@@ -61,7 +61,7 @@ import type {
   HeadstoneEntityConfig,
   EntityInteractionData,
 } from "../../types/entities";
-import type { InventoryItem } from "../../types/core/core";
+import type { InventoryItem, EntityData } from "../../types/core/core";
 import {
   InteractableEntity,
   type InteractableConfig,
@@ -91,6 +91,13 @@ export class HeadstoneEntity extends InteractableEntity {
     super(world, interactableConfig);
     this.config = config;
     this.lootItems = [...(config.headstoneData.items || [])];
+
+    console.log(
+      `[HeadstoneEntity] Constructed ${this.id} with ${this.lootItems.length} items:`,
+      this.lootItems
+        .map((item) => `${item.itemId} x${item.quantity}`)
+        .join(", ") || "(none)",
+    );
 
     // Listen for loot requests on this specific corpse
     this.lootRequestHandler = (data: unknown) => {
@@ -196,6 +203,16 @@ export class HeadstoneEntity extends InteractableEntity {
    * Handle corpse interaction - shows loot interface
    */
   public async handleInteraction(data: EntityInteractionData): Promise<void> {
+    console.log(
+      `[HeadstoneEntity] ${this.id} handleInteraction called by ${data.playerId}`,
+    );
+    console.log(
+      `[HeadstoneEntity] Emitting CORPSE_CLICK with ${this.lootItems.length} items:`,
+      this.lootItems
+        .map((item) => `${item.itemId} x${item.quantity}`)
+        .join(", ") || "(none)",
+    );
+
     // Emit corpse click event to show loot interface
     this.world.emit(EventType.CORPSE_CLICK, {
       corpseId: this.id,
@@ -257,14 +274,40 @@ export class HeadstoneEntity extends InteractableEntity {
   }
 
   /**
-   * Network data override
+   * Network data override - MUST include lootItems for client LootWindow
    */
   getNetworkData(): Record<string, unknown> {
     const baseData = super.getNetworkData();
     return {
       ...baseData,
       lootItemCount: this.lootItems.length,
+      lootItems: this.lootItems, // CRITICAL: Send actual items to client for LootWindow
       despawnTime: this.config.headstoneData.despawnTime,
+      playerId: this.config.headstoneData.playerId,
+      deathMessage: this.config.headstoneData.deathMessage,
+    };
+  }
+
+  /**
+   * Override serialize() to include lootItems in network packet
+   * CRITICAL: Base Entity.serialize() only copies this.data, but lootItems is a private field
+   */
+  serialize(): EntityData {
+    const baseData = super.serialize();
+    return {
+      ...baseData,
+      headstoneData: {
+        playerId: this.config.headstoneData.playerId,
+        playerName: this.config.headstoneData.playerName,
+        deathTime: this.config.headstoneData.deathTime,
+        deathMessage: this.config.headstoneData.deathMessage,
+        position: this.config.headstoneData.position,
+        items: this.lootItems, // CRITICAL: Include actual loot items for client
+        itemCount: this.lootItems.length,
+        despawnTime: this.config.headstoneData.despawnTime,
+      },
+      lootItems: this.lootItems, // Also include at root level for easy access
+      lootItemCount: this.lootItems.length,
     };
   }
 
