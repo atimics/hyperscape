@@ -2045,18 +2045,23 @@ export class TerrainSystem extends System {
 
   /**
    * Generate water meshes for low areas
-   * Simple v1: Just a flat plane at the fixed water threshold height
+   * Water geometry is shaped to only cover actual underwater terrain
    */
   private generateWaterMeshes(tile: TerrainTile): void {
     if (!this.waterSystem) return;
 
+    // Pass height function so water mesh can be shaped to underwater areas only
+    // Water will only be created where terrain is below WATER_THRESHOLD
+    // Geometry is shaped to match shorelines (not a full rectangle)
     const waterMesh = this.waterSystem.generateWaterMesh(
       tile,
       this.CONFIG.WATER_THRESHOLD,
       this.CONFIG.TILE_SIZE,
+      (worldX: number, worldZ: number) => this.getHeightAt(worldX, worldZ),
     );
 
-    if (tile.mesh) {
+    // waterMesh is null if no underwater areas exist
+    if (waterMesh && tile.mesh) {
       tile.mesh.add(waterMesh);
       tile.waterMeshes.push(waterMesh);
     }
@@ -2064,11 +2069,11 @@ export class TerrainSystem extends System {
 
   /**
    * Generate visual lake meshes for water bodies
-   * Note: generateWaterMeshes already handles the global water plane,
-   * so this is now a no-op. Keeping for future enhancements.
+   * Note: generateWaterMeshes now only creates water where terrain is underwater,
+   * so this is a no-op. Keeping for future enhancements (special lake effects).
    */
   private generateLakeMeshes(_tile: TerrainTile): void {
-    // V1: Global water plane is handled by generateWaterMeshes
+    // Water is handled by generateWaterMeshes (only where terrain < WATER_THRESHOLD)
     // Future: Could add special effects for lake biomes here (waves, ripples, etc.)
   }
 
