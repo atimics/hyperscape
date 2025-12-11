@@ -68,6 +68,7 @@ import {
 } from "../InteractableEntity";
 import { EventType } from "../../types/events";
 import { modelCache } from "../../utils/rendering/ModelCache";
+import { isNotedItemId } from "../../data/NoteGenerator";
 
 // Re-export types for external use
 export type { ItemEntityConfig } from "../../types/entities";
@@ -108,71 +109,104 @@ export class ItemEntity extends InteractableEntity {
       return;
     }
 
-    // Try to load 3D model if available (model or modelPath)
-    const modelToLoad = this.config.model || this.config.modelPath || null;
-    if (modelToLoad && this.world.loader) {
-      try {
-        const { scene } = await modelCache.loadModel(modelToLoad, this.world);
+    // BANK NOTE SYSTEM: Check if this is a noted item (uses canonical check)
+    const isNotedItem = isNotedItemId(this.config.itemId);
 
-        this.mesh = scene;
-        this.mesh.name = `Item_${this.config.itemId}`;
-        this.mesh.castShadow = false;
-        this.mesh.receiveShadow = false;
-        this.mesh.scale.set(0.3, 0.3, 0.3); // Scale down items
+    // Noted items always use paper mesh, never load 3D models
+    if (!isNotedItem) {
+      // Try to load 3D model if available (model or modelPath)
+      const modelToLoad = this.config.model || this.config.modelPath || null;
+      if (modelToLoad && this.world.loader) {
+        try {
+          const { scene } = await modelCache.loadModel(modelToLoad, this.world);
 
-        // Set up userData for interaction detection
-        this.mesh.userData = {
-          type: "item",
-          entityId: this.id,
-          name: this.config.name,
-          interactable: true,
-          itemData: {
-            id: this.id,
-            itemId: this.config.itemId,
+          this.mesh = scene;
+          this.mesh.name = `Item_${this.config.itemId}`;
+          this.mesh.castShadow = false;
+          this.mesh.receiveShadow = false;
+          this.mesh.scale.set(0.3, 0.3, 0.3); // Scale down items
+
+          // Set up userData for interaction detection
+          this.mesh.userData = {
+            type: "item",
+            entityId: this.id,
             name: this.config.name,
-            type: this.config.itemType,
-            quantity: this.config.quantity,
-          },
-        };
+            interactable: true,
+            itemData: {
+              id: this.id,
+              itemId: this.config.itemId,
+              name: this.config.name,
+              type: this.config.itemType,
+              quantity: this.config.quantity,
+            },
+          };
 
-        this.node.add(this.mesh);
-        return;
-      } catch (error) {
-        console.warn(
-          `[ItemEntity] Failed to load model for ${this.config.itemId}, using placeholder:`,
-          error,
-        );
-        // Fall through to placeholder
+          this.node.add(this.mesh);
+          return;
+        } catch (error) {
+          console.warn(
+            `[ItemEntity] Failed to load model for ${this.config.itemId}, using placeholder:`,
+            error,
+          );
+          // Fall through to placeholder
+        }
       }
     }
 
-    const geometry = new THREE.SphereGeometry(0.12, 8, 6);
+    // BANK NOTE SYSTEM: Create paper/note mesh for noted items
+    if (isNotedItem) {
+      // Flat plane geometry - like a piece of paper lying on the ground
+      const geometry = new THREE.PlaneGeometry(0.3, 0.4);
 
-    // Get subtle color based on item type
-    let color = 0xc0c0c0; // Default: Silver-gray
-    const nameLower = this.config.name.toLowerCase();
+      // Paper/parchment material - cream colored with slight transparency
+      const material = new THREE.MeshLambertMaterial({
+        color: 0xf5ebd2, // Cream/parchment color
+        transparent: true,
+        opacity: 0.95,
+        emissive: 0xf5ebd2,
+        emissiveIntensity: 0.1,
+        side: THREE.DoubleSide, // Visible from both sides
+      });
 
-    if (nameLower.includes("bronze")) color = 0xcd7f32;
-    else if (nameLower.includes("steel")) color = 0xb0c4de;
-    else if (nameLower.includes("gold") || nameLower.includes("coin"))
-      color = 0xffd700;
-    else if (nameLower.includes("wood") || nameLower.includes("log"))
-      color = 0x8b4513;
-    else if (nameLower.includes("fish")) color = 0xb0e0e6;
+      this.mesh = new THREE.Mesh(geometry, material);
+      this.mesh.name = `Note_${this.config.itemId}`;
 
-    const material = new THREE.MeshLambertMaterial({
-      color: color,
-      transparent: true,
-      opacity: 0.6,
-      emissive: color,
-      emissiveIntensity: 0.05,
-    });
+      // Rotate to lay flat on ground, slightly tilted for visibility
+      this.mesh.rotation.x = -Math.PI / 2.5; // Angled towards camera
+      this.mesh.rotation.z = Math.random() * 0.5 - 0.25; // Slight random rotation
 
-    this.mesh = new THREE.Mesh(geometry, material);
-    this.mesh.name = `Item_${this.config.itemId}`;
-    this.mesh.scale.set(0.8, 0.8, 0.8); // Small
-    this.mesh.castShadow = false; // Don't cast shadows for small items
-    this.mesh.receiveShadow = false;
+      this.mesh.castShadow = true;
+      this.mesh.receiveShadow = false;
+    } else {
+      // Standard item placeholder: sphere
+      const geometry = new THREE.SphereGeometry(0.12, 8, 6);
+
+      // Get subtle color based on item type
+      let color = 0xc0c0c0; // Default: Silver-gray
+      const nameLower = this.config.name.toLowerCase();
+
+      if (nameLower.includes("bronze")) color = 0xcd7f32;
+      else if (nameLower.includes("steel")) color = 0xb0c4de;
+      else if (nameLower.includes("gold") || nameLower.includes("coin"))
+        color = 0xffd700;
+      else if (nameLower.includes("wood") || nameLower.includes("log"))
+        color = 0x8b4513;
+      else if (nameLower.includes("fish")) color = 0xb0e0e6;
+
+      const material = new THREE.MeshLambertMaterial({
+        color: color,
+        transparent: true,
+        opacity: 0.6,
+        emissive: color,
+        emissiveIntensity: 0.05,
+      });
+
+      this.mesh = new THREE.Mesh(geometry, material);
+      this.mesh.name = `Item_${this.config.itemId}`;
+      this.mesh.scale.set(0.8, 0.8, 0.8); // Small
+      this.mesh.castShadow = false; // Don't cast shadows for small items
+      this.mesh.receiveShadow = false;
+    }
 
     // Set up node userData for interaction system
     this.node.userData.type = "item";
@@ -212,12 +246,24 @@ export class ItemEntity extends InteractableEntity {
   protected serverUpdate(deltaTime: number): void {
     super.serverUpdate(deltaTime);
 
+    // BANK NOTE SYSTEM: Different animation for notes vs regular items
+    const isNotedItem = isNotedItemId(this.config.itemId);
+
     // Floating animation - mesh position is RELATIVE to node, not absolute world position
     // Node is already positioned at terrain height, so just offset from that
     if (this.mesh && this.mesh.position && this.mesh.rotation) {
       const time = this.world.getTime() * 0.001;
-      this.mesh.position.y = 0.5 + Math.sin(time * 2) * 0.1; // Float above node position
-      this.mesh.rotation.y += deltaTime * 0.5;
+
+      if (isNotedItem) {
+        // Paper/note: gentle flutter, no spin - sits lower to ground
+        this.mesh.position.y = 0.15 + Math.sin(time * 1.5) * 0.03;
+        // Subtle rotation wobble like paper in breeze
+        this.mesh.rotation.z = Math.sin(time * 2) * 0.1;
+      } else {
+        // Regular items: float and spin
+        this.mesh.position.y = 0.5 + Math.sin(time * 2) * 0.1;
+        this.mesh.rotation.y += deltaTime * 0.5;
+      }
     }
 
     // Check for despawn conditions
@@ -235,6 +281,9 @@ export class ItemEntity extends InteractableEntity {
       }
     }
 
+    // BANK NOTE SYSTEM: Different animation for notes vs regular items
+    const isNotedItem = isNotedItemId(this.config.itemId);
+
     // Same floating animation on client - mesh position is RELATIVE to node
     // Only animate if visible
     if (
@@ -244,8 +293,17 @@ export class ItemEntity extends InteractableEntity {
       this.mesh.rotation
     ) {
       const time = this.world.getTime() * 0.001;
-      this.mesh.position.y = 0.5 + Math.sin(time * 2) * 0.1; // Float above node position
-      this.mesh.rotation.y += deltaTime * 0.5;
+
+      if (isNotedItem) {
+        // Paper/note: gentle flutter, no spin - sits lower to ground
+        this.mesh.position.y = 0.15 + Math.sin(time * 1.5) * 0.03;
+        // Subtle rotation wobble like paper in breeze
+        this.mesh.rotation.z = Math.sin(time * 2) * 0.1;
+      } else {
+        // Regular items: float and spin
+        this.mesh.position.y = 0.5 + Math.sin(time * 2) * 0.1;
+        this.mesh.rotation.y += deltaTime * 0.5;
+      }
     }
   }
 
