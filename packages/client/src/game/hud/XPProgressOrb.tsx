@@ -355,34 +355,48 @@ export function XPProgressOrb({ world }: XPProgressOrbProps) {
   // Two-phase approach:
   // 1. After ORB_VISIBLE_DURATION_MS, mark skill as "fading" to trigger fade animation
   // 2. After additional ORB_FADE_DURATION_MS, remove the skill from the list
+  // Optimized to avoid allocations when no changes are needed
   useEffect(() => {
     const tickInterval = setInterval(() => {
       const now = Date.now();
+      const fadeThreshold = ORB_VISIBLE_DURATION_MS;
+      const removeThreshold = ORB_VISIBLE_DURATION_MS + ORB_FADE_DURATION_MS;
 
       setActiveSkills((prev) => {
-        let changed = false;
-        const updated = prev.map((s) => {
-          const timeSinceGain = now - s.lastGainTime;
+        // Early exit if empty - no allocations needed
+        if (prev.length === 0) return prev;
 
-          // If not fading yet and past visible duration, start fading
-          if (!s.isFading && timeSinceGain >= ORB_VISIBLE_DURATION_MS) {
-            changed = true;
-            return { ...s, isFading: true };
-          }
-          return s;
-        });
+        // First pass: check what needs to change (no allocations)
+        let hasChanges = false;
+        let hasRemovals = false;
 
-        // Remove skills that have finished fading (visible duration + fade duration)
-        const totalDuration = ORB_VISIBLE_DURATION_MS + ORB_FADE_DURATION_MS;
-        const stillActive = updated.filter(
-          (s) => now - s.lastGainTime < totalDuration,
-        );
-
-        if (stillActive.length !== updated.length) {
-          return stillActive;
+        for (const skill of prev) {
+          const elapsed = now - skill.lastGainTime;
+          if (!skill.isFading && elapsed >= fadeThreshold) hasChanges = true;
+          if (elapsed >= removeThreshold) hasRemovals = true;
         }
 
-        return changed ? updated : prev;
+        // Early exit if nothing changed - no allocations
+        if (!hasChanges && !hasRemovals) return prev;
+
+        // Only allocate if we have changes
+        if (hasRemovals) {
+          // Need to both filter and potentially update fading state
+          return prev
+            .filter((s) => now - s.lastGainTime < removeThreshold)
+            .map((s) =>
+              !s.isFading && now - s.lastGainTime >= fadeThreshold
+                ? { ...s, isFading: true }
+                : s,
+            );
+        }
+
+        // Only fading changes, no removals - single map pass
+        return prev.map((s) =>
+          !s.isFading && now - s.lastGainTime >= fadeThreshold
+            ? { ...s, isFading: true }
+            : s,
+        );
       });
     }, GAME_TICK_MS);
 
