@@ -9,7 +9,13 @@
  * - Orbs fade after a number of game ticks (600ms each) without XP gain
  */
 
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, {
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+  useMemo,
+} from "react";
 import styled, { keyframes, css } from "styled-components";
 import { EventType } from "@hyperscape/shared";
 import type { ClientWorld } from "../../types";
@@ -50,13 +56,25 @@ function normalizeSkillName(skill: string): string {
   return lower;
 }
 
-// XP required for each level (OSRS formula)
-function calculateXPForLevel(level: number): number {
-  let total = 0;
-  for (let i = 1; i < level; i++) {
-    total += Math.floor(i + 300 * Math.pow(2, i / 7));
+// Pre-computed XP table for O(1) lookups (OSRS formula)
+// Computed once at module load instead of looping on every render
+const XP_TABLE: readonly number[] = (() => {
+  const table: number[] = new Array(100).fill(0); // Level 0 and 1 = 0 XP
+  for (let level = 2; level <= 99; level++) {
+    let total = 0;
+    for (let i = 1; i < level; i++) {
+      total += Math.floor(i + 300 * Math.pow(2, i / 7));
+    }
+    table[level] = Math.floor(total / 4);
   }
-  return Math.floor(total / 4);
+  return table;
+})();
+
+// O(1) lookup for XP required at a given level
+function getXPForLevel(level: number): number {
+  if (level < 1) return 0;
+  if (level > 99) return XP_TABLE[99];
+  return XP_TABLE[level];
 }
 
 interface XPDropData {
@@ -281,22 +299,40 @@ export function XPProgressOrb({ world }: XPProgressOrbProps) {
   // Track previous levels for level-up detection
   const previousLevelsRef = useRef<Record<string, number>>({});
 
-  // Calculate progress to next level
+  // Calculate progress to next level (uses pre-computed XP table)
   const calculateProgress = useCallback((xp: number, level: number): number => {
     if (level >= 99) return 100;
-    const currentLevelXP = calculateXPForLevel(level);
-    const nextLevelXP = calculateXPForLevel(level + 1);
+    const currentLevelXP = getXPForLevel(level);
+    const nextLevelXP = getXPForLevel(level + 1);
     const xpInLevel = xp - currentLevelXP;
     const xpNeeded = nextLevelXP - currentLevelXP;
     return Math.min(100, Math.max(0, (xpInLevel / xpNeeded) * 100));
   }, []);
 
-  // Calculate XP to next level
+  // Calculate XP to next level (uses pre-computed XP table)
   const getXPToNextLevel = useCallback((xp: number, level: number): number => {
     if (level >= 99) return 0;
-    const nextLevelXP = calculateXPForLevel(level + 1);
+    const nextLevelXP = getXPForLevel(level + 1);
     return nextLevelXP - xp;
   }, []);
+
+  // Memoize derived skill data to avoid recalculating on every render (hover, animation, etc.)
+  // This prevents expensive calculations from running on mouse movements
+  const skillsWithProgress = useMemo(() => {
+    return activeSkills.map((skill) => {
+      const skillKey = normalizeSkillName(skill.skill);
+      return {
+        ...skill,
+        skillKey,
+        icon:
+          SKILL_ICONS[skillKey] ||
+          SKILL_ICONS[skill.skill.toLowerCase()] ||
+          "\u2B50",
+        progress: calculateProgress(skill.xp, skill.level),
+        xpToLevel: getXPToNextLevel(skill.xp, skill.level),
+      };
+    });
+  }, [activeSkills, calculateProgress, getXPToNextLevel]);
 
   // Game tick timer - each orb fades independently based on its own lastGainTime
   // Two-phase approach:
@@ -443,7 +479,7 @@ export function XPProgressOrb({ world }: XPProgressOrbProps) {
   }, [world, finalizeGroupedDrop]);
 
   // Don't render if no skill has been trained yet
-  if (activeSkills.length === 0) {
+  if (skillsWithProgress.length === 0) {
     return null;
   }
 
@@ -464,33 +500,31 @@ export function XPProgressOrb({ world }: XPProgressOrbProps) {
 
       {/* Multiple orbs side by side - one for each active skill */}
       <OrbsRow>
-        {activeSkills.map((skill) => {
-          const skillKey = normalizeSkillName(skill.skill);
-          // Look up icon using both normalized and original name
-          const skillIcon =
-            SKILL_ICONS[skillKey] ||
-            SKILL_ICONS[skill.skill.toLowerCase()] ||
-            "\u2B50";
-          const progress = calculateProgress(skill.xp, skill.level);
-          const xpToLevel = getXPToNextLevel(skill.xp, skill.level);
-          const isThisLevelUp = levelUpSkill === skillKey;
-          const isHovered = hoveredSkill === skillKey;
+        {skillsWithProgress.map((skill) => {
+          // Use memoized values - no calculations in render
+          const isThisLevelUp = levelUpSkill === skill.skillKey;
+          const isHovered = hoveredSkill === skill.skillKey;
 
           return (
             <SingleOrbContainer
-              key={`orb-${skillKey}`}
+              key={`orb-${skill.skillKey}`}
               $fading={skill.isFading}
             >
               <OrbWrapper
                 $isLevelUp={isThisLevelUp}
-                onMouseEnter={() => setHoveredSkill(skillKey)}
+                onMouseEnter={() => setHoveredSkill(skill.skillKey)}
                 onMouseLeave={() => setHoveredSkill(null)}
               >
                 <ProgressRing viewBox="0 0 64 64">
                   <BackgroundCircle cx="32" cy="32" r="27" />
-                  <ProgressCircle cx="32" cy="32" r="27" $progress={progress} />
+                  <ProgressCircle
+                    cx="32"
+                    cy="32"
+                    r="27"
+                    $progress={skill.progress}
+                  />
                 </ProgressRing>
-                <SkillIcon>{skillIcon}</SkillIcon>
+                <SkillIcon>{skill.icon}</SkillIcon>
 
                 {/* Hover tooltip for this specific skill */}
                 {isHovered && (
@@ -505,11 +539,13 @@ export function XPProgressOrb({ world }: XPProgressOrbProps) {
                     </TooltipRow>
                     <TooltipRow>
                       <TooltipLabel>XP to level:</TooltipLabel>
-                      <TooltipValue>{xpToLevel.toLocaleString()}</TooltipValue>
+                      <TooltipValue>
+                        {skill.xpToLevel.toLocaleString()}
+                      </TooltipValue>
                     </TooltipRow>
                     <TooltipRow>
                       <TooltipLabel>Progress:</TooltipLabel>
-                      <TooltipValue>{progress.toFixed(1)}%</TooltipValue>
+                      <TooltipValue>{skill.progress.toFixed(1)}%</TooltipValue>
                     </TooltipRow>
                   </Tooltip>
                 )}
