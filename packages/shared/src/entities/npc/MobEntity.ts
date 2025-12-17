@@ -173,8 +173,6 @@ export class MobEntity extends CombatantEntity {
   private _wanderTarget: { x: number; z: number } | null = null;
   private _lastPosition: THREE.Vector3 | null = null;
   private _stuckTimer = 0;
-  private readonly WANDER_MIN_DISTANCE = 1; // Minimum wander distance
-  private readonly WANDER_MAX_DISTANCE = 5; // Maximum wander distance
   private readonly STUCK_TIMEOUT = 3000; // Give up after 3 seconds stuck
   // Tile movement throttling - prevent emitting duplicate move requests
   // Uses tick-based throttling (aligned with 600ms server ticks) instead of time-based
@@ -1073,35 +1071,29 @@ export class MobEntity extends CombatantEntity {
   }
 
   /**
-   * Generate a random wander target within wander radius
+   * Generate a random wander target within wander radius (OSRS-accurate)
+   *
+   * OSRS generates wander targets relative to SPAWN, not current position.
+   * This ensures NPCs naturally drift back toward spawn over time,
+   * even after being leashed far from their spawn point.
+   *
    * Uses CURRENT spawn point (changes on respawn), not fixed config.spawnPoint
    */
   private generateWanderTarget(): Position3D {
-    const currentPos = this.getPosition();
-    const angle = Math.random() * Math.PI * 2;
-    const distance =
-      this.WANDER_MIN_DISTANCE +
-      Math.random() * (this.WANDER_MAX_DISTANCE - this.WANDER_MIN_DISTANCE);
+    const spawn = this._currentSpawnPoint;
+    const radius = this.config.wanderRadius;
 
-    let targetX = currentPos.x + Math.cos(angle) * distance;
-    let targetZ = currentPos.z + Math.sin(angle) * distance;
+    // OSRS-accurate: Random tile within [-radius, +radius] of spawn
+    // This creates a square wander area centered on spawn
+    const range = 2 * radius + 1;
+    const offsetX = Math.floor(Math.random() * range) - radius;
+    const offsetZ = Math.floor(Math.random() * range) - radius;
 
-    // Ensure target is within wander radius from CURRENT spawn point
-    const distFromSpawn = Math.sqrt(
-      Math.pow(targetX - this._currentSpawnPoint.x, 2) +
-        Math.pow(targetZ - this._currentSpawnPoint.z, 2),
-    );
-
-    if (distFromSpawn > this.config.wanderRadius) {
-      // Clamp to wander radius boundary
-      const toTargetX = targetX - this._currentSpawnPoint.x;
-      const toTargetZ = targetZ - this._currentSpawnPoint.z;
-      const scale = this.config.wanderRadius / distFromSpawn;
-      targetX = this._currentSpawnPoint.x + toTargetX * scale;
-      targetZ = this._currentSpawnPoint.z + toTargetZ * scale;
-    }
-
-    return { x: targetX, y: currentPos.y, z: targetZ };
+    return {
+      x: spawn.x + offsetX,
+      y: this.getPosition().y,
+      z: spawn.z + offsetZ,
+    };
   }
 
   /**
