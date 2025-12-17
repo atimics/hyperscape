@@ -63,6 +63,38 @@ export const COMBAT_CONSTANTS = {
     MAX_HIT_DELAY: 10, // Maximum hit delay in ticks (cap for sanity)
   },
 
+  // Animation synchronization constants (Phase 4)
+  // @see https://oldschool.runescape.wiki/w/Hitsplat
+  // Damage applies at animation midpoint for visual synchronization
+  //
+  // Animation keyframe structure:
+  // - Frame 0: Wind-up starts (weapon raises)
+  // - Frame 0.5: Weapon connects (DAMAGE APPLIES HERE)
+  // - Frame 1.0: Follow-through completes
+  ANIMATION: {
+    // Ratio of attack animation where damage visually applies
+    // 0.5 = midpoint (weapon connects at center of swing)
+    HIT_FRAME_RATIO: 0.5,
+
+    // Minimum animation duration in ticks (ensures animation plays)
+    MIN_ANIMATION_TICKS: 2,
+
+    // Hitsplat display timing
+    // In OSRS, hitsplats appear the same tick damage is dealt
+    HITSPLAT_DELAY_TICKS: 0,
+
+    // Hitsplat display duration (visible time in ticks)
+    // @see https://oldschool.runescape.wiki/w/Hitsplat
+    HITSPLAT_DURATION_TICKS: 3,
+
+    // Combat animation types
+    EMOTE_COMBAT: "combat",
+    EMOTE_SWORD_SWING: "sword_swing",
+    EMOTE_RANGED: "ranged",
+    EMOTE_MAGIC: "magic",
+    EMOTE_IDLE: "idle",
+  },
+
   // Respawn timing in ticks (OSRS-style)
   // @see https://oldschool.runescape.wiki/w/Respawn_rate
   RESPAWN_TICKS_MIN: 25, // 15 seconds - minimum respawn time

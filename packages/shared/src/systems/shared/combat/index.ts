@@ -12,6 +12,7 @@ export * from "./MobDeathSystem";
 export * from "./CombatStateService";
 export * from "./CombatAnimationManager";
 export * from "./CombatRotationManager";
+export * from "./CombatAnimationSync";
 
 // Anti-cheat monitoring (Phase 6 - Game Studio Hardening)
 export * from "./CombatAntiCheat";
