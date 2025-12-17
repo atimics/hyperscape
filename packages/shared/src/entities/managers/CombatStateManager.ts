@@ -7,13 +7,19 @@
  * - Validate attack conditions
  * - Prevent teleporting while in combat
  * - Track last attacker
+ * - Handle OSRS-accurate first-attack timing
  *
  * Combat state is used to prevent exploits:
  * - Prevents safety teleport while fighting
  * - Prevents mob from resetting mid-combat
  * - Tracks who gets loot/XP credit
  *
+ * First-Attack Timing (OSRS-accurate):
+ * When NPC first enters combat range, the first attack happens on the NEXT tick,
+ * not immediately. This prevents instant damage when mobs aggro.
+ *
  * @see https://oldschool.runescape.wiki/w/Attack_speed
+ * @see MOB_AGGRO_IMPLEMENTATION_PLAN.md Phase 3.3
  */
 
 export interface CombatStateConfig {
@@ -31,6 +37,11 @@ export class CombatStateManager {
   private nextAttackTick = 0;
   private lastAttackerId: string | null = null;
   private config: CombatStateConfig;
+
+  // First-attack timing (OSRS-accurate)
+  // When NPC first enters combat range, attack happens NEXT tick, not immediately
+  private _pendingFirstAttack = false;
+  private _firstAttackTick = -1;
 
   // Callbacks
   private onAttackCallback?: (targetId: string) => void;
@@ -66,9 +77,32 @@ export class CombatStateManager {
     this.lastAttackTick = -Infinity;
     this.nextAttackTick = 0;
     this.lastAttackerId = null;
+    this._pendingFirstAttack = false;
+    this._firstAttackTick = -1;
 
     if (wasInCombat && this.onCombatEndCallback) {
       this.onCombatEndCallback();
+    }
+  }
+
+  /**
+   * Called when NPC first enters combat range with target
+   *
+   * OSRS-accurate: First attack happens on the NEXT tick after entering range,
+   * not immediately. This is inferred from tick processing order.
+   *
+   * @param currentTick - Current server tick number
+   */
+  onEnterCombatRange(currentTick: number): void {
+    if (!this.inCombat) {
+      this.inCombat = true;
+      // First attack happens NEXT tick (OSRS behavior)
+      this._pendingFirstAttack = true;
+      this._firstAttackTick = currentTick + 1;
+
+      if (this.onCombatStartCallback) {
+        this.onCombatStartCallback();
+      }
     }
   }
 
@@ -81,21 +115,42 @@ export class CombatStateManager {
 
   /**
    * Check if mob can attack on this tick (TICK-BASED)
+   *
+   * Handles two cases:
+   * 1. First attack after entering combat range (uses _firstAttackTick)
+   * 2. Subsequent attacks (uses nextAttackTick from attack speed)
+   *
    * @param currentTick - Current server tick number
    */
   canAttack(currentTick: number): boolean {
+    // First-attack timing check
+    if (this._pendingFirstAttack) {
+      return currentTick >= this._firstAttackTick;
+    }
+
+    // Normal attack timing
     return currentTick >= this.nextAttackTick;
   }
 
   /**
    * Perform attack (validates cooldown and sets next attack tick)
    * Returns true if attack was performed, false if on cooldown
+   *
+   * Handles first-attack timing: After the first attack, clears the
+   * pending state and transitions to normal attack speed timing.
+   *
    * @param targetId - ID of the target entity
    * @param currentTick - Current server tick number
    */
   performAttack(targetId: string, currentTick: number): boolean {
     if (!this.canAttack(currentTick)) {
       return false;
+    }
+
+    // Clear first-attack state after first attack is performed
+    if (this._pendingFirstAttack) {
+      this._pendingFirstAttack = false;
+      this._firstAttackTick = -1;
     }
 
     this.lastAttackTick = currentTick;
@@ -204,5 +259,21 @@ export class CombatStateManager {
     this.lastAttackTick = -Infinity;
     this.nextAttackTick = 0;
     this.lastAttackerId = null;
+    this._pendingFirstAttack = false;
+    this._firstAttackTick = -1;
+  }
+
+  /**
+   * Check if pending first attack
+   */
+  isPendingFirstAttack(): boolean {
+    return this._pendingFirstAttack;
+  }
+
+  /**
+   * Get first attack tick (for debugging/testing)
+   */
+  getFirstAttackTick(): number {
+    return this._firstAttackTick;
   }
 }

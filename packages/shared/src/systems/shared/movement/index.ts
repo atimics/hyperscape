@@ -9,3 +9,4 @@ export * from "./BFSPathfinder";
 export * from "./ObjectPools";
 export * from "./ChasePathfinding";
 export * from "./PathPersistenceManager";
+export * from "./WanderBehavior";
