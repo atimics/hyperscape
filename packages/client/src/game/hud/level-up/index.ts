@@ -5,7 +5,7 @@
  * - Visual popup with skill icon and level
  * - CSS fireworks animation
  * - Placeholder audio fanfare (Web Audio API)
- * - Chat message integration (Phase 4)
+ * - Chat message integration (OSRS-style game message)
  * - Skill unlock display (Phase 5)
  */
 

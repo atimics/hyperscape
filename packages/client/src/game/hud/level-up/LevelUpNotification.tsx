@@ -5,17 +5,17 @@
  * - useLevelUpState: Event subscription and queue management
  * - LevelUpPopup: Visual popup display
  * - levelUpAudio: Placeholder fanfare sounds
- *
- * Fireworks animation added in Phase 3.
- * Chat message integration added in Phase 4.
+ * - Chat message: OSRS-style game message
  */
 
 import { useEffect, useRef } from "react";
-import type { ClientAudio } from "@hyperscape/shared";
+import { uuid } from "@hyperscape/shared";
+import type { ClientAudio, Chat, ChatMessage } from "@hyperscape/shared";
 import type { ClientWorld } from "../../../types";
 import { useLevelUpState } from "./useLevelUpState";
 import { LevelUpPopup } from "./LevelUpPopup";
 import { playLevelUpFanfare } from "./levelUpAudio";
+import { capitalizeSkill } from "./utils";
 
 interface LevelUpNotificationProps {
   world: ClientWorld;
@@ -24,33 +24,48 @@ interface LevelUpNotificationProps {
 export function LevelUpNotification({ world }: LevelUpNotificationProps) {
   const { currentLevelUp, dismissLevelUp } = useLevelUpState(world);
 
-  // Track which level-ups we've played sound for (by timestamp)
-  const playedSoundsRef = useRef<Set<number>>(new Set());
+  // Track which level-ups we've already processed (by timestamp)
+  const processedRef = useRef<Set<number>>(new Set());
 
-  // Play audio when a new level-up appears
+  // Play audio and send chat message when a new level-up appears
   useEffect(() => {
     if (!currentLevelUp) return;
 
-    // Skip if we already played sound for this level-up
-    if (playedSoundsRef.current.has(currentLevelUp.timestamp)) return;
-    playedSoundsRef.current.add(currentLevelUp.timestamp);
+    // Skip if we already processed this level-up
+    if (processedRef.current.has(currentLevelUp.timestamp)) return;
+    processedRef.current.add(currentLevelUp.timestamp);
 
-    // Get audio system
+    // === AUDIO ===
     const audio = world.audio as ClientAudio | undefined;
-    if (!audio?.ctx) return;
+    if (audio?.ctx) {
+      const sfxVolume = audio.groupGains?.sfx?.gain?.value ?? 1;
+      if (sfxVolume > 0) {
+        audio.ready(() => {
+          playLevelUpFanfare(
+            currentLevelUp.newLevel,
+            audio.ctx,
+            audio.groupGains?.sfx,
+          );
+        });
+      }
+    }
 
-    // Check if SFX is muted
-    const sfxVolume = audio.groupGains?.sfx?.gain?.value ?? 1;
-    if (sfxVolume === 0) return;
+    // === CHAT MESSAGE ===
+    const chat = world.chat as Chat | undefined;
+    if (chat?.add) {
+      const messageBody = `Congratulations! You've advanced a ${capitalizeSkill(currentLevelUp.skill)} level. You are now level ${currentLevelUp.newLevel}.`;
 
-    // Play fanfare (uses audio.ready to handle suspended AudioContext)
-    audio.ready(() => {
-      playLevelUpFanfare(
-        currentLevelUp.newLevel,
-        audio.ctx,
-        audio.groupGains?.sfx,
-      );
-    });
+      const message: ChatMessage = {
+        id: uuid(),
+        from: "", // Empty = no [username] prefix, just game text (OSRS style)
+        body: messageBody,
+        text: messageBody, // For interface compatibility
+        timestamp: Date.now(),
+        createdAt: new Date().toISOString(),
+      };
+
+      chat.add(message, false); // false = don't broadcast to server
+    }
   }, [currentLevelUp, world]);
 
   // Cleanup old timestamps periodically to prevent memory leak
@@ -58,9 +73,9 @@ export function LevelUpNotification({ world }: LevelUpNotificationProps) {
     const cleanup = setInterval(() => {
       const now = Date.now();
       const threshold = 60000; // 1 minute
-      playedSoundsRef.current.forEach((timestamp) => {
+      processedRef.current.forEach((timestamp) => {
         if (now - timestamp > threshold) {
-          playedSoundsRef.current.delete(timestamp);
+          processedRef.current.delete(timestamp);
         }
       });
     }, 30000); // Every 30 seconds
