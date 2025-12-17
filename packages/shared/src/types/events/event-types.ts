@@ -190,6 +190,14 @@ export enum EventType {
   COMBAT_FOLLOW_TARGET = "combat:follow_target",
   COMBAT_PLAYER_DISENGAGE = "combat:player_disengage", // Player clicked away, cancel their attacking combat
 
+  // Server-controlled combat visuals (Phase 5 - Client display-only)
+  // These events are sent from server to client to control combat visuals
+  // Client should NOT independently search for attackers or decide facing
+  COMBAT_FACE_TARGET = "combat:face_target", // Server tells client to face a specific entity
+  COMBAT_CLEAR_FACE_TARGET = "combat:clear_face_target", // Server tells client to stop facing target
+  COMBAT_PLAY_ANIMATION = "combat:play_animation", // Server tells client to play combat animation
+  COMBAT_SHOW_HITSPLAT = "combat:show_hitsplat", // Server tells client to display hitsplat
+
   // Aggro System
   AGGRO_PLAYER_LEFT = "aggro:player_left",
   AGGRO_PLAYER_ENTERED = "aggro:player_entered",

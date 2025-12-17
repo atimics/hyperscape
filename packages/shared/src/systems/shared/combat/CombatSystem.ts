@@ -682,6 +682,12 @@ export class CombatSystem extends SystemBase {
       playerEntity.data.pa = null;
     }
 
+    // Phase 5: Clear server face target since player now has a combat target
+    // Client will use combatTarget instead of serverFaceTargetId
+    this.emitTypedEvent(EventType.COMBAT_CLEAR_FACE_TARGET, {
+      playerId: playerId,
+    });
+
     // Face the target and start combat animation
     this.rotationManager.rotateTowardsTarget(
       playerId,
@@ -712,6 +718,13 @@ export class CombatSystem extends SystemBase {
     // This keeps the combat timer active but player won't auto-attack
     // If auto-retaliate is ON and mob catches up and hits, player will start fighting again
     this.stateService.markInCombatWithoutTarget(playerId, targetId);
+
+    // Phase 5: Player should still face the mob that's attacking them
+    // Server-controlled face target (client is display-only)
+    this.emitTypedEvent(EventType.COMBAT_FACE_TARGET, {
+      playerId: playerId,
+      targetId: targetId,
+    });
   }
 
   /**
@@ -1116,6 +1129,14 @@ export class CombatSystem extends SystemBase {
         String(targetId),
         String(attackerId),
       );
+
+      // Phase 5: Server-controlled face target (client is display-only)
+      // Even with auto-retaliate OFF, player should visually face the attacker
+      // Client no longer searches for attackers - server tells them who to face
+      this.emitTypedEvent(EventType.COMBAT_FACE_TARGET, {
+        playerId: String(targetId),
+        targetId: String(attackerId),
+      });
     }
 
     // DON'T set combat emotes here - we set them when attacks happen instead
@@ -1194,6 +1215,19 @@ export class CombatSystem extends SystemBase {
       targetId: String(combatState.targetId),
     });
 
+    // Phase 5: Clear face target for players when combat ends (client is display-only)
+    // This tells client to stop facing the target since combat is over
+    if (combatState.attackerType === "player") {
+      this.emitTypedEvent(EventType.COMBAT_CLEAR_FACE_TARGET, {
+        playerId: data.entityId,
+      });
+    }
+    if (combatState.targetType === "player") {
+      this.emitTypedEvent(EventType.COMBAT_CLEAR_FACE_TARGET, {
+        playerId: String(combatState.targetId),
+      });
+    }
+
     // Show combat end message for player
     if (combatState.attackerType === "player") {
       this.emitTypedEvent(EventType.UI_MESSAGE, {
@@ -1242,6 +1276,33 @@ export class CombatSystem extends SystemBase {
           if (mobEntity && typeof mobEntity.onTargetDied === "function") {
             mobEntity.onTargetDied(entityId);
           }
+        }
+      }
+    }
+
+    // Phase 5: Clear face target for any players who had this entity as their pending attacker
+    // When an attacker dies, players with auto-retaliate OFF should stop facing them
+    if (entityType === "mob") {
+      // Check all players to see if they had this mob as their pending attacker
+      for (const player of this.world.entities.players.values()) {
+        const playerEntity = player as unknown as {
+          combat?: { pendingAttacker?: string | null };
+          data?: { pa?: string | null };
+        };
+        const pendingAttacker =
+          playerEntity.combat?.pendingAttacker || playerEntity.data?.pa;
+        if (pendingAttacker === entityId) {
+          // Clear the pending attacker state
+          if (playerEntity.combat) {
+            playerEntity.combat.pendingAttacker = null;
+          }
+          if (playerEntity.data) {
+            playerEntity.data.pa = null;
+          }
+          // Tell client to stop facing this entity
+          this.emitTypedEvent(EventType.COMBAT_CLEAR_FACE_TARGET, {
+            playerId: player.id,
+          });
         }
       }
     }
