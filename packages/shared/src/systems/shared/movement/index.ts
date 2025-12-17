@@ -7,3 +7,5 @@
 export * from "./TileSystem";
 export * from "./BFSPathfinder";
 export * from "./ObjectPools";
+export * from "./ChasePathfinding";
+export * from "./PathPersistenceManager";

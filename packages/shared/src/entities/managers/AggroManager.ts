@@ -8,11 +8,14 @@
  * - Aggro-on-damage behavior (auto-target attacker)
  * - Target clearing on death/respawn
  *
- * RuneScape-style Aggro Flow:
- * 1. Mob scans for players within aggro range
- * 2. First player found becomes target
+ * OSRS-Accurate Target Selection:
+ * 1. Mob scans for ALL players within aggro range
+ * 2. Random selection from valid candidates (not first-found)
  * 3. If attacked while idle, attacker becomes target
  * 4. Target is cleared on death or when out of range
+ *
+ * @see https://oldschool.runescape.wiki/w/Aggressiveness
+ * @see MOB_AGGRO_IMPLEMENTATION_PLAN.md Phase 2.3
  */
 
 import type { Position3D } from "../../types";
@@ -38,13 +41,23 @@ export class AggroManager {
   private currentTarget: string | null = null;
   private config: AggroConfig;
 
+  // Pre-allocated buffer for valid targets (zero-allocation target selection)
+  // OSRS selects randomly from all valid candidates, not first-found
+  private readonly _validTargetsBuffer: PlayerTarget[] = [];
+
   constructor(config: AggroConfig) {
     this.config = config;
   }
 
   /**
-   * Find nearby player within aggro range (RuneScape-style)
-   * Returns first player found within range for simplicity
+   * Find nearby player within aggro range (OSRS-accurate random selection)
+   *
+   * OSRS selects targets randomly from all valid candidates within range,
+   * NOT by proximity or first-found. This ensures fair targeting behavior.
+   *
+   * @param currentPos - Mob's current position
+   * @param players - Array of potential targets
+   * @returns Random valid target, or null if none in range
    */
   findNearbyPlayer(
     currentPos: Position3D,
@@ -57,6 +70,35 @@ export class AggroManager {
     // Early exit if no players
     if (players.length === 0) return null;
 
+    // Find all valid targets (no allocation - reuses buffer)
+    this.findValidTargets(currentPos, players);
+
+    // Random selection from valid candidates (OSRS-accurate)
+    return this.selectRandomTarget();
+  }
+
+  /**
+   * Find all valid aggro targets within range (zero-allocation)
+   *
+   * Populates the internal buffer with all valid targets.
+   * Call selectRandomTarget() after to pick one.
+   *
+   * @param currentPos - Mob's current position
+   * @param players - Array of potential targets
+   */
+  findValidTargets(
+    currentPos: Position3D,
+    players: Array<{
+      id: string;
+      position?: Position3D;
+      node?: { position?: Position3D };
+    }>,
+  ): void {
+    // Clear buffer (no allocation)
+    this._validTargetsBuffer.length = 0;
+
+    const mobTile = worldToTile(currentPos.x, currentPos.z);
+
     for (const player of players) {
       // Check both direct position AND node.position for compatibility
       // Server-side players may have position directly, client-side may use node.position
@@ -64,42 +106,94 @@ export class AggroManager {
       if (!playerPos) continue;
 
       // CRITICAL: Skip dead players (RuneScape-style: mobs don't aggro on corpses)
-      // PlayerEntity has isDead() method and health as a number (not { current, max })
-      const playerObj = player as any;
-      if (typeof playerObj.isDead === "function" && playerObj.isDead()) {
-        continue; // Dead player (has isDead method), skip
-      }
-      if (typeof playerObj.health === "number" && playerObj.health <= 0) {
-        continue; // Dead player (health is 0), skip
-      }
-      // Also check health.current for legacy/network data formats
-      if (
-        playerObj.health?.current !== undefined &&
-        playerObj.health.current <= 0
-      ) {
-        continue; // Dead player (health.current is 0), skip
-      }
-      if (playerObj.alive === false) {
-        continue; // Dead player (alive flag), skip
+      if (!this.isValidTarget(player)) {
+        continue;
       }
 
       // OSRS-accurate: Use tile-based Chebyshev distance (not Euclidean)
-      const mobTile = worldToTile(currentPos.x, currentPos.z);
       const playerTile = worldToTile(playerPos.x, playerPos.z);
       const tileDistance = tileChebyshevDistance(mobTile, playerTile);
 
       if (tileDistance <= this.config.aggroRange) {
-        return {
+        this._validTargetsBuffer.push({
           id: player.id,
           position: {
             x: playerPos.x,
             y: playerPos.y,
             z: playerPos.z,
           },
-        };
+        });
       }
     }
-    return null;
+  }
+
+  /**
+   * Select random target from valid candidates (OSRS-accurate)
+   *
+   * OSRS selects targets randomly among all valid candidates,
+   * NOT by priority or first-found.
+   *
+   * @returns Random target from buffer, or null if empty
+   */
+  selectRandomTarget(): PlayerTarget | null {
+    const count = this._validTargetsBuffer.length;
+    if (count === 0) return null;
+    if (count === 1) return this._validTargetsBuffer[0];
+
+    // Random selection (uniform distribution)
+    const index = Math.floor(Math.random() * count);
+    return this._validTargetsBuffer[index];
+  }
+
+  /**
+   * Get count of valid targets in buffer
+   * Useful for debugging and testing
+   */
+  getValidTargetCount(): number {
+    return this._validTargetsBuffer.length;
+  }
+
+  /**
+   * Check if a player is a valid target (not dead, not loading)
+   */
+  private isValidTarget(player: {
+    id: string;
+    position?: Position3D;
+    node?: { position?: Position3D };
+  }): boolean {
+    // PlayerEntity has isDead() method and health as a number (not { current, max })
+    const playerObj = player as Record<string, unknown>;
+
+    // Check isDead() method
+    if (
+      typeof playerObj.isDead === "function" &&
+      (playerObj.isDead as () => boolean)()
+    ) {
+      return false;
+    }
+
+    // Check health as number
+    if (typeof playerObj.health === "number" && playerObj.health <= 0) {
+      return false;
+    }
+
+    // Check health.current for legacy/network data formats
+    const health = playerObj.health as { current?: number } | undefined;
+    if (health?.current !== undefined && health.current <= 0) {
+      return false;
+    }
+
+    // Check alive flag
+    if (playerObj.alive === false) {
+      return false;
+    }
+
+    // Check isLoading flag (skip players still loading)
+    if (playerObj.isLoading === true) {
+      return false;
+    }
+
+    return true;
   }
 
   /**
@@ -122,23 +216,8 @@ export class AggroManager {
     if (!playerPos) return null;
 
     // CRITICAL: Return null if player is dead (RuneScape-style: clear target when player dies)
-    // PlayerEntity has isDead() method and health as a number (not { current, max })
-    const playerObj = player as any;
-    if (typeof playerObj.isDead === "function" && playerObj.isDead()) {
-      return null; // Dead player (has isDead method)
-    }
-    if (typeof playerObj.health === "number" && playerObj.health <= 0) {
-      return null; // Dead player (health is 0)
-    }
-    // Also check health.current for legacy/network data formats
-    if (
-      playerObj.health?.current !== undefined &&
-      playerObj.health.current <= 0
-    ) {
-      return null; // Dead player (health.current is 0)
-    }
-    if (playerObj.alive === false) {
-      return null; // Dead player (alive flag)
+    if (!this.isValidTarget(player)) {
+      return null;
     }
 
     return {

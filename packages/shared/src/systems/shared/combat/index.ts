@@ -16,3 +16,6 @@ export * from "./CombatAnimationSync";
 
 // Anti-cheat monitoring (Phase 6 - Game Studio Hardening)
 export * from "./CombatAntiCheat";
+
+// OSRS-accurate range calculations
+export * from "./RangeSystem";
