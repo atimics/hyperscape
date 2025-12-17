@@ -164,6 +164,14 @@ export { AVATAR_OPTIONS } from "./data/avatars";
 // Export skill icons for XP displays
 export { SKILL_ICONS, getSkillIcon } from "./data/skill-icons";
 
+// Export skill unlocks for level-up notifications
+export {
+  SKILL_UNLOCKS,
+  getUnlocksAtLevel,
+  getUnlocksUpToLevel,
+} from "./data/skill-unlocks";
+export type { SkillUnlock, UnlockType } from "./data/skill-unlocks";
+
 // Export world area data for server use
 export { ALL_WORLD_AREAS } from "./data/world-areas";
 

@@ -22,6 +22,7 @@ import { MouseWheelIcon } from "../components/MouseWheelIcon";
 import { Sidebar } from "./Sidebar";
 import { StatusBars } from "./hud/StatusBars";
 import { XPProgressOrb } from "./hud/XPProgressOrb";
+import { LevelUpNotification } from "./hud/level-up";
 
 // Type for icon components
 type IconComponent = React.ComponentType<{ size?: number | string }>;
@@ -281,6 +282,7 @@ export function CoreUI({ world }: { world: ClientWorld }) {
         {ready && <ActionsBlock world={world} />}
         {ready && <StatusBars world={world} />}
         {ready && <XPProgressOrb world={world} />}
+        {ready && <LevelUpNotification world={world} />}
         {ready && (
           <Sidebar world={world} ui={ui || { active: false, pane: null }} />
         )}
