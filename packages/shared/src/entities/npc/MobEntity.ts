@@ -2039,6 +2039,7 @@ export class MobEntity extends CombatantEntity {
       attack: this.config.attack,
       attackPower: this.config.attackPower,
       defense: this.config.defense,
+      defenseBonus: this.config.defenseBonus ?? 0,
       attackSpeedTicks: this.config.attackSpeedTicks,
       xpReward: this.config.xpReward,
       aiState: this.mapAIStateToInterface(this.config.aiState),

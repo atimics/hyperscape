@@ -82,6 +82,7 @@ export interface CombatStats {
   attack?: number;
   strength?: number;
   defense?: number;
+  defenseBonus?: number; // Equipment/armor defense bonus
   ranged?: number;
   attackPower?: number;
 }
@@ -248,7 +249,7 @@ export function calculateDamage(
   // OSRS accuracy system: attack roll vs defence roll
   // Phase 3: Style bonuses now passed to accuracy calculation
   const targetDefense = target.stats?.defense || 1;
-  const targetDefenseBonus = 0; // Most NPCs have 0 defense bonus (would come from their equipment)
+  const targetDefenseBonus = target.stats?.defenseBonus ?? 0; // Equipment/armor bonus from mob data
 
   const didHit = calculateAccuracy(
     attackStat,
