@@ -20,7 +20,7 @@ import { MobAIState } from "../../types/entities";
 import {
   worldToTile,
   tilesEqual,
-  tilesWithinRange,
+  tilesWithinMeleeRange,
   getBestCombatRangeTile,
   tileToWorld,
   type TileCoord,
@@ -201,9 +201,14 @@ export class WanderState implements AIState {
  *
  * OSRS-STYLE COMBAT POSITIONING:
  * - Uses manifest combatRange to determine how close mob needs to get
- * - Mob chases until within combatRange tiles (Chebyshev distance 1-N)
+ * - Range 1 (standard melee): Cardinal only (N/S/E/W) - NO diagonal attacks
+ * - Range 2+ (halberd, spear): Allows diagonal attacks (Chebyshev distance)
  * - Mob paths to the nearest valid combat tile, not the exact player position
  * - This prevents entities from standing on top of each other
+ *
+ * IMPORTANT: Must use tilesWithinMeleeRange (not tilesWithinRange) to match
+ * CombatSystem's OSRS-accurate range validation. Using the wrong function
+ * causes mobs to get stuck when diagonally adjacent to players.
  *
  * @see https://oldschool.runescape.wiki/w/Attack_range
  */
@@ -245,8 +250,9 @@ export class ChaseState implements AIState {
     );
 
     // Check if already in combat range (uses manifest combatRange)
+    // OSRS-accurate: Range 1 = cardinal only, Range 2+ = allows diagonal
     const combatRangeTiles = context.getCombatRange();
-    if (tilesWithinRange(currentTile, targetTile, combatRangeTiles)) {
+    if (tilesWithinMeleeRange(currentTile, targetTile, combatRangeTiles)) {
       return MobAIState.ATTACK;
     }
 
@@ -292,8 +298,13 @@ export class ChaseState implements AIState {
  *
  * OSRS-STYLE MELEE COMBAT:
  * - Stay on current tile (don't move closer)
- * - Attack when on adjacent tile to target
- * - Switch to CHASE if target moves away (no longer adjacent)
+ * - Range 1 (standard melee): Cardinal only (N/S/E/W) - NO diagonal attacks
+ * - Range 2+ (halberd, spear): Allows diagonal attacks (Chebyshev distance)
+ * - Switch to CHASE if target moves away (no longer in valid attack range)
+ *
+ * IMPORTANT: Must use tilesWithinMeleeRange (not tilesWithinRange) to match
+ * CombatSystem's OSRS-accurate range validation. Using the wrong function
+ * causes mobs to get stuck when diagonally adjacent to players.
  *
  * @see https://oldschool.runescape.wiki/w/Attack_range
  */
@@ -335,9 +346,10 @@ export class AttackState implements AIState {
     );
 
     // Check if still in combat range
+    // OSRS-accurate: Range 1 = cardinal only, Range 2+ = allows diagonal
     // Also allow attacking if on same tile (edge case that shouldn't happen)
     const combatRangeTiles = context.getCombatRange();
-    const isInRange = tilesWithinRange(
+    const isInRange = tilesWithinMeleeRange(
       currentTile,
       targetTile,
       combatRangeTiles,
