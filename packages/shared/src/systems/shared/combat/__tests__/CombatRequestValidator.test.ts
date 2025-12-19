@@ -17,16 +17,18 @@ import {
 
 describe("CombatRequestValidator", () => {
   const TEST_SECRET = "this-is-a-test-secret-key-for-hmac";
+  const FIXED_TIME = new Date("2025-01-15T12:00:00Z").getTime(); // 1736942400000
   let validator: CombatRequestValidator;
+  let dateNowSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     validator = new CombatRequestValidator(TEST_SECRET);
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2025-01-15T12:00:00Z"));
+    // Mock Date.now to return a fixed time
+    dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(FIXED_TIME);
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    dateNowSpy.mockRestore();
   });
 
   describe("constructor", () => {

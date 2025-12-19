@@ -139,6 +139,10 @@ export class CombatSystem extends SystemBase {
   private readonly _attackerTile: PooledTile = tilePool.acquire();
   private readonly _targetTile: PooledTile = tilePool.acquire();
 
+  // AFK tracking for auto-retaliate disable (Phase 6.5.2)
+  // OSRS: Auto-retaliate disabled after 20 minutes of no input
+  private lastInputTick = new Map<string, number>();
+
   constructor(world: World) {
     super(world, {
       name: "combat",
@@ -1068,6 +1072,12 @@ export class CombatSystem extends SystemBase {
         );
       }
       // Note: If playerSystem is null, canRetaliate stays true (default OSRS behavior)
+
+      // Phase 6.5.2: OSRS-accurate AFK auto-retaliate disable
+      // After 20 minutes of no input, auto-retaliate is disabled
+      if (canRetaliate && this.isAFKTooLong(String(targetId), currentTick)) {
+        canRetaliate = false;
+      }
     }
 
     // Attacker always faces target
@@ -1415,6 +1425,61 @@ export class CombatSystem extends SystemBase {
   }
 
   /**
+   * Check if a player can logout based on combat state
+   * OSRS-accurate: Cannot logout while actively in combat
+   * Uses the combat timeout window to determine if player is in active combat
+   *
+   * @param playerId - The player's entity ID
+   * @param currentTick - The current game tick
+   * @returns Object with allowed boolean and optional reason string
+   */
+  public canLogout(
+    playerId: string,
+    currentTick: number,
+  ): { allowed: boolean; reason?: string } {
+    const combatData = this.stateService.getCombatData(playerId);
+
+    // Player is in active combat if:
+    // 1. They have combat data with inCombat flag
+    // 2. Current tick is before their combat end tick
+    if (combatData?.inCombat && currentTick < combatData.combatEndTick) {
+      return {
+        allowed: false,
+        reason: "Cannot logout during combat",
+      };
+    }
+
+    return { allowed: true };
+  }
+
+  /**
+   * Update the last input tick for a player
+   * Called by PlayerSystem when player performs any action
+   * OSRS: Auto-retaliate disabled after 20 minutes of no input
+   *
+   * @param playerId - The player's entity ID
+   * @param currentTick - The current game tick
+   */
+  public updatePlayerInput(playerId: string, currentTick: number): void {
+    this.lastInputTick.set(playerId, currentTick);
+  }
+
+  /**
+   * Check if a player has been AFK too long (20 minutes)
+   * OSRS-accurate: Auto-retaliate disabled after 2000 ticks of no input
+   *
+   * @param playerId - The player's entity ID
+   * @param currentTick - The current game tick
+   * @returns true if player has been AFK too long
+   */
+  public isAFKTooLong(playerId: string, currentTick: number): boolean {
+    const lastInput = this.lastInputTick.get(playerId) ?? currentTick;
+    return (
+      currentTick - lastInput >= COMBAT_CONSTANTS.AFK_DISABLE_RETALIATE_TICKS
+    );
+  }
+
+  /**
    * Clean up all combat state for a disconnecting player
    * Called when a player disconnects to prevent orphaned combat states
    * and allow mobs to immediately retarget other players
@@ -1439,6 +1504,9 @@ export class CombatSystem extends SystemBase {
 
     // Clean up rate limiter state (Phase 6.5)
     this.rateLimiter.cleanup(playerId);
+
+    // Clean up AFK tracking (Phase 6.5.2)
+    this.lastInputTick.delete(playerId);
 
     // Find all entities that were targeting this disconnected player
     const combatStatesMap = this.stateService.getCombatStatesMap();
@@ -1710,17 +1778,19 @@ export class CombatSystem extends SystemBase {
     }
   }
 
+  // =========================================================================
+  // AUTO-ATTACK HELPER METHODS (Phase 6.1 - Decomposition)
+  // =========================================================================
+
   /**
-   * Process auto-attack for a combatant on a specific tick (OSRS-accurate)
-   * This creates the continuous attack loop that makes combat feel like RuneScape
+   * Validate combat actors exist and are alive
+   * @returns Validated entities or null if validation fails
    */
-  private processAutoAttackOnTick(
+  private validateCombatActors(
     combatState: CombatData,
-    tickNumber: number,
-  ): void {
+  ): { attacker: Entity | MobEntity; target: Entity | MobEntity } | null {
     const attackerId = String(combatState.attackerId);
     const targetId = String(combatState.targetId);
-    const typedAttackerId = combatState.attackerId;
 
     const attacker = this.getEntity(attackerId, combatState.attackerType);
     const target = this.getEntity(targetId, combatState.targetType);
@@ -1729,46 +1799,64 @@ export class CombatSystem extends SystemBase {
     // If entity not found (dead mob, disconnected player, etc.), DON'T end combat immediately
     // Let the 8-tick timeout expire naturally to keep health bars visible
     if (!attacker || !target) {
-      return;
+      return null;
     }
 
     // Check if attacker is still alive (prevent dead attackers from auto-attacking)
     if (!this.isEntityAlive(attacker, combatState.attackerType)) {
-      return;
+      return null;
     }
 
     // Check if target is still alive
     if (!this.isEntityAlive(target, combatState.targetType)) {
-      return;
+      return null;
     }
 
-    // MVP: Melee-only range check (tile-based, OSRS-style)
+    return { attacker, target };
+  }
+
+  /**
+   * Validate attacker is within melee range of target
+   * Uses pooled tiles for zero GC overhead
+   * @returns true if within range, false otherwise
+   */
+  private validateAttackRange(
+    attacker: Entity | MobEntity,
+    target: Entity | MobEntity,
+    attackerType: "player" | "mob",
+  ): boolean {
     const attackerPos = getEntityPosition(attacker);
     const targetPos = getEntityPosition(target);
-    if (!attackerPos || !targetPos) return; // Missing position
+    if (!attackerPos || !targetPos) return false;
 
     // MELEE: Must be within attacker's combat range (configurable per mob, minimum 1 tile)
     // OSRS-style: range 1 = cardinal only (N/S/E/W), range 2+ = diagonal allowed
     // Use pre-allocated pooled tiles (zero GC)
     tilePool.setFromPosition(this._attackerTile, attackerPos);
     tilePool.setFromPosition(this._targetTile, targetPos);
-    const combatRangeTiles = this.getEntityCombatRange(
-      attacker,
-      combatState.attackerType,
-    );
-    // OSRS-accurate melee range check (cardinal-only for range 1)
-    if (
-      !tilesWithinMeleeRange(
-        this._attackerTile,
-        this._targetTile,
-        combatRangeTiles,
-      )
-    ) {
-      // Out of melee range - skip this attack (follow is handled by checkRangeAndFollow every tick)
-      return;
-    }
+    const combatRangeTiles = this.getEntityCombatRange(attacker, attackerType);
 
-    // OSRS-STYLE: Update entity facing to face target (RuneScape entities always face combat target)
+    // OSRS-accurate melee range check (cardinal-only for range 1)
+    return tilesWithinMeleeRange(
+      this._attackerTile,
+      this._targetTile,
+      combatRangeTiles,
+    );
+  }
+
+  /**
+   * Execute the attack: rotation, animation, damage calculation, and application
+   * @returns The damage dealt (capped at target's current health)
+   */
+  private executeAttackDamage(
+    attackerId: string,
+    targetId: string,
+    attacker: Entity | MobEntity,
+    target: Entity | MobEntity,
+    combatState: CombatData,
+    tickNumber: number,
+  ): number {
+    // OSRS-STYLE: Update entity facing to face target
     this.rotationManager.rotateTowardsTarget(
       attackerId,
       targetId,
@@ -1799,88 +1887,112 @@ export class CombatSystem extends SystemBase {
     this.emitTypedEvent(EventType.COMBAT_DAMAGE_DEALT, {
       attackerId,
       targetId,
-      damage, // Capped damage - matches actual damage applied
+      damage,
       targetType: combatState.targetType,
       position: targetPosition,
     });
 
-    // Check if combat state still exists (target may have died)
-    if (!this.stateService.getCombatStatesMap().has(typedAttackerId)) {
-      return;
-    }
+    return damage;
+  }
 
-    // Update tick-based tracking (OSRS-accurate)
+  /**
+   * Update combat state tick tracking after a successful attack
+   */
+  private updateCombatTickState(
+    combatState: CombatData,
+    typedAttackerId: EntityID,
+    tickNumber: number,
+  ): void {
     combatState.lastAttackTick = tickNumber;
     combatState.nextAttackTick = tickNumber + combatState.attackSpeedTicks;
     combatState.combatEndTick =
       tickNumber + COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS;
     this.nextAttackTicks.set(typedAttackerId, combatState.nextAttackTick);
+  }
 
-    // FIX: Auto-retaliate check for ongoing combat
-    // When a mob attacks a player via ongoing combat, the player may not have a
-    // combat state (e.g., they just killed their previous target). Check if we
-    // need to create a new retaliation state for the player.
-    if (combatState.targetType === "player") {
-      const targetPlayerState = this.stateService.getCombatData(targetId);
-      const shouldRetaliate =
-        this.playerSystem?.getPlayerAutoRetaliate(targetId) ?? true;
+  /**
+   * Handle player auto-retaliation when attacked
+   * Creates retaliation state if player needs to fight back
+   */
+  private handlePlayerRetaliation(
+    targetId: string,
+    attackerId: string,
+    typedAttackerId: EntityID,
+    attackerType: "player" | "mob",
+    tickNumber: number,
+  ): void {
+    const targetPlayerState = this.stateService.getCombatData(targetId);
+    let shouldRetaliate =
+      this.playerSystem?.getPlayerAutoRetaliate(targetId) ?? true;
 
-      // Player needs a new retaliation state if:
-      // 1. They have auto-retaliate ON, AND
-      // 2. They have no combat state, OR their current target is dead/invalid
-      if (shouldRetaliate) {
-        const needsNewTarget =
-          !targetPlayerState ||
-          !targetPlayerState.inCombat ||
-          !this.isEntityAlive(
-            this.getEntity(
-              String(targetPlayerState.targetId),
-              targetPlayerState.targetType,
-            ),
-            targetPlayerState.targetType,
-          );
-
-        if (needsNewTarget) {
-          // Create retaliation state for player targeting this attacker
-          const playerAttackSpeed = this.getAttackSpeedTicks(
-            createEntityID(targetId),
-            "player",
-          );
-          const retaliationDelay = calculateRetaliationDelay(playerAttackSpeed);
-
-          this.stateService.createRetaliatorState(
-            createEntityID(targetId),
-            typedAttackerId,
-            "player",
-            combatState.attackerType,
-            tickNumber,
-            retaliationDelay,
-            playerAttackSpeed,
-          );
-
-          // Sync combat state to player entity
-          this.stateService.syncCombatStateToEntity(
-            targetId,
-            attackerId,
-            "player",
-          );
-
-          // Face the attacker
-          this.rotationManager.rotateTowardsTarget(
-            targetId,
-            attackerId,
-            "player",
-            combatState.attackerType,
-          );
-
-          // Clear any server face target since player now has combat target
-          this.emitTypedEvent(EventType.COMBAT_CLEAR_FACE_TARGET, {
-            playerId: targetId,
-          });
-        }
-      }
+    // Phase 6.5.2: OSRS-accurate AFK auto-retaliate disable
+    // After 20 minutes of no input, auto-retaliate is disabled
+    if (shouldRetaliate && this.isAFKTooLong(targetId, tickNumber)) {
+      shouldRetaliate = false;
     }
 
+    // Player needs a new retaliation state if:
+    // 1. They have auto-retaliate ON, AND
+    // 2. They have no combat state, OR their current target is dead/invalid
+    if (!shouldRetaliate) return;
+
+    const needsNewTarget =
+      !targetPlayerState ||
+      !targetPlayerState.inCombat ||
+      !this.isEntityAlive(
+        this.getEntity(
+          String(targetPlayerState.targetId),
+          targetPlayerState.targetType,
+        ),
+        targetPlayerState.targetType,
+      );
+
+    if (!needsNewTarget) return;
+
+    // Create retaliation state for player targeting this attacker
+    const playerAttackSpeed = this.getAttackSpeedTicks(
+      createEntityID(targetId),
+      "player",
+    );
+    const retaliationDelay = calculateRetaliationDelay(playerAttackSpeed);
+
+    this.stateService.createRetaliatorState(
+      createEntityID(targetId),
+      typedAttackerId,
+      "player",
+      attackerType,
+      tickNumber,
+      retaliationDelay,
+      playerAttackSpeed,
+    );
+
+    // Sync combat state to player entity
+    this.stateService.syncCombatStateToEntity(targetId, attackerId, "player");
+
+    // Face the attacker
+    this.rotationManager.rotateTowardsTarget(
+      targetId,
+      attackerId,
+      "player",
+      attackerType,
+    );
+
+    // Clear any server face target since player now has combat target
+    this.emitTypedEvent(EventType.COMBAT_CLEAR_FACE_TARGET, {
+      playerId: targetId,
+    });
+  }
+
+  /**
+   * Emit combat events for visual feedback and UI
+   */
+  private emitCombatEvents(
+    attackerId: string,
+    targetId: string,
+    target: Entity | MobEntity,
+    damage: number,
+    combatState: CombatData,
+  ): void {
     // MVP: Emit melee attack event for visual feedback
     this.emitTypedEvent(EventType.COMBAT_MELEE_ATTACK, {
       attackerId,
@@ -1897,6 +2009,73 @@ export class CombatSystem extends SystemBase {
         type: "combat",
       });
     }
+  }
+
+  // =========================================================================
+  // MAIN AUTO-ATTACK METHOD (Refactored - Phase 6.1)
+  // =========================================================================
+
+  /**
+   * Process auto-attack for a combatant on a specific tick (OSRS-accurate)
+   * This creates the continuous attack loop that makes combat feel like RuneScape
+   *
+   * Decomposed into focused helper methods for maintainability:
+   * - validateCombatActors: Entity resolution and alive checks
+   * - validateAttackRange: Melee range validation
+   * - executeAttackDamage: Damage calculation and application
+   * - updateCombatTickState: Tick tracking updates
+   * - handlePlayerRetaliation: Auto-retaliate handling
+   * - emitCombatEvents: Event emission
+   */
+  private processAutoAttackOnTick(
+    combatState: CombatData,
+    tickNumber: number,
+  ): void {
+    const attackerId = String(combatState.attackerId);
+    const targetId = String(combatState.targetId);
+    const typedAttackerId = combatState.attackerId;
+
+    // Step 1: Validate combat actors exist and are alive
+    const actors = this.validateCombatActors(combatState);
+    if (!actors) return;
+    const { attacker, target } = actors;
+
+    // Step 2: Validate attack range
+    if (!this.validateAttackRange(attacker, target, combatState.attackerType)) {
+      return;
+    }
+
+    // Step 3: Execute attack (rotation, animation, damage)
+    const damage = this.executeAttackDamage(
+      attackerId,
+      targetId,
+      attacker,
+      target,
+      combatState,
+      tickNumber,
+    );
+
+    // Step 4: Check if combat state still exists (target may have died)
+    if (!this.stateService.getCombatStatesMap().has(typedAttackerId)) {
+      return;
+    }
+
+    // Step 5: Update combat tick state
+    this.updateCombatTickState(combatState, typedAttackerId, tickNumber);
+
+    // Step 6: Handle player retaliation if target is a player
+    if (combatState.targetType === "player") {
+      this.handlePlayerRetaliation(
+        targetId,
+        attackerId,
+        typedAttackerId,
+        combatState.attackerType,
+        tickNumber,
+      );
+    }
+
+    // Step 7: Emit combat events
+    this.emitCombatEvents(attackerId, targetId, target, damage, combatState);
   }
 
   /**
@@ -2082,24 +2261,6 @@ export class CombatSystem extends SystemBase {
     }
 
     return false;
-  }
-
-  /**
-   * RS3-style: Check if player is actively moving
-   * Movement suppresses player attacks - they only attack when standing still
-   *
-   * @param playerId - Player ID to check
-   * @returns true if player has an active movement path
-   */
-  private isPlayerMoving(playerId: string): boolean {
-    const playerEntity = this.getEntity(playerId, "player");
-    if (!playerEntity) return false;
-
-    // Check server-side movement flag set by TileMovementManager
-    // This flag is set when player has an active path and cleared when path completes
-    const data = (playerEntity as { data?: { tileMovementActive?: boolean } })
-      .data;
-    return data?.tileMovementActive === true;
   }
 
   destroy(): void {

@@ -67,10 +67,12 @@ function createMockPlayer(
 }
 
 // Mock mob entity
+// NOTE: Default position (1, 0, 0) is CARDINAL adjacent to player at (0, 0, 0)
+// OSRS melee range 1 requires cardinal adjacency (no diagonal attacks)
 function createMockMob(
   id: string,
   health: number = 50,
-  position = { x: 1, y: 0, z: 1 },
+  position = { x: 1, y: 0, z: 0 },
 ) {
   let currentHealth = health;
   return {

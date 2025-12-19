@@ -29,6 +29,7 @@ export const COMBAT_CONSTANTS = {
   LOGOUT_PREVENTION_TICKS: 16, // 9.6s - can't logout after taking damage
   HEALTH_REGEN_COOLDOWN_TICKS: 17, // 10.2s - cooldown after damage before regen starts
   HEALTH_REGEN_INTERVAL_TICKS: 100, // 60s - regenerate 1 HP every 100 ticks
+  AFK_DISABLE_RETALIATE_TICKS: 2000, // 20 minutes - auto-retaliate disabled after 20 min AFK
 
   // Weapon speed tiers in ticks (OSRS-accurate)
   // @see https://oldschool.runescape.wiki/w/Attack_speed
@@ -85,7 +86,8 @@ export const COMBAT_CONSTANTS = {
 
     // Hitsplat display duration (visible time in ticks)
     // @see https://oldschool.runescape.wiki/w/Hitsplat
-    HITSPLAT_DURATION_TICKS: 3,
+    // OSRS-accurate: 1-2 ticks (0.6-1.2s), we use 2 for clarity
+    HITSPLAT_DURATION_TICKS: 2,
 
     // Combat animation types
     EMOTE_COMBAT: "combat",
