@@ -12,6 +12,7 @@ import type { DamageHandler, DamageResult } from "./DamageHandler";
 import type { EntityID } from "../../../../types/core/identifiers";
 import type { Entity } from "../../../../entities/Entity";
 import { EventType } from "../../../../types/events";
+import { getMobRetaliates } from "../../../../utils/typeGuards";
 
 /**
  * Mob interface for damage operations
@@ -89,10 +90,9 @@ export class MobDamageHandler implements DamageHandler {
     const mob = this.getEntity(entityId) as MobLike | null;
     if (!mob) return false;
 
-    // Check if mob is configured to retaliate
-    // Access the config property - mobs with retaliates: false are peaceful
-    const mobConfig = mob as unknown as { config?: { retaliates?: boolean } };
-    return mobConfig.config?.retaliates ?? true;
+    // Check if mob is configured to retaliate using type guard
+    // Mobs with retaliates: false are peaceful (default: true)
+    return getMobRetaliates(mob);
   }
 
   isProtected(_entityId: EntityID): boolean {

@@ -120,6 +120,7 @@ import {
 import type { EntityID } from "../../types/core/identifiers";
 import { getNPCSize, getOccupiedTiles } from "./LargeNPCSupport";
 import { getGameRng } from "../../utils/SeededRandom";
+import { isTerrainSystem } from "../../utils/typeGuards";
 
 // Polyfill ProgressEvent for Node.js server environment
 if (typeof ProgressEvent === "undefined") {
@@ -1370,22 +1371,10 @@ export class MobEntity extends CombatantEntity {
       isWalkable: (tile) => {
         // Check terrain walkability using TerrainSystem if available
         const terrain = this.world.getSystem("terrain");
-        if (terrain) {
-          // Use unknown intermediate cast for type safety
-          const terrainWithWalkable = terrain as unknown as {
-            isPositionWalkable?: (
-              x: number,
-              z: number,
-            ) => { walkable: boolean };
-          };
-          if (typeof terrainWithWalkable.isPositionWalkable === "function") {
-            const worldPos = tileToWorld(tile);
-            const result = terrainWithWalkable.isPositionWalkable(
-              worldPos.x,
-              worldPos.z,
-            );
-            return result.walkable;
-          }
+        if (isTerrainSystem(terrain)) {
+          const worldPos = tileToWorld(tile);
+          const result = terrain.isPositionWalkable(worldPos.x, worldPos.z);
+          return result.walkable;
         }
         // Fallback: assume walkable if no terrain system
         return true;
@@ -1410,25 +1399,12 @@ export class MobEntity extends CombatantEntity {
           this.world.entityOccupancy,
           this.id as EntityID,
           (tile) => {
-            // Check terrain walkability using isPositionWalkable (matches isWalkable context method)
+            // Check terrain walkability using type guard
             const terrain = this.world.getSystem?.("terrain");
-            if (terrain) {
-              const terrainWithWalkable = terrain as unknown as {
-                isPositionWalkable?: (
-                  x: number,
-                  z: number,
-                ) => { walkable: boolean };
-              };
-              if (
-                typeof terrainWithWalkable.isPositionWalkable === "function"
-              ) {
-                const worldPos = tileToWorld(tile);
-                const result = terrainWithWalkable.isPositionWalkable(
-                  worldPos.x,
-                  worldPos.z,
-                );
-                return result.walkable;
-              }
+            if (isTerrainSystem(terrain)) {
+              const worldPos = tileToWorld(tile);
+              const result = terrain.isPositionWalkable(worldPos.x, worldPos.z);
+              return result.walkable;
             }
             // Fallback: assume walkable if no terrain system
             return true;

@@ -284,6 +284,7 @@ export { glbToNodes } from "./extras/three/glbToNodes";
 export { Emotes } from "./data/playerEmotes";
 export { ControlPriorities } from "./systems/client/ControlPriorities";
 export { downloadFile } from "./utils/downloadFile";
+export * from "./utils/typeGuards";
 export { Curve } from "./extras/animation/Curve";
 export { buttons, propToLabel } from "./extras/ui/buttons";
 // GLTFLoader export disabled due to TypeScript declaration generation issues

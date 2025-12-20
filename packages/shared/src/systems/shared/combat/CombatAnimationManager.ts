@@ -7,6 +7,7 @@
 
 import type { World } from "../../../core/World";
 import { Emotes } from "../../../data/playerEmotes";
+import { hasServerEmote, isEquipmentSystem } from "../../../utils/typeGuards";
 
 /**
  * Interface for player entity properties accessed for emote management
@@ -23,27 +24,11 @@ interface AnimatablePlayerEntity {
 }
 
 /**
- * Interface for mob entity with optional setServerEmote method
- */
-interface AnimatableMobEntity {
-  setServerEmote?: (emote: string) => void;
-}
-
-/**
  * Data for scheduled emote reset
  */
 interface EmoteResetData {
   tick: number;
   entityType: "player" | "mob";
-}
-
-/**
- * Equipment system interface for weapon checks
- */
-interface EquipmentSystemLike {
-  getPlayerEquipment?: (playerId: string) => {
-    weapon?: { item?: { weaponType?: string; id?: string } };
-  };
 }
 
 export class CombatAnimationManager {
@@ -148,11 +133,9 @@ export class CombatAnimationManager {
     let combatEmote = "combat"; // Default to punching
 
     // Get equipment from EquipmentSystem (source of truth)
-    const equipmentSystem = this.world.getSystem("equipment") as
-      | EquipmentSystemLike
-      | undefined;
+    const equipmentSystem = this.world.getSystem("equipment");
 
-    if (equipmentSystem?.getPlayerEquipment) {
+    if (isEquipmentSystem(equipmentSystem)) {
       const equipment = equipmentSystem.getPlayerEquipment(entityId);
 
       if (equipment?.weapon?.item) {
@@ -191,11 +174,9 @@ export class CombatAnimationManager {
   private setMobCombatEmote(entityId: string): void {
     // For mobs, send one-shot combat animation via setServerEmote()
     // Client returns to AI-state-based animation after
-    const mobEntity = this.world.entities.get(entityId) as
-      | AnimatableMobEntity
-      | undefined;
+    const mobEntity = this.world.entities.get(entityId);
 
-    if (mobEntity?.setServerEmote) {
+    if (hasServerEmote(mobEntity)) {
       mobEntity.setServerEmote(Emotes.COMBAT);
     }
   }
