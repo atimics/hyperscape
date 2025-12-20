@@ -21,10 +21,12 @@ import {
   worldToTile,
   tilesEqual,
   tilesWithinMeleeRange,
-  getBestCombatRangeTile,
+  getBestUnoccupiedMeleeTile,
   tileToWorld,
   type TileCoord,
 } from "../../systems/shared/movement/TileSystem";
+import type { IEntityOccupancy } from "../../systems/shared/movement/EntityOccupancyMap";
+import type { EntityID } from "../../types/core/identifiers";
 
 export interface AIStateContext {
   // Position & Movement
@@ -66,6 +68,14 @@ export interface AIStateContext {
   // State management
   markNetworkDirty(): void;
   emitEvent(eventType: string, data: unknown): void;
+
+  // Entity Occupancy (OSRS-accurate NPC collision)
+  /** Entity ID for occupancy exclusion */
+  getEntityId(): EntityID;
+  /** Entity occupancy map for collision checks */
+  getEntityOccupancy(): IEntityOccupancy;
+  /** Check if tile is walkable (terrain-based) */
+  isWalkable(tile: TileCoord): boolean;
 
   // Same-tile step-out (OSRS-accurate)
   /**
@@ -278,13 +288,20 @@ export class ChaseState implements AIState {
       return MobAIState.ATTACK;
     }
 
-    // PATH TO COMBAT RANGE TILE (not exact player position)
-    // Find the best tile within combat range that's closest to us
-    const combatTile = getBestCombatRangeTile(
-      targetTile,
+    // PATH TO COMBAT RANGE TILE (considering entity occupancy)
+    // Find the best tile within combat range that's:
+    // 1. Closest to attacker
+    // 2. Not blocked by another entity
+    // 3. Terrain-walkable
+    const combatTile = getBestUnoccupiedMeleeTile(
       currentTile,
+      targetTile,
+      context.getEntityOccupancy(),
+      context.getEntityId(),
+      (tile) => context.isWalkable(tile),
       combatRangeTiles,
     );
+
     if (combatTile) {
       // Convert combat tile to world position and move towards it
       const combatWorld = tileToWorld(combatTile);
@@ -293,9 +310,10 @@ export class ChaseState implements AIState {
         deltaTime,
       );
     } else {
-      // Fallback: no valid combat tile, try moving closer anyway
-      // This handles edge cases like all combat tiles being blocked
-      context.moveTowards(targetPlayer.position, deltaTime);
+      // All combat tiles are occupied or unwalkable
+      // Wait here - creates natural queuing behavior (OSRS-accurate)
+      // Will retry next tick when another mob might have moved
+      // Don't move toward player directly as that would cause stacking
     }
 
     return null; // Stay in CHASE

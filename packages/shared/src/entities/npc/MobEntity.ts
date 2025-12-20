@@ -1237,6 +1237,38 @@ export class MobEntity extends CombatantEntity {
         this.world.emit(eventType as EventType, data);
       },
 
+      // Entity Occupancy (OSRS-accurate NPC collision)
+      getEntityId: () => this.id as EntityID,
+      getEntityOccupancy: () => this.world.entityOccupancy,
+      isWalkable: (tile) => {
+        // Check terrain walkability using TerrainSystem if available
+        const terrain = this.world.getSystem("terrain");
+        if (
+          terrain &&
+          typeof (
+            terrain as {
+              isPositionWalkable?: (
+                x: number,
+                z: number,
+              ) => { walkable: boolean };
+            }
+          ).isPositionWalkable === "function"
+        ) {
+          const worldPos = tileToWorld(tile);
+          const result = (
+            terrain as {
+              isPositionWalkable: (
+                x: number,
+                z: number,
+              ) => { walkable: boolean };
+            }
+          ).isPositionWalkable(worldPos.x, worldPos.z);
+          return result.walkable;
+        }
+        // Fallback: assume walkable if no terrain system
+        return true;
+      },
+
       // Same-tile step-out (OSRS-accurate)
       // When NPC is on same tile as target, it cannot attack.
       // Pick random cardinal direction and try to move 1 tile.
