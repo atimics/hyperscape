@@ -114,8 +114,7 @@ import {
   tileToWorld,
   TICK_DURATION_MS,
   tileChebyshevDistance,
-  getRandomCardinalTile,
-  CARDINAL_DIRECTIONS,
+  getBestStepOutTile,
   type TileCoord,
 } from "../../systems/shared/movement/TileSystem";
 import type { EntityID } from "../../types/core/identifiers";
@@ -1394,26 +1393,65 @@ export class MobEntity extends CombatantEntity {
 
       // Same-tile step-out (OSRS-accurate)
       // When NPC is on same tile as target, it cannot attack.
-      // Pick random cardinal direction and try to move 1 tile.
-      // If blocked, server rejects movement - we try again next tick.
+      // Tries all 4 cardinal directions in shuffled order, picking the first
+      // valid tile (walkable terrain + no entity blocking).
+      // Returns false if ALL directions are blocked (mob is stuck).
       tryStepOutCardinal: (): boolean => {
         const currentPos = this.getPosition();
         const currentTile = worldToTile(currentPos.x, currentPos.z);
 
-        // Use game RNG for deterministic random direction
+        // Use game RNG for deterministic shuffled direction order
         const rng = getGameRng();
-        const targetTile = getRandomCardinalTile(currentTile, rng);
+
+        // Find best step-out tile (checks walkability + entity occupancy)
+        // Uses shuffled order for OSRS-style randomness
+        const stepOutTile = getBestStepOutTile(
+          currentTile,
+          this.world.entityOccupancy,
+          this.id as EntityID,
+          (tile) => {
+            // Check terrain walkability using isPositionWalkable (matches isWalkable context method)
+            const terrain = this.world.getSystem?.("terrain");
+            if (terrain) {
+              const terrainWithWalkable = terrain as unknown as {
+                isPositionWalkable?: (
+                  x: number,
+                  z: number,
+                ) => { walkable: boolean };
+              };
+              if (
+                typeof terrainWithWalkable.isPositionWalkable === "function"
+              ) {
+                const worldPos = tileToWorld(tile);
+                const result = terrainWithWalkable.isPositionWalkable(
+                  worldPos.x,
+                  worldPos.z,
+                );
+                return result.walkable;
+              }
+            }
+            // Fallback: assume walkable if no terrain system
+            return true;
+          },
+          rng,
+        );
+
+        // If no valid tile found, all directions are blocked
+        if (!stepOutTile) {
+          // All cardinal tiles blocked - wait for next tick
+          // In OSRS, mob would be stuck until a tile opens up
+          return false;
+        }
 
         // Convert to world position
-        const targetWorld = tileToWorld(targetTile);
+        const targetWorld = tileToWorld(stepOutTile);
         const targetPos = {
           x: targetWorld.x,
           y: currentPos.y,
           z: targetWorld.z,
         };
 
-        // Emit movement request (server will validate walkability)
-        // If blocked, movement simply won't happen - OSRS behavior
+        // Emit movement request
         this.world.emit(EventType.MOB_NPC_MOVE_REQUEST, {
           mobId: this.id,
           targetPos: targetPos,
@@ -1421,7 +1459,7 @@ export class MobEntity extends CombatantEntity {
           tilesPerTick: 1, // Single tile step
         });
 
-        return true; // Request sent (server determines if walkable)
+        return true; // Valid tile found and movement requested
       },
     };
   }

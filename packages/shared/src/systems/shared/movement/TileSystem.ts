@@ -516,6 +516,96 @@ export function getRandomCardinalTile(
   };
 }
 
+// ============================================================================
+// PRE-ALLOCATED BUFFER FOR STEP-OUT (Zero-allocation)
+// ============================================================================
+
+/**
+ * Pre-allocated buffer for step-out tile selection.
+ * Avoids creating new arrays on each call.
+ */
+const _stepOutBuffer: TileCoord[] = [
+  { x: 0, z: 0 },
+  { x: 0, z: 0 },
+  { x: 0, z: 0 },
+  { x: 0, z: 0 },
+];
+
+/**
+ * Find the best cardinal tile to step out to when on same tile as target.
+ *
+ * OSRS-accurate: When an NPC is on the same tile as its target, it must
+ * step out to a cardinal tile before it can attack. This function finds
+ * the first valid tile by:
+ * 1. Shuffling all 4 cardinal directions (maintains OSRS randomness)
+ * 2. Checking each for terrain walkability AND entity occupancy
+ * 3. Returning the first valid tile found
+ *
+ * This prevents the "thrashing" bug where random single-direction picking
+ * could repeatedly select blocked tiles while valid tiles exist.
+ *
+ * Memory: Uses pre-allocated buffer to avoid GC pressure in hot paths.
+ *
+ * @param currentTile - Mob's current tile (same as target)
+ * @param occupancy - Entity occupancy map for collision checking
+ * @param entityId - Mob's entity ID (excluded from occupancy check)
+ * @param isWalkable - Terrain walkability check function
+ * @param rng - RNG for shuffling directions (deterministic)
+ * @returns Best tile to step to, or null if all 4 cardinal tiles are blocked
+ *
+ * @see https://osrs-docs.com/docs/mechanics/entity-collision/
+ */
+export function getBestStepOutTile(
+  currentTile: TileCoord,
+  occupancy: IEntityOccupancy,
+  entityId: EntityID,
+  isWalkable: (tile: TileCoord) => boolean,
+  rng: { nextInt: (max: number) => number },
+): TileCoord | null {
+  // Populate buffer with cardinal tiles
+  // South
+  _stepOutBuffer[0].x = currentTile.x;
+  _stepOutBuffer[0].z = currentTile.z - 1;
+  // North
+  _stepOutBuffer[1].x = currentTile.x;
+  _stepOutBuffer[1].z = currentTile.z + 1;
+  // West
+  _stepOutBuffer[2].x = currentTile.x - 1;
+  _stepOutBuffer[2].z = currentTile.z;
+  // East
+  _stepOutBuffer[3].x = currentTile.x + 1;
+  _stepOutBuffer[3].z = currentTile.z;
+
+  // Fisher-Yates shuffle for random order (OSRS-style randomness)
+  for (let i = 3; i > 0; i--) {
+    const j = rng.nextInt(i + 1);
+    // Swap values (not references, to keep buffer intact)
+    const tempX = _stepOutBuffer[i].x;
+    const tempZ = _stepOutBuffer[i].z;
+    _stepOutBuffer[i].x = _stepOutBuffer[j].x;
+    _stepOutBuffer[i].z = _stepOutBuffer[j].z;
+    _stepOutBuffer[j].x = tempX;
+    _stepOutBuffer[j].z = tempZ;
+  }
+
+  // Find first valid tile
+  for (let i = 0; i < 4; i++) {
+    const tile = _stepOutBuffer[i];
+
+    // Check terrain walkability first (cheaper check)
+    if (!isWalkable(tile)) continue;
+
+    // Check entity occupancy (exclude self)
+    if (occupancy.isBlocked(tile, entityId)) continue;
+
+    // Found a valid tile - return a copy (buffer will be reused)
+    return { x: tile.x, z: tile.z };
+  }
+
+  // All tiles blocked
+  return null;
+}
+
 /**
  * Check if a direction is diagonal
  */

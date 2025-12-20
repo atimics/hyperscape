@@ -702,6 +702,7 @@ export {
   getBestCombatRangeTile,
   getBestMeleeTile,
   getBestUnoccupiedMeleeTile,
+  getBestStepOutTile,
   getAdjacentTiles,
   isDiagonal,
   tileKey,

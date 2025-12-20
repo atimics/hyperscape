@@ -394,9 +394,17 @@ export class AttackState implements AIState {
     // When on same tile, NPC cannot attack - must step out first
     // "The tile underneath the NPC itself is not part of the attack range"
     if (isSameTile) {
-      // Try to step out to a random cardinal tile (OSRS behavior)
-      // If blocked, do nothing this tick - try again next tick
-      context.tryStepOutCardinal();
+      // Try to step out to a cardinal tile (checks all 4 directions)
+      // Returns false if ALL directions are blocked (terrain or entities)
+      const stepOutSuccess = context.tryStepOutCardinal();
+
+      // If step-out failed, all cardinal tiles are blocked
+      // Stay in ATTACK state and retry next tick - a tile may open up
+      // This is OSRS-accurate: mob waits until it can step out
+      if (!stepOutSuccess) {
+        // All tiles blocked - will retry next tick
+        // No action needed, just wait
+      }
 
       // Stay in ATTACK state - we're still in combat, just repositioning
       return null;
