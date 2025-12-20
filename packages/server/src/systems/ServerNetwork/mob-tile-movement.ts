@@ -32,6 +32,7 @@ import {
   getChasePathfinder,
   MobEntity,
   getBestUnoccupiedMeleeTile,
+  tileKey,
 } from "@hyperscape/shared";
 import type {
   TileCoord,
@@ -128,6 +129,15 @@ export class MobTileMovementManager {
     { x: 0, z: 0 },
     { x: 0, z: 0 },
   ];
+
+  /**
+   * Destination claims for current tick (prevents multiple mobs targeting same tile)
+   *
+   * When a mob selects a melee tile as its destination, it's added here.
+   * Other mobs in the same tick will see it as "claimed" and pick a different tile.
+   * Cleared at the start of each onTick() call.
+   */
+  private readonly _claimedDestinations: Set<string> = new Set();
 
   constructor(
     private world: World,
@@ -393,6 +403,10 @@ export class MobTileMovementManager {
   onTick(tickNumber: number): void {
     const terrain = this.getTerrain();
 
+    // Clear destination claims from previous tick
+    // This prevents mobs from claiming the same melee tile in the same tick
+    this._claimedDestinations.clear();
+
     if (this.DEBUG_MODE && this.mobStates.size > 0) {
       // Log occupancy stats at tick start
       const stats = this.world.entityOccupancy.getStats();
@@ -485,12 +499,15 @@ export class MobTileMovementManager {
 
           // NOT in combat range - find best unoccupied melee tile and path toward it
           // This prevents all mobs from trying to reach the same tile around the player
+          // Also check claimed destinations to prevent multiple mobs targeting same tile in same tick
           const destinationTile = getBestUnoccupiedMeleeTile(
             state.currentTile,
             this._targetTile,
             this.world.entityOccupancy,
             mobId as EntityID,
-            (tile) => this.isTileWalkable(tile),
+            (tile) =>
+              this.isTileWalkable(tile) &&
+              !this._claimedDestinations.has(tileKey(tile)),
             combatRange,
           );
 
@@ -498,13 +515,16 @@ export class MobTileMovementManager {
           if (!destinationTile) {
             if (this.DEBUG_MODE)
               console.log(
-                `[MobTileMovement] WAIT: Mob ${mobId} at (${state.currentTile.x},${state.currentTile.z}) - all melee tiles around target (${this._targetTile.x},${this._targetTile.z}) are occupied, waiting`,
+                `[MobTileMovement] WAIT: Mob ${mobId} at (${state.currentTile.x},${state.currentTile.z}) - all melee tiles around target (${this._targetTile.x},${this._targetTile.z}) are occupied or claimed, waiting`,
               );
             state.path = [];
             state.pathIndex = 0;
             state.hasDestination = false;
             continue; // Skip movement - wait for a tile to open up
           }
+
+          // Claim this destination so other mobs in this tick won't target it
+          this._claimedDestinations.add(tileKey(destinationTile));
 
           if (this.DEBUG_MODE)
             console.log(
@@ -853,19 +873,25 @@ export class MobTileMovementManager {
         }
 
         // Find best unoccupied melee tile (prevents stacking)
+        // Also check claimed destinations to prevent multiple mobs targeting same tile
         const destinationTile = getBestUnoccupiedMeleeTile(
           state.currentTile,
           currentTargetTile,
           this.world.entityOccupancy,
           mobId as EntityID,
-          (tile) => this.isTileWalkable(tile),
+          (tile) =>
+            this.isTileWalkable(tile) &&
+            !this._claimedDestinations.has(tileKey(tile)),
           combatRange,
         );
 
         // If no unoccupied melee tile available, wait
         if (!destinationTile) {
-          return; // All melee tiles occupied - wait for one to open up
+          return; // All melee tiles occupied or claimed - wait for one to open up
         }
+
+        // Claim this destination so other mobs in this tick won't target it
+        this._claimedDestinations.add(tileKey(destinationTile));
 
         // Calculate chase path toward the unoccupied melee tile
         const newPath: TileCoord[] = [];
