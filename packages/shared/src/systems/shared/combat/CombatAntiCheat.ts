@@ -2,13 +2,7 @@
  * Combat Anti-Cheat Monitor
  *
  * Detects and logs suspicious combat patterns for admin review.
- * This is a MONITORING system, not a blocking system - it logs
- * violations but does not prevent gameplay.
- *
- * The actual blocking is done by input validators and CombatSystem checks.
- * This system tracks patterns over time to identify potential bad actors.
- *
- * @see COMBAT_SYSTEM_HARDENING_PLAN.md Phase 6: Game Studio Hardening
+ * Monitors patterns over time to identify potential bad actors.
  */
 
 import type { EntityID } from "../../../types/core/identifiers";
@@ -105,10 +99,6 @@ const VIOLATION_WEIGHTS: Record<CombatViolationSeverity, number> = {
 
 /**
  * Configuration for anti-cheat thresholds
- * All values can be tuned at runtime without code changes
- *
- * @see COMBAT_SYSTEM_IMPROVEMENTS.md Section 4.2
- * @see OSRS-IMPLEMENTATION-PLAN.md Phase 5.2
  */
 export interface AntiCheatConfig {
   /** Score threshold for logging a warning (default: 25) */
@@ -153,12 +143,6 @@ export interface AntiCheatMetric {
  */
 export type MetricsCallback = (metric: AntiCheatMetric) => void;
 
-/**
- * Default anti-cheat configuration
- * Can be overridden per-instance for different environments
- *
- * @see OSRS-IMPLEMENTATION-PLAN.md Phase 5.2
- */
 const DEFAULT_CONFIG: AntiCheatConfig = {
   warningThreshold: 25,
   alertThreshold: 75,
@@ -777,22 +761,9 @@ export class CombatAntiCheat {
     }
   }
 
-  // =========================================================================
-  // XP AND DAMAGE VALIDATION (Phase 5.4 & 5.5)
-  // =========================================================================
-
   /**
    * Validate XP gain is within possible bounds
-   *
-   * OSRS XP per hit: HP XP = damage × 1.33, combat XP = damage × 4
-   * Max damage per hit ≈ 99, so max XP per hit ≈ 396
-   *
-   * @param playerId - Player gaining XP (accepts both EntityID and string)
-   * @param xpAmount - Amount of XP gained
-   * @param currentTick - Current game tick
-   * @returns true if XP gain is valid, false if suspicious
-   *
-   * @see OSRS-IMPLEMENTATION-PLAN.md Phase 5.4
+   * Max XP per hit ≈ 396 (99 damage × 4)
    */
   validateXPGain(
     playerId: EntityID | string,
@@ -850,18 +821,7 @@ export class CombatAntiCheat {
 
   /**
    * Validate damage is within possible bounds for attacker's stats
-   *
-   * Uses OSRS max hit formula to calculate theoretical maximum.
-   * Adds 10% tolerance for special attacks / future mechanics.
-   *
-   * @param attackerId - Player/entity dealing damage (accepts both EntityID and string)
-   * @param damage - Damage dealt
-   * @param attackerStrength - Attacker's strength level
-   * @param attackerStrengthBonus - Attacker's equipment strength bonus
-   * @param currentTick - Current game tick (optional)
-   * @returns true if damage is valid, false if suspicious
-   *
-   * @see OSRS-IMPLEMENTATION-PLAN.md Phase 5.5
+   * Uses max hit formula with 10% tolerance for special attacks.
    */
   validateDamage(
     attackerId: EntityID | string,

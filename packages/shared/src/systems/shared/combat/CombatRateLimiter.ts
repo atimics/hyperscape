@@ -1,15 +1,7 @@
 /**
  * CombatRateLimiter - Rate limiting for combat requests
  *
- * Prevents players from sending excessive combat requests that could:
- * - Overwhelm the server with attack processing
- * - Exploit race conditions in combat logic
- * - Create unfair advantages through request flooding
- *
- * This operates at the network layer, BEFORE requests reach CombatSystem.
- * Works in conjunction with CombatAntiCheat which monitors patterns over time.
- *
- * @see COMBAT_SYSTEM_HARDENING_PLAN.md Phase 6: Game Studio Hardening
+ * Prevents request flooding that could overwhelm the server.
  */
 
 import type { EntityID } from "../../../types/core/identifiers";

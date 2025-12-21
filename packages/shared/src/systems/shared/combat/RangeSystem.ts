@@ -1,19 +1,8 @@
 /**
- * RangeSystem - OSRS-accurate range calculations
+ * RangeSystem - Range calculations for NPC aggro and combat
  *
- * OSRS has THREE distinct range types:
- * 1. Hunt Range: Where NPC searches for targets (origin: SW tile)
- * 2. Attack Range: Where NPC can perform attacks (origin: ALL occupied tiles)
- * 3. Max Range: Maximum distance from spawn (origin: spawn point)
- *
- * Key differences from naive implementations:
- * - Hunt range uses only the SW tile as origin
- * - Attack range checks from ALL tiles the NPC occupies
- * - Large NPCs (2x2, 3x3) occupy multiple tiles
- * - Melee range 1 excludes diagonals (cardinal only)
- *
- * @see https://oldschool.runescape.wiki/w/Aggressiveness
- * @see MOB_AGGRO_IMPLEMENTATION_PLAN.md Phase 2.2
+ * Three range types: Hunt, Attack, and Max range.
+ * Large NPCs check from all occupied tiles.
  */
 
 import type { TileCoord } from "../movement/TileSystem";

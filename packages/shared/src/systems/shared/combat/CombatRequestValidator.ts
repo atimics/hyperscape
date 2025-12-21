@@ -1,20 +1,10 @@
 /**
  * Combat Request Validator with HMAC Signing
  *
- * Provides request signing and validation for combat actions.
- * Prevents request forgery and replay attacks.
- *
- * Uses HMAC-SHA256 for signature generation and verification.
- * Includes timestamp freshness checks to prevent replay attacks.
- *
- * @see OSRS-IMPLEMENTATION-PLAN.md Phase 5.3
+ * Request signing to prevent forgery and replay attacks.
  */
 
 import { createHmac } from "crypto";
-
-// =============================================================================
-// TYPES
-// =============================================================================
 
 /**
  * Combat action types that can be signed

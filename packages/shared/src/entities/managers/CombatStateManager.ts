@@ -19,7 +19,6 @@
  * not immediately. This prevents instant damage when mobs aggro.
  *
  * @see https://oldschool.runescape.wiki/w/Attack_speed
- * @see MOB_AGGRO_IMPLEMENTATION_PLAN.md Phase 3.3
  */
 
 export interface CombatStateConfig {

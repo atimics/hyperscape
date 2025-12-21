@@ -1,13 +1,7 @@
 /**
- * CombatReplayService - High-level combat replay and debugging
+ * CombatReplayService - Combat replay and debugging
  *
- * Provides developer-friendly APIs for:
- * - Investigating player reports ("I got hit for 50 when max is 20!")
- * - Debugging combat issues with full event history
- * - Replaying combat sequences with deterministic RNG
- * - Detecting desync between client and server
- *
- * @see OSRS-IMPLEMENTATION-PLAN.md Phase 7 - EventStore Integration
+ * APIs for investigating reports, debugging, and replaying combat.
  */
 
 import {

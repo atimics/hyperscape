@@ -205,15 +205,13 @@ export class PlayerDeathSystem extends SystemBase {
       (data: { headstoneId: string; playerId: string }) =>
         this.handleHeadstoneExpired(data),
     );
-    // CRITICAL: Clean up death lock when gravestone is fully looted
-    // Prevents database memory leak and ensures proper respawn state
+    // Clean up death lock when gravestone is fully looted
     this.subscribe(
       EventType.CORPSE_EMPTY,
       (data: { corpseId: string; playerId: string }) =>
         this.handleCorpseEmpty(data),
     );
-    // CRITICAL: Validate death state on player reconnect
-    // Prevents item duplication when player disconnects during death
+    // Validate death state on player reconnect
     this.subscribe(EventType.PLAYER_JOINED, (data: { playerId: string }) =>
       this.handlePlayerReconnect(data),
     );
@@ -371,34 +369,32 @@ export class PlayerDeathSystem extends SystemBase {
     deathPosition: { x: number; y: number; z: number },
     killedBy: string,
   ): Promise<void> {
-    // CRITICAL: Server authority check - prevent client from triggering death events
+    // Server-only - prevent client from triggering death events
     if (!this.world.isServer) {
       console.error(
-        `[PlayerDeathSystem] ⚠️  Client attempted server-only death processing for ${playerId} - BLOCKED`,
+        `[PlayerDeathSystem] Client attempted server-only death processing for ${playerId}`,
       );
       return;
     }
 
-    // CRITICAL: Rate limiter - prevent death spam exploits
+    // Rate limiter - prevent death spam exploits
     const lastDeath = this.lastDeathTime.get(playerId) || 0;
     const timeSinceDeath = Date.now() - lastDeath;
 
     if (timeSinceDeath < this.DEATH_COOLDOWN) {
       console.warn(
-        `[PlayerDeathSystem] ⚠️  Death spam detected for ${playerId} - ` +
-          `${timeSinceDeath}ms since last death (cooldown: ${this.DEATH_COOLDOWN}ms) - BLOCKED`,
+        `[PlayerDeathSystem] Death spam detected for ${playerId} - ` +
+          `${timeSinceDeath}ms since last death (cooldown: ${this.DEATH_COOLDOWN}ms)`,
       );
       return;
     }
 
-    // CRITICAL: Check for active death lock - prevents duplicate deaths
-    // This checks both in-memory AND database (for reconnect scenarios)
+    // Check for active death lock - prevents duplicate deaths
     const hasActiveDeathLock =
       await this.deathStateManager.hasActiveDeathLock(playerId);
     if (hasActiveDeathLock) {
       console.warn(
-        `[PlayerDeathSystem] ⚠️  Player ${playerId} already has active death lock - ` +
-          `cannot die again until resolved - BLOCKED`,
+        `[PlayerDeathSystem] Player ${playerId} already has active death lock`,
       );
       return;
     }
@@ -432,7 +428,7 @@ export class PlayerDeathSystem extends SystemBase {
     let itemsToDrop: InventoryItem[] = [];
 
     try {
-      // CRITICAL: Wrap entire death flow in transaction for atomicity
+      // Wrap entire death flow in transaction for atomicity
       await databaseSystem.executeInTransaction(async (tx: unknown) => {
         // Step 1: Get inventory items (read-only, non-destructive)
         const inventory = inventorySystem.getInventory(playerId);
@@ -507,8 +503,7 @@ export class PlayerDeathSystem extends SystemBase {
           );
         }
 
-        // Step 4: CRITICAL - Clear inventory AND equipment LAST (safest point for destructive operation)
-        // If we crash before this point, transaction rolls back and nothing is cleared
+        // Clear inventory and equipment last (if crash occurs before, transaction rolls back)
         await inventorySystem.clearInventoryImmediate(playerId);
 
         // Also clear equipment
@@ -523,7 +518,7 @@ export class PlayerDeathSystem extends SystemBase {
       this.postDeathCleanup(playerId, deathPosition, itemsToDrop, killedBy);
     } catch (error) {
       console.error(
-        `[PlayerDeathSystem] ❌ Death transaction failed for ${playerId}, rolled back:`,
+        `[PlayerDeathSystem] Death transaction failed for ${playerId}, rolled back:`,
         error,
       );
       // Transaction automatically rolled back
@@ -858,8 +853,7 @@ export class PlayerDeathSystem extends SystemBase {
       type: "info",
     });
 
-    // CRITICAL: Clear death lock after successful respawn
-    // This prevents stale death locks from blocking future logins
+    // Clear death lock after successful respawn
     this.deathStateManager.clearDeathLock(playerId);
   }
 
@@ -1003,9 +997,8 @@ export class PlayerDeathSystem extends SystemBase {
   }
 
   /**
-   * Handle player reconnect - validate death state
-   * CRITICAL: Prevents item duplication when player disconnects during death
-   *
+   * Handle player reconnect - validate death state.
+   * Prevents item duplication when player disconnects during death.
    * Called when player reconnects to server
    * - Checks for active death lock in database
    * - Restores death screen UI if death lock exists
@@ -1044,8 +1037,7 @@ export class PlayerDeathSystem extends SystemBase {
         this.initiateRespawn(playerId);
       }, 500); // 0.5 second delay
 
-      // CRITICAL: Block inventory load until respawn
-      // This prevents inventory items from appearing when player is dead
+      // Block inventory load until respawn
       return { blockInventoryLoad: true };
     }
 
@@ -1170,8 +1162,8 @@ export class PlayerDeathSystem extends SystemBase {
   }
 
   /**
-   * Handle CORPSE_EMPTY event - called when all items are looted from gravestone
-   * CRITICAL: Clears death lock from database to prevent memory leak
+   * Handle CORPSE_EMPTY event - called when all items are looted from gravestone.
+   * Clears death lock from database.
    */
   private async handleCorpseEmpty(data: {
     corpseId: string;

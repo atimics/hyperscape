@@ -377,9 +377,8 @@ export class AggroSystem extends SystemBase {
       return false;
     }
 
-    // Phase 4: Check tolerance timer
-    // After 10 minutes in a 21x21 region, mobs stop being aggressive to the player
-    // Tolerance-immune mobs (bosses) ignore this check
+    // Check tolerance timer - after 10 minutes in region, mobs ignore player
+    // Tolerance-immune mobs (bosses) skip this check
     if (!toleranceImmune && this.hasToleranceExpired(playerId)) {
       return false;
     }
@@ -479,10 +478,6 @@ export class AggroSystem extends SystemBase {
     };
   }
 
-  // =============================================================================
-  // TOLERANCE SYSTEM (Phase 4)
-  // =============================================================================
-
   /**
    * Update tolerance state for a player based on their current position
    *
@@ -563,10 +558,6 @@ export class AggroSystem extends SystemBase {
     const remaining = state.toleranceExpiredTick - this.currentTick;
     return Math.max(0, remaining);
   }
-
-  // =============================================================================
-  // CHASE AND COMBAT METHODS
-  // =============================================================================
 
   private startChasing(mobState: MobAIStateData, playerId: string): void {
     mobState.isChasing = true;

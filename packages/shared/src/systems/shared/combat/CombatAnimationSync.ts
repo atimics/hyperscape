@@ -1,22 +1,8 @@
 /**
- * CombatAnimationSync - Animation-Damage Synchronization (Phase 4)
+ * CombatAnimationSync - Animation-Damage Synchronization
  *
- * Coordinates combat animations with damage application and hitsplat display.
- * Ensures damage appears at the visual "hit" moment of attack animations.
- *
- * OSRS Animation Synchronization:
- * @see https://oldschool.runescape.wiki/w/Hitsplat
- *
- * Attack animation keyframes:
- * - Frame 0: Wind-up starts (weapon raises)
- * - Frame 0.5: Weapon connects (DAMAGE APPLIES HERE)
- * - Frame 1.0: Follow-through completes
- *
- * The damage frame is calculated as:
- *   damageFrame = ceil(attackSpeedTicks * HIT_FRAME_RATIO)
- *
- * For a 4-tick attack (2.4s):
- *   damageFrame = ceil(4 * 0.5) = 2 ticks after animation starts
+ * Coordinates combat animations with damage application.
+ * Damage appears at the visual "hit" moment (mid-animation).
  *
  * This ensures:
  * 1. Animation starts immediately when attack is queued
@@ -204,7 +190,6 @@ export class CombatAnimationSync {
       attackSpeedTicks * ANIMATION.HIT_FRAME_RATIO,
     );
 
-    // 3. Calculate hit delay based on attack type (Phase 3)
     let hitDelayTicks = 0;
     switch (attackType) {
       case "melee":

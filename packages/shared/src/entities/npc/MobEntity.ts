@@ -146,14 +146,12 @@ if (typeof ProgressEvent === "undefined") {
 export class MobEntity extends CombatantEntity {
   protected config: MobEntityConfig;
 
-  // ===== COMPONENTS (Clean Separation of Concerns) =====
   private deathManager: DeathStateManager;
   private combatManager: CombatStateManager;
   private aiStateMachine: AIStateMachine;
   private respawnManager: RespawnManager;
   private aggroManager: AggroManager;
 
-  // ===== RENDERING =====
   private _avatarInstance: VRMAvatarInstance | null = null;
   private _currentEmote: string | null = null;
   private _serverEmote: string | null = null; // Server-forced one-shot emote (e.g., combat)
@@ -171,11 +169,9 @@ export class MobEntity extends CombatantEntity {
   // Placeholder hitbox for click detection before VRM loads (RuneScape-style: entity is functional immediately)
   private _placeholderHitbox: THREE.Mesh | null = null;
 
-  // ===== PATROL SYSTEM (Can be componentized later) =====
   private patrolPoints: Array<{ x: number; z: number }> = [];
   private currentPatrolIndex = 0;
 
-  // ===== MOVEMENT (Can be componentized later) =====
   private _wanderTarget: { x: number; z: number } | null = null;
   private _lastPosition: THREE.Vector3 | null = null;
   private _stuckTimer = 0;
@@ -185,10 +181,7 @@ export class MobEntity extends CombatantEntity {
   private _lastRequestedTargetTile: { x: number; z: number } | null = null;
   private _lastMoveRequestTick: number = -1;
 
-  // ===== ENTITY OCCUPANCY (OSRS-accurate NPC collision) =====
   // Pre-allocated buffers for zero-allocation hot path operations
-  // @see NPC_ENTITY_COLLISION_PLAN.md
-
   /** Reusable buffer for occupied tiles (max 5x5 = 25 tiles for large bosses) */
   private readonly _occupiedTilesBuffer: TileCoord[] = Array.from(
     { length: 25 },
@@ -220,10 +213,6 @@ export class MobEntity extends CombatantEntity {
 
   /** Max spiral search radius for unoccupied spawn tile */
   private readonly MAX_SPAWN_SEARCH_RADIUS = 10;
-
-  // ============================================================================
-  // ENTITY OCCUPANCY METHODS (OSRS-accurate NPC collision)
-  // ============================================================================
 
   /**
    * Find an unoccupied tile for spawning using spiral search
@@ -325,8 +314,6 @@ export class MobEntity extends CombatantEntity {
    *
    * OSRS Mechanic: Flags set when entity spawns/moves TO a tile
    * If spawn tile is occupied, finds nearby unoccupied tile first.
-   *
-   * @see NPC_ENTITY_COLLISION_PLAN.md Phase 2
    */
   private registerOccupancy(): void {
     // Server-only: occupancy tracking is authoritative
@@ -371,8 +358,6 @@ export class MobEntity extends CombatantEntity {
     );
 
     // Check if this mob should ignore collision (bosses, special NPCs)
-    // Default: regular mobs DO block other entities
-    // @see NPC_ENTITY_COLLISION_PLAN.md Phase 7
     const ignoresCollision = this.config.ignoresEntityCollision === true;
 
     // Register with EntityOccupancyMap
@@ -393,8 +378,6 @@ export class MobEntity extends CombatantEntity {
    * Called when mob dies or despawns to clear collision flags.
    *
    * OSRS Mechanic: Flags removed when entity despawns/dies
-   *
-   * @see NPC_ENTITY_COLLISION_PLAN.md Phase 2
    */
   private unregisterOccupancy(): void {
     // Server-only: occupancy tracking is authoritative
@@ -413,10 +396,7 @@ export class MobEntity extends CombatantEntity {
    * Uses atomic move() to avoid race conditions.
    *
    * OSRS Mechanic: Flags removed from old tiles, added to new tiles (in order)
-   *
    * Called by MobTileMovementManager after successful movement.
-   *
-   * @see NPC_ENTITY_COLLISION_PLAN.md Phase 2
    */
   public updateOccupancy(): void {
     // Server-only: occupancy tracking is authoritative
@@ -453,20 +433,15 @@ export class MobEntity extends CombatantEntity {
     );
   }
 
-  // ===== SPAWN TRACKING =====
-  // Track the mob's CURRENT spawn location (changes on respawn)
+  // Track the mob's current spawn location (changes on respawn)
   // This is different from respawnManager.getSpawnAreaCenter() which is fixed
   private _currentSpawnPoint: Position3D;
 
-  // ===== DEBUG TRACKING =====
   private _justRespawned = false; // Track if we just respawned (for one-time logging)
 
-  // ===== TICK-ALIGNED AI =====
   // AI runs once per server tick (600ms), not every frame (~16ms)
-  // This prevents excessive movement requests and aligns with OSRS tick system
   private _lastAITick: number = -1;
 
-  // ===== HEALTH BAR (HealthBars system - atlas-based instanced mesh) =====
   private _healthBarHandle: HealthBarHandle | null = null; // Handle to HealthBars system
   private _healthBarVisibleUntil: number = 0; // Timestamp when health bar should hide
   private _lastKnownHealth: number = 0; // Track previous health to detect damage
@@ -537,11 +512,7 @@ export class MobEntity extends CombatantEntity {
     super(world, combatConfig);
     this.config = config;
 
-    // ===== SYNC ENTITY HEALTH =====
-    // Entity constructor defaults to 100/100 because MobEntityConfig uses flat
-    // currentHealth/maxHealth fields rather than properties.health format.
-    // Sync base class fields with config to ensure getEntityHealth() returns
-    // correct value for first-hit damage capping (Issue: first hit > max HP).
+    // Entity constructor defaults to 100/100 - sync with config
     this.health = config.currentHealth;
     this.maxHealth = config.maxHealth;
     this.data.health = this.health;
@@ -551,8 +522,6 @@ export class MobEntity extends CombatantEntity {
     if (!this.config.respawnTime) {
       this.config.respawnTime = 15000; // Default 15s if not specified
     }
-
-    // ===== INITIALIZE COMPONENTS =====
 
     // Death State Manager
     this.deathManager = new DeathStateManager({
@@ -1064,13 +1033,10 @@ export class MobEntity extends CombatantEntity {
       return;
     }
 
-    // ===== PHASE 1: CREATE PLACEHOLDER HITBOX IMMEDIATELY =====
-    // RuneScape-style: Entity is functional (clickable, attackable) before visuals load
-    // This fixes the race condition where mobs spawned before VRM loads are "glitched"
+    // Create placeholder hitbox for immediate click detection before VRM loads
     this.createPlaceholderHitbox();
 
-    // ===== PHASE 2: LOAD VRM MODEL IN BACKGROUND (NON-BLOCKING) =====
-    // Try to load 3D model if available
+    // Load 3D model in background (non-blocking)
     if (this.config.model && this.world.loader) {
       try {
         // Check if this is a VRM file
@@ -1099,8 +1065,7 @@ export class MobEntity extends CombatantEntity {
         this.mesh = scene;
         this.mesh.name = `Mob_${this.config.mobType}_${this.id}`;
 
-        // CRITICAL: Scale the root mesh transform, then bind skeleton
-        // Apply cm→m conversion (100x) multiplied by manifest scale
+        // Scale root mesh (cm to meters) and apply manifest scale
         const modelScale = 100; // cm to meters
         const configScale = this.config.scale;
         this.mesh.scale.set(
@@ -1169,11 +1134,7 @@ export class MobEntity extends CombatantEntity {
       }
     }
 
-    // ===== PHASE 3: UPGRADE TO VISIBLE PLACEHOLDER =====
-    // No model or model loading failed - make placeholder visible for debugging
-    // The invisible placeholder is already functional (clickable/attackable)
-    // This replaces it with a visible colored capsule for mobs without models
-
+    // No model available - create visible placeholder capsule
     // Remove invisible placeholder (if it's still the current mesh)
     if (this.mesh === this._placeholderHitbox) {
       this.removePlaceholderHitbox();
@@ -1574,8 +1535,6 @@ export class MobEntity extends CombatantEntity {
     super.serverUpdate(deltaTime);
     this.serverUpdateCalls++;
 
-    // ===== COMPONENT-BASED UPDATE LOGIC =====
-
     // Handle death state (position locking during death animation)
     if (this.deathManager.isCurrentlyDead()) {
       // Use Date.now() for consistent millisecond timing (world.getTime() has inconsistent units)
@@ -1620,12 +1579,7 @@ export class MobEntity extends CombatantEntity {
       }
     }
 
-    // ===== TICK-ALIGNED AI UPDATE =====
-    // Only run AI once per server tick (600ms), not every frame (~16ms)
-    // This aligns with OSRS tick system and prevents excessive movement requests
-    //
-    // world.currentTick is set by ServerNetwork's TickSystem at the start of each tick
-    // On client, currentTick is always 0, so AI won't run (client mobs are visual only)
+    // AI runs once per server tick (600ms), not every frame
     const currentTick = this.world.currentTick;
     if (currentTick === this._lastAITick) {
       // Same tick as last AI update - skip AI processing
@@ -1976,9 +1930,7 @@ export class MobEntity extends CombatantEntity {
       return;
     }
 
-    // ===== PLACEHOLDER MODE: VRM still loading in background =====
-    // If mesh is the placeholder hitbox, VRM is still loading asynchronously
-    // Skip animation updates - placeholder doesn't animate
+    // If mesh is the placeholder hitbox, skip animation (VRM still loading)
     if (this.mesh === this._placeholderHitbox) {
       // Just update position from terrain while waiting for VRM to load
       const terrain = this.world.getSystem("terrain");
@@ -2083,8 +2035,6 @@ export class MobEntity extends CombatantEntity {
   }
 
   takeDamage(damage: number, attackerId?: string): boolean {
-    // ===== COMPONENT-BASED DAMAGE HANDLING =====
-
     // Already dead - ignore damage
     if (this.deathManager.isCurrentlyDead()) {
       return false;
@@ -2139,9 +2089,7 @@ export class MobEntity extends CombatantEntity {
   }
 
   die(): void {
-    // ===== COMPONENT-BASED DEATH HANDLING =====
-
-    // Unregister tile occupancy (OSRS: dead NPCs don't block tiles)
+    // Unregister tile occupancy (dead NPCs don't block tiles)
     this.unregisterOccupancy();
 
     // Use Date.now() for consistent millisecond timing (world.getTime() has inconsistent units)
@@ -2476,8 +2424,6 @@ export class MobEntity extends CombatantEntity {
   getNetworkData(): Record<string, unknown> {
     const baseData = super.getNetworkData();
 
-    // ===== COMPONENT-BASED NETWORK SYNC =====
-
     // Handle death state separately
     if (this.deathManager.isCurrentlyDead()) {
       // Remove ALL position data from baseData
@@ -2571,8 +2517,6 @@ export class MobEntity extends CombatantEntity {
    * Override modify to handle network updates from server
    */
   override modify(data: Partial<EntityData>): void {
-    // ===== COMPONENT-BASED CLIENT-SIDE NETWORK UPDATES =====
-
     // Handle AI state changes
     if ("aiState" in data) {
       const newState = data.aiState as MobAIState;
@@ -2724,10 +2668,7 @@ export class MobEntity extends CombatantEntity {
       }
     }
 
-    // ===== POSITION HANDLING =====
-    // The base Entity.modify() does NOT handle position - we must do it here
     // Handle position for living mobs (non-death, non-respawn cases)
-    // Death/respawn position is handled above in the aiState logic
     if (!this.deathManager.shouldLockPosition()) {
       // Check if TileInterpolator is controlling position - if so, skip position updates
       // TileInterpolator handles position smoothly for tile-based movement

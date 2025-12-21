@@ -93,20 +93,14 @@ export class CombatSystem extends SystemBase {
   private entityManager?: EntityManager;
   private playerSystem?: PlayerSystem; // Cached for auto-retaliate checks (hot path optimization)
 
-  // Modular services (Phase 5 extraction)
-  // Note: stateService is public for GameTickProcessor access (OSRS-accurate tick processing)
+  // Public for GameTickProcessor access during tick processing
   public readonly stateService: CombatStateService;
   private animationManager: CombatAnimationManager;
   private rotationManager: CombatRotationManager;
 
-  // Anti-cheat monitoring (Phase 6 - Game Studio Hardening)
   private antiCheat: CombatAntiCheat;
-
-  // Input validation and rate limiting (Phase 6.5 - Security Hardening)
   private entityIdValidator: EntityIdValidator;
   private rateLimiter: CombatRateLimiter;
-
-  // Combat event recording for replay/debugging (Phase 7 - EventStore Integration)
   private eventStore: EventStore;
   private eventRecordingEnabled: boolean = true;
 
@@ -120,18 +114,12 @@ export class CombatSystem extends SystemBase {
   private readonly _attackerTile: PooledTile = tilePool.acquire();
   private readonly _targetTile: PooledTile = tilePool.acquire();
 
-  // AFK tracking for auto-retaliate disable (Phase 6.5.2)
-  // OSRS: Auto-retaliate disabled after 20 minutes of no input
+  // Auto-retaliate disabled after 20 minutes of no input (OSRS behavior)
   private lastInputTick = new Map<string, number>();
 
-  // Polymorphic damage handlers (Phase 8 - SOLID refactoring)
-  // Eliminates player/mob conditionals in damage application
   private damageHandlers: Map<"player" | "mob", DamageHandler>;
 
-  // PID Manager for OSRS-style combat priority (Phase 9 - PvP Fairness)
-  // Lower PID = higher priority = hits first when attacks happen same tick
-  // PIDs shuffle every 60-150 seconds for fairness
-  // @see https://oldschool.runescape.wiki/w/PID
+  // Lower PID = higher priority when attacks occur on same tick
   public readonly pidManager: PidManager;
 
   constructor(world: World) {
@@ -144,33 +132,23 @@ export class CombatSystem extends SystemBase {
       autoCleanup: true,
     });
 
-    // Initialize modular services
     this.stateService = new CombatStateService(world);
     this.animationManager = new CombatAnimationManager(world);
     this.rotationManager = new CombatRotationManager(world);
-
-    // Initialize anti-cheat monitoring (Phase 6 - Game Studio Hardening)
     this.antiCheat = new CombatAntiCheat();
-
-    // Initialize input validation and rate limiting (Phase 6.5 - Security Hardening)
     this.entityIdValidator = new EntityIdValidator();
     this.rateLimiter = new CombatRateLimiter();
 
-    // Initialize event store for combat replay/debugging (Phase 7)
-    // Snapshots every 100 ticks (~60 seconds), keeps 100k events and 10 snapshots
     this.eventStore = new EventStore({
       snapshotInterval: 100,
       maxEvents: 100000,
       maxSnapshots: 10,
     });
 
-    // Initialize polymorphic damage handlers (Phase 8 - SOLID refactoring)
     this.damageHandlers = new Map();
     this.damageHandlers.set("player", new PlayerDamageHandler(world));
     this.damageHandlers.set("mob", new MobDamageHandler(world));
 
-    // Initialize PID manager for OSRS-style combat priority (Phase 9 - PvP Fairness)
-    // Uses game RNG for deterministic shuffle timing
     this.pidManager = new PidManager(getGameRng());
   }
 
@@ -263,18 +241,13 @@ export class CombatSystem extends SystemBase {
       },
     );
 
-    // PID Assignment: Assign PID when player joins (Phase 9 - PvP Fairness)
-    // PIDs determine combat priority - lower PID hits first on same tick
     this.subscribe(EventType.PLAYER_JOINED, (data: { playerId: string }) => {
       const tickNumber = this.world.currentTick ?? 0;
       this.pidManager.assignPid(data.playerId as EntityID, tickNumber);
     });
 
-    // Listen for player disconnect to clean up combat state and remove PID
-    // This prevents orphaned combat states when players disconnect mid-combat
     this.subscribe(EventType.PLAYER_LEFT, (data: { playerId: string }) => {
       this.cleanupPlayerDisconnect(data.playerId);
-      // Remove PID when player leaves (Phase 9 - PvP Fairness)
       this.pidManager.removePid(data.playerId as EntityID);
     });
 
@@ -340,7 +313,6 @@ export class CombatSystem extends SystemBase {
     const { attackerId, targetId, attackerType } = data;
     const currentTick = this.world.currentTick;
 
-    // Phase 6.5: Input validation - reject malformed entity IDs
     if (!this.entityIdValidator.isValid(attackerId)) {
       const sanitized = this.entityIdValidator.sanitizeForLogging(attackerId);
       this.logger.warn("Invalid attacker ID rejected", {
@@ -365,7 +337,6 @@ export class CombatSystem extends SystemBase {
       return;
     }
 
-    // Phase 6.5: Rate limiting - prevent request flooding
     if (attackerType === "player") {
       const rateResult = this.rateLimiter.checkLimit(attackerId, currentTick);
       if (!rateResult.allowed) {
@@ -376,10 +347,6 @@ export class CombatSystem extends SystemBase {
         });
         return;
       }
-    }
-
-    // Anti-cheat: Track attack rate for players (Phase 6)
-    if (attackerType === "player") {
       this.antiCheat.trackAttack(attackerId, currentTick);
     }
 
@@ -922,8 +889,7 @@ export class CombatSystem extends SystemBase {
       return;
     }
 
-    // CRITICAL: Check if target died from THIS attack
-    // This prevents additional auto-attacks from ANY entity in the same frame
+    // Prevent additional attacks if target died this tick
     if (result.targetDied) {
       this.handleEntityDied(targetId, targetType);
       return;
@@ -1019,8 +985,7 @@ export class CombatSystem extends SystemBase {
       }
       // Note: If playerSystem is null, canRetaliate stays true (default OSRS behavior)
 
-      // Phase 6.5.2: OSRS-accurate AFK auto-retaliate disable
-      // After 20 minutes of no input, auto-retaliate is disabled
+      // 20 min AFK disables auto-retaliate
       if (canRetaliate && this.isAFKTooLong(String(targetId), currentTick)) {
         canRetaliate = false;
       }
@@ -1034,16 +999,7 @@ export class CombatSystem extends SystemBase {
       targetType,
     );
 
-    // OSRS-ACCURATE: Check if target already has a valid combat target BEFORE any state modifications
-    // @see https://oldschool.runescape.wiki/w/Auto_Retaliate
-    // @see AUTO_RETALIATE_FIX_PLAN.md - Private server pattern: if (playerIndex <= 0 && npcIndex <= 0)
-    //
-    // When player is attacking Goblin 1 and Goblin 2 attacks the player:
-    // - INCORRECT: Player switches to Goblin 2 (old behavior)
-    // - CORRECT: Player continues attacking Goblin 1 (OSRS behavior)
-    //
-    // Auto-retaliate only triggers when player has NO current target
-    // We calculate this ONCE before any state modifications, then reuse for both decisions
+    // Auto-retaliate only triggers when player has no current target
     let targetHasValidTarget = false;
     if (canRetaliate) {
       const targetCombatState = this.stateService.getCombatData(targetId);
@@ -1138,9 +1094,7 @@ export class CombatSystem extends SystemBase {
         String(attackerId),
       );
 
-      // Phase 5: Server-controlled face target (client is display-only)
-      // Even with auto-retaliate OFF, player should visually face the attacker
-      // Client no longer searches for attackers - server tells them who to face
+      // Player visually faces attacker even with auto-retaliate off
       this.emitTypedEvent(EventType.COMBAT_FACE_TARGET, {
         playerId: String(targetId),
         targetId: String(attackerId),
@@ -1156,7 +1110,6 @@ export class CombatSystem extends SystemBase {
       targetId: String(targetId),
     });
 
-    // Record combat start event for replay/debugging (Phase 7)
     this.recordCombatEvent(GameEventType.COMBAT_START, String(attackerId), {
       targetId: String(targetId),
       attackerType,
@@ -1178,7 +1131,7 @@ export class CombatSystem extends SystemBase {
 
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId: localPlayer.id,
-        message: `⚔️ Combat started with ${opponentName}!`,
+        message: `Combat started with ${opponentName}!`,
         type: "combat",
         duration: 3000,
       });
@@ -1232,7 +1185,6 @@ export class CombatSystem extends SystemBase {
       targetId: String(combatState.targetId),
     });
 
-    // Record combat end event for replay/debugging (Phase 7)
     this.recordCombatEvent(GameEventType.COMBAT_END, data.entityId, {
       targetId: String(combatState.targetId),
       attackerType: combatState.attackerType,
@@ -1240,8 +1192,6 @@ export class CombatSystem extends SystemBase {
       reason: "timeout_or_manual",
     });
 
-    // Phase 5: Clear face target for players when combat ends (client is display-only)
-    // This tells client to stop facing the target since combat is over
     if (combatState.attackerType === "player") {
       this.emitTypedEvent(EventType.COMBAT_CLEAR_FACE_TARGET, {
         playerId: data.entityId,
@@ -1264,15 +1214,12 @@ export class CombatSystem extends SystemBase {
   }
 
   /**
-   * Handle entity death - mark dead entity as non-targetable, let combat timeout naturally
-   * CRITICAL FIX FOR ISSUE #269: RuneScape-style combat timer
-   * In OSRS, combat lasts for 8 ticks (4.8 seconds) after the LAST hit
-   * Don't end combat immediately - let the timer expire naturally so health bars stay visible
+   * Handle entity death - combat times out naturally after 8 ticks (4.8s)
+   * so health bars stay visible briefly after death
    */
   private handleEntityDied(entityId: string, entityType: string): void {
     const typedEntityId = createEntityID(entityId);
 
-    // Record death event for replay/debugging (Phase 7)
     const deathEventType =
       entityType === "player"
         ? GameEventType.DEATH_PLAYER
@@ -1295,16 +1242,12 @@ export class CombatSystem extends SystemBase {
 
     // Find all attackers targeting this dead entity
     // Their combat will naturally timeout after 4.8 seconds (8 ticks) since they got the last hit
-    // This matches RuneScape behavior where health bars stay visible briefly after combat ends
     const combatStatesMap = this.stateService.getCombatStatesMap();
     for (const [attackerId, state] of combatStatesMap) {
       if (String(state.targetId) === entityId) {
-        // CRITICAL: Clear the attacker's attack cooldown so they can attack new targets immediately
-        // Without this, mobs would be stuck waiting for cooldown after their target dies and respawns
+        // Allow attacker to target someone else immediately
         this.nextAttackTicks.delete(attackerId);
 
-        // CRITICAL: If the attacker is a mob, reset its internal CombatStateManager
-        // This clears the mob's own nextAttackTick so it can attack immediately when target respawns
         if (state.attackerType === "mob") {
           const mobEntity = this.world.entities.get(String(attackerId));
           if (
@@ -1317,8 +1260,7 @@ export class CombatSystem extends SystemBase {
       }
     }
 
-    // Phase 5: Clear face target for any players who had this entity as their pending attacker
-    // When an attacker dies, players with auto-retaliate OFF should stop facing them
+    // Clear face target for players who had this as pending attacker
     if (entityType === "mob") {
       // Check all players to see if they had this mob as their pending attacker
       for (const player of this.world.entities.players.values()) {
@@ -1364,8 +1306,6 @@ export class CombatSystem extends SystemBase {
       return false;
     }
 
-    // CRITICAL: Cannot start combat with dead entities (RuneScape-style validation)
-    // This prevents mobs from starting combat with dead players (Issue #265)
     const attackerAlive = this.isEntityAlive(attacker, opts.attackerType);
     const targetAlive = this.isEntityAlive(target, opts.targetType);
 
@@ -1501,13 +1441,8 @@ export class CombatSystem extends SystemBase {
     // Clear player's equipment stats cache
     this.playerEquipmentStats.delete(playerId);
 
-    // Clean up anti-cheat tracking for disconnected player (Phase 6)
     this.antiCheat.cleanup(playerId);
-
-    // Clean up rate limiter state (Phase 6.5)
     this.rateLimiter.cleanup(playerId);
-
-    // Clean up AFK tracking (Phase 6.5.2)
     this.lastInputTick.delete(playerId);
 
     // Find all entities that were targeting this disconnected player
@@ -1615,8 +1550,6 @@ export class CombatSystem extends SystemBase {
    * Called by TickSystem at COMBAT priority (after movement, before AI)
    */
   public processCombatTick(tickNumber: number): void {
-    // Update PID manager - handles periodic shuffles for PvP fairness (Phase 9)
-    // OSRS shuffles every 60-150 seconds to prevent permanent priority advantage
     this.pidManager.update(tickNumber);
 
     // Process scheduled emote resets (tick-aligned animation timing)
@@ -1627,15 +1560,10 @@ export class CombatSystem extends SystemBase {
     const combatStates = this.stateService.getAllCombatStates();
     const combatStatesMap = this.stateService.getCombatStatesMap();
 
-    // Sort by PID for fair combat priority (Phase 9 - PvP Fairness)
-    // Lower PID = higher priority = attacks first when multiple entities attack on same tick
-    // OSRS-ACCURATE: This determines who wins when both players would kill each other
-    // @see https://oldschool.runescape.wiki/w/PID
+    // Lower PID attacks first when multiple attacks on same tick
     combatStates.sort((a, b) => this.pidManager.comparePriority(a[0], b[0]));
 
-    // Process all active combat sessions in PID order
     for (const [entityId, combatState] of combatStates) {
-      // CRITICAL: Re-check if this combat state still exists
       if (!combatStatesMap.has(entityId)) {
         continue;
       }
@@ -1812,13 +1740,8 @@ export class CombatSystem extends SystemBase {
     }
   }
 
-  // =========================================================================
-  // AUTO-ATTACK HELPER METHODS (Phase 6.1 - Decomposition)
-  // =========================================================================
-
   /**
    * Validate combat actors exist and are alive
-   * @returns Validated entities or null if validation fails
    */
   private validateCombatActors(
     combatState: CombatData,
@@ -1829,9 +1752,7 @@ export class CombatSystem extends SystemBase {
     const attacker = this.getEntity(attackerId, combatState.attackerType);
     const target = this.getEntity(targetId, combatState.targetType);
 
-    // CRITICAL FIX FOR ISSUE #269: RuneScape-style combat timer
-    // If entity not found (dead mob, disconnected player, etc.), DON'T end combat immediately
-    // Let the 8-tick timeout expire naturally to keep health bars visible
+    // Let combat time out naturally if entities gone (health bars stay visible)
     if (!attacker || !target) {
       return null;
     }
@@ -1926,7 +1847,6 @@ export class CombatSystem extends SystemBase {
       position: targetPosition,
     });
 
-    // Record attack and damage events for replay/debugging (Phase 7)
     this.recordCombatEvent(GameEventType.COMBAT_ATTACK, attackerId, {
       targetId,
       attackerType: combatState.attackerType,
@@ -1984,8 +1904,6 @@ export class CombatSystem extends SystemBase {
     let shouldRetaliate =
       this.playerSystem?.getPlayerAutoRetaliate(targetId) ?? true;
 
-    // Phase 6.5.2: OSRS-accurate AFK auto-retaliate disable
-    // After 20 minutes of no input, auto-retaliate is disabled
     if (shouldRetaliate && this.isAFKTooLong(targetId, tickNumber)) {
       shouldRetaliate = false;
     }
@@ -2070,21 +1988,8 @@ export class CombatSystem extends SystemBase {
     }
   }
 
-  // =========================================================================
-  // MAIN AUTO-ATTACK METHOD (Refactored - Phase 6.1)
-  // =========================================================================
-
   /**
-   * Process auto-attack for a combatant on a specific tick (OSRS-accurate)
-   * This creates the continuous attack loop that makes combat feel like RuneScape
-   *
-   * Decomposed into focused helper methods for maintainability:
-   * - validateCombatActors: Entity resolution and alive checks
-   * - validateAttackRange: Melee range validation
-   * - executeAttackDamage: Damage calculation and application
-   * - updateCombatTickState: Tick tracking updates
-   * - handlePlayerRetaliation: Auto-retaliate handling
-   * - emitCombatEvents: Event emission
+   * Process auto-attack for a combatant on a specific tick
    */
   private processAutoAttackOnTick(
     combatState: CombatData,
@@ -2316,13 +2221,8 @@ export class CombatSystem extends SystemBase {
     return false;
   }
 
-  // =========================================================================
-  // EVENT STORE METHODS (Phase 7 - Combat Replay/Debugging)
-  // =========================================================================
-
   /**
    * Build GameStateInfo for event recording
-   * Used for checksum calculation to detect desync
    */
   private buildGameStateInfo(): GameStateInfo {
     const combatStatesMap = this.stateService.getCombatStatesMap();
@@ -2516,33 +2416,17 @@ export class CombatSystem extends SystemBase {
   }
 
   destroy(): void {
-    // Clean up modular services
     this.stateService.destroy();
     this.animationManager.destroy();
-
-    // Clean up anti-cheat monitoring (Phase 6)
     this.antiCheat.destroy();
-
-    // Clean up rate limiter (Phase 6.5)
     this.rateLimiter.destroy();
-
-    // Clean up event store (Phase 7)
     this.eventStore.destroy();
-
-    // Release pooled tiles back to pool
     tilePool.release(this._attackerTile);
     tilePool.release(this._targetTile);
-
-    // Clear all attack cooldowns (tick-based)
     this.nextAttackTicks.clear();
-
-    // Call parent cleanup (handles autoCleanup)
     super.destroy();
   }
 
-  /**
-   * Get anti-cheat stats for monitoring dashboard (Phase 6)
-   */
   public getAntiCheatStats(): {
     trackedPlayers: number;
     playersAboveWarning: number;
@@ -2552,9 +2436,6 @@ export class CombatSystem extends SystemBase {
     return this.antiCheat.getStats();
   }
 
-  /**
-   * Get anti-cheat report for a specific player (Phase 6)
-   */
   public getAntiCheatPlayerReport(playerId: string): {
     score: number;
     recentViolations: Array<{
@@ -2569,9 +2450,6 @@ export class CombatSystem extends SystemBase {
     return this.antiCheat.getPlayerReport(playerId);
   }
 
-  /**
-   * Get players requiring admin attention (Phase 6)
-   */
   public getPlayersRequiringReview(): string[] {
     return this.antiCheat.getPlayersRequiringReview();
   }

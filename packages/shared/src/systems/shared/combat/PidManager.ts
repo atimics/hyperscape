@@ -1,22 +1,12 @@
 /**
- * PidManager - OSRS-style Player ID shuffle system
+ * PidManager - Player ID shuffle for fair PvP
  *
- * Manages combat priority ordering for fair PvP. When two players attack
- * each other on the same tick, the player with lower PID hits first.
- *
- * PIDs are shuffled every 60-150 seconds (randomized) to ensure no player
- * has a permanent combat priority advantage.
- *
- * @see https://oldschool.runescape.wiki/w/PID
- * @see COMBAT-IMPROVEMENTS-PLAN.md
+ * Lower PID attacks first when two players attack same tick.
+ * Shuffles every 60-150 seconds so no player has permanent advantage.
  */
 
 import type { EntityID } from "../../../types/core/identifiers";
 import type { SeededRandom } from "../../../utils/SeededRandom";
-
-// =============================================================================
-// OSRS PID CONSTANTS
-// =============================================================================
 
 /** Minimum PID shuffle interval in ticks (~60 seconds at 600ms/tick) */
 const PID_SHUFFLE_MIN_TICKS = 100;

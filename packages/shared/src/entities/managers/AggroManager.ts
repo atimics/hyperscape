@@ -15,7 +15,6 @@
  * 4. Target is cleared on death or when out of range
  *
  * @see https://oldschool.runescape.wiki/w/Aggressiveness
- * @see MOB_AGGRO_IMPLEMENTATION_PLAN.md Phase 2.3
  */
 
 import type { Position3D } from "../../types";
