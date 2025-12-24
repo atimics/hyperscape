@@ -119,6 +119,17 @@ export const COMBAT_CONSTANTS = {
   MIN_DAMAGE: 0, // OSRS: Can hit 0 (miss)
   MAX_DAMAGE: 200, // OSRS damage cap
 
+  // OSRS-accurate XP formulas
+  // @see https://oldschool.runescape.wiki/w/Combat#Experience
+  XP: {
+    /** Combat skill XP per damage dealt (Attack, Strength, Defence, or Ranged) */
+    COMBAT_XP_PER_DAMAGE: 4,
+    /** Hitpoints XP per damage dealt (always granted in addition to combat XP) */
+    HITPOINTS_XP_PER_DAMAGE: 1.33,
+    /** Controlled style XP per damage per skill (1.33 to each of 4 skills) */
+    CONTROLLED_XP_PER_DAMAGE: 1.33,
+  },
+
   // Combat states
   COMBAT_STATES: {
     IDLE: "idle",

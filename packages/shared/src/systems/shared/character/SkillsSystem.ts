@@ -41,6 +41,7 @@ import {
   getStatsComponent,
   requireStatsComponent,
 } from "../../../utils/game/ComponentUtils";
+import { COMBAT_CONSTANTS } from "../../../constants/CombatConstants";
 
 /** Skill name constants for type-safe skill references */
 const Skill = {
@@ -655,11 +656,14 @@ export class SkillsSystem extends SystemBase {
     if (!targetStats) return;
 
     // OSRS Formula: 4 XP per damage for combat skills, 1.33 XP per damage for Hitpoints
+    // @see https://oldschool.runescape.wiki/w/Combat#Experience
     // Use damageDealt (total damage by this player) or fallback to mob's max HP
     const totalDamage =
       damageDealt > 0 ? damageDealt : (targetStats.health?.max ?? 10);
-    const combatSkillXP = totalDamage * 4; // 4 XP per damage (OSRS standard)
-    const hitpointsXP = totalDamage * 1.33; // 1.33 XP per damage (OSRS: accumulates fractionally)
+    const combatSkillXP =
+      totalDamage * COMBAT_CONSTANTS.XP.COMBAT_XP_PER_DAMAGE;
+    const hitpointsXP =
+      totalDamage * COMBAT_CONSTANTS.XP.HITPOINTS_XP_PER_DAMAGE;
 
     // Grant combat skill XP based on attack style
     // Each style trains ONE skill exclusively (except controlled)
@@ -694,7 +698,8 @@ export class SkillsSystem extends SystemBase {
       case "controlled": {
         // OSRS: Controlled gives 1.33 XP per damage to each of 4 skills
         // Total: 5.32 XP per damage (vs 5.33 for focused styles)
-        const controlledXP = totalDamage * 1.33; // No floor - OSRS accumulates fractionally
+        const controlledXP =
+          totalDamage * COMBAT_CONSTANTS.XP.CONTROLLED_XP_PER_DAMAGE;
         this.emitTypedEvent(EventType.SKILLS_XP_GAINED, {
           playerId: attackerId,
           skill: Skill.ATTACK,
