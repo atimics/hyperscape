@@ -13,6 +13,7 @@ import { PlayerSystem } from "..";
 import {
   isAttackOnCooldownTicks,
   calculateRetaliationDelay,
+  CombatStyle,
 } from "../../../utils/game/CombatCalculations";
 import { createEntityID } from "../../../utils/IdentifierUtils";
 import { EntityManager } from "..";
@@ -593,8 +594,20 @@ export class CombatSystem extends SystemBase {
       attackSpeedTicks,
     );
 
+    // Get player's combat style for OSRS-accurate damage bonuses
+    let combatStyle: CombatStyle = "accurate";
+    if (attackerType === "player") {
+      const playerSystem = this.world.getSystem(
+        "player",
+      ) as PlayerSystem | null;
+      const styleData = playerSystem?.getPlayerAttackStyle?.(attackerId);
+      if (styleData?.id) {
+        combatStyle = styleData.id as CombatStyle;
+      }
+    }
+
     // Calculate and apply damage
-    const rawDamage = this.calculateMeleeDamage(attacker, target);
+    const rawDamage = this.calculateMeleeDamage(attacker, target, combatStyle);
     const currentHealth = this.entityResolver.getHealth(target);
     const damage = Math.min(rawDamage, currentHealth);
 
@@ -746,8 +759,9 @@ export class CombatSystem extends SystemBase {
   private calculateMeleeDamage(
     attacker: Entity | MobEntity,
     target: Entity | MobEntity,
+    style: CombatStyle = "accurate",
   ): number {
-    return this.damageCalculator.calculateMeleeDamage(attacker, target);
+    return this.damageCalculator.calculateMeleeDamage(attacker, target, style);
   }
 
   // MVP: calculateRangedDamage removed - melee only
@@ -1698,8 +1712,20 @@ export class CombatSystem extends SystemBase {
       combatState.attackSpeedTicks,
     );
 
+    // Get player's combat style for OSRS-accurate damage bonuses
+    let combatStyle: CombatStyle = "accurate";
+    if (combatState.attackerType === "player") {
+      const playerSystem = this.world.getSystem(
+        "player",
+      ) as PlayerSystem | null;
+      const styleData = playerSystem?.getPlayerAttackStyle?.(attackerId);
+      if (styleData?.id) {
+        combatStyle = styleData.id as CombatStyle;
+      }
+    }
+
     // MVP: Melee-only damage calculation
-    const rawDamage = this.calculateMeleeDamage(attacker, target);
+    const rawDamage = this.calculateMeleeDamage(attacker, target, combatStyle);
 
     // OSRS-STYLE: Cap damage at target's current health (no overkill)
     const currentHealth = this.entityResolver.getHealth(target);

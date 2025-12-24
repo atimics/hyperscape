@@ -11,6 +11,7 @@ import { AttackType } from "../../../types/core/core";
 import {
   calculateDamage,
   CombatStats,
+  CombatStyle,
 } from "../../../utils/game/CombatCalculations";
 import { isMobEntity } from "../../../utils/typeGuards";
 
@@ -45,11 +46,13 @@ export class DamageCalculator {
    * Calculate melee damage for an attack
    * @param attacker - The attacking entity
    * @param target - The target entity
+   * @param style - Combat style for OSRS-accurate stat bonuses (default: "accurate")
    * @returns Calculated damage value
    */
   calculateMeleeDamage(
     attacker: Entity | MobEntity,
     target: Entity | MobEntity,
+    style: CombatStyle = "accurate",
   ): number {
     // Extract required properties for damage calculation
     let attackerData: {
@@ -153,6 +156,7 @@ export class DamageCalculator {
       targetData,
       AttackType.MELEE,
       equipmentStats,
+      style,
     );
 
     return result.damage;
