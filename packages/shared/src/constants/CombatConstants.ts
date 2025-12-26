@@ -27,16 +27,6 @@ export const COMBAT_CONSTANTS = {
   HEALTH_REGEN_INTERVAL_TICKS: 100, // 60s - regenerate 1 HP every 100 ticks
   AFK_DISABLE_RETALIATE_TICKS: 2000, // 20 minutes - auto-retaliate disabled after 20 min AFK
 
-  // Weapon speed tiers in ticks (OSRS-accurate)
-  // @see https://oldschool.runescape.wiki/w/Attack_speed
-  ATTACK_SPEED_TICKS: {
-    FASTEST: 3, // Darts, blowpipe (1.8s)
-    FAST: 4, // Scimitars, whip, daggers, unarmed (2.4s)
-    MEDIUM: 5, // Longswords, crossbows (3.0s)
-    SLOW: 6, // Godswords, battleaxes (3.6s)
-    SLOWEST: 7, // Halberds, 2H swords (4.2s)
-  },
-
   // OSRS-accurate hit delay formulas (Phase 3)
   // @see https://oldschool.runescape.wiki/w/Hit_delay
   // Hit delay = ticks from attack to damage appearing on target
@@ -95,8 +85,7 @@ export const COMBAT_CONSTANTS = {
 
   // Respawn timing in ticks (OSRS-style)
   // @see https://oldschool.runescape.wiki/w/Respawn_rate
-  RESPAWN_TICKS_MIN: 25, // 15 seconds - minimum respawn time
-  RESPAWN_TICKS_DEFAULT: 25, // 15 seconds - standard mob respawn
+  // Note: Default respawn time is in DEFAULTS.NPC.RESPAWN_TICKS
   RESPAWN_TICKS_RANDOMNESS: 8, // +0-8 ticks randomness (~0-5 seconds)
 
   // Death/Loot timing in ticks (OSRS-accurate)
@@ -220,10 +209,14 @@ export const AGGRO_CONSTANTS = {
   // Special level thresholds
   ALWAYS_AGGRESSIVE_LEVEL: 999, // Used for mobs that ignore level differences
 
-  // Mob behavior configurations - loaded dynamically from mobs.json manifest
-  // Access via getMobById(mobId).behavior from data/mobs.ts
-  // OSRS-accurate defaults: detectionRange=4 (hunt), leashRange=7 (max range)
-  // @see https://oldschool.runescape.wiki/w/Aggressiveness
+  /**
+   * @deprecated Use manifest values with COMBAT_CONSTANTS.DEFAULTS fallback instead.
+   * This lookup table is legacy - AggroSystem now uses manifest data directly.
+   * Kept for backwards compatibility with tests; will be removed in future version.
+   *
+   * New pattern: registerMob() accepts combat config from manifest,
+   * falls back to COMBAT_CONSTANTS.DEFAULTS.NPC for missing values.
+   */
   MOB_BEHAVIORS: {
     default: {
       behavior: "passive" as const,
