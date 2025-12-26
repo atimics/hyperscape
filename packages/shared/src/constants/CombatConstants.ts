@@ -99,10 +99,10 @@ export const COMBAT_CONSTANTS = {
   RESPAWN_TICKS_DEFAULT: 25, // 15 seconds - standard mob respawn
   RESPAWN_TICKS_RANDOMNESS: 8, // +0-8 ticks randomness (~0-5 seconds)
 
-  // Death/Loot timing in ticks (OSRS-style)
+  // Death/Loot timing in ticks (OSRS-accurate)
   // @see https://oldschool.runescape.wiki/w/Gravestone
-  GRAVESTONE_TICKS: 500, // 5 minutes (300 seconds / 0.6)
-  GROUND_ITEM_DESPAWN_TICKS: 200, // 2 minutes (120 seconds / 0.6) - tradeable items
+  GRAVESTONE_TICKS: 1500, // 15 minutes (900 seconds / 0.6) - OSRS-accurate
+  GROUND_ITEM_DESPAWN_TICKS: 300, // 3 minutes (180 seconds / 0.6) - tradeable items, OSRS-accurate
   UNTRADEABLE_DESPAWN_TICKS: 300, // 3 minutes (180 seconds / 0.6) - untradeable items
   LOOT_PROTECTION_TICKS: 100, // 1 minute (60 seconds / 0.6) - killer exclusivity
   CORPSE_DESPAWN_TICKS: 200, // 2 minutes - mob corpse despawn
@@ -154,6 +154,59 @@ export const COMBAT_CONSTANTS = {
     IDLE: "idle",
     IN_COMBAT: "in_combat",
     FLEEING: "fleeing",
+  } as const,
+
+  /**
+   * Default values for manifest normalization
+   * Used by DataManager when manifest omits optional fields
+   *
+   * These are OSRS-accurate fallback values, NOT overrides.
+   * Manifests are the source of truth - these only apply when
+   * a manifest field is undefined.
+   */
+  DEFAULTS: {
+    /**
+     * NPC/Mob defaults (used by DataManager.normalizeNPC)
+     * @see https://oldschool.runescape.wiki/w/Monster
+     */
+    NPC: {
+      /** Standard attack speed in ticks (verified: all basic NPCs use 4)
+       * @see https://oldschool.runescape.wiki/w/Attack_speed */
+      ATTACK_SPEED_TICKS: 4,
+
+      /** Detection/hunt range in tiles (NOT DOCUMENTED in OSRS - estimated)
+       * Most aggressive NPCs detect players within ~4 tiles */
+      AGGRO_RANGE: 4,
+
+      /** Melee attack range in tiles (verified: standard melee = 1)
+       * @see https://oldschool.runescape.wiki/w/Attack_range */
+      COMBAT_RANGE: 1,
+
+      /** Max chase range from spawn in tiles (verified: default = 7)
+       * @see https://osrs-docs.com/docs/variables/max-range/ */
+      LEASH_RANGE: 7,
+
+      /** Default respawn time in ticks (25 = chickens, fastest basic NPC)
+       * Note: Varies per NPC. Manifest should specify per-NPC values.
+       * @see https://oldschool.runescape.wiki/w/Chicken */
+      RESPAWN_TICKS: 25,
+
+      /** Wander radius from spawn in tiles (verified: default = 5)
+       * @see https://osrs-docs.com/docs/variables/wander-range/ */
+      WANDER_RADIUS: 5,
+    },
+
+    /**
+     * Item defaults (used by DataManager.normalizeItem)
+     * @see https://oldschool.runescape.wiki/w/Attack_speed
+     */
+    ITEM: {
+      /** Standard weapon attack speed in ticks */
+      ATTACK_SPEED: 4,
+
+      /** Standard melee attack range in tiles */
+      ATTACK_RANGE: 1,
+    },
   } as const,
 } as const;
 
