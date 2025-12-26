@@ -12,10 +12,7 @@
 
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { AggroSystem } from "../AggroSystem";
-import {
-  AGGRO_CONSTANTS,
-  COMBAT_CONSTANTS,
-} from "../../../../constants/CombatConstants";
+import { COMBAT_CONSTANTS } from "../../../../constants/CombatConstants";
 
 // Mock World
 function createMockWorld() {
@@ -218,42 +215,21 @@ describe("AggroSystem", () => {
     });
   });
 
-  describe("default behavior constants", () => {
-    it("has default behavior config (legacy, deprecated)", () => {
-      // MOB_BEHAVIORS is deprecated - manifests + DEFAULTS are now the source of truth
-      const defaultBehavior = AGGRO_CONSTANTS.MOB_BEHAVIORS.default;
-      expect(defaultBehavior).toBeDefined();
-      expect(defaultBehavior.behavior).toBe("passive");
-    });
-
-    it("DEFAULTS.NPC has OSRS-accurate aggroRange of 4", () => {
+  describe("DEFAULTS.NPC constants", () => {
+    it("has OSRS-accurate aggroRange of 4", () => {
       expect(COMBAT_CONSTANTS.DEFAULTS.NPC.AGGRO_RANGE).toBe(4);
     });
 
-    it("DEFAULTS.NPC has OSRS-accurate leashRange of 7", () => {
+    it("has OSRS-accurate leashRange of 7", () => {
       expect(COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE).toBe(7);
     });
 
-    it("DEFAULTS.NPC has OSRS-accurate attackSpeedTicks of 4", () => {
+    it("has OSRS-accurate attackSpeedTicks of 4", () => {
       expect(COMBAT_CONSTANTS.DEFAULTS.NPC.ATTACK_SPEED_TICKS).toBe(4);
     });
 
-    it("DEFAULTS.NPC has OSRS-accurate respawnTicks of 25", () => {
+    it("has OSRS-accurate respawnTicks of 25", () => {
       expect(COMBAT_CONSTANTS.DEFAULTS.NPC.RESPAWN_TICKS).toBe(25);
-    });
-  });
-
-  describe("aggro constants", () => {
-    it("has DEFAULT_BEHAVIOR set to passive", () => {
-      expect(AGGRO_CONSTANTS.DEFAULT_BEHAVIOR).toBe("passive");
-    });
-
-    it("has ALWAYS_AGGRESSIVE_LEVEL set to 999", () => {
-      expect(AGGRO_CONSTANTS.ALWAYS_AGGRESSIVE_LEVEL).toBe(999);
-    });
-
-    it("has AGGRO_UPDATE_INTERVAL_MS set to 100", () => {
-      expect(AGGRO_CONSTANTS.AGGRO_UPDATE_INTERVAL_MS).toBe(100);
     });
   });
 

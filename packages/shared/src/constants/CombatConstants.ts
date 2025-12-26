@@ -110,16 +110,6 @@ export const AGGRO_CONSTANTS = {
   DEFAULT_BEHAVIOR: "passive" as const,
   AGGRO_UPDATE_INTERVAL_MS: 100,
   ALWAYS_AGGRESSIVE_LEVEL: 999,
-
-  // Legacy lookup table - use manifest values with DEFAULTS fallback instead
-  MOB_BEHAVIORS: {
-    default: {
-      behavior: "passive" as const,
-      detectionRange: 4,
-      leashRange: 7,
-      levelIgnoreThreshold: 0,
-    },
-  } as const,
 } as const;
 
 export const LEVEL_CONSTANTS = {
@@ -139,4 +129,3 @@ export const LEVEL_CONSTANTS = {
 
 export type CombatState =
   (typeof COMBAT_CONSTANTS.COMBAT_STATES)[keyof typeof COMBAT_CONSTANTS.COMBAT_STATES];
-export type MobBehaviorType = keyof typeof AGGRO_CONSTANTS.MOB_BEHAVIORS;
