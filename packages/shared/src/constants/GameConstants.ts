@@ -76,7 +76,7 @@ export const MOB_CONSTANTS = {
   MOB_RESPAWN_TIME:
     COMBAT_CONSTANTS.DEFAULTS.NPC.RESPAWN_TICKS *
     COMBAT_CONSTANTS.TICK_DURATION_MS,
-  AI_UPDATE_INTERVAL: 1000, // 1 second
+  // Note: AI update interval is TICK_DURATION_MS (600ms) - see AggroSystem.ts
 } as const;
 
 // Import health bar dimensions from single source of truth
