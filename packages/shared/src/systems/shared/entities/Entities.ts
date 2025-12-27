@@ -153,7 +153,8 @@ export class Entities extends SystemBase implements IEntities {
   }
 
   get(id: string): Entity | null {
-    return this.items.get(id) || null;
+    // Check items first, then players (for remote player entity lookup)
+    return this.items.get(id) || this.players.get(id) || null;
   }
 
   values(): IterableIterator<Entity> {

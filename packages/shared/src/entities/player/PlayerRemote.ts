@@ -385,6 +385,29 @@ export class PlayerRemote extends Entity implements HotReloadable {
       (this.avatar as unknown as { visible: boolean }).visible = true;
       nodeObj.position.set(0, 0, 0);
 
+      // CRITICAL: Set up userData on the VRM scene for raycast/interaction detection
+      // Without this, right-clicking on remote players won't work
+      const instanceWithRaw = avatarWithInstance.instance as unknown as {
+        raw?: { scene?: THREE.Object3D };
+      };
+      if (instanceWithRaw?.raw?.scene) {
+        instanceWithRaw.raw.scene.userData = {
+          type: "player",
+          entityId: this.id,
+          name: this.data.name || "Player",
+          interactable: true,
+        };
+        // Also set on all children recursively for accurate hit detection
+        instanceWithRaw.raw.scene.traverse((child: THREE.Object3D) => {
+          child.userData = {
+            type: "player",
+            entityId: this.id,
+            name: this.data.name || "Player",
+            interactable: true,
+          };
+        });
+      }
+
       // Ensure a default idle emote after mount so avatar isn't frozen
       (this.avatar as Avatar).setEmote(Emotes.IDLE);
       this.lastEmote = Emotes.IDLE;
