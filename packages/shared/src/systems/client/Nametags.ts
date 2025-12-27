@@ -38,6 +38,8 @@ const defaultScale = toTHREEVector3(new THREE.Vector3(1, 1, 1));
 interface NametagEntry {
   idx: number;
   name: string;
+  /** Combat level (null = don't show, e.g., for NPCs without levels) */
+  level: number | null;
   matrix: THREE.Matrix4;
 }
 
@@ -47,11 +49,15 @@ interface NametagEntry {
 export interface NametagHandle {
   idx: number;
   name: string;
+  /** Combat level (null = don't show) */
+  level: number | null;
   matrix: THREE.Matrix4;
   /** Update position in world space */
   move: (newMatrix: THREE.Matrix4) => void;
   /** Update name text */
   setName: (name: string) => void;
+  /** Update combat level (OSRS format: "Name (level-XX)") */
+  setLevel: (level: number | null) => void;
   /** Remove nametag from system */
   destroy: () => void;
 }
@@ -232,8 +238,15 @@ export class Nametags extends SystemBase {
   /**
    * Add a nametag for an entity
    * @param name - The name to display
+   * @param level - Combat level (null = don't show, for OSRS format "Name (level-XX)")
    */
-  add({ name }: { name: string }): NametagHandle | null {
+  add({
+    name,
+    level = null,
+  }: {
+    name: string;
+    level?: number | null;
+  }): NametagHandle | null {
     const idx = this.nametags.length;
     if (idx >= MAX_INSTANCES) {
       console.error("nametags: reached max");
@@ -257,6 +270,7 @@ export class Nametags extends SystemBase {
     const entry: NametagEntry = {
       idx,
       name,
+      level,
       matrix,
     };
     this.nametags[idx] = entry;
@@ -265,6 +279,7 @@ export class Nametags extends SystemBase {
     const handle: NametagHandle = {
       idx,
       name,
+      level,
       matrix,
       move: (newMatrix: THREE.Matrix4) => {
         matrix.elements[12] = newMatrix.elements[12];
@@ -277,6 +292,12 @@ export class Nametags extends SystemBase {
         if (entry.name === newName) return;
         entry.name = newName;
         handle.name = newName;
+        this.draw(entry);
+      },
+      setLevel: (newLevel: number | null) => {
+        if (entry.level === newLevel) return;
+        entry.level = newLevel;
+        handle.level = newLevel;
         this.draw(entry);
       },
       destroy: () => {
@@ -342,14 +363,20 @@ export class Nametags extends SystemBase {
 
     this.ctx.clearRect(x, y, NAMETAG_WIDTH, NAMETAG_HEIGHT);
 
-    // Draw name only (no health bar - that's handled by HealthBars system)
+    // Format display text: "Name" or "Name (level-XX)" (OSRS format)
+    let displayText = entry.name;
+    if (entry.level !== null && entry.level > 0) {
+      displayText = `${entry.name} (level-${entry.level})`;
+    }
+
+    // Draw name (no health bar - that's handled by HealthBars system)
     this.ctx.font = `800 ${NAME_FONT_SIZE}px Rubik`;
     this.ctx.fillStyle = "white";
     this.ctx.textAlign = "center";
     this.ctx.textBaseline = "middle";
     this.ctx.lineWidth = NAME_OUTLINE_SIZE;
     this.ctx.strokeStyle = "rgba(0,0,0,0.5)";
-    const text = this.fitText(entry.name, NAMETAG_WIDTH);
+    const text = this.fitText(displayText, NAMETAG_WIDTH);
     this.ctx.save();
     this.ctx.globalCompositeOperation = "xor";
     this.ctx.globalAlpha = 1;
