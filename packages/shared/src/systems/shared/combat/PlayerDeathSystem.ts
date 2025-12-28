@@ -521,6 +521,10 @@ export class PlayerDeathSystem extends SystemBase {
     };
     this.deathLocations.set(playerId, deathData);
 
+    // PVP XP: Emit COMBAT_KILL event if killed by another player
+    // This allows SkillsSystem to award XP for PvP kills
+    this.emitCombatKillForPvP(playerId);
+
     // Set player as dead and disable movement
     this.emitTypedEvent(EventType.PLAYER_SET_DEAD, {
       playerId,
@@ -585,6 +589,73 @@ export class PlayerDeathSystem extends SystemBase {
       this.respawnTimers.set(playerId, respawnTimer);
     }
     // Note: If tickSystem is available, respawn is handled by processPendingRespawns()
+  }
+
+  /**
+   * Emit COMBAT_KILL event for PvP kills so SkillsSystem can award XP.
+   * Uses CombatStateService to find the attacker who killed the player.
+   */
+  private emitCombatKillForPvP(deadPlayerId: string): void {
+    // Get CombatSystem to access stateService
+    const combatSystem = this.world.getSystem("combat") as {
+      stateService?: {
+        getAttackersTargeting: (
+          entityId: string,
+        ) => Array<{ toString: () => string }>;
+        getCombatData: (entityId: string) => {
+          attackerType: "player" | "mob";
+        } | null;
+      };
+    } | null;
+
+    if (!combatSystem?.stateService) {
+      return;
+    }
+
+    // Get all attackers who were targeting the dead player
+    const attackers =
+      combatSystem.stateService.getAttackersTargeting(deadPlayerId);
+    if (attackers.length === 0) {
+      return;
+    }
+
+    // Get dead player's max health for damage calculation (same approach as MobEntity)
+    const deadPlayerEntity = this.world.entities?.get?.(deadPlayerId);
+    let maxHealth = 10; // Default fallback
+    if (deadPlayerEntity && "getMaxHealth" in deadPlayerEntity) {
+      maxHealth =
+        (deadPlayerEntity as { getMaxHealth: () => number }).getMaxHealth() ||
+        10;
+    }
+
+    // Get PlayerSystem for attack style lookup
+    const playerSystem = this.world.getSystem("player") as {
+      getPlayerAttackStyle?: (playerId: string) => { id: string } | null;
+    } | null;
+
+    // Emit COMBAT_KILL for each player attacker (award XP to all who contributed)
+    for (const attackerId of attackers) {
+      const attackerIdStr = attackerId.toString();
+
+      // Check if this attacker is a player (not a mob)
+      const combatData = combatSystem.stateService.getCombatData(attackerIdStr);
+      if (!combatData || combatData.attackerType !== "player") {
+        continue;
+      }
+
+      // Get attacker's attack style
+      const attackStyleData =
+        playerSystem?.getPlayerAttackStyle?.(attackerIdStr);
+      const attackStyle = attackStyleData?.id || "aggressive"; // Default to aggressive
+
+      // Emit COMBAT_KILL event - SkillsSystem will handle XP distribution
+      this.emitTypedEvent(EventType.COMBAT_KILL, {
+        attackerId: attackerIdStr,
+        targetId: deadPlayerId,
+        damageDealt: maxHealth, // Use max health as damage (same as MobEntity)
+        attackStyle: attackStyle,
+      });
+    }
   }
 
   private async createHeadstoneEntity(
