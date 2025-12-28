@@ -849,7 +849,8 @@ export class EntityManager extends SystemBase {
       if (entity) {
         // Get current position from entity
         let pos = entity.position;
-        const rot = entity.node?.quaternion;
+        // Get rotation: prefer node.quaternion (client) but fallback to entity.rotation (server)
+        const rot = entity.node?.quaternion ?? entity.rotation;
 
         // Get network data from entity (includes health and other properties)
         const networkData = entity.getNetworkData();
