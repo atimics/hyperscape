@@ -514,7 +514,13 @@ export class ClientNetwork extends SystemBase {
         data.entities.length === 0 &&
         Array.isArray((data as { characters?: unknown[] }).characters);
 
-      this.logger.debug("Snapshot received - checking character select mode");
+      console.log("[PlayerLoading] Snapshot received", {
+        entitiesCount: data.entities?.length ?? "undefined",
+        hasCharacters: Array.isArray(
+          (data as { characters?: unknown[] }).characters,
+        ),
+        isCharacterSelectMode,
+      });
 
       // Handle character selection and world entry (non-spectators only)
       if (isCharacterSelectMode) {
@@ -525,23 +531,25 @@ export class ClientNetwork extends SystemBase {
             ? localStorage.getItem("selectedCharacterId")
             : null);
 
-        if (characterId) {
-          this.logger.debug(`Auto-selecting character: ${characterId}`, {
-            isEmbedded: this.isEmbeddedSpectator,
-          });
+        console.log("[PlayerLoading] Character select mode detected", {
+          characterId,
+          isEmbedded: this.isEmbeddedSpectator,
+        });
 
+        if (characterId) {
           // Embedded spectator mode needs characterSelected packet first
           if (this.isEmbeddedSpectator) {
             this.send("characterSelected", { characterId });
           }
 
           // Both modes need enterWorld to spawn the character
+          console.log(
+            `[PlayerLoading] Sending enterWorld with characterId: ${characterId}`,
+          );
           this.send("enterWorld", { characterId });
-
-          this.logger.debug("Character selection packets sent");
         } else {
-          this.logger.debug(
-            "No characterId available, skipping auto-enter world",
+          console.warn(
+            "[PlayerLoading] No characterId available, skipping auto-enter world",
           );
         }
       }

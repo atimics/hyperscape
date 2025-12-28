@@ -771,6 +771,13 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       if (!socket.player) {
         console.warn(
           "[PlayerLoading] clientReady received but no player on socket",
+          {
+            socketId: socket.id,
+            accountId: socket.accountId,
+            characterId: socket.characterId,
+            selectedCharacterId: socket.selectedCharacterId,
+            isRegistered: this.sockets.has(socket.id),
+          },
         );
         return;
       }

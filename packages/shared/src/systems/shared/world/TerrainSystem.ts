@@ -6,18 +6,14 @@ import {
 } from "../../../extras/three/geometryToPxMesh";
 import THREE, {
   MeshStandardNodeMaterial,
-  normalWorld,
-  uniform,
+  positionWorld,
+  cameraPosition,
   float,
   vec3,
-  abs,
-  pow,
-  add,
   sub,
-  mul,
-  div,
   mix,
   smoothstep,
+  length,
   vertexColor,
   Fn,
 } from "../../../extras/three/three";
@@ -44,8 +40,8 @@ import { PhysicsHandle } from "../../../types/systems/physics";
 import { getPhysX } from "../../../physics/PhysXManager";
 import { Layers } from "../../../physics/Layers";
 import { BIOMES } from "../../../data/world-structure";
-import { GrassSystem } from "..";
 import { WaterSystem } from "..";
+import { createTerrainMaterial, TerrainUniforms } from "./TerrainShader";
 
 interface BiomeCenter {
   x: number;
@@ -67,6 +63,12 @@ export class TerrainSystem extends System {
   private databaseSystem!: {
     saveWorldChunk(chunkData: WorldChunkData): void;
   }; // DatabaseSystem reference
+
+  // Terrain shader material (shared across all tiles)
+  private terrainMaterial?: THREE.Material & {
+    terrainUniforms: TerrainUniforms;
+  };
+  private terrainTextures = new Map<string, THREE.Texture>();
   private chunkSaveInterval?: NodeJS.Timeout;
   private terrainUpdateIntervalId?: NodeJS.Timeout;
   private serializationIntervalId?: NodeJS.Timeout;
@@ -93,7 +95,6 @@ export class TerrainSystem extends System {
   private _tempVec2 = new THREE.Vector2();
   private _tempVec2_2 = new THREE.Vector2();
   private _tempBox3 = new THREE.Box3();
-  private grassSystem?: GrassSystem;
   private waterSystem?: WaterSystem;
 
   // Serialization system
@@ -162,73 +163,106 @@ export class TerrainSystem extends System {
 
   /**
    * Create terrain tile material using TSL Node Material
-   * Features tri-planar slope coloring for realistic rock/grass blending
+   * Features vertex colors with distance fog for atmosphere
    */
   private createTerrainTileMaterial(): THREE.Material {
-    // Slope color uniforms
-    const uSlopeColor = uniform(vec3(0.42, 0.4, 0.38)); // Gray-brown rock (0x6b6560)
-    const uSlopeThreshold = uniform(float(0.6)); // Normal Y threshold
-    const uSlopeBlend = uniform(float(0.2)); // Blend smoothness
+    // Use TSL Node Material with vertex colors and custom fog
+    const FOG_NEAR = 500.0;
+    const FOG_FAR = 2000.0;
 
-    // Create TSL Node Material
-    const material = new MeshStandardNodeMaterial();
-    material.metalness = 0.1;
-    material.roughness = 0.9;
-
-    // Get world normal for slope calculations
-    const worldNormal = normalWorld;
-
-    // Create color node with tri-planar slope blending
+    // Create color node that uses vertex colors with fog
     const colorNode = Fn(() => {
-      // Get base vertex color (set during geometry creation)
+      // Get vertex color
       const baseColor = vertexColor();
 
-      // Calculate slope factor (0 = flat, 1 = vertical)
-      const slopeFactor = sub(float(1.0), abs(worldNormal.y));
+      // Calculate distance fog
+      const worldPos = positionWorld;
+      const dist = length(sub(worldPos, cameraPosition));
+      const fogFactor = smoothstep(float(FOG_NEAR), float(FOG_FAR), dist);
+      const fogColor = vec3(0.83, 0.78, 0.72); // Warm beige matches Environment fog
 
-      // Tri-planar blending weights based on world normal
-      const absNormal = abs(worldNormal);
-      const blendWeightsPow = pow(absNormal, vec3(3.0));
-      const weightSum = add(
-        add(blendWeightsPow.x, blendWeightsPow.y),
-        blendWeightsPow.z,
-      );
-      const blendWeights = div(blendWeightsPow, weightSum);
+      // Apply fog
+      const foggedColor = mix(baseColor.rgb, fogColor, fogFactor);
 
-      // Smooth slope color blending
-      const slopeBlendFactor = smoothstep(
-        sub(uSlopeThreshold, uSlopeBlend),
-        add(uSlopeThreshold, uSlopeBlend),
-        slopeFactor,
-      );
-
-      // Blend base color with slope color on steep surfaces (0.7 factor)
-      const mixedColor = mix(
-        baseColor.rgb,
-        uSlopeColor,
-        mul(slopeBlendFactor, float(0.7)),
-      );
-
-      // Apply subtle tri-planar directional variation
-      const xVariation = add(float(0.95), mul(float(0.05), blendWeights.x));
-      const zVariation = add(float(0.92), mul(float(0.08), blendWeights.z));
-
-      const xColor = mul(mixedColor, xVariation);
-      const yColor = mixedColor;
-      const zColor = mul(mixedColor, zVariation);
-
-      // Final blend using weights
-      const finalColor = add(
-        add(mul(xColor, blendWeights.x), mul(yColor, blendWeights.y)),
-        mul(zColor, blendWeights.z),
-      );
-
-      return finalColor;
+      return foggedColor;
     })();
 
+    const material = new MeshStandardNodeMaterial();
     material.colorNode = colorNode;
+    material.roughness = 0.9;
+    material.metalness = 0.0;
+    material.side = THREE.FrontSide;
+    material.flatShading = false;
+    material.fog = false; // We handle fog in the shader
 
     return material;
+  }
+
+  /**
+   * Load terrain textures and create the shared terrain material
+   */
+  private async loadTerrainTextures(): Promise<void> {
+    const loader = new THREE.TextureLoader();
+
+    const loadTexture = (path: string): Promise<THREE.Texture> => {
+      return new Promise((resolve) => {
+        loader.load(
+          path,
+          (tex) => {
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            tex.magFilter = THREE.LinearFilter;
+            tex.minFilter = THREE.LinearMipmapLinearFilter;
+            tex.generateMipmaps = true;
+            resolve(tex);
+          },
+          undefined,
+          () => {
+            // On error, create a placeholder
+            console.warn(`[TerrainSystem] Failed to load texture: ${path}`);
+            const placeholder = new THREE.DataTexture(
+              new Uint8Array([128, 128, 128, 255]),
+              1,
+              1,
+              THREE.RGBAFormat,
+            );
+            placeholder.wrapS = placeholder.wrapT = THREE.RepeatWrapping;
+            placeholder.needsUpdate = true;
+            resolve(placeholder);
+          },
+        );
+      });
+    };
+
+    // Load terrain textures from CDN assets folder
+    const cdnUrl = this.world.assetsUrl || "";
+    const [grassTex, dirtTex, rockTex, sandTex, snowTex] = await Promise.all([
+      loadTexture(`${cdnUrl}/textures/terrain/grass/stylized_grass_d.png`),
+      loadTexture(`${cdnUrl}/textures/terrain/dirt/dirt_ground_d.png`),
+      loadTexture(`${cdnUrl}/textures/terrain/rock/stylized_stone_d.png`),
+      loadTexture(`${cdnUrl}/textures/terrain/dirt/dirt_ground_d.png`), // Sand uses dirt
+      loadTexture(`${cdnUrl}/textures/terrain/snow/stylized_snow_d.png`),
+    ]);
+
+    this.terrainTextures.set("grass", grassTex);
+    this.terrainTextures.set("dirt", dirtTex);
+    this.terrainTextures.set("rock", rockTex);
+    this.terrainTextures.set("sand", sandTex);
+    this.terrainTextures.set("snow", snowTex);
+
+    // Create the shared terrain material
+    this.terrainMaterial = createTerrainMaterial(this.terrainTextures);
+    console.log("[TerrainSystem] Terrain textures loaded and material created");
+  }
+
+  /**
+   * Get the terrain material (creates fallback if not loaded)
+   */
+  private getTerrainMaterial(): THREE.Material {
+    if (this.terrainMaterial) {
+      return this.terrainMaterial;
+    }
+    // Fallback to simple vertex color material
+    return this.createTerrainTileMaterial();
   }
 
   /**
@@ -327,7 +361,8 @@ export class TerrainSystem extends System {
 
   private initializeBiomeCenters(): void {
     const worldSize = this.CONFIG.WORLD_SIZE * this.CONFIG.TILE_SIZE; // 10km x 10km
-    const numCenters = Math.floor((worldSize * worldSize) / 1000000); // Roughly 100 centers for 10km x 10km
+    const gridSize = this.CONFIG.BIOME_GRID_SIZE; // 5x5 grid
+    const cellSize = worldSize / gridSize;
 
     // Use deterministic PRNG for reproducible biome placement
     const baseSeed = this.computeSeedFromWorldId();
@@ -339,32 +374,52 @@ export class TerrainSystem extends System {
       return randomState / 0xffffffff;
     };
 
+    // Weighted biome types - plains dominant, with variety
     const biomeTypes = [
       "plains",
+      "plains",
+      "plains",
+      "forest",
       "forest",
       "valley",
       "mountains",
-      "tundra",
+      "mountains",
       "desert",
-      "lakes",
       "swamp",
+      "tundra", // Added back
     ];
 
     // Clear any existing centers
     this.biomeCenters = [];
 
-    for (let i = 0; i < numCenters; i++) {
-      const x = (nextRandom() - 0.5) * worldSize;
-      const z = (nextRandom() - 0.5) * worldSize;
-      const typeIndex = Math.floor(nextRandom() * biomeTypes.length);
-      const influence = 200 + nextRandom() * 400; // 200-600m influence radius
+    // Grid-jitter placement for even distribution
+    for (let gx = 0; gx < gridSize; gx++) {
+      for (let gz = 0; gz < gridSize; gz++) {
+        // Base position at grid cell center
+        const baseX = (gx + 0.5) * cellSize - worldSize / 2;
+        const baseZ = (gz + 0.5) * cellSize - worldSize / 2;
 
-      this.biomeCenters.push({
-        x,
-        z,
-        type: biomeTypes[typeIndex],
-        influence,
-      });
+        // Jitter within cell (controlled randomness)
+        const jitter = this.CONFIG.BIOME_JITTER;
+        const jitterX = (nextRandom() - 0.5) * 2 * jitter * cellSize;
+        const jitterZ = (nextRandom() - 0.5) * 2 * jitter * cellSize;
+
+        const x = baseX + jitterX;
+        const z = baseZ + jitterZ;
+
+        const typeIndex = Math.floor(nextRandom() * biomeTypes.length);
+        const influenceRange =
+          this.CONFIG.BIOME_MAX_INFLUENCE - this.CONFIG.BIOME_MIN_INFLUENCE;
+        const influence =
+          this.CONFIG.BIOME_MIN_INFLUENCE + nextRandom() * influenceRange;
+
+        this.biomeCenters.push({
+          x,
+          z,
+          type: biomeTypes[typeIndex],
+          influence,
+        });
+      }
     }
   }
 
@@ -392,6 +447,28 @@ export class TerrainSystem extends System {
     RESOURCE_DENSITY: 0.15, // 15% chance per area for resources (increased for more resources)
     TREE_DENSITY: 0.25, // 25% chance for trees in forest biomes (increased for visibility)
     TOWN_RADIUS: 25, // Safe radius around towns
+
+    // Biome Generation
+    BIOME_GRID_SIZE: 3, // 3x3 grid = 9 very large biomes
+    BIOME_JITTER: 0.35, // How much to randomize position within grid cell (0-0.5)
+    BIOME_MIN_INFLUENCE: 2000, // Biome influence radius in meters
+    BIOME_MAX_INFLUENCE: 3500, // Biome influence radius in meters
+    BIOME_GAUSSIAN_COEFF: 0.15, // Gaussian falloff (smooth natural decay)
+    BIOME_RANGE_MULT: 10, // Not used - no hard cutoff
+    BIOME_BOUNDARY_NOISE_SCALE: 0.003, // Larger scale noise for organic boundaries
+    BIOME_BOUNDARY_NOISE_AMOUNT: 0.15, // Subtle noise
+
+    // Height-Biome Coupling
+    MOUNTAIN_HEIGHT_BOOST: 0.5, // How much mountains raise terrain (0.5 = 50%)
+    MOUNTAIN_HEIGHT_THRESHOLD: 0.4, // Height above which mountains get weight boost
+    MOUNTAIN_WEIGHT_BOOST: 2.0, // Max weight multiplier for mountains at high elevation
+    VALLEY_HEIGHT_THRESHOLD: 0.4, // Height below which valleys/plains get weight boost
+    VALLEY_WEIGHT_BOOST: 1.5, // Max weight multiplier for valleys at low elevation
+
+    // Shoreline
+    WATER_LEVEL_NORMALIZED: 0.15, // Normalized height where water starts
+    SHORELINE_THRESHOLD: 0.25, // Normalized height where shoreline effect ends
+    SHORELINE_STRENGTH: 0.6, // How strong the brown tint is (0-1)
   };
 
   // Biomes now loaded from assets/manifests/biomes.json via DataManager
@@ -412,8 +489,12 @@ export class TerrainSystem extends System {
     // Initialize biome centers using deterministic random placement
     this.initializeBiomeCenters();
 
-    // Initialize water system (grass disabled for now)
-    // this.grassSystem = new GrassSystem(this.world)
+    // Load terrain textures (client-side only)
+    if (this.world.isClient) {
+      await this.loadTerrainTextures();
+    }
+
+    // Initialize water system
     this.waterSystem = new WaterSystem(this.world);
     await this.waterSystem.init();
 
@@ -646,8 +727,8 @@ export class TerrainSystem extends System {
     // Create geometry for this tile
     const geometry = this.createTileGeometry(tileX, tileZ);
 
-    // Create material with vertex colors and tri-planar slope shading using TSL Node Material
-    const material = this.createTerrainTileMaterial();
+    // Use triplanar terrain shader material (or fallback to vertex colors)
+    const material = this.getTerrainMaterial();
 
     // Create mesh
     const mesh = new THREE.Mesh(geometry, material);
@@ -953,10 +1034,16 @@ export class TerrainSystem extends System {
     const heightData: number[] = [];
     const biomeIds = new Float32Array(positions.count);
 
-    const defaultBiomeData = BIOMES["plains"] || {
-      color: 0x7fb069,
-      name: "Plains",
-    };
+    // Verify biome data is loaded - error if not
+    if (Object.keys(BIOMES).length === 0) {
+      throw new Error(
+        "[TerrainSystem] BIOMES data not loaded! DataManager must initialize before terrain generation.",
+      );
+    }
+    const defaultBiomeData = BIOMES["plains"];
+    if (!defaultBiomeData) {
+      throw new Error("[TerrainSystem] Plains biome not found in BIOMES data!");
+    }
 
     // Generate heightmap and vertex colors
     for (let i = 0; i < positions.count; i++) {
@@ -988,83 +1075,48 @@ export class TerrainSystem extends System {
 
       // Get biome influences for smooth color blending
       const biomeInfluences = this.getBiomeInfluencesAtPosition(x, z);
-      const normalizedHeight = height / 30; // Max height is 30 (OSRS-style)
+      const normalizedHeight = height / this.CONFIG.MAX_HEIGHT;
 
       // Store dominant biome ID for shader
       const dominantBiome = biomeInfluences[0].type;
       biomeIds[i] = this.getBiomeId(dominantBiome);
 
-      // Blend biome colors based on influences
+      // Blend up to 3 biome colors based on influence weights
       const color = new THREE.Color(0, 0, 0);
 
       for (const influence of biomeInfluences) {
-        const biomeData = BIOMES[influence.type] || defaultBiomeData;
+        const biomeData = BIOMES[influence.type];
+        if (!biomeData) {
+          throw new Error(
+            `[TerrainSystem] Biome "${influence.type}" not found in BIOMES data!`,
+          );
+        }
         const biomeColor = new THREE.Color(biomeData.color);
 
-        // Weight the color contribution (keep in linear space)
+        // Accumulate weighted colors
         color.r += biomeColor.r * influence.weight;
         color.g += biomeColor.g * influence.weight;
         color.b += biomeColor.b * influence.weight;
       }
 
-      // Apply height-based environmental effects BEFORE brightness adjustments
-      // Snow on high peaks
-      if (normalizedHeight > 0.7) {
-        const snowColor = new THREE.Color(0xffffff); // Pure white snow
-        const snowFactor = Math.pow((normalizedHeight - 0.7) / 0.3, 1.5);
-        color.lerp(snowColor, snowFactor * 0.7);
-      }
-      // Water tinting for low areas
-      else if (normalizedHeight < 0.18) {
-        const waterColor = new THREE.Color(0x2a5580); // Deep water blue
-        const depth = Math.max(0, 0.18 - normalizedHeight);
-        color.lerp(waterColor, Math.min(0.8, depth * 4.0));
-      }
-
-      // Boost saturation AFTER environmental effects but BEFORE brightness
-      const hsl = { h: 0, s: 0, l: 0 };
-      color.getHSL(hsl);
-      hsl.s = Math.min(1.0, hsl.s * 1.8); // 80% saturation boost
-      hsl.l = Math.max(0.2, Math.min(0.8, hsl.l)); // Clamp lightness
-      color.setHSL(hsl.h, hsl.s, hsl.l);
-
-      // Subtle height-based ambient occlusion (darken valleys slightly)
-      const ambientOcclusion = 0.85 + normalizedHeight * 0.15;
-      color.multiplyScalar(ambientOcclusion);
-
-      // Very subtle organic variation (reduced from 8% to 3%)
-      const noiseScale = 0.008;
-      const colorNoise = this.noise.simplex2D(x * noiseScale, z * noiseScale);
-      const colorVariation = 1.0 + colorNoise * 0.03;
-      color.multiplyScalar(colorVariation);
-
-      // Apply road-like patterns using noise (no actual road segments)
-      // Create organic path-like patterns
-      const roadNoiseScale = 0.002;
-      const roadPattern1 = this.noise.simplex2D(
-        x * roadNoiseScale,
-        z * roadNoiseScale * 0.5,
-      );
-      const roadPattern2 = this.noise.simplex2D(
-        x * roadNoiseScale * 0.5,
-        z * roadNoiseScale,
-      );
-
-      // Create path-like patterns that connect areas
-      const pathInfluence =
-        Math.max(
-          0,
-          Math.pow(Math.max(0, 1.0 - Math.abs(roadPattern1) * 4), 3) +
-            Math.pow(Math.max(0, 1.0 - Math.abs(roadPattern2) * 4), 3),
-        ) * 0.5;
-
-      if (pathInfluence > 0.1 && normalizedHeight < 0.5) {
-        // Only on lower terrain
-        const pathColor = new THREE.Color(0x6b5840); // Darker dirt path
-        color.lerp(pathColor, pathInfluence * 0.5);
+      // Apply brownish shoreline tint near water level
+      const waterLevel = this.CONFIG.WATER_LEVEL_NORMALIZED;
+      const shorelineThreshold = this.CONFIG.SHORELINE_THRESHOLD;
+      if (
+        normalizedHeight > waterLevel &&
+        normalizedHeight < shorelineThreshold
+      ) {
+        const shorelineColor = new THREE.Color(0x8b7355); // Sandy brown
+        const shoreFactor =
+          1.0 -
+          (normalizedHeight - waterLevel) / (shorelineThreshold - waterLevel);
+        color.lerp(
+          shorelineColor,
+          shoreFactor * this.CONFIG.SHORELINE_STRENGTH,
+        );
       }
 
-      // Store color in linear space (THREE.js expects this)
+      // Store blended color
       colors[i * 3] = color.r;
       colors[i * 3 + 1] = color.g;
       colors[i * 3 + 2] = color.b;
@@ -1097,8 +1149,12 @@ export class TerrainSystem extends System {
     return biomeIds[biomeName] || 0;
   }
 
-  getHeightAt(worldX: number, worldZ: number): number {
-    // Ensure noise generator is initialized even if init()/start() haven't run yet
+  /**
+   * Get base terrain height WITHOUT mountain biome boost.
+   * Used for biome influence calculation to avoid feedback loops.
+   */
+  private getBaseHeightAt(worldX: number, worldZ: number): number {
+    // Ensure noise generator is initialized
     if (!this.noise) {
       this.noise = new NoiseGenerator(this.computeSeedFromWorldId());
       if (!this.biomeCenters || this.biomeCenters.length === 0) {
@@ -1107,7 +1163,6 @@ export class TerrainSystem extends System {
     }
 
     // Multi-layered noise for realistic terrain
-    // Layer 1: Continental shelf - very large scale features
     const continentScale = 0.0008;
     const continentNoise = this.noise.fractal2D(
       worldX * continentScale,
@@ -1117,14 +1172,12 @@ export class TerrainSystem extends System {
       2.0,
     );
 
-    // Layer 2: Mountain ridges - creates dramatic peaks and valleys
     const ridgeScale = 0.003;
     const ridgeNoise = this.noise.ridgeNoise2D(
       worldX * ridgeScale,
       worldZ * ridgeScale,
     );
 
-    // Layer 3: Hills and valleys - medium scale variation
     const hillScale = 0.012;
     const hillNoise = this.noise.fractal2D(
       worldX * hillScale,
@@ -1134,7 +1187,6 @@ export class TerrainSystem extends System {
       2.2,
     );
 
-    // Layer 4: Erosion - smooths valleys and creates river beds
     const erosionScale = 0.005;
     const erosionNoise = this.noise.erosionNoise2D(
       worldX * erosionScale,
@@ -1142,7 +1194,6 @@ export class TerrainSystem extends System {
       3,
     );
 
-    // Layer 5: Fine detail - small bumps and texture
     const detailScale = 0.04;
     const detailNoise = this.noise.fractal2D(
       worldX * detailScale,
@@ -1152,31 +1203,19 @@ export class TerrainSystem extends System {
       2.5,
     );
 
-    // Combine layers with OSRS-style tuning (gentle, not dramatic)
+    // Combine layers with OSRS-style tuning
     let height = 0;
-
-    // Base continental elevation (40% weight)
     height += continentNoise * 0.4;
-
-    // Add mountain ridges - LINEAR, not squared (10% weight)
-    // OSRS-style: gentle ridges, not sharp peaks
     height += ridgeNoise * 0.1;
-
-    // Add rolling hills (12% weight) - reduced for flatter terrain
     height += hillNoise * 0.12;
-
-    // Apply erosion to create valleys (8% weight, subtractive)
     height += erosionNoise * 0.08;
-
-    // Add fine detail (3% weight) - subtle texture
     height += detailNoise * 0.03;
 
     // Normalize to [0, 1] range
     height = (height + 1) * 0.5;
     height = Math.max(0, Math.min(1, height));
 
-    // Apply gentle power curve (OSRS-style: mostly flat with gentle variation)
-    // 1.1 instead of 1.4 = much less dramatic peaks
+    // Apply gentle power curve
     height = Math.pow(height, 1.1);
 
     // Create ocean depressions
@@ -1186,17 +1225,49 @@ export class TerrainSystem extends System {
       worldZ * oceanScale,
     );
 
-    // If in ocean zone, depress the terrain
     if (oceanMask < -0.3) {
-      const oceanDepth = (-0.3 - oceanMask) * 2; // How deep into ocean
+      const oceanDepth = (-0.3 - oceanMask) * 2;
       height *= Math.max(0.1, 1 - oceanDepth);
     }
 
-    // Scale to actual world height (OSRS-style: gentle terrain)
-    const MAX_HEIGHT = 30; // Maximum terrain height in meters
-    const finalHeight = height * MAX_HEIGHT;
+    return height * this.CONFIG.MAX_HEIGHT;
+  }
 
-    return finalHeight;
+  getHeightAt(worldX: number, worldZ: number): number {
+    // Ensure biome centers are initialized
+    if (!this.biomeCenters || this.biomeCenters.length === 0) {
+      if (!this.noise) {
+        this.noise = new NoiseGenerator(this.computeSeedFromWorldId());
+      }
+      this.initializeBiomeCenters();
+    }
+
+    // Get base height (without mountain boost)
+    const baseHeight = this.getBaseHeightAt(worldX, worldZ);
+    let height = baseHeight / this.CONFIG.MAX_HEIGHT; // Normalize for boost calc
+
+    // Apply mountain biome height boost
+    let mountainBoost = 0;
+    for (const center of this.biomeCenters) {
+      if (center.type === "mountains") {
+        const dx = worldX - center.x;
+        const dz = worldZ - center.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        const normalizedDist = distance / center.influence;
+
+        if (normalizedDist < 2.5) {
+          // Smooth boost that peaks at center and fades out
+          const boost = Math.exp(-normalizedDist * normalizedDist * 0.3);
+          mountainBoost = Math.max(mountainBoost, boost);
+        }
+      }
+    }
+
+    // Apply mountain height boost from CONFIG
+    height = height * (1 + mountainBoost * this.CONFIG.MOUNTAIN_HEIGHT_BOOST);
+    height = Math.min(1, height); // Cap at max
+
+    return height * this.CONFIG.MAX_HEIGHT;
   }
 
   /**
@@ -1261,70 +1332,78 @@ export class TerrainSystem extends System {
     worldX: number,
     worldZ: number,
   ): Array<{ type: string; weight: number }> {
-    // Get height for biome weighting
-    const height = this.getHeightAt(worldX, worldZ);
-    const normalizedHeight = height / 30; // Max height is 30 (OSRS-style)
+    // Get BASE height (without mountain boost) to avoid feedback loop
+    const baseHeight = this.getBaseHeightAt(worldX, worldZ);
+    const normalizedHeight = baseHeight / this.CONFIG.MAX_HEIGHT;
 
-    const biomeInfluences: Array<{ type: string; weight: number }> = [];
+    // Add boundary noise for organic edges
+    const boundaryNoise = this.noise.simplex2D(
+      worldX * this.CONFIG.BIOME_BOUNDARY_NOISE_SCALE,
+      worldZ * this.CONFIG.BIOME_BOUNDARY_NOISE_SCALE,
+    );
 
-    // Calculate influence from each biome center
+    // Map to collect and merge same-type biomes
+    const biomeWeightMap = new Map<string, number>();
+
+    // Calculate influence from ALL biome centers (no hard cutoff!)
     for (const center of this.biomeCenters) {
-      const distance = Math.sqrt(
-        (worldX - center.x) ** 2 + (worldZ - center.z) ** 2,
+      const dx = worldX - center.x;
+      const dz = worldZ - center.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+
+      // Add subtle noise to distance for organic boundaries
+      const noisyDistance =
+        distance *
+        (1 + boundaryNoise * this.CONFIG.BIOME_BOUNDARY_NOISE_AMOUNT);
+
+      // Pure gaussian falloff - NO hard distance cutoff
+      // The gaussian naturally approaches 0 at large distances
+      const normalizedDistance = noisyDistance / center.influence;
+      let weight = Math.exp(
+        -normalizedDistance *
+          normalizedDistance *
+          this.CONFIG.BIOME_GAUSSIAN_COEFF,
       );
 
-      // Use smoother falloff for more organic blending
-      if (distance < center.influence * 3) {
-        // Use a smoother gaussian falloff
-        const normalizedDistance = distance / center.influence;
-        const weight = Math.exp(-normalizedDistance * normalizedDistance * 0.5);
-
-        // Adjust weight based on height appropriateness for the biome
-        let heightMultiplier = 1.0;
-
-        if (center.type === "lakes" && normalizedHeight < 0.2) {
-          heightMultiplier = 1.8;
-        } else if (center.type === "tundra" && normalizedHeight > 0.6) {
-          heightMultiplier = 1.8;
-        } else if (
-          center.type === "forest" &&
-          normalizedHeight > 0.3 &&
-          normalizedHeight < 0.7
-        ) {
-          heightMultiplier = 1.4;
-        } else if (
-          center.type === "plains" &&
-          normalizedHeight > 0.2 &&
-          normalizedHeight < 0.4
-        ) {
-          heightMultiplier = 1.4;
-        }
-
-        if (weight > 0.001) {
-          biomeInfluences.push({
-            type: center.type,
-            weight: weight * heightMultiplier,
-          });
-        }
+      // Height-based weight adjustments (using BASE height, not boosted)
+      if (
+        center.type === "mountains" &&
+        normalizedHeight > this.CONFIG.MOUNTAIN_HEIGHT_THRESHOLD
+      ) {
+        const heightFactor =
+          normalizedHeight - this.CONFIG.MOUNTAIN_HEIGHT_THRESHOLD;
+        weight *= 1.0 + heightFactor * this.CONFIG.MOUNTAIN_WEIGHT_BOOST;
       }
+
+      if (
+        (center.type === "valley" || center.type === "plains") &&
+        normalizedHeight < this.CONFIG.VALLEY_HEIGHT_THRESHOLD
+      ) {
+        const heightFactor =
+          this.CONFIG.VALLEY_HEIGHT_THRESHOLD - normalizedHeight;
+        weight *= 1.0 + heightFactor * this.CONFIG.VALLEY_WEIGHT_BOOST;
+      }
+
+      // Merge same-type biomes (no threshold - let gaussian handle falloff)
+      const existing = biomeWeightMap.get(center.type) || 0;
+      biomeWeightMap.set(center.type, existing + weight);
     }
 
-    // Normalize weights
+    // Convert map to array - use ALL influences for smooth blending
+    const biomeInfluences: Array<{ type: string; weight: number }> = [];
+    for (const [type, weight] of biomeWeightMap) {
+      biomeInfluences.push({ type, weight });
+    }
+
+    // Normalize weights across ALL biomes (no limit)
     const totalWeight = biomeInfluences.reduce((sum, b) => sum + b.weight, 0);
     if (totalWeight > 0) {
       for (const influence of biomeInfluences) {
         influence.weight /= totalWeight;
       }
     } else {
-      const heightBasedBiome =
-        normalizedHeight < 0.15
-          ? "lakes"
-          : normalizedHeight < 0.35
-            ? "plains"
-            : normalizedHeight < 0.6
-              ? "forest"
-              : "tundra";
-      biomeInfluences.push({ type: heightBasedBiome, weight: 1.0 });
+      // Fallback to plains if no biome centers are nearby
+      biomeInfluences.push({ type: "plains", weight: 1.0 });
     }
 
     return biomeInfluences;
@@ -1390,7 +1469,6 @@ export class TerrainSystem extends System {
 
     this.generateTreesForTile(tile, biomeData);
     this.generateOtherResourcesForTile(tile, biomeData);
-    this.generateGrassForTile(tile, biomeData);
     // Roads are now generated using noise patterns instead of segments
   }
 
@@ -1474,34 +1552,6 @@ export class TerrainSystem extends System {
         tile.resources.push(resource);
       }
     }
-  }
-
-  private generateGrassForTile(tile: TerrainTile, _biomeData: BiomeData): void {
-    if (!this.world.network?.isClient) return;
-    if (!this.grassSystem) return;
-
-    const grassMesh = this.grassSystem.generateGrassForTile(
-      tile,
-      this.getHeightAt.bind(this),
-      this.getNormalAt.bind(this),
-      this.calculateSlope.bind(this),
-      this.CONFIG.WATER_THRESHOLD,
-      this.CONFIG.TILE_SIZE,
-      this.createTileRng.bind(this),
-    );
-
-    if (!grassMesh) return;
-
-    const stage = this.world.stage as { scene: THREE.Scene };
-    if (stage?.scene) {
-      stage.scene.add(grassMesh);
-    }
-
-    (tile as { grassMeshes?: THREE.InstancedMesh[] }).grassMeshes =
-      (tile as { grassMeshes?: THREE.InstancedMesh[] }).grassMeshes || [];
-    (tile as { grassMeshes?: THREE.InstancedMesh[] }).grassMeshes!.push(
-      grassMesh,
-    );
   }
 
   // DEPRECATED: Roads are now generated using noise patterns instead of segments
@@ -1693,11 +1743,6 @@ export class TerrainSystem extends System {
           ? _deltaTime
           : 1 / 60;
 
-      // DISABLED: Grass system updates
-      // if (this.grassSystem) {
-      //   this.grassSystem.update(dt)
-      // }
-
       // Update water system
       if (this.waterSystem) {
         const allWaterMeshes: THREE.Mesh[] = [];
@@ -1803,19 +1848,6 @@ export class TerrainSystem extends System {
         }
       }
       tile.waterMeshes = [];
-    }
-
-    // Clean up grass meshes
-    const grassMeshes = (tile as { grassMeshes?: THREE.InstancedMesh[] })
-      .grassMeshes;
-    if (grassMeshes) {
-      for (const grassMesh of grassMeshes) {
-        if (grassMesh.parent) {
-          grassMesh.parent.remove(grassMesh);
-        }
-        grassMesh.geometry.dispose();
-      }
-      (tile as { grassMeshes?: THREE.InstancedMesh[] }).grassMeshes = [];
     }
 
     // Remove main tile mesh from scene

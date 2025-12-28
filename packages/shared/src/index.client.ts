@@ -128,6 +128,7 @@ export { ClientAudio } from "./systems/client/ClientAudio";
 export { ClientLiveKit } from "./systems/client/ClientLiveKit";
 export { ClientInput } from "./systems/client/ClientInput";
 export { ClientActions } from "./systems/client/ClientActions";
+export { DevStats } from "./systems/client/DevStats"; // FPS counter and dev performance telemetry
 export { EventBus } from "./systems/shared";
 export { System as SystemClass } from "./systems/shared";
 export { SystemBase } from "./systems/shared";

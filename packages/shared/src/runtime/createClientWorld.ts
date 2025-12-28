@@ -50,6 +50,7 @@ import { World } from "../core/World";
 import { ClientActions } from "../systems/client/ClientActions";
 import { ClientAudio } from "../systems/client/ClientAudio";
 import { ClientCameraSystem } from "../systems/client/ClientCameraSystem";
+import { DevStats } from "../systems/client/DevStats";
 import { Environment } from "../systems/shared";
 import { ClientGraphics } from "../systems/client/ClientGraphics";
 import { ClientInput } from "../systems/client/ClientInput";
@@ -142,6 +143,9 @@ export function createClientWorld() {
   // Rendering systems
   world.register("graphics", ClientGraphics); // WebGPU renderer
   world.register("environment", Environment); // Lighting, shadows, CSM
+
+  // Dev tools (only active in dev mode)
+  world.register("devStats", DevStats); // FPS counter and performance telemetry
 
   // Audio systems
   world.register("audio", ClientAudio); // 3D spatial audio

@@ -383,13 +383,22 @@ export async function handleEnterWorld(
   sendFn: (name: string, data: unknown, ignoreSocketId?: string) => void,
   sendToFn: (socketId: string, name: string, data: unknown) => void,
 ): Promise<void> {
+  const payload = (data as { characterId?: string }) || {};
+  const characterId = payload.characterId || null;
+
+  console.log("[PlayerLoading] enterWorld received", {
+    socketId: socket.id,
+    accountId: socket.accountId,
+    characterId,
+    hasExistingPlayer: !!socket.player,
+  });
+
   // Spawn the entity now, preserving legacy spawn shape
   if (socket.player) {
+    console.log("[PlayerLoading] enterWorld skipped - player already exists");
     return; // Already spawned
   }
   const accountId = socket.accountId || undefined;
-  const payload = (data as { characterId?: string }) || {};
-  const characterId = payload.characterId || null;
 
   // Set socket.characterId IMMEDIATELY for synchronous duplicate detection
   // This must happen BEFORE any async operations (DB queries, entity creation)

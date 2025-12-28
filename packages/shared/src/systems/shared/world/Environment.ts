@@ -276,9 +276,10 @@ export class Environment extends System {
 
     const sunIntensity = node?._sunIntensity ?? base.sunIntensity;
     const sunColor = node?._sunColor ?? base.sunColor;
-    const fogNear = node?._fogNear ?? base.fogNear;
-    const fogFar = node?._fogFar ?? base.fogFar;
-    const fogColor = node?._fogColor ?? base.fogColor;
+    // Default fog for atmosphere - warm fog affecting terrain and models
+    const fogNear = node?._fogNear ?? base.fogNear ?? 500;
+    const fogFar = node?._fogFar ?? base.fogFar ?? 2000;
+    const fogColor = node?._fogColor ?? base.fogColor ?? "#d4c8b8";
 
     const n = ++this.skyN;
     let bgTexture;
@@ -317,16 +318,16 @@ export class Environment extends System {
       }
     }
 
-    if (fogNear != null && fogFar != null && fogColor) {
-      const color = new THREE.Color(fogColor);
-      this.world.stage.scene.fog = new THREE.Fog(
-        color,
-        fogNear as number,
-        fogFar as number,
-      );
-    } else {
-      this.world.stage.scene.fog = null;
-    }
+    // Always apply fog with defaults
+    const color = new THREE.Color(fogColor);
+    this.world.stage.scene.fog = new THREE.Fog(
+      color,
+      fogNear as number,
+      fogFar as number,
+    );
+    console.log(
+      `[Environment] Fog applied: near=${fogNear}, far=${fogFar}, color=${fogColor}`,
+    );
 
     this.skyInfo = {
       bgUrl,

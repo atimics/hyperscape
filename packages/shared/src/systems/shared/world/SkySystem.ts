@@ -14,28 +14,23 @@ import THREE, {
   texture,
   uv,
   positionLocal,
-  positionWorld,
   uniform,
   float,
   vec3,
   vec4,
-  sin,
   abs,
   pow,
   add,
   sub,
   mul,
-  div,
   mix,
   clamp,
   smoothstep,
   dot,
   normalize,
-  distance,
   length,
-  min,
-  max,
-  step,
+  sin,
+  cos,
   Fn,
 } from "../../../extras/three/three";
 import { System } from "..";
@@ -62,300 +57,25 @@ function createNoiseTexture(size = 128): THREE.DataTexture {
 }
 
 // -----------------------------
-// Cloud data (subset from reference; enough for layered sky feel)
+// Cloud configuration with texture atlas sampling
+// The cloud textures are 2x4 sprite sheets (8 clouds per texture)
+// UV offset selects which cloud sprite to use
 // -----------------------------
-type CloudItem = {
-  textureNumber: number;
-  cloudNumber: number;
-  positionIndex: number;
-  posY: number;
-  width: number;
-  height: number;
-  distortionSpeed: number;
-  distortionRange: number;
+type CloudDef = {
+  az: number; // azimuth in degrees
+  el: number; // elevation in degrees
+  tex: number; // which texture (1-4)
+  sprite: number; // which sprite in atlas (0-7)
+  scale: number; // size multiplier
 };
 
-const cloudData: CloudItem[] = [
-  {
-    textureNumber: 2,
-    cloudNumber: 0,
-    positionIndex: 4,
-    posY: 350,
-    width: 300,
-    height: 200,
-    distortionSpeed: 0.12,
-    distortionRange: 0.1,
-  },
-  {
-    textureNumber: 2,
-    cloudNumber: 6,
-    positionIndex: 0,
-    posY: 350,
-    width: 300,
-    height: 200,
-    distortionSpeed: 0.11,
-    distortionRange: 0.05,
-  },
-  {
-    textureNumber: 2,
-    cloudNumber: 1,
-    positionIndex: 14,
-    posY: 350,
-    width: 300,
-    height: 180,
-    distortionSpeed: 0.12,
-    distortionRange: 0.1,
-  },
-  {
-    textureNumber: 2,
-    cloudNumber: 6,
-    positionIndex: 8,
-    posY: 350,
-    width: 300,
-    height: 180,
-    distortionSpeed: 0.1,
-    distortionRange: 0.0,
-  },
-  {
-    textureNumber: 2,
-    cloudNumber: 2,
-    positionIndex: 28,
-    posY: 350,
-    width: 400,
-    height: 200,
-    distortionSpeed: 0.12,
-    distortionRange: 0.1,
-  },
-  {
-    textureNumber: 2,
-    cloudNumber: 6,
-    positionIndex: 30,
-    posY: 350,
-    width: 400,
-    height: 200,
-    distortionSpeed: 0.12,
-    distortionRange: 0.05,
-  },
-  {
-    textureNumber: 2,
-    cloudNumber: 3,
-    positionIndex: 45,
-    posY: 350,
-    width: 400,
-    height: 200,
-    distortionSpeed: 0.12,
-    distortionRange: 0.1,
-  },
-  {
-    textureNumber: 2,
-    cloudNumber: 7,
-    positionIndex: 50,
-    posY: 350,
-    width: 400,
-    height: 200,
-    distortionSpeed: 0.1,
-    distortionRange: 0.1,
-  },
-  {
-    textureNumber: 2,
-    cloudNumber: 4,
-    positionIndex: 69,
-    posY: 350,
-    width: 350,
-    height: 175,
-    distortionSpeed: 0.12,
-    distortionRange: 0.1,
-  },
-  {
-    textureNumber: 2,
-    cloudNumber: 6,
-    positionIndex: 75,
-    posY: 350,
-    width: 350,
-    height: 175,
-    distortionSpeed: 0.12,
-    distortionRange: 0.0,
-  },
-  {
-    textureNumber: 2,
-    cloudNumber: 5,
-    positionIndex: 80,
-    posY: 350,
-    width: 350,
-    height: 175,
-    distortionSpeed: 0.12,
-    distortionRange: 0.1,
-  },
-  {
-    textureNumber: 2,
-    cloudNumber: 7,
-    positionIndex: 85,
-    posY: 350,
-    width: 500,
-    height: 200,
-    distortionSpeed: 0.1,
-    distortionRange: 0.05,
-  },
-  {
-    textureNumber: 0,
-    cloudNumber: 0,
-    positionIndex: 0,
-    posY: 450,
-    width: 230,
-    height: 115,
-    distortionSpeed: 0.1,
-    distortionRange: 0.5,
-  },
-  {
-    textureNumber: 0,
-    cloudNumber: 1,
-    positionIndex: 15,
-    posY: 550,
-    width: 180,
-    height: 90,
-    distortionSpeed: 0.12,
-    distortionRange: 0.4,
-  },
-  {
-    textureNumber: 0,
-    cloudNumber: 2,
-    positionIndex: 23,
-    posY: 650,
-    width: 210,
-    height: 105,
-    distortionSpeed: 0.13,
-    distortionRange: 0.35,
-  },
-  {
-    textureNumber: 0,
-    cloudNumber: 3,
-    positionIndex: 34,
-    posY: 400,
-    width: 250,
-    height: 125,
-    distortionSpeed: 0.15,
-    distortionRange: 0.4,
-  },
-  {
-    textureNumber: 0,
-    cloudNumber: 4,
-    positionIndex: 46,
-    posY: 450,
-    width: 230,
-    height: 115,
-    distortionSpeed: 0.16,
-    distortionRange: 0.35,
-  },
-  {
-    textureNumber: 0,
-    cloudNumber: 5,
-    positionIndex: 58,
-    posY: 550,
-    width: 290,
-    height: 145,
-    distortionSpeed: 0.12,
-    distortionRange: 0.4,
-  },
-  {
-    textureNumber: 0,
-    cloudNumber: 6,
-    positionIndex: 75,
-    posY: 475,
-    width: 150,
-    height: 75,
-    distortionSpeed: 0.2,
-    distortionRange: 0.45,
-  },
-  {
-    textureNumber: 0,
-    cloudNumber: 7,
-    positionIndex: 90,
-    posY: 450,
-    width: 240,
-    height: 120,
-    distortionSpeed: 0.17,
-    distortionRange: 0.5,
-  },
-  {
-    textureNumber: 3,
-    cloudNumber: 7,
-    positionIndex: 60,
-    posY: 375,
-    width: 300,
-    height: 150,
-    distortionSpeed: 0.1,
-    distortionRange: 0.5,
-  },
-  {
-    textureNumber: 3,
-    cloudNumber: 6,
-    positionIndex: 20,
-    posY: 375,
-    width: 200,
-    height: 100,
-    distortionSpeed: 0.12,
-    distortionRange: 0.4,
-  },
-  {
-    textureNumber: 3,
-    cloudNumber: 5,
-    positionIndex: 36,
-    posY: 550,
-    width: 250,
-    height: 120,
-    distortionSpeed: 0.13,
-    distortionRange: 0.35,
-  },
-  {
-    textureNumber: 3,
-    cloudNumber: 4,
-    positionIndex: 50,
-    posY: 625,
-    width: 280,
-    height: 170,
-    distortionSpeed: 0.15,
-    distortionRange: 0.4,
-  },
-  {
-    textureNumber: 3,
-    cloudNumber: 3,
-    positionIndex: 69,
-    posY: 550,
-    width: 350,
-    height: 200,
-    distortionSpeed: 0.16,
-    distortionRange: 0.35,
-  },
-  {
-    textureNumber: 3,
-    cloudNumber: 2,
-    positionIndex: 79,
-    posY: 700,
-    width: 390,
-    height: 200,
-    distortionSpeed: 0.12,
-    distortionRange: 0.4,
-  },
-  {
-    textureNumber: 3,
-    cloudNumber: 1,
-    positionIndex: 85,
-    posY: 525,
-    width: 380,
-    height: 190,
-    distortionSpeed: 0.2,
-    distortionRange: 0.45,
-  },
-  {
-    textureNumber: 3,
-    cloudNumber: 0,
-    positionIndex: 95,
-    posY: 675,
-    width: 150,
-    height: 100,
-    distortionSpeed: 0.17,
-    distortionRange: 0.5,
-  },
+const CLOUD_DEFS: CloudDef[] = [
+  { az: 25, el: 22, tex: 1, sprite: 0, scale: 1.2 },
+  { az: 85, el: 35, tex: 2, sprite: 2, scale: 1.0 },
+  { az: 145, el: 18, tex: 1, sprite: 4, scale: 1.4 },
+  { az: 205, el: 30, tex: 3, sprite: 1, scale: 1.1 },
+  { az: 265, el: 42, tex: 2, sprite: 5, scale: 0.9 },
+  { az: 325, el: 25, tex: 1, sprite: 3, scale: 1.3 },
 ];
 
 // -----------------------------
@@ -547,6 +267,7 @@ export class SkySystem extends System {
     sunMat.blending = THREE.AdditiveBlending;
     sunMat.depthWrite = false;
     sunMat.transparent = true;
+    sunMat.fog = false;
 
     // Store uniform for runtime updates
     this.sunMaterialUniforms = { uOpacity };
@@ -583,6 +304,7 @@ export class SkySystem extends System {
     glowMat.depthWrite = false;
     glowMat.transparent = true;
     glowMat.side = THREE.DoubleSide;
+    glowMat.fog = false;
 
     this.sunGlow = new THREE.Mesh(glowGeom, glowMat);
     this.sunGlow.name = "SkySunGlow";
@@ -617,6 +339,7 @@ export class SkySystem extends System {
     moonMat.depthWrite = false;
     moonMat.transparent = true;
     moonMat.side = THREE.DoubleSide;
+    moonMat.fog = false;
 
     // Store uniform for runtime updates
     this.moonMaterialUniforms = { uOpacity };
@@ -629,147 +352,164 @@ export class SkySystem extends System {
 
   /**
    * Create sky dome with TSL Node Material
+   * Production-grade day/night cycle with smooth transitions, stars, and proper atmosphere
    */
   private createSkyDome(): void {
     if (!this.group) return;
 
-    const skyGeom = new THREE.SphereGeometry(8000, 32, 32);
+    // Use high segment count to prevent color banding
+    const skyGeom = new THREE.SphereGeometry(8000, 128, 64);
 
     // Create TSL uniforms
     const uTime = uniform(float(0));
     const uSunPosition = uniform(vec3(0, 1, 0));
     const uDayCycleProgress = uniform(float(0));
 
-    // Sky colors
-    const colorDayCycleHigh = vec3(0.55, 0.78, 1.0); // #8cc8ff
-    const colorDayCycleLow = vec3(0.88, 0.95, 1.0); // #e0f2ff
-    const colorNightHigh = vec3(0.04, 0.05, 0.1); // #0a0d1a
-    const colorNightLow = vec3(0.1, 0.125, 0.2); // #1a2033
-    const colorDawn = vec3(1.0, 0.48, 0.23); // #ff7a3a
-    const colorSun = vec3(1.0, 1.0, 0.93); // #ffffee
-
-    // Atmosphere parameters
-    const atmosphereElevation = float(0.4);
-    const atmospherePower = float(2.5);
-    const dawnAngleAmplitude = float(0.35);
-    const dawnElevationAmplitude = float(0.25);
-    const sunAmplitude = float(0.05);
-    const sunMultiplier = float(0.8);
-
-    // Create the sky color node
+    // Create the sky color node - comprehensive day/night with stars
     const skyColorNode = Fn(() => {
-      const uvCoord = uv();
       const localPos = normalize(positionLocal);
 
-      // Sky gradient based on elevation
-      const horizonIntensity = div(
-        sub(uvCoord.y, float(0.5)),
-        atmosphereElevation,
-      );
-      const horizonFactor = pow(
-        sub(float(1.0), horizonIntensity),
-        atmospherePower,
-      );
+      // Elevation: 0 at horizon, 1 at zenith
+      const elevation = clamp(localPos.y, float(0.0), float(1.0));
 
-      // Day cycle colors
-      const colorDayCycle = mix(
-        colorDayCycleHigh,
-        colorDayCycleLow,
-        horizonFactor,
-      );
-      const colorNight = mix(colorNightHigh, colorNightLow, horizonFactor);
-
-      // Day intensity based on cycle progress
-      const dayIntensityCalc = Fn(() => {
-        const progress = uDayCycleProgress;
-        const isFirstHalf = step(progress, float(0.5));
-        const firstHalfIntensity = mul(
-          sub(float(0.25), abs(sub(progress, float(0.25)))),
-          float(4.0),
-        );
-        return mul(firstHalfIntensity, isFirstHalf);
-      })();
-
-      let skyColor = mix(colorNight, colorDayCycle, dayIntensityCalc);
-
-      // Dawn color contribution
-      const dawnAngleIntensity = dot(normalize(uSunPosition), localPos);
-      const dawnAngleFactor = smoothstep(
-        float(0.0),
-        float(1.0),
-        div(
-          sub(dawnAngleIntensity, sub(float(1.0), dawnAngleAmplitude)),
-          dawnAngleAmplitude,
-        ),
-      );
-      const dawnElevationFactor = sub(
-        float(1.0),
-        min(
-          float(1.0),
-          div(sub(uvCoord.y, float(0.5)), dawnElevationAmplitude),
-        ),
-      );
-
-      const dawnDayCycleIntensity = Fn(() => {
-        const progress = uDayCycleProgress;
-        const isFirstHalf = step(progress, float(0.5));
-        const intensity = mul(abs(sub(progress, float(0.25))), float(4.0));
-        return mul(
-          mul(add(mul(intensity, float(4.0)), float(3.14159)), float(0.5)),
-          isFirstHalf,
-        );
-      })();
-
-      const dawnIntensity = clamp(
-        mul(mul(dawnAngleFactor, dawnElevationFactor), dawnDayCycleIntensity),
+      // =====================
+      // DAY/NIGHT CYCLE
+      // =====================
+      // Progress: 0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset, 1.0 = midnight
+      // Use cosine for smooth day intensity: peaks at 0.5 (noon), lowest at 0/1 (midnight)
+      const dayAngle = mul(uDayCycleProgress, float(6.2832)); // 2*PI
+      // Shift so noon (0.5) = peak: cos(2π * 0.5 - π) = cos(0) = 1
+      const dayIntensity = clamp(
+        mul(add(cos(sub(dayAngle, float(3.14159))), float(1.0)), float(0.5)),
         float(0.0),
         float(1.0),
       );
 
-      // Add dawn color
-      skyColor = add(skyColor, mul(colorDawn, dawnIntensity));
+      // Night intensity is inverse of day
+      const nightIntensity = sub(float(1.0), dayIntensity);
 
-      // Sun glow
-      const distanceToSun = distance(localPos, uSunPosition);
-      const sunIntensity = mul(
-        smoothstep(
-          float(0.0),
-          float(1.0),
-          clamp(
-            sub(float(1.0), div(distanceToSun, sunAmplitude)),
-            float(0.0),
-            float(1.0),
-          ),
+      // =====================
+      // SKY COLORS
+      // =====================
+      // Day sky gradient: deep blue at zenith, lighter at horizon
+      const dayZenith = vec3(0.25, 0.55, 0.95); // Rich blue
+      const dayHorizon = vec3(0.7, 0.85, 1.0); // Light blue/white
+      const dayGradient = pow(sub(float(1.0), elevation), float(1.5));
+      const daySkyColor = mix(dayZenith, dayHorizon, dayGradient);
+
+      // Night sky gradient: deep dark blue at zenith, slightly lighter at horizon
+      const nightZenith = vec3(0.02, 0.03, 0.08); // Very dark blue
+      const nightHorizon = vec3(0.08, 0.1, 0.18); // Dark blue-gray
+      const nightGradient = pow(sub(float(1.0), elevation), float(2.0));
+      const nightSkyColor = mix(nightZenith, nightHorizon, nightGradient);
+
+      // Blend day/night sky
+      let skyColor = mix(nightSkyColor, daySkyColor, dayIntensity);
+
+      // =====================
+      // SUNRISE/SUNSET GLOW
+      // =====================
+      // Detect when sun is near horizon (sunrise/sunset)
+      const sunY = uSunPosition.y;
+      // Dawn/dusk factor: peaks when sun is at horizon (-0.1 to 0.3)
+      const dawnDuskFactor = smoothstep(float(-0.2), float(0.0), sunY);
+      const dawnDuskFade = smoothstep(float(0.4), float(0.15), sunY);
+      const sunriseSunsetIntensity = mul(dawnDuskFactor, dawnDuskFade);
+
+      // Direction to sun for glow positioning
+      const sunDir = normalize(uSunPosition);
+      const angleToSun = dot(localPos, sunDir);
+
+      // Sunrise/sunset colors near sun
+      const sunriseColor = vec3(1.0, 0.5, 0.2); // Orange
+      const sunsetPinkColor = vec3(1.0, 0.4, 0.5); // Pink/red
+
+      // Glow strongest near sun, fading with angle
+      const sunGlowAngle = smoothstep(float(0.3), float(1.0), angleToSun);
+      // Also affect horizon area more
+      const horizonGlow = smoothstep(float(0.3), float(0.0), elevation);
+
+      const glowIntensity = mul(
+        mul(sunGlowAngle, horizonGlow),
+        mul(sunriseSunsetIntensity, float(0.8)),
+      );
+
+      // Blend sunrise color with slight pink variation based on time
+      const dawnOrDusk = smoothstep(float(0.2), float(0.3), uDayCycleProgress);
+      const glowColor = mix(sunriseColor, sunsetPinkColor, dawnOrDusk);
+      skyColor = add(skyColor, mul(glowColor, glowIntensity));
+
+      // =====================
+      // STARS (Night only)
+      // =====================
+      // Stars visible at night, above horizon
+      const starVisibility = mul(
+        nightIntensity,
+        smoothstep(float(0.1), float(0.4), elevation),
+      );
+
+      // Procedural stars using stable hash from position
+      // Lower scale = larger star cells = fewer stars
+      const starScale = float(20.0);
+      const starX = mul(localPos.x, starScale);
+      const starY = mul(localPos.y, starScale);
+      const starZ = mul(localPos.z, starScale);
+
+      // Create pseudo-random value from position (stable, no dithering)
+      const hash1 = sin(
+        add(mul(starX, float(12.9898)), mul(starY, float(78.233))),
+      );
+      const hash2 = sin(
+        add(mul(starZ, float(43.758)), mul(starX, float(27.169))),
+      );
+      const starHash = abs(sin(mul(add(hash1, hash2), float(43758.5453))));
+
+      // Star threshold - extremely high threshold = very sparse stars
+      const starThreshold = smoothstep(float(0.9999), float(0.99999), starHash);
+
+      // Star brightness with subtle twinkle
+      const twinkle = add(
+        float(0.7),
+        mul(
+          sin(add(mul(uTime, float(2.0)), mul(starHash, float(10.0)))),
+          float(0.3),
         ),
-        sunMultiplier,
       );
-      skyColor = add(skyColor, mul(colorSun, sunIntensity));
+      const starBrightness = mul(mul(starThreshold, twinkle), starVisibility);
 
-      // Sun glow halo
-      const sunGlowStrength = pow(
-        max(float(0.0), sub(float(1.05), mul(distanceToSun, float(2.5)))),
-        float(2.0),
+      // Star color with slight variation (blue to yellow tint)
+      const starColorTint = mix(
+        vec3(0.8, 0.9, 1.0), // Blue tint
+        vec3(1.0, 0.95, 0.8), // Yellow tint
+        starHash,
       );
-      skyColor = add(skyColor, mul(colorSun, sunGlowStrength));
+      const finalStarColor = mul(starColorTint, starBrightness);
+      skyColor = add(skyColor, finalStarColor);
 
-      // Stars (simplified - just add some brightness at night)
-      const starFactor = mul(
-        sub(float(1.0), dayIntensityCalc),
-        mul(sin(mul(localPos.x, float(100.0))), float(0.1)),
+      // =====================
+      // MOON GLOW (Night atmospheric glow)
+      // =====================
+      const moonPos = mul(sunDir, float(-1.0));
+      const angleToMoon = dot(localPos, moonPos);
+      const moonGlowAngle = smoothstep(float(0.85), float(1.0), angleToMoon);
+      const moonGlowColor = vec3(0.4, 0.5, 0.7); // Cool blue glow
+      const moonGlowIntensity = mul(
+        mul(moonGlowAngle, nightIntensity),
+        float(0.3),
       );
-      skyColor = add(skyColor, vec3(starFactor, starFactor, starFactor));
+      skyColor = add(skyColor, mul(moonGlowColor, moonGlowIntensity));
 
-      // Moon glow
-      const moonPosition = mul(uSunPosition, float(-1.0));
-      const moonDist = distance(localPos, moonPosition);
-      const moonArea = sub(float(1.0), div(moonDist, float(1.0)));
-      const moonFactor = smoothstep(float(0.1), float(2.0), moonArea);
-      const moonColor = vec3(0.1, 0.7, 0.9);
-      const nightFactor = sub(float(1.0), dayIntensityCalc);
-      skyColor = add(
-        skyColor,
-        mul(mul(moonColor, moonFactor), mul(nightFactor, float(0.4))),
+      // =====================
+      // HORIZON HAZE (subtle atmosphere)
+      // =====================
+      const hazeColor = vec3(0.83, 0.78, 0.72); // Warm beige
+      const hazeStrength = smoothstep(float(0.1), float(-0.05), localPos.y);
+      // Haze stronger during day, subtle at night
+      const hazeAmount = mul(
+        hazeStrength,
+        mul(float(0.4), add(float(0.3), mul(dayIntensity, float(0.7)))),
       );
+      skyColor = mix(skyColor, hazeColor, hazeAmount);
 
       return vec4(skyColor, float(1.0));
     })();
@@ -781,6 +521,7 @@ export class SkySystem extends System {
     skyMat.depthWrite = false;
     skyMat.transparent = false;
     skyMat.toneMapped = true;
+    skyMat.fog = false; // Sky should never be affected by scene fog
 
     // Store uniforms for updates
     (
@@ -803,175 +544,119 @@ export class SkySystem extends System {
     this.group.add(this.skyMesh);
   }
 
+  // Store cloud group for rotation animation
+  private cloudGroup: THREE.Group | null = null;
+
   /**
-   * Create instanced cloud billboards with TSL Node Material
+   * Create cloud billboards using cloud textures
+   * Each cloud samples from a sprite atlas (2 columns x 4 rows = 8 sprites per texture)
    */
   private createClouds(): void {
     if (!this.group) return;
-    const count = cloudData.length;
-    const base = new THREE.PlaneGeometry(1, 1);
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute("position", base.attributes.position);
-    geom.setAttribute("normal", base.attributes.normal);
-    geom.setAttribute("uv", base.attributes.uv);
-    geom.setIndex(base.index!);
 
-    const positions = new Float32Array(count * 3);
-    const textureNumber = new Float32Array(count);
-    const distortionSpeed = new Float32Array(count);
-    const distortionRange = new Float32Array(count);
-    const scales = new Float32Array(count * 2);
-    const offsets = new Float32Array(count * 2);
-    const rotationY = new Float32Array(count);
+    const SKY_RADIUS = 5500;
+    const BASE_SIZE = 1800;
 
-    const CLOUD_RADIUS = 600;
+    // Create a group to hold all cloud meshes (for rotation)
+    this.cloudGroup = new THREE.Group();
+    this.cloudGroup.name = "CloudGroup";
 
-    for (let i = 0; i < count; i++) {
-      const c = cloudData[i];
-      const theta = 2 * Math.PI * (c.positionIndex / 100);
-      const x = Math.sin(theta) * CLOUD_RADIUS;
-      const z = Math.cos(theta) * CLOUD_RADIUS;
-      positions[i * 3 + 0] = x;
-      positions[i * 3 + 1] = c.posY;
-      positions[i * 3 + 2] = z;
-      textureNumber[i] = c.textureNumber;
-      distortionSpeed[i] = c.distortionSpeed;
-      distortionRange[i] = (1 - c.distortionRange) * 2;
-      scales[i * 2 + 0] = c.width;
-      scales[i * 2 + 1] = c.height;
-      rotationY[i] =
-        -Math.sin(theta) * (Math.PI * 0.5) * (Math.cos(theta) > 0 ? 1 : -1);
-      const cloudNum = c.cloudNumber;
-      offsets[i * 2 + 0] = (cloudNum % 2) * 0.5;
-      offsets[i * 2 + 1] = 0.75 - Math.floor(cloudNum / 2) * 0.25;
-    }
+    // Get textures array for easy lookup
+    const textures = [this.cloud1, this.cloud2, this.cloud3, this.cloud4];
 
-    geom.setAttribute(
-      "positions",
-      new THREE.InstancedBufferAttribute(positions, 3),
-    );
-    geom.setAttribute(
-      "textureNumber",
-      new THREE.InstancedBufferAttribute(textureNumber, 1),
-    );
-    geom.setAttribute(
-      "distortionSpeed",
-      new THREE.InstancedBufferAttribute(distortionSpeed, 1),
-    );
-    geom.setAttribute(
-      "distortionRange",
-      new THREE.InstancedBufferAttribute(distortionRange, 1),
-    );
-    geom.setAttribute("scales", new THREE.InstancedBufferAttribute(scales, 2));
-    geom.setAttribute("offset", new THREE.InstancedBufferAttribute(offsets, 2));
-    geom.setAttribute(
-      "rotationY",
-      new THREE.InstancedBufferAttribute(rotationY, 1),
-    );
-
-    // Create cloud TSL Node Material
+    // Shared uniforms for all clouds
     const uTime = uniform(float(0));
-    const uSunPosition = uniform(vec3(0, 1, 0));
-    const cloudRadius = float(850);
+    const uSunDir = uniform(vec3(0, 1, 0));
 
-    // Use first cloud texture if available, otherwise create basic color
-    const cloudMat = new MeshBasicNodeMaterial();
+    for (let i = 0; i < CLOUD_DEFS.length; i++) {
+      const def = CLOUD_DEFS[i];
+      const tex = textures[def.tex - 1]; // tex is 1-indexed
 
-    const cloudColorNode = Fn(() => {
-      const uvCoord = uv();
-      const worldPos = positionWorld;
+      if (!tex) continue;
 
-      // Sample cloud texture if available
-      const cloudTexColor = this.cloud1
-        ? texture(this.cloud1, uvCoord)
-        : vec4(1.0, 1.0, 1.0, 0.5);
+      // Calculate UV offset for sprite in atlas (2 cols x 4 rows)
+      const col = def.sprite % 2;
+      const row = Math.floor(def.sprite / 2);
+      const uOffset = col * 0.5;
+      const vOffset = 0.75 - row * 0.25; // rows go from top
 
-      // Sun/night color transition
-      const sunNightStep = smoothstep(
-        float(-0.3),
-        float(0.25),
-        div(uSunPosition.y, cloudRadius),
-      );
-      const cloudBrightColor = mix(
-        vec3(0.141, 0.607, 0.94),
-        vec3(1.0, 1.0, 1.0),
-        sunNightStep,
-      );
-      const cloudDarkColor = mix(
-        vec3(0.024, 0.32, 0.59),
-        vec3(0.141, 0.807, 0.94),
-        sunNightStep,
-      );
+      // Create geometry with adjusted UVs for this sprite
+      const geom = new THREE.PlaneGeometry(1, 1);
+      const uvAttr = geom.attributes.uv;
+      for (let j = 0; j < uvAttr.count; j++) {
+        const u = uvAttr.getX(j) * 0.5 + uOffset;
+        const v = uvAttr.getY(j) * 0.25 + vOffset;
+        uvAttr.setXY(j, u, v);
+      }
+      uvAttr.needsUpdate = true;
 
-      // Distance to sun for brightness
-      const brightLerpSize = mul(cloudRadius, float(1.0));
-      const sunDist = distance(worldPos, uSunPosition);
-      const brightLerp = smoothstep(float(0.0), brightLerpSize, sunDist);
-      const bright = mix(float(2.0), float(1.0), brightLerp);
+      // Create material with this cloud's texture - simple soft clouds
+      const cloudColorNode = Fn(() => {
+        const uvCoord = uv();
+        const cloudTex = texture(tex, uvCoord);
 
-      // Mix cloud colors based on texture
-      const cloudColorLerp = cloudTexColor.r;
-      let cloudColor = mul(
-        mix(cloudDarkColor, cloudBrightColor, cloudColorLerp),
-        bright,
-      );
-      cloudColor = add(
-        cloudColor,
-        mul(
-          vec3(cloudTexColor.g, cloudTexColor.g, cloudTexColor.g),
-          sub(float(1.0), brightLerp),
-        ),
-      );
+        // Day/night color - clouds are white, tinted slightly at night
+        const dayFactor = smoothstep(float(-0.1), float(0.3), uSunDir.y);
+        const cloudColor = mix(
+          vec3(0.75, 0.8, 0.95), // night: slight blue tint
+          vec3(1.0, 1.0, 1.0), // day: pure white
+          dayFactor,
+        );
 
-      // Alpha from texture
-      const cloudAlpha = cloudTexColor.a;
+        // Use texture alpha directly for soft fluffy edges
+        return vec4(cloudColor, cloudTex.a);
+      })();
 
-      return vec4(cloudColor, cloudAlpha);
-    })();
+      const mat = new MeshBasicNodeMaterial();
+      mat.colorNode = cloudColorNode;
+      mat.side = THREE.DoubleSide;
+      mat.transparent = true;
+      mat.depthWrite = false;
+      mat.toneMapped = false;
+      mat.fog = false; // Don't let scene fog affect clouds
 
-    cloudMat.colorNode = cloudColorNode;
-    cloudMat.side = THREE.DoubleSide;
-    cloudMat.transparent = true;
-    cloudMat.depthWrite = true;
-    cloudMat.toneMapped = false;
-
-    // Store uniforms for updates
-    (
-      cloudMat as THREE.Material & {
-        cloudUniforms?: {
-          uTime: typeof uTime;
-          uSunPosition: typeof uSunPosition;
+      // Store uniform reference on first material (for updates)
+      if (i === 0) {
+        (
+          mat as THREE.Material & { cloudUniforms?: CloudMaterialUniforms }
+        ).cloudUniforms = {
+          uTime,
+          uSunPosition: uSunDir,
         };
       }
-    ).cloudUniforms = {
-      uTime,
-      uSunPosition,
-    };
 
-    this.clouds = new THREE.InstancedMesh(geom, cloudMat, cloudData.length);
-    this.clouds.count = cloudData.length;
-    this.clouds.frustumCulled = false;
-    this.clouds.name = "SkyClouds";
+      // Create mesh
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 1;
 
-    // Set instance matrices using pre-allocated vectors to avoid loop allocations
-    const matrix = new THREE.Matrix4();
-    const scaleVec = new THREE.Vector3();
-    for (let i = 0; i < count; i++) {
-      const c = cloudData[i];
-      const theta = 2 * Math.PI * (c.positionIndex / 100);
-      const x = Math.sin(theta) * CLOUD_RADIUS;
-      const z = Math.cos(theta) * CLOUD_RADIUS;
+      // Position on sky dome
+      const azRad = (def.az * Math.PI) / 180;
+      const elRad = (def.el * Math.PI) / 180;
 
-      matrix.identity();
-      matrix.makeRotationY(rotationY[i]);
-      scaleVec.set(c.width, c.height, 1);
-      matrix.scale(scaleVec);
-      matrix.setPosition(x, c.posY, z);
-      this.clouds.setMatrixAt(i, matrix);
+      const x = SKY_RADIUS * Math.cos(elRad) * Math.sin(azRad);
+      const y = SKY_RADIUS * Math.sin(elRad);
+      const z = SKY_RADIUS * Math.cos(elRad) * Math.cos(azRad);
+
+      mesh.position.set(x, y, z);
+
+      // Rotate to face center (billboard)
+      mesh.rotation.y = azRad + Math.PI;
+
+      // Scale
+      const w = BASE_SIZE * def.scale * 1.5;
+      const h = BASE_SIZE * def.scale * 0.7;
+      mesh.scale.set(w, h, 1);
+
+      // Store base scale for animation
+      mesh.userData.baseScale = new THREE.Vector3(w, h, 1);
+
+      this.cloudGroup.add(mesh);
     }
-    this.clouds.instanceMatrix.needsUpdate = true;
 
-    this.group.add(this.clouds);
+    // Store reference (use first mesh for uniform updates)
+    this.clouds = this.cloudGroup.children[0] as THREE.InstancedMesh;
+    this.group.add(this.cloudGroup);
   }
 
   override update(delta: number): void {
@@ -1058,15 +743,38 @@ export class SkySystem extends System {
       };
       if (cloudMat.cloudUniforms) {
         cloudMat.cloudUniforms.uTime.value = this.elapsed;
-        cloudMat.cloudUniforms.uSunPosition.value.set(
-          this._sunDir.x * 850 + this.world.rig.position.x,
-          this._sunDir.y * 850,
-          this._sunDir.z * 850 + this.world.rig.position.z,
-        );
+        // Pass normalized sun direction for lighting
+        cloudMat.cloudUniforms.uSunPosition.value.copy(this._sunDir);
       }
 
       if (this.sun) this.sun.renderOrder = 2;
       if (this.moon) this.moon.renderOrder = 2;
+    }
+
+    // Very slowly rotate cloud cover and animate scale
+    if (this.cloudGroup) {
+      // ~1 full rotation per 40 minutes (0.0025 radians/sec)
+      this.cloudGroup.rotation.y += delta * 0.0025;
+
+      // Animate each cloud's scale for gentle breathing effect
+      this.cloudGroup.children.forEach((mesh, i) => {
+        if (mesh instanceof THREE.Mesh) {
+          const baseScale = mesh.userData.baseScale as
+            | THREE.Vector3
+            | undefined;
+          if (baseScale) {
+            // Each cloud has different phase
+            const phase = this.elapsed * 0.3 + i * 1.5;
+            // Scale oscillates between 95% and 105%
+            const scaleMod = 1.0 + Math.sin(phase) * 0.05;
+            mesh.scale.set(
+              baseScale.x * scaleMod,
+              baseScale.y * scaleMod,
+              baseScale.z,
+            );
+          }
+        }
+      });
     }
   }
 

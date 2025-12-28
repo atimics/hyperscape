@@ -146,9 +146,9 @@ export class ConnectionHandler {
       await this.sendResourceSnapshot(socket);
 
       // CRITICAL FIX: Remove old socket for same account (prevents duplicate connections)
-      // Grace period: Only close old sockets that are stale (no player after 10s) or have a player
-      // This prevents closing sockets that are still in the spawn process
-      const GRACE_PERIOD_MS = 10000; // 10 seconds
+      // This handles the CharacterSelectScreen → GameClient transition where both use the same account
+      // Always close old sockets and allow the new connection - character spawn protection is handled
+      // separately in handleEnterWorld (which checks for duplicate characterIds)
       for (const [oldSocketId, oldSocket] of this.sockets) {
         if (
           oldSocket.accountId === socket.accountId &&
@@ -156,30 +156,15 @@ export class ConnectionHandler {
         ) {
           const socketAge = Date.now() - (oldSocket.createdAt || 0);
           const hasPlayer = !!oldSocket.player;
-          const isStale = socketAge > GRACE_PERIOD_MS;
 
-          // Only close if the old socket has a player (legitimate reconnection)
-          // OR if it's been idle for too long without spawning a player (stale connection)
-          if (hasPlayer || isStale) {
-            console.warn(
-              `[ConnectionHandler] 🔄 Detected reconnection for account ${socket.accountId}`,
-            );
-            console.warn(
-              `[ConnectionHandler] Closing old socket ${oldSocketId} (hasPlayer: ${hasPlayer}, age: ${Math.round(socketAge / 1000)}s), replacing with new socket ${socket.id}`,
-            );
-            oldSocket.ws?.close?.();
-            this.sockets.delete(oldSocketId);
-          } else {
-            console.warn(
-              `[ConnectionHandler] ⏳ Found recent socket ${oldSocketId} for account ${socket.accountId} (age: ${Math.round(socketAge / 1000)}s, no player yet)`,
-            );
-            console.warn(
-              `[ConnectionHandler] ❌ Rejecting new connection ${socket.id} - socket ${oldSocketId} is still spawning (within grace period)`,
-            );
-            // Close the NEW connection and don't register it
-            socket.ws?.close?.();
-            return;
-          }
+          console.log(
+            `[ConnectionHandler] 🔄 Detected reconnection for account ${socket.accountId}`,
+          );
+          console.log(
+            `[ConnectionHandler] Closing old socket ${oldSocketId} (hasPlayer: ${hasPlayer}, age: ${Math.round(socketAge / 1000)}s), replacing with new socket ${socket.id}`,
+          );
+          oldSocket.ws?.close?.();
+          this.sockets.delete(oldSocketId);
         }
       }
 

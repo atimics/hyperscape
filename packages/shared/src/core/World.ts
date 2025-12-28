@@ -322,6 +322,19 @@ export class World extends EventEmitter {
     isWebGPU?: boolean;
   };
 
+  /** Dev mode performance stats (FPS counter, system timing) */
+  devStats?: {
+    toggle: () => void;
+    show: () => void;
+    hide: () => void;
+    getFps: () => number;
+    getFrameTime: () => number;
+    isVisible: () => boolean;
+    enableSystemTiming: () => void;
+    disableSystemTiming: () => void;
+    recordSystemTime: (systemName: string, timeMs: number) => void;
+  };
+
   /** Input handling system (keyboard, mouse, touch, gamepad) */
   controls?: ClientInput;
 
