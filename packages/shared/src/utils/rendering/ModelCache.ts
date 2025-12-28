@@ -16,6 +16,8 @@ interface CachedModel {
   animations: THREE.AnimationClip[];
   loadedAt: number;
   cloneCount: number;
+  /** Shared materials for this model type (one material per mesh index) */
+  sharedMaterials: Map<number, THREE.Material | THREE.Material[]>;
 }
 
 export class ModelCache {
@@ -37,21 +39,82 @@ export class ModelCache {
   }
 
   /**
+   * Convert a material to MeshStandardMaterial for proper PBR lighting
+   * This ensures models respond correctly to sun, moon, and environment maps
+   */
+  private convertToStandardMaterial(
+    mat: THREE.Material,
+  ): THREE.MeshStandardMaterial {
+    // Extract textures and colors from original material
+    const originalMat = mat as THREE.Material & {
+      map?: THREE.Texture | null;
+      normalMap?: THREE.Texture | null;
+      emissiveMap?: THREE.Texture | null;
+      color?: THREE.Color;
+      emissive?: THREE.Color;
+      emissiveIntensity?: number;
+      opacity?: number;
+      transparent?: boolean;
+      alphaTest?: number;
+      side?: THREE.Side;
+    };
+
+    const newMat = new THREE.MeshStandardMaterial({
+      map: originalMat.map || null,
+      normalMap: originalMat.normalMap || null,
+      emissiveMap: originalMat.emissiveMap || null,
+      color: originalMat.color?.clone() || new THREE.Color(0xffffff),
+      emissive: originalMat.emissive?.clone() || new THREE.Color(0x000000),
+      emissiveIntensity: originalMat.emissiveIntensity ?? 0,
+      opacity: originalMat.opacity ?? 1,
+      transparent: originalMat.transparent ?? false,
+      alphaTest: originalMat.alphaTest ?? 0,
+      side: originalMat.side ?? THREE.FrontSide,
+      roughness: 0.7,
+      metalness: 0.0,
+      envMapIntensity: 1.0, // Respond to environment map
+    });
+
+    // Copy name for debugging
+    newMat.name = originalMat.name || "GLB_Standard";
+
+    // Dispose old material
+    originalMat.dispose();
+
+    return newMat;
+  }
+
+  /**
    * Setup materials for WebGPU/CSM compatibility
    * This ensures proper shadows and rendering
+   * Also converts non-PBR materials to MeshStandardMaterial for proper lighting
    */
   private setupMaterials(scene: THREE.Object3D, world?: World): void {
     scene.traverse((node) => {
       if (node instanceof THREE.Mesh || node instanceof THREE.SkinnedMesh) {
         const mesh = node;
 
+        // Convert materials to MeshStandardMaterial for proper sun/moon/environment lighting
+        const convertMaterial = (mat: THREE.Material): THREE.Material => {
+          // If already a PBR material, just set it up
+          if (
+            mat instanceof THREE.MeshStandardMaterial ||
+            mat instanceof THREE.MeshPhysicalMaterial
+          ) {
+            this.setupSingleMaterial(mat, world);
+            return mat;
+          }
+          // Convert non-PBR materials (MeshBasicMaterial, MeshPhongMaterial, etc.)
+          const newMat = this.convertToStandardMaterial(mat);
+          this.setupSingleMaterial(newMat, world);
+          return newMat;
+        };
+
         // Handle material arrays
         if (Array.isArray(mesh.material)) {
-          mesh.material.forEach((mat) => {
-            this.setupSingleMaterial(mat, world);
-          });
+          mesh.material = mesh.material.map((mat) => convertMaterial(mat));
         } else {
-          this.setupSingleMaterial(mesh.material, world);
+          mesh.material = convertMaterial(mesh.material);
         }
 
         // Enable shadows
@@ -63,6 +126,55 @@ export class ModelCache {
           mesh.frustumCulled = false; // Prevent culling issues with animated meshes
           // NOTE: Do NOT bind skeleton here - entities will handle it after scaling
         }
+      }
+    });
+  }
+
+  /**
+   * Extract and store materials from a scene for sharing across clones.
+   * Called once when a model is first loaded.
+   */
+  private extractSharedMaterials(
+    scene: THREE.Object3D,
+  ): Map<number, THREE.Material | THREE.Material[]> {
+    const sharedMaterials = new Map<
+      number,
+      THREE.Material | THREE.Material[]
+    >();
+    let meshIndex = 0;
+
+    scene.traverse((node) => {
+      if (node instanceof THREE.Mesh || node instanceof THREE.SkinnedMesh) {
+        // Store the material(s) for this mesh index
+        if (Array.isArray(node.material)) {
+          sharedMaterials.set(meshIndex, [...node.material]);
+        } else {
+          sharedMaterials.set(meshIndex, node.material);
+        }
+        meshIndex++;
+      }
+    });
+
+    return sharedMaterials;
+  }
+
+  /**
+   * Apply shared materials to a cloned scene.
+   * This reuses materials instead of cloning them, reducing draw call overhead.
+   */
+  private applySharedMaterials(
+    scene: THREE.Object3D,
+    sharedMaterials: Map<number, THREE.Material | THREE.Material[]>,
+  ): void {
+    let meshIndex = 0;
+
+    scene.traverse((node) => {
+      if (node instanceof THREE.Mesh || node instanceof THREE.SkinnedMesh) {
+        const shared = sharedMaterials.get(meshIndex);
+        if (shared) {
+          node.material = shared;
+        }
+        meshIndex++;
       }
     });
   }
@@ -92,11 +204,22 @@ export class ModelCache {
 
     if (
       material instanceof THREE.MeshStandardMaterial ||
-      material instanceof THREE.MeshPhysicalMaterial ||
+      material instanceof THREE.MeshPhysicalMaterial
+    ) {
+      // Set up texture color spaces
+      if (materialWithMaps.map) {
+        materialWithMaps.map.colorSpace = THREE.SRGBColorSpace;
+      }
+      if (materialWithMaps.emissiveMap) {
+        materialWithMaps.emissiveMap.colorSpace = THREE.SRGBColorSpace;
+      }
+      // Ensure environment map intensity is set for proper IBL lighting
+      material.envMapIntensity = material.envMapIntensity ?? 1.0;
+    } else if (
       material instanceof THREE.MeshBasicMaterial ||
       material instanceof THREE.MeshPhongMaterial
     ) {
-      // Set up texture color spaces
+      // Set up texture color spaces for non-PBR materials
       if (materialWithMaps.map) {
         materialWithMaps.map.colorSpace = THREE.SRGBColorSpace;
       }
@@ -118,15 +241,18 @@ export class ModelCache {
    *
    * @param path - Model path (can be asset:// URL or absolute URL)
    * @param world - World instance for URL resolution and material setup
+   * @param options.shareMaterials - If true, all instances share the same material (reduces draw calls)
    */
   async loadModel(
     path: string,
     world?: World,
+    options?: { shareMaterials?: boolean },
   ): Promise<{
     scene: THREE.Object3D;
     animations: THREE.AnimationClip[];
     fromCache: boolean;
   }> {
+    const shareMaterials = options?.shareMaterials ?? true; // Default to sharing
     // Resolve asset:// URLs to actual URLs
     let resolvedPath = world ? world.resolveURL(path) : path;
 
@@ -168,8 +294,13 @@ export class ModelCache {
       // Clone the scene for this instance
       const clonedScene = cached.scene.clone(true);
 
-      // CRITICAL: Setup materials on the clone for WebGPU/CSM
-      this.setupMaterials(clonedScene, world);
+      if (shareMaterials && cached.sharedMaterials.size > 0) {
+        // Reuse shared materials (reduces draw calls)
+        this.applySharedMaterials(clonedScene, cached.sharedMaterials);
+      } else {
+        // Create new materials for this clone (allows custom tinting)
+        this.setupMaterials(clonedScene, world);
+      }
 
       return {
         scene: clonedScene,
@@ -185,8 +316,13 @@ export class ModelCache {
       result.cloneCount++;
       const clonedScene = result.scene.clone(true);
 
-      // CRITICAL: Setup materials on the clone for WebGPU/CSM
-      this.setupMaterials(clonedScene, world);
+      if (shareMaterials && result.sharedMaterials.size > 0) {
+        // Reuse shared materials (reduces draw calls)
+        this.applySharedMaterials(clonedScene, result.sharedMaterials);
+      } else {
+        // Create new materials for this clone
+        this.setupMaterials(clonedScene, world);
+      }
 
       return {
         scene: clonedScene,
@@ -219,11 +355,15 @@ export class ModelCache {
         // This ensures all clones will have properly configured materials
         this.setupMaterials(gltf.scene, world);
 
+        // Extract materials for sharing across clones
+        const sharedMaterials = this.extractSharedMaterials(gltf.scene);
+
         const cachedModel: CachedModel = {
           scene: gltf.scene,
           animations: gltf.animations,
           loadedAt: Date.now(),
           cloneCount: 0,
+          sharedMaterials,
         };
 
         this.cache.set(resolvedPath, cachedModel);
@@ -256,8 +396,13 @@ export class ModelCache {
       );
     }
 
-    // CRITICAL: Setup materials on the clone as well for safety
-    this.setupMaterials(clonedScene, world);
+    if (shareMaterials && result.sharedMaterials.size > 0) {
+      // Reuse shared materials (reduces draw calls)
+      this.applySharedMaterials(clonedScene, result.sharedMaterials);
+    } else {
+      // Create new materials for this clone
+      this.setupMaterials(clonedScene, world);
+    }
 
     return {
       scene: clonedScene,
@@ -276,19 +421,30 @@ export class ModelCache {
   /**
    * Get cache statistics
    */
-  getStats(): { total: number; paths: string[]; totalClones: number } {
+  getStats(): {
+    total: number;
+    paths: string[];
+    totalClones: number;
+    materialsSaved: number;
+  } {
     const paths: string[] = [];
     let totalClones = 0;
+    let materialsSaved = 0;
 
     for (const [path, model] of this.cache.entries()) {
       paths.push(path);
       totalClones += model.cloneCount;
+      // Each clone after the first shares materials instead of creating new ones
+      if (model.cloneCount > 1) {
+        materialsSaved += (model.cloneCount - 1) * model.sharedMaterials.size;
+      }
     }
 
     return {
       total: this.cache.size,
       paths,
       totalClones,
+      materialsSaved, // Number of materials NOT created due to sharing
     };
   }
 

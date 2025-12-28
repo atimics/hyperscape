@@ -106,13 +106,17 @@ export const {
   tan,
   // Texture
   texture,
+  texture3D,
   // Discard
   discard,
   // Display
   output,
+  renderOutput,
   // Post-processing
   pass,
   mrt,
+  // Reflection
+  reflector,
 } = THREE_NAMESPACE.TSL;
 
 // Re-export Node Materials (these ARE directly on three/webgpu)

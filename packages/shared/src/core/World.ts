@@ -344,6 +344,8 @@ export class World extends EventEmitter {
     shadows?: string;
     postprocessing?: boolean;
     bloom?: boolean;
+    colorGrading?: string;
+    colorGradingIntensity?: number;
     music?: number;
     sfx?: number;
     voice?: number;
@@ -356,6 +358,8 @@ export class World extends EventEmitter {
     setShadows?: (value: string) => void;
     setPostprocessing?: (value: boolean) => void;
     setBloom?: (value: boolean) => void;
+    setColorGrading?: (value: string) => void;
+    setColorGradingIntensity?: (value: number) => void;
     setMusic?: (value: number) => void;
     setSFX?: (value: number) => void;
     setVoice?: (value: number) => void;

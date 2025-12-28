@@ -102,6 +102,10 @@ export class Environment extends System {
   skyInfo!: SkyInfo;
   private skySystem?: SkySystem;
 
+  // Ambient lighting for day/night cycle
+  private hemisphereLight: THREE.HemisphereLight | null = null;
+  private ambientLight: THREE.AmbientLight | null = null;
+
   private isClientWithGraphics: boolean = false;
 
   constructor(world: World) {
@@ -133,6 +137,9 @@ export class Environment extends System {
     // Build CSM immediately - stage should be ready by start()
     this.buildCSM();
 
+    // Create ambient lighting for day/night visibility
+    this.createAmbientLighting();
+
     this.updateSky();
 
     // Load initial model
@@ -150,6 +157,11 @@ export class Environment extends System {
     }
     // Re-evaluate sky state now that SkySystem exists
     await this.updateSky();
+
+    // No environment map - using planar reflections for water, toon/rough style for everything else
+    if (this.world.stage?.scene) {
+      this.world.stage.scene.environment = null;
+    }
 
     this.world.settings?.on("change", this.onSettingsChange);
     this.world.prefs?.on("change", this.onPrefsChange);
@@ -288,24 +300,16 @@ export class Environment extends System {
     if (hdrUrl) hdrTexture = await this.world.loader?.load("hdr", hdrUrl);
     if (n !== this.skyN) return;
 
-    if (this.skySystem) {
-      // Prefer dynamic SkySystem visuals; hide legacy background sphere
-      this.sky.visible = false;
-    } else if (bgTexture) {
-      bgTexture.minFilter = bgTexture.magFilter = THREE.LinearFilter;
-      bgTexture.mapping = THREE.EquirectangularReflectionMapping;
-      bgTexture.colorSpace = THREE.SRGBColorSpace;
-      const skyMaterial = this.sky.material as THREE.MeshBasicMaterial;
-      skyMaterial.map = bgTexture;
-      this.sky.visible = true;
-    } else {
-      this.sky.visible = false;
+    // When using SkySystem, completely remove the legacy sky sphere from scene
+    // Just hiding it isn't enough - it can still interfere with planar reflections
+    this.sky.visible = false;
+    if (this.sky.parent) {
+      this.sky.parent.remove(this.sky);
     }
-
-    if (hdrTexture) {
-      hdrTexture.mapping = THREE.EquirectangularReflectionMapping;
-      this.world.stage.scene.environment = hdrTexture;
-    }
+    // Completely remove environment map when using SkySystem
+    // This ensures planar reflections don't pick up the HDR
+    this.world.stage.scene.environment = null;
+    this.world.stage.scene.background = null;
 
     if (this.csm) {
       this.csm.lightDirection = sunDirection || _sunDirection;
@@ -389,6 +393,23 @@ export class Environment extends System {
       (this.csm as unknown as CSMWithDispose).dispose();
     }
 
+    // Dispose ambient lights
+    if (this.hemisphereLight) {
+      if (this.hemisphereLight.parent) {
+        this.hemisphereLight.parent.remove(this.hemisphereLight);
+      }
+      this.hemisphereLight.dispose();
+      this.hemisphereLight = null;
+    }
+
+    if (this.ambientLight) {
+      if (this.ambientLight.parent) {
+        this.ambientLight.parent.remove(this.ambientLight);
+      }
+      this.ambientLight.dispose();
+      this.ambientLight = null;
+    }
+
     this.skys = [];
     this.model = null;
   }
@@ -396,16 +417,89 @@ export class Environment extends System {
   override update(_delta: number) {
     if (!this.isClientWithGraphics) return;
 
+    // Update sky system first to get current sun position
+    if (this.skySystem) {
+      this.skySystem.update(_delta);
+
+      // Sync CSM directional light with sun position
+      if (this.csm) {
+        // Light direction is opposite of sun direction (light comes FROM the sun)
+        this.csm.lightDirection.copy(this.skySystem.sunDirection).negate();
+
+        // Adjust directional light intensity based on day/night
+        const dayIntensity = this.skySystem.dayIntensity;
+        if (this.csm.lights) {
+          for (const light of this.csm.lights) {
+            // Sun light fades to 0 at night, max 1.2 at noon
+            light.intensity = dayIntensity * 1.2;
+            // Warm color at sunrise/sunset, white at noon
+            const sunsetFactor =
+              Math.abs(this.skySystem.dayPhase - 0.25) < 0.1 ||
+              Math.abs(this.skySystem.dayPhase - 0.75) < 0.1
+                ? 0.5
+                : 0;
+            light.color.setRGB(
+              1.0,
+              1.0 - sunsetFactor * 0.2,
+              1.0 - sunsetFactor * 0.4,
+            );
+          }
+        }
+      }
+
+      // Update ambient lighting based on day/night
+      this.updateAmbientLighting(this.skySystem.dayIntensity);
+    }
+
     if (this.csm) {
       this.csm.update();
     }
+
     // Ensure sky sphere never writes depth (prevents cutting moon)
     if (this.sky) {
       const m = this.sky.material as THREE.MeshBasicMaterial;
       if (m.depthWrite !== false) m.depthWrite = false;
     }
-    if (this.skySystem) {
-      this.skySystem.update(_delta);
+  }
+
+  /**
+   * Update ambient lighting based on day/night cycle
+   * @param dayIntensity 0-1 (0 = night, 1 = day)
+   */
+  private updateAmbientLighting(dayIntensity: number): void {
+    const nightIntensity = 1 - dayIntensity;
+
+    if (this.hemisphereLight) {
+      // Hemisphere light: brighter during day, dimmer at night
+      // Higher base intensity since we removed environment map
+      this.hemisphereLight.intensity = 0.5 + dayIntensity * 0.5;
+
+      // Shift sky color from blue (day) to dark blue (night)
+      this.hemisphereLight.color.setRGB(
+        0.53 * dayIntensity + 0.15 * nightIntensity, // R
+        0.81 * dayIntensity + 0.2 * nightIntensity, // G
+        0.92 * dayIntensity + 0.35 * nightIntensity, // B
+      );
+
+      // Ground color stays brownish but darker at night
+      this.hemisphereLight.groundColor.setRGB(
+        0.36 * dayIntensity + 0.12 * nightIntensity,
+        0.27 * dayIntensity + 0.1 * nightIntensity,
+        0.18 * dayIntensity + 0.12 * nightIntensity,
+      );
+    }
+
+    if (this.ambientLight) {
+      // Ambient fill: higher base since we removed env map
+      // Night needs more ambient to see without harsh directional light
+      this.ambientLight.intensity = 0.4 + nightIntensity * 0.3;
+
+      // Warmer neutral during day, cool blue tint at night
+      this.ambientLight.color.setRGB(
+        0.5 + dayIntensity * 0.5,
+        0.5 + dayIntensity * 0.45,
+        0.55 + dayIntensity * 0.4,
+      );
     }
   }
 
@@ -419,6 +513,36 @@ export class Environment extends System {
     this.sky.position.x = this.world.rig.position.x;
     this.sky.position.z = this.world.rig.position.z;
     this.sky.matrixWorld.setPosition(this.sky.position);
+  }
+
+  /**
+   * Create ambient lighting for proper day/night visibility
+   * - HemisphereLight: Sky/ground ambient (always on, provides base visibility)
+   * - AmbientLight: Flat ambient fill (stronger at night)
+   */
+  private createAmbientLighting(): void {
+    if (!this.isClientWithGraphics || !this.world.stage?.scene) return;
+
+    const scene = this.world.stage.scene;
+
+    // Hemisphere light - sky color from above, ground color from below
+    // Provides natural ambient lighting that varies with direction
+    this.hemisphereLight = new THREE.HemisphereLight(
+      0x87ceeb, // Sky color (light blue)
+      0x5d4837, // Ground color (warm brown)
+      0.8, // Higher intensity for better ambient
+    );
+    this.hemisphereLight.name = "EnvironmentHemisphereLight";
+    scene.add(this.hemisphereLight);
+
+    // Ambient light - flat fill light for base visibility
+    // Ensures objects are never completely black (especially important without env map)
+    this.ambientLight = new THREE.AmbientLight(
+      0x606070, // Neutral with slight cool tint
+      0.5, // Higher intensity since we removed env map
+    );
+    this.ambientLight.name = "EnvironmentAmbientLight";
+    scene.add(this.ambientLight);
   }
 
   buildCSM() {

@@ -109,7 +109,8 @@ export class MobNPCSpawnerSystem extends SystemBase {
         // Get ground height at NPC position
         const groundY =
           terrainSystem?.getHeightAt?.(npc.position.x, npc.position.z) ?? 43;
-        const spawnY = groundY + 1.0;
+        // NPCs should be at ground level (not +1m), the model's pivot handles foot placement
+        const spawnY = groundY;
 
         // ALL NPC data comes from npcs.json manifest - world-areas only provides position/type
         const npcManifestData = getNPCById(npc.id);
@@ -152,6 +153,9 @@ export class MobNPCSpawnerSystem extends SystemBase {
 
         try {
           await entityManager.spawnEntity(npcConfig);
+          console.log(
+            `[MobNPCSpawnerSystem] ✅ Spawned NPC ${npc.id} (${npcName}) at (${npc.position.x}, ${spawnY.toFixed(2)}, ${npc.position.z})`,
+          );
         } catch (err) {
           console.error(
             `[MobNPCSpawnerSystem] ❌ Failed to spawn NPC ${npc.id}:`,

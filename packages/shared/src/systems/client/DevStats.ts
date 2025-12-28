@@ -79,6 +79,12 @@ export class DevStats extends System {
   private updateInterval = 100; // ms
   private lastUIUpdate = 0;
 
+  // Per-frame render stats (delta tracking)
+  private lastRenderCalls = 0;
+  private lastRenderTriangles = 0;
+  private frameDrawCalls = 0;
+  private frameTriangles = 0;
+
   constructor(world: World) {
     super(world);
   }
@@ -323,6 +329,9 @@ export class DevStats extends System {
       this.lastFpsUpdate = now;
     }
 
+    // Calculate per-frame render stats (delta from cumulative values)
+    this.updatePerFrameRenderStats();
+
     // Store frame sample
     this.currentFrameTime = frameTime;
     this.frameSamples.push({
@@ -343,6 +352,39 @@ export class DevStats extends System {
     }
 
     this.lastFrameTime = now;
+  }
+
+  /**
+   * Calculate per-frame render statistics by tracking deltas
+   */
+  private updatePerFrameRenderStats(): void {
+    const graphics = this.world.graphics;
+    if (!graphics?.renderer) return;
+
+    const renderer = graphics.renderer as {
+      info: {
+        render: { triangles: number; calls: number };
+        memory: { geometries: number; textures: number };
+      };
+    };
+
+    const info = renderer.info;
+    if (!info) return;
+
+    // Calculate delta (this frame's contribution)
+    const currentCalls = info.render.calls;
+    const currentTriangles = info.render.triangles;
+
+    this.frameDrawCalls = currentCalls - this.lastRenderCalls;
+    this.frameTriangles = currentTriangles - this.lastRenderTriangles;
+
+    // Handle reset (when values go down, renderer was reset)
+    if (this.frameDrawCalls < 0) this.frameDrawCalls = currentCalls;
+    if (this.frameTriangles < 0) this.frameTriangles = currentTriangles;
+
+    // Store for next frame
+    this.lastRenderCalls = currentCalls;
+    this.lastRenderTriangles = currentTriangles;
   }
 
   /**
@@ -476,6 +518,7 @@ export class DevStats extends System {
 
   /**
    * Get renderer statistics from WebGPU renderer
+   * Returns per-frame values (not cumulative)
    */
   private getRendererInfo(): RenderInfo | null {
     const graphics = this.world.graphics;
@@ -492,9 +535,10 @@ export class DevStats extends System {
     const info = renderer.info;
     if (!info) return null;
 
+    // Return per-frame values (calculated in updatePerFrameRenderStats)
     return {
-      drawCalls: info.render.calls,
-      triangles: info.render.triangles,
+      drawCalls: this.frameDrawCalls,
+      triangles: this.frameTriangles,
       textures: info.memory.textures,
       geometries: info.memory.geometries,
     };

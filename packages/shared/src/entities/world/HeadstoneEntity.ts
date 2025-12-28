@@ -302,9 +302,11 @@ export class HeadstoneEntity extends InteractableEntity {
 
     // Create a tombstone/pile visual for the corpse
     const geometry = new THREE.BoxGeometry(1.5, 0.5, 1.0);
-    const material = new THREE.MeshLambertMaterial({
+    // Use MeshStandardMaterial for proper lighting (responds to sun, moon, and environment maps)
+    const material = new THREE.MeshStandardMaterial({
       color: 0x4a4a4a, // Gray for corpse
-      transparent: false,
+      roughness: 0.9,
+      metalness: 0.0,
     });
 
     const mesh = new THREE.Mesh(geometry, material);

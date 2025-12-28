@@ -64,8 +64,9 @@ import { Stage } from "../systems/shared";
 
 import THREE from "../extras/three/three";
 
-// Terrain and physics
+// Terrain, vegetation, and physics
 import { TerrainSystem } from "../systems/shared";
+import { VegetationSystem } from "../systems/shared";
 import { Physics } from "../systems/shared";
 
 // RPG systems are registered via SystemLoader to keep them modular
@@ -170,6 +171,14 @@ export function createClientWorld() {
   // Renders heightmap-based terrain with LOD
 
   world.register("terrain", TerrainSystem);
+
+  // ============================================================================
+  // VEGETATION SYSTEM
+  // ============================================================================
+  // GPU-instanced vegetation (trees, bushes, grass, rocks, flowers)
+  // Must be registered after terrain as it listens to terrain tile events
+
+  world.register("vegetation", VegetationSystem);
 
   // ============================================================================
   // VISUAL EFFECTS SYSTEMS

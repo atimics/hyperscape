@@ -24,6 +24,7 @@ import THREE, {
   dot,
   normalize,
   length,
+  sin,
   Fn,
 } from "../../../extras/three/three";
 
@@ -98,8 +99,8 @@ function perlin2D(x: number, y: number, perm: number[]): number {
   return lerp(x1, x2, v);
 }
 
-// Multi-octave fractal noise
-function fbm(
+// Multi-octave fractal noise (non-seamless version, kept for reference)
+function _fbm(
   x: number,
   y: number,
   perm: number[],
@@ -312,6 +313,7 @@ function createPlaceholderTexture(color: number): THREE.Texture {
 
 export type TerrainUniforms = {
   sunPosition: { value: THREE.Vector3 };
+  time: { value: number };
 };
 
 export function createTerrainMaterial(
@@ -335,6 +337,7 @@ export function createTerrainMaterial(
   const snowTex = textures.get("snow") || placeholders.snow;
 
   const sunPositionUniform = uniform(vec3(100, 100, 100));
+  const timeUniform = uniform(float(0));
   const triplanarScale = uniform(float(TERRAIN_CONSTANTS.TRIPLANAR_SCALE));
   const noiseScale = uniform(float(TERRAIN_CONSTANTS.NOISE_SCALE));
 
@@ -428,6 +431,75 @@ export function createTerrainMaterial(
   );
   blendedColor = mix(blendedColor, sandColor, sandBlend);
 
+  // === LAKE SHORELINE EFFECT ===
+  // Gradual transition: grass → dirt → wet mud → dark saturated edge
+
+  // Zone 1: Dirt transition (5-12m) - blend to dirt texture
+  const dirtZone = smoothstep(float(12.0), float(6.0), height);
+  const shoreDirt = mul(dirtColor, float(0.9)); // Use the dirt texture
+  blendedColor = mix(blendedColor, shoreDirt, mul(dirtZone, float(0.7)));
+
+  // Zone 2: Wet mud (5-8m) - darker, saturated
+  const wetMudColor = vec3(0.12, 0.08, 0.05); // Dark wet earth
+  const wetZone = smoothstep(float(8.0), float(5.5), height);
+  blendedColor = mix(blendedColor, wetMudColor, mul(wetZone, float(0.8)));
+
+  // Zone 3: Water's edge (5-6m) - very dark, almost black wet soil
+  const edgeColor = vec3(0.04, 0.025, 0.015); // Nearly black wet soil
+  const edgeZone = smoothstep(float(6.0), float(5.0), height);
+  blendedColor = mix(blendedColor, edgeColor, mul(edgeZone, float(0.95)));
+
+  // === UNDERWATER CAUSTICS ===
+  // Animated light patterns on underwater terrain (where caustics actually belong!)
+  const causticTime = mul(timeUniform, float(0.25));
+  const causticScale = float(0.12);
+  const causticUV = mul(vec2(worldPos.x, worldPos.z), causticScale);
+
+  // Multiple overlapping sine waves create caustic-like patterns
+  const c1 = sin(
+    add(
+      mul(causticUV.x, float(1.0)),
+      add(mul(causticUV.y, float(0.8)), causticTime),
+    ),
+  );
+  const c2 = sin(
+    add(
+      mul(causticUV.x, float(0.7)),
+      add(mul(causticUV.y, float(-1.1)), mul(causticTime, float(1.2))),
+    ),
+  );
+  const c3 = sin(
+    add(
+      mul(causticUV.x, float(-0.9)),
+      add(mul(causticUV.y, float(0.9)), mul(causticTime, float(0.85))),
+    ),
+  );
+  const c4 = sin(
+    add(
+      mul(add(causticUV.x, causticUV.y), float(1.0)),
+      mul(causticTime, float(1.1)),
+    ),
+  );
+
+  // Combine and create bright caustic lines
+  const causticPattern = pow(
+    mul(add(add(add(c1, c2), c3), c4), float(0.25)),
+    float(2.0),
+  );
+  const causticBrightness = mul(causticPattern, float(0.15));
+
+  // Only show caustics underwater (below water level ~5m) with falloff
+  const underwaterMask = smoothstep(float(5.0), float(4.0), height);
+  const depthFade = smoothstep(float(-5.0), float(4.0), height); // Fade out in deeper water
+  const causticMask = mul(underwaterMask, depthFade);
+
+  // Add caustics as bright highlights
+  const causticLight = mul(
+    vec3(0.6, 0.8, 0.9),
+    mul(causticBrightness, causticMask),
+  );
+  blendedColor = add(blendedColor, causticLight);
+
   // Lighting
   const N = normalize(worldNormal);
   const sunDir = normalize(sunPositionUniform);
@@ -462,7 +534,10 @@ export function createTerrainMaterial(
   material.depthWrite = true;
   material.depthTest = true;
 
-  const terrainUniforms: TerrainUniforms = { sunPosition: sunPositionUniform };
+  const terrainUniforms: TerrainUniforms = {
+    sunPosition: sunPositionUniform,
+    time: timeUniform,
+  };
   const result = material as typeof material & {
     terrainUniforms: TerrainUniforms;
   };

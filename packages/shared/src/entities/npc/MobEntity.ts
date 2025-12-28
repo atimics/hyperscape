@@ -1158,7 +1158,12 @@ export class MobEntity extends CombatantEntity {
       4,
       8,
     );
-    const material = new THREE.MeshLambertMaterial({ color: color.getHex() });
+    // Use MeshStandardMaterial for proper lighting (responds to sun, moon, and environment maps)
+    const material = new THREE.MeshStandardMaterial({
+      color: color.getHex(),
+      roughness: 0.8,
+      metalness: 0.0,
+    });
 
     this.mesh = new THREE.Mesh(geometry, material);
     this.mesh.name = `Mob_${this.config.mobType}_${this.id}`;

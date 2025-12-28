@@ -100,11 +100,63 @@ export function createVRMFactory(
   // remove secondary
   const secondaries = glb.scene.children.filter(n => n.name === 'secondary') // prettier-ignore
   for (const node of secondaries) node.removeFromParent();
-  // enable shadows
+  // enable shadows and convert MToon materials to MeshStandardMaterial for proper lighting
   glb.scene.traverse((obj) => {
     if (obj instanceof THREE.Mesh) {
       obj.castShadow = true;
       obj.receiveShadow = true;
+
+      // Convert materials to MeshStandardMaterial for proper sun/moon/environment lighting
+      const convertMaterial = (
+        mat: THREE.Material,
+      ): THREE.MeshStandardMaterial => {
+        // Extract textures and colors from original material
+        const originalMat = mat as THREE.Material & {
+          map?: THREE.Texture | null;
+          normalMap?: THREE.Texture | null;
+          emissiveMap?: THREE.Texture | null;
+          color?: THREE.Color;
+          emissive?: THREE.Color;
+          emissiveIntensity?: number;
+          opacity?: number;
+          transparent?: boolean;
+          alphaTest?: number;
+          side?: THREE.Side;
+          // MToon specific properties
+          shadeMultiplyTexture?: THREE.Texture | null;
+          matcapTexture?: THREE.Texture | null;
+        };
+
+        const newMat = new THREE.MeshStandardMaterial({
+          map: originalMat.map || null,
+          normalMap: originalMat.normalMap || null,
+          emissiveMap: originalMat.emissiveMap || null,
+          color: originalMat.color?.clone() || new THREE.Color(0xffffff),
+          emissive: originalMat.emissive?.clone() || new THREE.Color(0x000000),
+          emissiveIntensity: originalMat.emissiveIntensity ?? 0,
+          opacity: originalMat.opacity ?? 1,
+          transparent: originalMat.transparent ?? false,
+          alphaTest: originalMat.alphaTest ?? 0,
+          side: originalMat.side ?? THREE.FrontSide,
+          roughness: 0.7,
+          metalness: 0.0,
+          envMapIntensity: 1.0, // Respond to environment map
+        });
+
+        // Copy name for debugging
+        newMat.name = originalMat.name || "VRM_Standard";
+
+        // Dispose old material
+        originalMat.dispose();
+
+        return newMat;
+      };
+
+      if (Array.isArray(obj.material)) {
+        obj.material = obj.material.map(convertMaterial);
+      } else {
+        obj.material = convertMaterial(obj.material);
+      }
     }
   });
   // MMO APPROACH: Use cloning with raw bones for memory efficiency

@@ -673,7 +673,23 @@ export interface EventMap {
   [EventType.CHARACTER_SELECTED]: { characterId: string | null };
   [EventType.ENTITY_MODIFIED]: { id: string; changes: Record<string, unknown> };
   [EventType.SERVER_CORRECTION]: { sequence: number; corrections: unknown };
-  [EventType.TERRAIN_TILE_UNLOADED]: { tileId: string };
+  [EventType.TERRAIN_TILE_UNLOADED]: {
+    tileId: string;
+    tileX: number;
+    tileZ: number;
+  };
+  [EventType.TERRAIN_TILE_GENERATED]: {
+    tileId: string;
+    position: { x: number; z: number };
+    tileX: number;
+    tileZ: number;
+    biome: string;
+    resources: Array<{
+      id: string;
+      type: string;
+      position: { x: number; y: number; z: number };
+    }>;
+  };
   [EventType.TERRAIN_GENERATE_INITIAL]: {
     centerX: number;
     centerZ: number;

@@ -58,6 +58,7 @@ export class TerrainSystem extends System {
   private _initialTilesReady = false; // Track when initial tiles are loaded
   private lastPlayerTile = { x: 0, z: 0 };
   private updateTimer = 0;
+  private terrainTime = 0; // For animated caustics
   private noise!: NoiseGenerator;
   private biomeCenters: BiomeCenter[] = [];
   private databaseSystem!: {
@@ -497,6 +498,11 @@ export class TerrainSystem extends System {
     // Initialize water system
     this.waterSystem = new WaterSystem(this.world);
     await this.waterSystem.init();
+
+    // Add water system to scene (required for reflector and debug view)
+    if (this.world.stage?.scene) {
+      this.waterSystem.addToScene(this.world.stage.scene);
+    }
 
     // Get systems references
     // Check if database system exists and has the required method
@@ -1736,22 +1742,22 @@ export class TerrainSystem extends System {
       }
     }
 
-    // Animate water and grass (client-side only)
+    // Animate water, grass, and terrain caustics (client-side only)
     if (this.world.network?.isClient) {
       const dt =
         typeof _deltaTime === "number" && isFinite(_deltaTime)
           ? _deltaTime
           : 1 / 60;
 
+      // Update terrain time for animated caustics
+      this.terrainTime += dt;
+      if (this.terrainMaterial?.terrainUniforms) {
+        this.terrainMaterial.terrainUniforms.time.value = this.terrainTime;
+      }
+
       // Update water system
       if (this.waterSystem) {
-        const allWaterMeshes: THREE.Mesh[] = [];
-        for (const tile of this.terrainTiles.values()) {
-          if (tile.waterMeshes) {
-            allWaterMeshes.push(...tile.waterMeshes);
-          }
-        }
-        this.waterSystem.update(dt, allWaterMeshes);
+        this.waterSystem.update(dt);
       }
     }
   }
@@ -1875,7 +1881,7 @@ export class TerrainSystem extends System {
     this.activeChunks.delete(tile.key);
     // Remove cached bounding box if present
     this.terrainBoundingBoxes.delete(tile.key);
-    this.emitTileUnloaded(`${tile.x},${tile.z}`);
+    this.emitTileUnloaded(`${tile.x},${tile.z}`, tile.x, tile.z);
   }
 
   // ===== TERRAIN MOVEMENT CONSTRAINTS (GDD Requirement) =====
@@ -2377,8 +2383,8 @@ export class TerrainSystem extends System {
     this.pendingSerializationData.clear();
   }
 
-  private emitTileUnloaded(tileId: string): void {
-    this.world.emit(EventType.TERRAIN_TILE_UNLOADED, { tileId });
+  private emitTileUnloaded(tileId: string, tileX: number, tileZ: number): void {
+    this.world.emit(EventType.TERRAIN_TILE_UNLOADED, { tileId, tileX, tileZ });
   }
 
   // Methods for chunk persistence (used by tests)

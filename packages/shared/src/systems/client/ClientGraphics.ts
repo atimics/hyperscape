@@ -183,6 +183,11 @@ export class ClientGraphics extends System {
     this.usePostprocessing = this.world.prefs?.postprocessing ?? true;
 
     if (this.usePostprocessing) {
+      // Get color grading settings from preferences
+      const colorGradingLut = this.world.prefs?.colorGrading ?? "none";
+      const colorGradingIntensity =
+        this.world.prefs?.colorGradingIntensity ?? 1.0;
+
       this.composer = await createPostProcessing(
         this.renderer,
         this.world.stage.scene,
@@ -193,6 +198,20 @@ export class ClientGraphics extends System {
             intensity: 0.3,
             threshold: 1.0,
             radius: 0.5,
+          },
+          colorGrading: {
+            enabled: true,
+            lut: colorGradingLut as
+              | "none"
+              | "cinematic"
+              | "bourbon"
+              | "chemical"
+              | "clayton"
+              | "cubicle"
+              | "remy"
+              | "bw"
+              | "night",
+            intensity: colorGradingIntensity,
           },
         },
       );
@@ -313,6 +332,8 @@ export class ClientGraphics extends System {
     dpr?: { value: number };
     postprocessing?: { value: boolean };
     bloom?: { value: boolean };
+    colorGrading?: { value: string };
+    colorGradingIntensity?: { value: number };
   }) => {
     // dpr
     if (changes.dpr) {
@@ -322,6 +343,25 @@ export class ClientGraphics extends System {
     // postprocessing
     if (changes.postprocessing) {
       this.usePostprocessing = changes.postprocessing.value;
+    }
+    // color grading LUT
+    if (changes.colorGrading && this.composer) {
+      this.composer.setLUT(
+        changes.colorGrading.value as
+          | "none"
+          | "cinematic"
+          | "bourbon"
+          | "chemical"
+          | "clayton"
+          | "cubicle"
+          | "remy"
+          | "bw"
+          | "night",
+      );
+    }
+    // color grading intensity
+    if (changes.colorGradingIntensity && this.composer) {
+      this.composer.setLUTIntensity(changes.colorGradingIntensity.value);
     }
   };
 

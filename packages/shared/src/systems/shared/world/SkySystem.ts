@@ -18,7 +18,6 @@ import THREE, {
   float,
   vec3,
   vec4,
-  abs,
   pow,
   add,
   sub,
@@ -29,8 +28,8 @@ import THREE, {
   dot,
   normalize,
   length,
-  sin,
   cos,
+  abs,
   Fn,
 } from "../../../extras/three/three";
 import { System } from "..";
@@ -101,6 +100,7 @@ type SkyMaterialUniforms = {
 type CloudMaterialUniforms = {
   uTime: TSLUniformFloat;
   uSunPosition: TSLUniformVec3;
+  uDayIntensity: TSLUniformFloat;
 };
 
 type SunMaterialUniforms = {
@@ -133,17 +133,20 @@ export class SkySystem extends System {
   private noiseA!: THREE.Texture;
   private noiseB!: THREE.Texture;
 
-  // TSL uniforms
+  // Legacy uniforms (for compatibility)
   private skyUniforms: SkyUniforms;
 
-  // TSL material uniforms for runtime updates
+  // TSL material uniforms for runtime updates - stored at class level like WaterSystem
   private sunMaterialUniforms: SunMaterialUniforms | null = null;
   private moonMaterialUniforms: MoonMaterialUniforms | null = null;
+  private skyTSLUniforms: SkyMaterialUniforms | null = null;
 
   private elapsed = 0;
   private dayDurationSec = 240; // full day cycle in seconds
   // Pre-allocated vector for sun direction to avoid per-frame allocation
   private _sunDir = new THREE.Vector3();
+  private _dayPhase = 0;
+  private _dayIntensity = 1;
 
   constructor(world: World) {
     super(world);
@@ -152,6 +155,35 @@ export class SkySystem extends System {
       sunPosition: { value: new THREE.Vector3(0, 1, 0) },
       dayCycleProgress: { value: 0 },
     };
+  }
+
+  // =====================
+  // Public getters for lighting synchronization
+  // =====================
+
+  /** Current sun direction vector (normalized) */
+  get sunDirection(): THREE.Vector3 {
+    return this._sunDir;
+  }
+
+  /** Day phase 0-1 (0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset) */
+  get dayPhase(): number {
+    return this._dayPhase;
+  }
+
+  /** Day intensity 0-1 (0 = full night, 1 = full day) - smooth cosine curve */
+  get dayIntensity(): number {
+    return this._dayIntensity;
+  }
+
+  /** Whether it's currently daytime (sun above horizon) */
+  get isDay(): boolean {
+    return this._dayPhase < 0.5;
+  }
+
+  /** Moon direction vector (opposite of sun) */
+  get moonDirection(): THREE.Vector3 {
+    return this._sunDir.clone().negate();
   }
 
   override getDependencies() {
@@ -280,21 +312,27 @@ export class SkySystem extends System {
     // Sun glow effect (larger, softer circle behind sun) - replaces Lensflare
     const glowGeom = new THREE.CircleGeometry(450, 32);
 
-    // TSL glow color with radial falloff
+    // TSL glow color with gradual radial falloff
     const glowColorNode = Fn(() => {
       const uvCoord = uv();
       // Distance from center (0.5, 0.5)
       const center = vec3(0.5, 0.5, 0.0);
       const uvPos = vec3(uvCoord.x, uvCoord.y, float(0.0));
       const dist = length(sub(uvPos, center));
-      // Smooth falloff from center
-      const falloff = smoothstep(float(0.5), float(0.0), dist);
-      const glowStrength = pow(falloff, float(1.5));
+      // Gradual falloff - inverse square for natural light falloff
+      const normalizedDist = mul(dist, float(2.0)); // 0 at center, 1 at edge
+      const falloff = clamp(
+        sub(float(1.0), normalizedDist),
+        float(0.0),
+        float(1.0),
+      );
+      // Higher power = more gradual falloff across radius
+      const glowStrength = pow(falloff, float(3.0));
       // Warm glow color
       const glowColor = vec3(1.0, 0.9, 0.7);
       return vec4(
         mul(glowColor, glowStrength),
-        mul(glowStrength, mul(uOpacity, float(0.4))),
+        mul(glowStrength, mul(uOpacity, float(0.3))),
       );
     })();
 
@@ -365,12 +403,17 @@ export class SkySystem extends System {
     const uSunPosition = uniform(vec3(0, 1, 0));
     const uDayCycleProgress = uniform(float(0));
 
+    // Reference to galaxy texture for star rendering
+    const galaxyTexRef = this.galaxyTex;
+
     // Create the sky color node - comprehensive day/night with stars
     const skyColorNode = Fn(() => {
       const localPos = normalize(positionLocal);
 
       // Elevation: 0 at horizon, 1 at zenith
-      const elevation = clamp(localPos.y, float(0.0), float(1.0));
+      // Use abs() to make sky symmetric - lower hemisphere mirrors upper
+      // This is essential for correct planar water reflections
+      const elevation = abs(localPos.y);
 
       // =====================
       // DAY/NIGHT CYCLE
@@ -424,14 +467,23 @@ export class SkySystem extends System {
       const sunriseColor = vec3(1.0, 0.5, 0.2); // Orange
       const sunsetPinkColor = vec3(1.0, 0.4, 0.5); // Pink/red
 
-      // Glow strongest near sun, fading with angle
-      const sunGlowAngle = smoothstep(float(0.3), float(1.0), angleToSun);
+      // Glow strongest near sun, with gradual falloff across radius
+      // Use power function for smooth natural falloff instead of smoothstep
+      const sunGlowRaw = clamp(angleToSun, float(0.0), float(1.0));
+      const sunGlowAngle = pow(sunGlowRaw, float(4.0)); // Higher power = tighter, more gradual falloff
       // Also affect horizon area more
-      const horizonGlow = smoothstep(float(0.3), float(0.0), elevation);
+      const horizonGlow = pow(
+        clamp(
+          sub(float(1.0), mul(elevation, float(2.0))),
+          float(0.0),
+          float(1.0),
+        ),
+        float(2.0),
+      );
 
       const glowIntensity = mul(
         mul(sunGlowAngle, horizonGlow),
-        mul(sunriseSunsetIntensity, float(0.8)),
+        mul(sunriseSunsetIntensity, float(0.6)),
       );
 
       // Blend sunrise color with slight pink variation based on time
@@ -440,7 +492,7 @@ export class SkySystem extends System {
       skyColor = add(skyColor, mul(glowColor, glowIntensity));
 
       // =====================
-      // STARS (Night only)
+      // STARS (Night only) - Simple equirectangular mapping
       // =====================
       // Stars visible at night, above horizon
       const starVisibility = mul(
@@ -448,42 +500,26 @@ export class SkySystem extends System {
         smoothstep(float(0.1), float(0.4), elevation),
       );
 
-      // Procedural stars using stable hash from position
-      // Lower scale = larger star cells = fewer stars
-      const starScale = float(20.0);
-      const starX = mul(localPos.x, starScale);
-      const starY = mul(localPos.y, starScale);
-      const starZ = mul(localPos.z, starScale);
-
-      // Create pseudo-random value from position (stable, no dithering)
-      const hash1 = sin(
-        add(mul(starX, float(12.9898)), mul(starY, float(78.233))),
+      // Simple equirectangular UV from sphere position
+      // U = atan2(x, z) / 2π + 0.5, V = y * 0.5 + 0.5
+      // Simplified approximation that avoids atan2
+      const starU = mul(
+        add(localPos.x, mul(localPos.z, float(0.7))),
+        float(0.3),
       );
-      const hash2 = sin(
-        add(mul(starZ, float(43.758)), mul(starX, float(27.169))),
-      );
-      const starHash = abs(sin(mul(add(hash1, hash2), float(43758.5453))));
+      const starV = mul(add(localPos.y, float(1.0)), float(0.5));
 
-      // Star threshold - extremely high threshold = very sparse stars
-      const starThreshold = smoothstep(float(0.9999), float(0.99999), starHash);
+      // Sample galaxy texture for stars (has nice star distribution)
+      const starSample = galaxyTexRef
+        ? texture(galaxyTexRef, vec3(starU, starV, float(0.0)).xy)
+        : vec4(0.0, 0.0, 0.0, 0.0);
 
-      // Star brightness with subtle twinkle
-      const twinkle = add(
-        float(0.7),
-        mul(
-          sin(add(mul(uTime, float(2.0)), mul(starHash, float(10.0)))),
-          float(0.3),
-        ),
+      // Use texture brightness as star intensity
+      const starIntensity = mul(starSample.r, float(0.3));
+      const finalStarColor = mul(
+        vec3(0.9, 0.92, 1.0), // Slight blue-white tint
+        mul(starIntensity, starVisibility),
       );
-      const starBrightness = mul(mul(starThreshold, twinkle), starVisibility);
-
-      // Star color with slight variation (blue to yellow tint)
-      const starColorTint = mix(
-        vec3(0.8, 0.9, 1.0), // Blue tint
-        vec3(1.0, 0.95, 0.8), // Yellow tint
-        starHash,
-      );
-      const finalStarColor = mul(starColorTint, starBrightness);
       skyColor = add(skyColor, finalStarColor);
 
       // =====================
@@ -491,11 +527,13 @@ export class SkySystem extends System {
       // =====================
       const moonPos = mul(sunDir, float(-1.0));
       const angleToMoon = dot(localPos, moonPos);
-      const moonGlowAngle = smoothstep(float(0.85), float(1.0), angleToMoon);
+      // Use power function for gradual falloff instead of smoothstep
+      const moonGlowRaw = clamp(angleToMoon, float(0.0), float(1.0));
+      const moonGlowAngle = pow(moonGlowRaw, float(8.0)); // Higher power = tighter, more gradual
       const moonGlowColor = vec3(0.4, 0.5, 0.7); // Cool blue glow
       const moonGlowIntensity = mul(
         mul(moonGlowAngle, nightIntensity),
-        float(0.3),
+        float(0.25),
       );
       skyColor = add(skyColor, mul(moonGlowColor, moonGlowIntensity));
 
@@ -503,7 +541,9 @@ export class SkySystem extends System {
       // HORIZON HAZE (subtle atmosphere)
       // =====================
       const hazeColor = vec3(0.83, 0.78, 0.72); // Warm beige
-      const hazeStrength = smoothstep(float(0.1), float(-0.05), localPos.y);
+      // Haze strongest near horizon (low elevation), fades as you go higher
+      // Use elevation (which is now abs(localPos.y)) for symmetric reflections
+      const hazeStrength = smoothstep(float(0.15), float(0.0), elevation);
       // Haze stronger during day, subtle at night
       const hazeAmount = mul(
         hazeStrength,
@@ -523,20 +563,13 @@ export class SkySystem extends System {
     skyMat.toneMapped = true;
     skyMat.fog = false; // Sky should never be affected by scene fog
 
-    // Store uniforms for updates
-    (
-      skyMat as THREE.Material & {
-        skyUniforms?: {
-          uTime: typeof uTime;
-          uSunPosition: typeof uSunPosition;
-          uDayCycleProgress: typeof uDayCycleProgress;
-        };
-      }
-    ).skyUniforms = {
-      uTime,
-      uSunPosition,
-      uDayCycleProgress,
-    };
+    // Store TSL uniforms at class level for reliable updates (like WaterSystem)
+    // Store directly without casting - the uniform() function returns objects with .value
+    this.skyTSLUniforms = {
+      uTime: uTime,
+      uSunPosition: uSunPosition as unknown as TSLUniformVec3,
+      uDayCycleProgress: uDayCycleProgress,
+    } as SkyMaterialUniforms;
 
     this.skyMesh = new THREE.Mesh(skyGeom, skyMat);
     this.skyMesh.frustumCulled = false;
@@ -567,6 +600,7 @@ export class SkySystem extends System {
     // Shared uniforms for all clouds
     const uTime = uniform(float(0));
     const uSunDir = uniform(vec3(0, 1, 0));
+    const uDayIntensity = uniform(float(1.0)); // For darkening clouds at night
 
     for (let i = 0; i < CLOUD_DEFS.length; i++) {
       const def = CLOUD_DEFS[i];
@@ -595,16 +629,17 @@ export class SkySystem extends System {
         const uvCoord = uv();
         const cloudTex = texture(tex, uvCoord);
 
-        // Day/night color - clouds are white, tinted slightly at night
-        const dayFactor = smoothstep(float(-0.1), float(0.3), uSunDir.y);
-        const cloudColor = mix(
-          vec3(0.75, 0.8, 0.95), // night: slight blue tint
-          vec3(1.0, 1.0, 1.0), // day: pure white
-          dayFactor,
-        );
+        // Day/night color - clouds darken significantly at night
+        // uDayIntensity: 1 = full day, 0 = full night
+        const dayColor = vec3(1.0, 1.0, 1.0); // day: pure white
+        const nightColor = vec3(0.15, 0.18, 0.25); // night: dark blue-gray
+        const cloudColor = mix(nightColor, dayColor, uDayIntensity);
 
-        // Use texture alpha directly for soft fluffy edges
-        return vec4(cloudColor, cloudTex.a);
+        // Alpha also fades at night (clouds less visible)
+        const nightAlpha = add(float(0.3), mul(uDayIntensity, float(0.7))); // 30%-100%
+        const finalAlpha = mul(cloudTex.a, nightAlpha);
+
+        return vec4(cloudColor, finalAlpha);
       })();
 
       const mat = new MeshBasicNodeMaterial();
@@ -622,7 +657,8 @@ export class SkySystem extends System {
         ).cloudUniforms = {
           uTime,
           uSunPosition: uSunDir,
-        };
+          uDayIntensity,
+        } as CloudMaterialUniforms;
       }
 
       // Create mesh
@@ -667,6 +703,15 @@ export class SkySystem extends System {
     const worldTime = this.world.getTime();
     const dayPhase = (worldTime % this.dayDurationSec) / this.dayDurationSec;
     const isDay = dayPhase < 0.5;
+
+    // Store for public getters
+    this._dayPhase = dayPhase;
+    // Calculate smooth day intensity using cosine (peaks at noon, lowest at midnight)
+    // dayPhase 0.5 = noon = max intensity, dayPhase 0/1 = midnight = min intensity
+    this._dayIntensity = Math.max(
+      0,
+      Math.cos((dayPhase - 0.5) * Math.PI * 2) * 0.5 + 0.5,
+    );
 
     // Sun direction on unit circle around scene using pre-allocated vector
     const inc = 0.01;
@@ -726,14 +771,11 @@ export class SkySystem extends System {
       }
     }
 
-    // Update sky material uniforms
-    const skyMat = this.skyMesh.material as THREE.Material & {
-      skyUniforms?: SkyMaterialUniforms;
-    };
-    if (skyMat.skyUniforms) {
-      skyMat.skyUniforms.uTime.value = this.elapsed;
-      skyMat.skyUniforms.uSunPosition.value.copy(this._sunDir);
-      skyMat.skyUniforms.uDayCycleProgress.value = dayPhase;
+    // Update sky TSL uniforms (stored at class level for reliable updates)
+    if (this.skyTSLUniforms) {
+      this.skyTSLUniforms.uTime.value = this.elapsed;
+      this.skyTSLUniforms.uSunPosition.value.copy(this._sunDir);
+      this.skyTSLUniforms.uDayCycleProgress.value = dayPhase;
     }
 
     // Update cloud material uniforms
@@ -743,8 +785,8 @@ export class SkySystem extends System {
       };
       if (cloudMat.cloudUniforms) {
         cloudMat.cloudUniforms.uTime.value = this.elapsed;
-        // Pass normalized sun direction for lighting
         cloudMat.cloudUniforms.uSunPosition.value.copy(this._sunDir);
+        cloudMat.cloudUniforms.uDayIntensity.value = this._dayIntensity;
       }
 
       if (this.sun) this.sun.renderOrder = 2;
