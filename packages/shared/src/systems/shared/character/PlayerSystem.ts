@@ -452,8 +452,8 @@ export class PlayerSystem extends SystemBase {
     oldLevel: number;
     newLevel: number;
   }): void {
-    // Only save on server
-    if (!this.world.isServer || !this.databaseSystem) return;
+    // Only process on server
+    if (!this.world.isServer) return;
 
     const player = this.players.get(data.entityId);
     if (!player) return;
@@ -461,11 +461,16 @@ export class PlayerSystem extends SystemBase {
     // Update combat level in player data (SkillsSystem already updated StatsComponent)
     player.combat.combatLevel = data.newLevel;
 
-    // Save to database immediately
-    const databaseId = PlayerIdMapper.getDatabaseId(data.entityId);
-    this.databaseSystem.savePlayer(databaseId, {
-      combatLevel: data.newLevel,
-    });
+    // Sync to entity and broadcast to all clients
+    this.syncCombatLevelToEntity(data.entityId, data.newLevel);
+
+    // Save to database immediately (only if database system available)
+    if (this.databaseSystem) {
+      const databaseId = PlayerIdMapper.getDatabaseId(data.entityId);
+      this.databaseSystem.savePlayer(databaseId, {
+        combatLevel: data.newLevel,
+      });
+    }
   }
 
   async onPlayerEnter(data: PlayerEnterEvent): Promise<void> {
@@ -599,6 +604,12 @@ export class PlayerSystem extends SystemBase {
 
     // Update UI
     this.emitPlayerUpdate(data.playerId);
+
+    // CRITICAL: Sync combat level to entity data for remote clients
+    // The entity was created with combatLevel=3 (default), but we now have the correct level
+    // from database. Sync it to entity.data so serialize() sends correct level to new clients,
+    // and broadcast via entityModified so existing clients see the correct combat level.
+    this.syncCombatLevelToEntity(data.playerId, playerData.combat.combatLevel);
 
     // If entity doesn't exist yet, wait for spawn request to create spawn data
     // This happens during initial join before character select
@@ -979,6 +990,9 @@ export class PlayerSystem extends SystemBase {
 
     // Recalculate combat level
     player.combat.combatLevel = this.calculateCombatLevel(player.skills);
+
+    // Sync to entity and broadcast to all clients
+    this.syncCombatLevelToEntity(playerId, player.combat.combatLevel);
 
     // Save to database
     if (this.databaseSystem) {
@@ -1404,6 +1418,28 @@ export class PlayerSystem extends SystemBase {
     const combatLevel = base + Math.max(melee, ranged);
 
     return Math.floor(combatLevel);
+  }
+
+  /**
+   * Sync combat level to entity data and broadcast to all clients
+   * Call this after recalculating combat level to ensure remote players see updates
+   */
+  private syncCombatLevelToEntity(playerId: string, combatLevel: number): void {
+    if (!this.world.isServer) return;
+
+    const entity = this.world.entities.get(playerId);
+    if (entity) {
+      // Update entity data so serialize() includes correct combat level
+      (entity.data as { combatLevel?: number }).combatLevel = combatLevel;
+
+      // Broadcast to all clients via entityModified
+      if (this.world.network?.send) {
+        this.world.network.send("entityModified", {
+          id: playerId,
+          combatLevel: combatLevel,
+        });
+      }
+    }
   }
 
   // === ATTACK STYLE METHODS (merged from AttackStyleSystem) ===
@@ -1847,6 +1883,9 @@ export class PlayerSystem extends SystemBase {
 
     // Recalculate combat level
     player.combat.combatLevel = this.calculateCombatLevel(data.skills);
+
+    // Sync to entity and broadcast to all clients
+    this.syncCombatLevelToEntity(data.playerId, player.combat.combatLevel);
 
     // Update stats component with new skill data for SkillsSystem and combat calculations
     const playerEntity = this.world.entities.get(data.playerId);
