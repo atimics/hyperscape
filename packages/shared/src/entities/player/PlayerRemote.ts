@@ -832,10 +832,13 @@ export class PlayerRemote extends Entity implements HotReloadable {
   }
 
   override destroy(local?: boolean) {
+    // Guard uses inherited Entity.destroyed flag
     if (this.destroyed) return;
-    this.destroyed = true;
+    // NOTE: Do NOT set this.destroyed = true here!
+    // Entity.destroy() sets it, and if we set it first, super.destroy() will
+    // immediately return and the node won't be removed from the scene.
 
-    // Remove raycast proxy from scene
+    // 1. Remove raycast proxy from scene
     if (this.raycastProxy) {
       const scene = this.world.stage?.scene;
       if (scene) {
@@ -846,24 +849,49 @@ export class PlayerRemote extends Entity implements HotReloadable {
       this.raycastProxy = null;
     }
 
+    // 2. Clear timers
     if (this.chatTimer) clearTimeout(this.chatTimer);
+
+    // 3. Clean up avatar (VRM instance is added directly to world.stage.scene)
+    // Must destroy the instance to remove from scene, not just set to undefined
+    if (this.avatar) {
+      this.avatar.deactivate();
+      // Destroy VRM instance to remove from scene
+      const avatarWithInstance = this.avatar as AvatarWithInstance;
+      if (avatarWithInstance.instance) {
+        avatarWithInstance.instance.destroy();
+      }
+      this.avatar = undefined;
+    }
+
+    // 4. Unmount nametag (registered with Nametags system)
+    if (this.nametag && this.nametag.unmount) {
+      this.nametag.unmount();
+    }
+
+    // 5. Deactivate visual components
     this.base.deactivate();
-    this.avatar = undefined;
-    this.world.setHot(this, false);
-    this.world.emit(EventType.PLAYER_LEFT, { playerId: this.data.id });
     this.aura.deactivate();
 
-    // Clean up health bar from HealthBars system
+    // 6. Unregister from hot updates
+    this.world.setHot(this, false);
+
+    // 7. Clean up health bar from HealthBars system
     if (this._healthBarHandle) {
       this._healthBarHandle.destroy();
       this._healthBarHandle = null;
     }
 
-    this.world.entities.remove(this.data.id);
-    // if removed locally we need to broadcast to server/clients
-    if (local) {
-      this.world.network.send("entityRemoved", this.data.id);
-    }
+    // 8. Call parent destroy to:
+    //    - Set destroyed = true
+    //    - Remove node from scene
+    //    - Dispose mesh/materials
+    //    - Clean up physics
+    //    - Clean up components
+    // Pass false to prevent duplicate entityRemoved broadcast
+    // (server already sent it via handleDisconnect, and Entities.remove()
+    // is what called us so we don't need to call it again)
+    super.destroy(false);
   }
 
   public toggleInterpolation(enabled: boolean): void {
