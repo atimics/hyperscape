@@ -60,7 +60,6 @@ export class PlayerInteractionHandler extends BaseInteractionHandler {
           { text: `${targetLevel}`, color: levelColor },
           { text: ")" },
         ],
-        icon: "⚔️",
         enabled: true,
         priority: 0,
         handler: () => this.attackPlayer(target),
@@ -78,7 +77,6 @@ export class PlayerInteractionHandler extends BaseInteractionHandler {
         { text: `${targetLevel}`, color: levelColor },
         { text: ")" },
       ],
-      icon: "🤝",
       enabled: false, // Disabled until trading implemented
       priority: 1,
       handler: () => this.showExamineMessage("Trading is not yet available."),
@@ -95,7 +93,6 @@ export class PlayerInteractionHandler extends BaseInteractionHandler {
         { text: `${targetLevel}`, color: levelColor },
         { text: ")" },
       ],
-      icon: "👣",
       enabled: true,
       priority: 2,
       handler: () => this.followPlayer(target),
@@ -105,7 +102,6 @@ export class PlayerInteractionHandler extends BaseInteractionHandler {
     actions.push({
       id: "report",
       label: `Report ${target.name}`,
-      icon: "🚩",
       enabled: true,
       priority: 3,
       handler: () => this.showExamineMessage("Report system coming soon."),

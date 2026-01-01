@@ -72,7 +72,6 @@ export class MobInteractionHandler extends BaseInteractionHandler {
         { text: `${mobLevel}`, color: levelColor },
         { text: ")" },
       ],
-      icon: "⚔️",
       enabled: isAlive,
       priority: 1,
       handler: () => {
