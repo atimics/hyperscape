@@ -269,6 +269,8 @@ export interface WorldArea {
   };
   biomeType: string;
   safeZone: boolean;
+  /** PvP enabled - players can attack each other in this zone */
+  pvpEnabled?: boolean;
   npcs: NPCLocation[];
   resources: BiomeResource[];
   mobSpawns: MobSpawnPoint[];

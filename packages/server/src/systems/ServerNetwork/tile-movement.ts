@@ -52,6 +52,16 @@ export class TileMovementManager {
   private _up = new THREE.Vector3(0, 1, 0);
   private _tempQuat = new THREE.Quaternion();
 
+  /**
+   * OSRS-ACCURATE: Tick-start positions for all players
+   * Captured at the VERY START of onTick(), BEFORE any movement processing.
+   * Used by FollowManager to create the 1-tick delay effect.
+   *
+   * Key insight from OSRS: "The important part is to set the previousTile
+   * at the start (or the end) of the tick not when they actually move"
+   */
+  private tickStartTiles: Map<string, TileCoord> = new Map();
+
   // Security: Input validation and anti-cheat monitoring
   private readonly inputValidator = new MovementInputValidator();
   private readonly antiCheat = new MovementAntiCheat();
@@ -331,6 +341,22 @@ export class TileMovementManager {
    * Called every server tick (600ms) - advance all players along their paths
    */
   onTick(tickNumber: number): void {
+    // OSRS-ACCURATE: Capture tick-start positions for ALL players FIRST
+    // This happens BEFORE any movement, so FollowManager can see where
+    // players were at the START of this tick (creating 1-tick delay effect)
+    this.tickStartTiles.clear();
+    for (const [playerId, state] of this.playerStates) {
+      this.tickStartTiles.set(playerId, { ...state.currentTile });
+    }
+
+    // Initialize previousTile for newly spawned players only
+    // Movement processing will update it to "last stepped off" tile
+    for (const [_playerId, state] of this.playerStates) {
+      if (state.previousTile === null) {
+        state.previousTile = { ...state.currentTile };
+      }
+    }
+
     // Decay anti-cheat scores every 100 ticks (~60 seconds)
     // This rewards good behavior over time
     if (tickNumber % 100 === 0) {
@@ -362,6 +388,11 @@ export class TileMovementManager {
 
       for (let i = 0; i < tilesToMove; i++) {
         if (state.pathIndex >= state.path.length) break;
+
+        // OSRS-ACCURATE: Capture the tile we're stepping OFF of
+        // This ensures previousTile is always 1 tile behind currentTile
+        // Used by FollowManager for 1-tile trailing effect
+        state.previousTile = { ...state.currentTile };
 
         const nextTile = state.path[state.pathIndex];
         // Copy values instead of spread (zero allocation)
@@ -490,6 +521,11 @@ export class TileMovementManager {
 
     for (let i = 0; i < tilesToMove; i++) {
       if (state.pathIndex >= state.path.length) break;
+
+      // OSRS-ACCURATE: Capture the tile we're stepping OFF of
+      // This ensures previousTile is always 1 tile behind currentTile
+      // Used by FollowManager for 1-tile trailing effect
+      state.previousTile = { ...state.currentTile };
 
       const nextTile = state.path[state.pathIndex];
       // Copy values instead of spread (zero allocation)
@@ -640,6 +676,68 @@ export class TileMovementManager {
   getCurrentTile(playerId: string): TileCoord | null {
     const state = this.playerStates.get(playerId);
     return state ? state.currentTile : null;
+  }
+
+  /**
+   * Get the previous tile for a player (where they were at START of tick)
+   *
+   * OSRS-ACCURATE: Used by FollowManager for follow mechanic.
+   * Followers path to target's PREVIOUS tile, creating the
+   * characteristic 1-tick trailing effect.
+   *
+   * Edge cases:
+   * - If no previous tile (just spawned/teleported): use tile WEST of current
+   * - This matches OSRS behavior per private server community research
+   *
+   * @see https://rune-server.org/threads/help-with-player-dancing-spinning-when-following-each-other.706121/
+   */
+  getPreviousTile(playerId: string): TileCoord {
+    const state = this.playerStates.get(playerId);
+
+    // Use captured previous tile if available
+    if (state?.previousTile) {
+      return state.previousTile;
+    }
+
+    // Fallback: If no previous tile (just spawned/teleported), use tile WEST of current
+    // This matches OSRS behavior per private server research
+    if (state) {
+      return {
+        x: state.currentTile.x - 1,
+        z: state.currentTile.z,
+      };
+    }
+
+    // No state at all - try to get from entity position
+    const entity = this.world.entities.get(playerId);
+    if (entity?.position) {
+      const currentTile = worldToTile(entity.position.x, entity.position.z);
+      return {
+        x: currentTile.x - 1,
+        z: currentTile.z,
+      };
+    }
+
+    // Ultimate fallback (should never happen)
+    return { x: 0, z: 0 };
+  }
+
+  /**
+   * Get the tick-start tile for a player
+   *
+   * OSRS-ACCURATE: Returns where the player was at the VERY START of the
+   * current tick, BEFORE any movement was processed. This is different from
+   * previousTile (which is the last tile stepped off during movement).
+   *
+   * Used by FollowManager to create the authentic 1-tick delay effect:
+   * - Tick N: Target is at tile A (tick-start), then moves to tile B
+   * - Tick N: Follower sees target's tick-start position (A)
+   * - Tick N+1: Follower moves toward A, while target is now at B
+   *
+   * This creates the characteristic "always one step behind" feel.
+   */
+  getTickStartTile(playerId: string): TileCoord | null {
+    return this.tickStartTiles.get(playerId) ?? null;
   }
 
   /**

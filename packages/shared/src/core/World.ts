@@ -305,6 +305,14 @@ export class World extends EventEmitter {
       Record<string, { level: number; xp: number }>
     >;
     lastEquipmentByPlayerId?: Record<string, unknown>;
+    lastAttackStyleByPlayerId?: Record<
+      string,
+      {
+        currentStyle: { id: string };
+        availableStyles: unknown;
+        canChange: boolean;
+      }
+    >;
   };
 
   /** Environment system (lighting, skybox, fog, shadows) */

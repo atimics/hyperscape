@@ -157,7 +157,8 @@ export class Entities extends SystemBase implements IEntities {
   }
 
   get(id: string): Entity | null {
-    return this.items.get(id) || null;
+    // Check items first, then players (for remote player entity lookup)
+    return this.items.get(id) || this.players.get(id) || null;
   }
 
   values(): IterableIterator<Entity> {
@@ -274,6 +275,20 @@ export class Entities extends SystemBase implements IEntities {
         }
       }
 
+      // Extract mob data sent from server (see MobEntity.serialize())
+      const networkData = data as {
+        level?: number;
+        currentHealth?: number;
+        maxHealth?: number;
+        mobType?: string;
+        aiState?: MobAIState;
+        targetPlayerId?: string | null;
+      };
+      const mobLevel = networkData.level || 1;
+      const mobCurrentHealth = networkData.currentHealth || 100;
+      const mobMaxHealth = networkData.maxHealth || 100;
+      const mobType = networkData.mobType || derivedMobType;
+
       const mobConfig: MobEntityConfig = {
         id: data.id,
         name: name,
@@ -296,11 +311,11 @@ export class Entities extends SystemBase implements IEntities {
         interactionDistance: 5,
         description: name,
         model: finalModelPath,
-        // Minimal required MobEntity fields with sensible defaults
-        mobType: derivedMobType, // Mob ID from mobs.json
-        level: 1,
-        currentHealth: 100,
-        maxHealth: 100,
+        // Use server-provided mob data, with sensible defaults
+        mobType: mobType,
+        level: mobLevel,
+        currentHealth: mobCurrentHealth,
+        maxHealth: mobMaxHealth,
         attack: 1, // Default attack level for accuracy
         attackPower: 10,
         defense: 2,
@@ -322,17 +337,17 @@ export class Entities extends SystemBase implements IEntities {
           y: positionArray[1],
           z: positionArray[2],
         },
-        aiState: MobAIState.IDLE,
+        aiState: networkData.aiState || MobAIState.IDLE,
         lastAttackTime: 0,
         properties: {
           movementComponent: null,
           combatComponent: null,
           healthComponent: null,
           visualComponent: null,
-          health: { current: 100, max: 100 },
-          level: 1,
+          health: { current: mobCurrentHealth, max: mobMaxHealth },
+          level: mobLevel,
         },
-        targetPlayerId: null,
+        targetPlayerId: networkData.targetPlayerId || null,
         deathTime: null,
       };
 
