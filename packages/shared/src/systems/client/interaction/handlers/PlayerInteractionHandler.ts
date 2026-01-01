@@ -21,6 +21,7 @@ import { BaseInteractionHandler } from "./BaseInteractionHandler";
 import type { RaycastTarget, ContextMenuAction } from "../types";
 import { INTERACTION_RANGE, MESSAGE_TYPES } from "../constants";
 import { getCombatLevelColor } from "../utils/combatLevelColor";
+import { calculateCombatLevel } from "../../../../utils/game/CombatLevelCalculator";
 import type { ZoneDetectionSystem } from "../../../shared/death/ZoneDetectionSystem";
 
 export class PlayerInteractionHandler extends BaseInteractionHandler {
@@ -164,15 +165,50 @@ export class PlayerInteractionHandler extends BaseInteractionHandler {
   /**
    * Get target player's combat level.
    * Falls back to 3 (OSRS minimum) if unknown.
+   *
+   * Checks multiple property paths to handle different player entity types:
+   * - PlayerRemote: has `combatLevel` getter
+   * - PlayerLocal: stores in `combat.combatLevel` or can be calculated from skills
    */
   private getPlayerCombatLevel(playerId: string): number {
     const playerEntity = this.world.entities?.players?.get(playerId);
-    if (playerEntity) {
-      const entity = playerEntity as unknown as { combatLevel?: number };
-      if (typeof entity.combatLevel === "number") {
-        return entity.combatLevel;
-      }
+    if (!playerEntity) return 3;
+
+    const entity = playerEntity as unknown as Record<string, unknown>;
+
+    // 1. Check direct getter (PlayerRemote - most common for other players)
+    if (typeof entity.combatLevel === "number") {
+      return entity.combatLevel;
     }
+
+    // 2. Check data object (raw entity data from server sync)
+    const data = entity.data as { combatLevel?: number } | undefined;
+    if (typeof data?.combatLevel === "number" && data.combatLevel > 1) {
+      return data.combatLevel;
+    }
+
+    // 3. Calculate from skills (if available)
+    const skills = entity.skills as
+      | Record<string, { level: number }>
+      | undefined;
+    if (skills) {
+      return calculateCombatLevel({
+        attack: skills.attack?.level || 1,
+        strength: skills.strength?.level || 1,
+        defense: skills.defense?.level || 1,
+        hitpoints: skills.constitution?.level || 10,
+        ranged: skills.ranged?.level || 1,
+        magic: skills.magic?.level || 1,
+        prayer: skills.prayer?.level || 1,
+      });
+    }
+
+    // 4. Check nested combat object (fallback)
+    const combat = entity.combat as { combatLevel?: number } | undefined;
+    if (typeof combat?.combatLevel === "number" && combat.combatLevel > 1) {
+      return combat.combatLevel;
+    }
+
     // Fallback: OSRS minimum combat level
     return 3;
   }
@@ -181,15 +217,51 @@ export class PlayerInteractionHandler extends BaseInteractionHandler {
    * Get local player's combat level.
    * Used for relative color calculation (green/yellow/red).
    * Falls back to 3 (OSRS minimum) if unknown.
+   *
+   * Checks multiple property paths to handle different player entity types:
+   * - PlayerRemote: has `combatLevel` getter
+   * - PlayerLocal: stores in `combat.combatLevel` or can be calculated from skills
    */
   private getLocalPlayerCombatLevel(): number {
     const player = this.getPlayer();
     if (!player) return 3;
 
-    const entity = player as unknown as { combatLevel?: number };
+    const entity = player as unknown as Record<string, unknown>;
+
+    // 1. Check direct getter (PlayerRemote)
     if (typeof entity.combatLevel === "number") {
       return entity.combatLevel;
     }
+
+    // 2. Check data object (raw entity data from server sync)
+    const data = entity.data as { combatLevel?: number } | undefined;
+    if (typeof data?.combatLevel === "number" && data.combatLevel > 1) {
+      return data.combatLevel;
+    }
+
+    // 3. Calculate from skills (PlayerLocal has synced skills via SKILLS_UPDATED)
+    // This is the most reliable method for the local player
+    const skills = entity.skills as
+      | Record<string, { level: number }>
+      | undefined;
+    if (skills) {
+      return calculateCombatLevel({
+        attack: skills.attack?.level || 1,
+        strength: skills.strength?.level || 1,
+        defense: skills.defense?.level || 1,
+        hitpoints: skills.constitution?.level || 10,
+        ranged: skills.ranged?.level || 1,
+        magic: skills.magic?.level || 1,
+        prayer: skills.prayer?.level || 1,
+      });
+    }
+
+    // 4. Check nested combat object (PlayerLocal - fallback)
+    const combat = entity.combat as { combatLevel?: number } | undefined;
+    if (typeof combat?.combatLevel === "number" && combat.combatLevel > 1) {
+      return combat.combatLevel;
+    }
+
     // Fallback: OSRS minimum combat level
     return 3;
   }
