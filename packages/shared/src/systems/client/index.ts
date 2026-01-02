@@ -19,6 +19,7 @@ export { ControlPriorities } from "./ControlPriorities";
 export { EquipmentVisualSystem } from "./EquipmentVisualSystem";
 export { DamageSplatSystem } from "./DamageSplatSystem";
 export { XPDropSystem } from "./XPDropSystem";
+export { ZoneVisualsSystem } from "./ZoneVisualsSystem";
 
 // New interaction system (replaces legacy InteractionSystem)
 export { InteractionRouter } from "./interaction";

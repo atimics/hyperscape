@@ -102,6 +102,7 @@ import type {
 } from "../../types";
 import type { Entity } from "../../entities/Entity";
 import { EventType } from "../../types/events";
+import { DeathState } from "../../types/entities";
 import { uuid } from "../../utils";
 import { SystemBase } from "../shared/infrastructure/SystemBase";
 import { PlayerLocal } from "../../entities/player/PlayerLocal";
@@ -185,6 +186,16 @@ export class ClientNetwork extends SystemBase {
   > = {};
   // Cache latest equipment per player so UI can hydrate even if it mounted late
   lastEquipmentByPlayerId: Record<string, Record<string, unknown>> = {};
+  // Cache latest attack style per player so UI can hydrate even if it mounted late
+  // (mirrors skills caching pattern - prevents race condition on page refresh)
+  lastAttackStyleByPlayerId: Record<
+    string,
+    {
+      currentStyle: { id: string };
+      availableStyles: unknown;
+      canChange: boolean;
+    }
+  > = {};
 
   // Spectator mode state
   private spectatorFollowEntity: string | undefined;
@@ -203,6 +214,11 @@ export class ClientNetwork extends SystemBase {
   // Tile-based interpolation for RuneScape-style movement
   // Public to allow position sync on respawn/teleport
   public tileInterpolator: TileInterpolator = new TileInterpolator();
+
+  // Track dead players to prevent position updates from entityModified packets
+  // CRITICAL: Prevents race condition where entityModified packets arrive after death
+  // and overwrite the respawn position for other players
+  private deadPlayers: Set<string> = new Set();
 
   // Embedded viewport configuration (read once at init)
   private embeddedCharacterId: string | null = null;
@@ -964,7 +980,7 @@ export class ClientNetwork extends SystemBase {
       }
     } else {
       // Remote entities - use interpolation for smooth movement
-      // CRITICAL: If mob is DEAD (or entering DEAD state), clear interpolation buffer
+      // CRITICAL: If entity is DEAD (or entering DEAD state), clear interpolation buffer
       // This prevents sliding from stale snapshots that were added before death
       const entityData = entity.serialize();
 
@@ -972,22 +988,35 @@ export class ClientNetwork extends SystemBase {
       // This ensures when mob respawns (changes.aiState='idle'), it's treated as alive
       // and position updates are applied correctly
       const newState = changes.aiState || entityData.aiState;
-      const isDead = newState === "dead";
+      const newEmote =
+        (changes as { e?: string }).e || (entityData as { e?: string }).e;
+
+      // Check both mob death (aiState) and player death (emote)
+      // AAA QUALITY: Also check entity.data.deathState (single source of truth)
+      // AND deadPlayers set for backward compatibility
+      const isDeadMob = newState === "dead" || newEmote === "death";
+      const entityDeathState = (entity.data as { deathState?: DeathState })
+        ?.deathState;
+      const isDeadByEntityState =
+        entityDeathState === DeathState.DYING ||
+        entityDeathState === DeathState.DEAD;
+      const isDeadPlayer = this.deadPlayers.has(id) || isDeadByEntityState;
+      const isDead = isDeadMob || isDeadPlayer;
 
       // Mob AI state tracking (no logging needed in production)
 
-      // Clear interpolation buffer for ANY dead mob (defense in depth)
+      // Clear interpolation buffer for ANY dead entity (defense in depth)
       if (isDead && this.interpolationStates.has(id)) {
         this.interpolationStates.delete(id);
       }
 
-      // CRITICAL: Clear tile state when mob dies - they need death/respawn positions
-      // Without this, position is stripped and mob can't receive death position or respawn position
+      // CRITICAL: Clear tile state when entity dies - they need death/respawn positions
+      // Without this, position is stripped and entity can't receive death position or respawn position
       if (isDead && this.tileInterpolator.hasState(id)) {
         this.tileInterpolator.removeEntity(id);
       }
 
-      // Skip adding new interpolation snapshots for dead mobs
+      // Skip adding new interpolation snapshots for dead entities
       // Also skip for entities using tile movement (tile interpolator handles them)
       const hasTileState = this.tileInterpolator.hasState(id);
       if (hasP && !isDead && !hasTileState) {
@@ -1001,12 +1030,38 @@ export class ClientNetwork extends SystemBase {
         );
       }
 
-      // Still apply non-transform changes immediately
-      // But strip position AND rotation for tile-moving entities
-      // EXCEPTION: Dead entities need position for death/respawn (don't strip)
-      // (let tile interpolator handle them smoothly - server values cause twitching)
-      if (hasTileState && !isDead) {
+      // CRITICAL: For dead PLAYERS specifically, strip position entirely from entityModified
+      // This prevents race condition where stale position packets overwrite respawn position
+      // Dead mobs need position for death animation placement (different from players)
+      if (isDeadPlayer && hasP) {
         const { p, q, ...restChanges } = changes as Record<string, unknown>;
+        entity.modify(restChanges);
+      } else if (hasTileState && !isDead) {
+        // AAA ARCHITECTURE: TileInterpolator is Single Source of Truth for transform
+        // When TileInterpolator controls an entity:
+        // - Position: TileInterpolator handles (strip from entityModified)
+        // - Rotation: Route to TileInterpolator.setCombatRotation() for combat facing
+        //
+        // This prevents race conditions where multiple systems fight over rotation.
+        // TileInterpolator.setCombatRotation() will apply rotation when entity is standing still,
+        // and ignore it when moving (movement direction takes priority, OSRS-accurate).
+        const changesTyped = changes as Record<string, unknown>;
+        const { p, q, ...restChanges } = changesTyped;
+
+        // Route combat rotation to TileInterpolator (single source of truth)
+        if (q && Array.isArray(q) && q.length === 4) {
+          const applied = this.tileInterpolator.setCombatRotation(
+            id,
+            q as number[],
+          );
+          // If TileInterpolator didn't apply it (entity moving), that's intentional
+          // Movement direction wins over combat rotation while moving
+          if (!applied) {
+            // Entity is moving - combat rotation ignored (OSRS-accurate)
+          }
+        }
+
+        // Apply non-transform changes (emote, health, combat state, etc.)
         entity.modify(restChanges);
       } else {
         entity.modify(changes);
@@ -1699,6 +1754,8 @@ export class ClientNetwork extends SystemBase {
     this.pendingModifications.delete(id);
     this.pendingModificationTimestamps.delete(id);
     this.pendingModificationLimitReached.delete(id);
+    // Clean up dead players tracking
+    this.deadPlayers.delete(id);
     // Remove from entities system
     this.world.entities.remove(id);
   };
@@ -1830,27 +1887,162 @@ export class ClientNetwork extends SystemBase {
     isDead: boolean;
     deathPosition?: number[];
   }) => {
-    // Only handle for local player
     const localPlayer = this.world.getPlayer();
-    if (localPlayer && localPlayer.id === data.playerId) {
+    const isLocalPlayer = localPlayer && localPlayer.id === data.playerId;
+
+    if (isLocalPlayer) {
       // Forward to local event system so PlayerLocal can handle it
       this.world.emit(EventType.PLAYER_SET_DEAD, {
         playerId: data.playerId,
         isDead: data.isDead,
         deathPosition: data.deathPosition,
       });
+    } else {
+      // For OTHER players: handle both death and respawn states
+      // AAA QUALITY: Track dead players in deadPlayers Set AND entity.data.deathState
+      // Both are needed for backward compatibility and entity-based checks
+      if (data.isDead) {
+        this.deadPlayers.add(data.playerId);
+      }
+      // NOTE: Do NOT remove from deadPlayers when isDead=false!
+      // The onPlayerRespawned handles removal.
+      // Removing here would undo our position blocking during death animation.
+
+      // Check both main entities and players collection
+      const entity =
+        this.world.entities.get(data.playerId) ||
+        this.world.entities.players?.get(data.playerId);
+
+      // CRITICAL FIX: Clear tileInterpolatorControlled flag so position updates work
+      // This flag was blocking PlayerRemote.modify() and update() from applying positions
+      if (entity?.data) {
+        entity.data.tileInterpolatorControlled = false;
+      }
+
+      if (data.isDead) {
+        // Player is dying - clear interpolation state and show death animation
+        if (this.tileInterpolator.hasState(data.playerId)) {
+          this.tileInterpolator.removeEntity(data.playerId);
+        }
+        if (this.interpolationStates.has(data.playerId)) {
+          this.interpolationStates.delete(data.playerId);
+        }
+
+        // AAA QUALITY: Set entity.data.deathState (single source of truth)
+        if (entity?.data) {
+          entity.data.deathState = DeathState.DYING;
+          if (data.deathPosition) {
+            // Handle both array [x,y,z] and object {x,y,z} formats
+            if (Array.isArray(data.deathPosition)) {
+              entity.data.deathPosition = data.deathPosition as [
+                number,
+                number,
+                number,
+              ];
+            } else {
+              const pos = data.deathPosition as {
+                x: number;
+                y: number;
+                z: number;
+              };
+              entity.data.deathPosition = [pos.x, pos.y, pos.z];
+            }
+          }
+        }
+
+        // CRITICAL FIX: Set entity position to death position AND show death animation
+        // Without this, the entity stays at whatever interpolated position it was at
+        // on the killer's screen, not where the player actually died
+        if (entity && data.deathPosition) {
+          // Handle both array [x,y,z] and object {x,y,z} formats
+          let x: number, y: number, z: number;
+          let posArray: [number, number, number];
+          if (Array.isArray(data.deathPosition)) {
+            [x, y, z] = data.deathPosition;
+            posArray = data.deathPosition as [number, number, number];
+          } else {
+            const pos = data.deathPosition as {
+              x: number;
+              y: number;
+              z: number;
+            };
+            x = pos.x;
+            y = pos.y;
+            z = pos.z;
+            posArray = [x, y, z];
+          }
+
+          // Apply death position and emote together
+          entity.modify({
+            p: posArray,
+            e: "death",
+            visible: true,
+          });
+
+          // Also update position directly for immediate visual feedback
+          if (entity.position) {
+            entity.position.x = x;
+            entity.position.y = y;
+            entity.position.z = z;
+          }
+          if (entity.node?.position) {
+            entity.node.position.set(x, y, z);
+          }
+
+          // Update base position for VRM avatars
+          const entityWithBase = entity as {
+            base?: {
+              position: { set: (x: number, y: number, z: number) => void };
+            };
+          };
+          if (entityWithBase.base?.position) {
+            entityWithBase.base.position.set(x, y, z);
+          }
+
+          // Update lerp position to prevent interpolation fighting
+          const playerRemote = entity as {
+            lerpPosition?: {
+              pushArray: (arr: number[], teleport: number | null) => void;
+            };
+            teleport?: number;
+          };
+          if (playerRemote.lerpPosition) {
+            playerRemote.teleport = (playerRemote.teleport || 0) + 1;
+            playerRemote.lerpPosition.pushArray(
+              posArray,
+              playerRemote.teleport,
+            );
+          }
+        } else if (entity) {
+          // Fallback if no death position provided
+          entity.modify({ e: "death", visible: true });
+        }
+      } else {
+        // Player is respawning (isDead = false) - clear stale state
+        // NOTE: Do NOT reset emote to idle here! The killed player may click
+        // respawn before the death animation finishes for OTHER players.
+        // Let onPlayerRespawned handle setting idle emote when position updates.
+        if (this.tileInterpolator.hasState(data.playerId)) {
+          this.tileInterpolator.removeEntity(data.playerId);
+        }
+        if (this.interpolationStates.has(data.playerId)) {
+          this.interpolationStates.delete(data.playerId);
+        }
+        // Death animation continues until onPlayerRespawned sets idle emote
+      }
     }
   };
 
   onPlayerRespawned = (data: {
     playerId: string;
-    spawnPosition: number[];
+    spawnPosition: number[] | { x: number; y: number; z: number };
     townName?: string;
     deathLocation?: number[];
   }) => {
-    // Only handle for local player
     const localPlayer = this.world.getPlayer();
-    if (localPlayer && localPlayer.id === data.playerId) {
+    const isLocalPlayer = localPlayer && localPlayer.id === data.playerId;
+
+    if (isLocalPlayer) {
       // Forward to local event system so PlayerLocal can handle it
       this.world.emit(EventType.PLAYER_RESPAWNED, {
         playerId: data.playerId,
@@ -1858,6 +2050,89 @@ export class ClientNetwork extends SystemBase {
         townName: data.townName,
         deathLocation: data.deathLocation,
       });
+    } else {
+      // SERVER-AUTHORITATIVE DEATH: Server now freezes position broadcasts during death animation
+      // Client just needs to apply the spawn position when PLAYER_RESPAWNED arrives
+
+      // Remove from dead players tracking - server has finished death animation timing
+      this.deadPlayers.delete(data.playerId);
+
+      // Clear any stale tile/interpolation state
+      if (this.tileInterpolator.hasState(data.playerId)) {
+        this.tileInterpolator.removeEntity(data.playerId);
+      }
+      if (this.interpolationStates.has(data.playerId)) {
+        this.interpolationStates.delete(data.playerId);
+      }
+
+      // Convert spawnPosition to array format if needed
+      let posArray: [number, number, number];
+      if (Array.isArray(data.spawnPosition)) {
+        posArray = data.spawnPosition as [number, number, number];
+      } else {
+        const sp = data.spawnPosition as { x: number; y: number; z: number };
+        posArray = [sp.x, sp.y, sp.z];
+      }
+
+      // Apply respawn position and reset emote to idle
+      const entity =
+        this.world.entities.get(data.playerId) ||
+        this.world.entities.players?.get(data.playerId);
+
+      if (entity) {
+        // AAA QUALITY: Clear entity.data.deathState (single source of truth)
+        if (entity.data) {
+          entity.data.tileInterpolatorControlled = false;
+          entity.data.deathState = DeathState.ALIVE;
+          entity.data.deathPosition = undefined;
+        }
+
+        // Update lerpPosition with teleport snap
+        const playerRemote = entity as {
+          lerpPosition?: {
+            pushArray: (arr: number[], teleport: number | null) => void;
+          };
+          teleport?: number;
+        };
+        if (playerRemote.lerpPosition) {
+          playerRemote.teleport = (playerRemote.teleport || 0) + 1;
+          playerRemote.lerpPosition.pushArray(posArray, playerRemote.teleport);
+        }
+
+        // Apply position and idle emote
+        entity.modify({
+          p: posArray,
+          e: "idle",
+          visible: true,
+        });
+
+        // Direct position updates for immediate visual feedback
+        if (entity.position) {
+          entity.position.x = posArray[0];
+          entity.position.y = posArray[1];
+          entity.position.z = posArray[2];
+        }
+        if (entity.node?.position) {
+          entity.node.position.set(posArray[0], posArray[1], posArray[2]);
+        }
+
+        const entityWithBase = entity as {
+          base?: {
+            position: { set: (x: number, y: number, z: number) => void };
+            updateTransform?: () => void;
+          };
+        };
+        if (entityWithBase.base?.position) {
+          entityWithBase.base.position.set(
+            posArray[0],
+            posArray[1],
+            posArray[2],
+          );
+          if (entityWithBase.base.updateTransform) {
+            entityWithBase.base.updateTransform();
+          }
+        }
+      }
     }
   };
 
@@ -1868,12 +2143,19 @@ export class ClientNetwork extends SystemBase {
     canChange: boolean;
     cooldownRemaining?: number;
   }) => {
-    // Only handle for local player
-    const localPlayer = this.world.getPlayer();
-    if (localPlayer && localPlayer.id === data.playerId) {
-      // Forward to local event system so UI can update
-      this.world.emit(EventType.UI_ATTACK_STYLE_CHANGED, data);
-    }
+    // Cache for late-mounting UI (same pattern as skills)
+    // This ensures CombatPanel gets correct value even if it mounts after packet arrives
+    this.lastAttackStyleByPlayerId[data.playerId] = {
+      currentStyle: data.currentStyle as { id: string },
+      availableStyles: data.availableStyles,
+      canChange: data.canChange,
+    };
+
+    // Forward to local event system so UI can update
+    // CRITICAL: Emit unconditionally - the packet is already filtered server-side
+    // for this player, and waiting for localPlayer causes race conditions where
+    // the packet arrives before the player entity is created (style not synced)
+    this.world.emit(EventType.UI_ATTACK_STYLE_CHANGED, data);
   };
 
   onAttackStyleUpdate = (data: {
@@ -1882,12 +2164,16 @@ export class ClientNetwork extends SystemBase {
     availableStyles: unknown;
     canChange: boolean;
   }) => {
-    // Only handle for local player
-    const localPlayer = this.world.getPlayer();
-    if (localPlayer && localPlayer.id === data.playerId) {
-      // Forward to local event system so UI can update
-      this.world.emit(EventType.UI_ATTACK_STYLE_UPDATE, data);
-    }
+    // Cache for late-mounting UI (same pattern as skills)
+    this.lastAttackStyleByPlayerId[data.playerId] = {
+      currentStyle: data.currentStyle as { id: string },
+      availableStyles: data.availableStyles,
+      canChange: data.canChange,
+    };
+
+    // Forward to local event system so UI can update
+    // CRITICAL: Emit unconditionally - same reason as onAttackStyleChanged
+    this.world.emit(EventType.UI_ATTACK_STYLE_UPDATE, data);
   };
 
   onAutoRetaliateChanged = (data: { enabled: boolean }) => {
@@ -2248,6 +2534,8 @@ export class ClientNetwork extends SystemBase {
     this.pendingModifications.clear();
     this.pendingModificationTimestamps.clear();
     this.pendingModificationLimitReached.clear();
+    // Clear dead players tracking
+    this.deadPlayers.clear();
   };
 
   // Plugin-specific upload method

@@ -109,11 +109,7 @@ export class ZoneDetectionSystem extends SystemBase {
         ) {
           // Found matching area
           const isSafe = area.safeZone === true;
-          interface AreaWithPvP extends WorldArea {
-            pvpEnabled?: boolean;
-          }
-          const areaWithPvP = area as AreaWithPvP;
-          const isPvP = areaWithPvP.pvpEnabled === true;
+          const isPvP = area.pvpEnabled === true;
           const isWild = !isSafe || isPvP;
 
           let type: ZoneType;
