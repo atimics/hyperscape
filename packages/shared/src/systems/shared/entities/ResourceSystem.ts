@@ -60,6 +60,10 @@ export class ResourceSystem extends SystemBase {
   // Terrain system reference for height lookups
   private terrainSystem: TerrainSystem | null = null;
 
+  // ===== SECURITY: Rate limiting to prevent gather request spam =====
+  private gatherRateLimits = new Map<PlayerID, number>();
+  private static readonly RATE_LIMIT_MS = 600; // 1 tick - minimum time between gather requests
+
   constructor(world: World) {
     super(world, {
       name: "resource",
@@ -248,6 +252,18 @@ export class ResourceSystem extends SystemBase {
     // This must be in start() not init() because network broadcast isn't ready during init()
     if (this.world.isServer) {
       this.initializeWorldAreaResources();
+
+      // SECURITY: Periodic cleanup of stale rate limit entries (every 60 seconds)
+      // Prevents memory leak from disconnected players
+      this.createInterval(() => {
+        const now = Date.now();
+        const staleThreshold = 10000; // 10 seconds
+        for (const [playerId, timestamp] of this.gatherRateLimits) {
+          if (now - timestamp > staleThreshold) {
+            this.gatherRateLimits.delete(playerId);
+          }
+        }
+      }, 60000);
     }
   }
 
@@ -675,6 +691,25 @@ export class ResourceSystem extends SystemBase {
     }
 
     const playerId = createPlayerID(data.playerId);
+
+    // ===== SECURITY: Rate limiting - prevent gather request spam =====
+    const now = Date.now();
+    const lastAttempt = this.gatherRateLimits.get(playerId);
+    if (lastAttempt && now - lastAttempt < ResourceSystem.RATE_LIMIT_MS) {
+      // Silently drop rapid requests - don't send error to prevent timing attacks
+      return;
+    }
+    this.gatherRateLimits.set(playerId, now);
+
+    // ===== SECURITY: Validate resource ID format =====
+    if (!this.isValidResourceId(data.resourceId)) {
+      console.warn(
+        "[ResourceSystem] Invalid resource ID format:",
+        data.resourceId,
+      );
+      return;
+    }
+
     const resourceId = createResourceID(data.resourceId);
 
     let resource = this.resources.get(resourceId);
@@ -900,7 +935,10 @@ export class ResourceSystem extends SystemBase {
   }
 
   private cleanupPlayerGathering(playerId: string): void {
-    this.activeGathering.delete(createPlayerID(playerId));
+    const pid = createPlayerID(playerId);
+    this.activeGathering.delete(pid);
+    // SECURITY: Clean up rate limit tracking on disconnect
+    this.gatherRateLimits.delete(pid);
   }
 
   /**
@@ -970,13 +1008,15 @@ export class ResourceSystem extends SystemBase {
       // Only process when it's time for the next attempt (tick-based)
       if (tickNumber < session.nextAttemptTick) continue;
 
-      // Proximity check before attempt
+      // SECURITY: Server-authoritative proximity check
+      // Position is fetched from world state, never from client payload
       const p = this.world.getPlayer?.(playerId);
       const playerPos =
         p && (p as { position?: { x: number; y: number; z: number } }).position
           ? (p as { position: { x: number; y: number; z: number } }).position
           : null;
       if (!playerPos || calculateDistance(playerPos, resource.position) > 4.0) {
+        // Player moved away from resource - cancel gathering session
         this.emitTypedEvent(EventType.RESOURCE_GATHERING_STOPPED, {
           playerId: playerId,
           resourceId: session.resourceId,
@@ -1235,6 +1275,24 @@ export class ResourceSystem extends SystemBase {
 
     // Fallback to first drop if chances don't sum to 1.0
     return drops[0];
+  }
+
+  /**
+   * SECURITY: Validate resource ID format to prevent injection attacks
+   * Valid IDs are alphanumeric with underscores/hyphens, reasonable length
+   */
+  private isValidResourceId(resourceId: string): boolean {
+    if (!resourceId || typeof resourceId !== "string") {
+      return false;
+    }
+    if (resourceId.length > 100) {
+      return false;
+    }
+    // Only allow alphanumeric, underscores, hyphens, and periods
+    if (!/^[a-zA-Z0-9_.-]+$/.test(resourceId)) {
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -1552,6 +1610,9 @@ export class ResourceSystem extends SystemBase {
     // Clear all resource data
     this.resources.clear();
     this.manifestResourceIds.clear();
+
+    // SECURITY: Clear rate limit tracking
+    this.gatherRateLimits.clear();
 
     // Call parent cleanup (automatically clears all tracked timers, intervals, and listeners)
     super.destroy();

@@ -2,6 +2,9 @@
  * Resource Handler
  *
  * Handles resource gathering events from clients
+ *
+ * SECURITY: Always uses server-authoritative player position.
+ * Client-provided position is ignored to prevent position spoofing exploits.
  */
 
 import type { ServerSocket } from "../../../shared/types";
@@ -22,14 +25,15 @@ export function handleResourceGather(
 
   const payload = data as {
     resourceId?: string;
-    playerPosition?: { x: number; y: number; z: number };
+    // Note: playerPosition from client is intentionally ignored for security
   };
   if (!payload.resourceId) {
     console.warn("[Resources] handleResourceGather: no resourceId in payload");
     return;
   }
 
-  const playerPosition = payload.playerPosition || {
+  // SECURITY: Always use server-authoritative position, never trust client
+  const playerPosition = {
     x: playerEntity.position.x,
     y: playerEntity.position.y,
     z: playerEntity.position.z,
