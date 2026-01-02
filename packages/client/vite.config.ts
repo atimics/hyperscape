@@ -183,8 +183,32 @@ export default defineConfig(({ mode }) => {
       "process.env.TERRAIN_SEED": JSON.stringify(env.TERRAIN_SEED || "0"),
       "process.env.VITEST": "undefined", // Not in browser
 
-      // Note: import.meta.env.PUBLIC_* variables are auto-exposed by Vite (via envPrefix above)
-      // We don't need to manually define them here - Vite handles it automatically
+      // Production API URLs - explicitly defined for production builds
+      // These override the defaults in code when building for production
+      "import.meta.env.PUBLIC_API_URL": JSON.stringify(
+        env.PUBLIC_API_URL ||
+          (mode === "production"
+            ? "https://api.hyperscape.lol"
+            : "http://localhost:5555"),
+      ),
+      "import.meta.env.PUBLIC_WS_URL": JSON.stringify(
+        env.PUBLIC_WS_URL ||
+          (mode === "production"
+            ? "wss://api.hyperscape.lol/ws"
+            : "ws://localhost:5555/ws"),
+      ),
+      "import.meta.env.PUBLIC_CDN_URL": JSON.stringify(
+        env.PUBLIC_CDN_URL ||
+          (mode === "production"
+            ? "https://d20g7vd4m53hpb.cloudfront.net"
+            : "http://localhost:8080"),
+      ),
+      "import.meta.env.PUBLIC_APP_URL": JSON.stringify(
+        env.PUBLIC_APP_URL ||
+          (mode === "production"
+            ? "https://hyperscape.lol"
+            : "http://localhost:3333"),
+      ),
     },
     server: {
       port: Number(env.VITE_PORT) || 3333,

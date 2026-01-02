@@ -59,22 +59,39 @@ export async function createHttpServer(
   const fastify = Fastify({ logger: { level: "error" } });
 
   // Configure CORS for development and production
+  const allowedOrigins = [
+    // Production domains
+    "https://hyperscape.lol",
+    "https://api.hyperscape.lol",
+    // Development
+    "http://localhost:4001", // ElizaOS API
+    "http://localhost:3333", // Game Client
+    "http://localhost:5555", // Game Server
+    "http://localhost:7777",
+    // Dynamic patterns
+    /^https?:\/\/localhost:\d+$/,
+    /^https:\/\/.+\.farcaster\.xyz$/,
+    /^https:\/\/.+\.warpcast\.com$/,
+    /^https:\/\/.+\.privy\.io$/,
+    /^https:\/\/.+\.hyperscape\.lol$/,
+  ];
+
+  // Add custom domain from env if set
+  if (process.env.PUBLIC_APP_URL) {
+    allowedOrigins.push(process.env.PUBLIC_APP_URL);
+  }
+
   await fastify.register(cors, {
-    origin: [
-      "http://localhost:4001", // ElizaOS API
-      "http://localhost:3333", // Game Client
-      "http://localhost:5555", // Game Server
-      "http://localhost:7777",
-      /^https?:\/\/localhost:\d+$/,
-      /^https:\/\/.+\.farcaster\.xyz$/,
-      /^https:\/\/.+\.warpcast\.com$/,
-      /^https:\/\/.+\.privy\.io$/,
-      true,
-    ],
+    origin: allowedOrigins,
     credentials: true,
-    methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS"],
+    methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
   });
-  console.log("[HTTP] ✅ CORS configured");
+  console.log(
+    "[HTTP] ✅ CORS configured for:",
+    allowedOrigins.slice(0, 4).join(", "),
+    "...",
+  );
 
   // Configure rate limiting for production security
   if (isRateLimitEnabled()) {

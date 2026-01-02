@@ -1,4 +1,6 @@
+import { GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
 import React, { useState, useEffect } from "react";
+import { GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
 import { Agent } from "../../screens/DashboardScreen";
 import {
   ChevronDown,
@@ -78,7 +80,7 @@ export const AgentGoalPanel: React.FC<AgentGoalPanelProps> = ({
     try {
       // Call Hyperscape server API on port 5555
       const response = await fetch(
-        `http://localhost:5555/api/agents/${agent.id}/goal`,
+        `${GAME_API_URL}/api/agents/${agent.id}/goal`,
       );
 
       if (!response.ok) {
@@ -107,7 +109,7 @@ export const AgentGoalPanel: React.FC<AgentGoalPanelProps> = ({
     setSettingGoal(true);
     try {
       const response = await fetch(
-        `http://localhost:5555/api/agents/${agent.id}/goal`,
+        `${GAME_API_URL}/api/agents/${agent.id}/goal`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -135,7 +137,7 @@ export const AgentGoalPanel: React.FC<AgentGoalPanelProps> = ({
   const handleUnlockGoal = async () => {
     try {
       const response = await fetch(
-        `http://localhost:5555/api/agents/${agent.id}/goal/unlock`,
+        `${GAME_API_URL}/api/agents/${agent.id}/goal/unlock`,
         { method: "POST" },
       );
 

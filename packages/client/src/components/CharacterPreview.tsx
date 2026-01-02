@@ -186,9 +186,10 @@ export const CharacterPreview: React.FC<CharacterPreviewProps> = ({
           }
         }
 
-        const waveUrl =
-          "http://localhost:8080/emotes/emote-waving-both-hands.glb";
-        const idleUrl = "http://localhost:8080/emotes/emote-idle.glb";
+        const cdnUrl =
+          import.meta.env.PUBLIC_CDN_URL || "http://localhost:8080";
+        const waveUrl = `${cdnUrl}/emotes/emote-waving-both-hands.glb`;
+        const idleUrl = `${cdnUrl}/emotes/emote-idle.glb`;
 
         console.log("[CharacterPreview] Loading animations...");
         const [waveGltf, idleGltf] = await Promise.all([

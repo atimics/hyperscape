@@ -32,7 +32,7 @@ import {
 import React from "react";
 import { CharacterPreview } from "../components/CharacterPreview";
 import { usePrivy, useCreateWallet } from "@privy-io/react-auth";
-import { ELIZAOS_API } from "@/lib/api-config";
+import { ELIZAOS_API, GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
 
 type Character = {
   id: string;
@@ -105,7 +105,7 @@ const useIntroMusic = (enabled: boolean) => {
       const track = Math.random() > 0.5 ? "1.mp3" : "2.mp3";
       setCurrentTrack(track);
 
-      const cdnUrl = "http://localhost:8080"; // CDN URL
+      const cdnUrl = import.meta.env.PUBLIC_CDN_URL || "http://localhost:8080";
       const musicPath = `${cdnUrl}/audio/music/intro/${track}`;
 
       // Resume audio context if suspended (browser autoplay policy)
@@ -323,7 +323,7 @@ export function CharacterSelectScreen({
 
       setLoadingTemplates(true);
       try {
-        const response = await fetch("http://localhost:5555/api/templates");
+        const response = await fetch(`${GAME_API_URL}/api/templates`);
         if (response.ok) {
           const data = await response.json();
           if (data.success && data.templates) {
@@ -528,7 +528,7 @@ export function CharacterSelectScreen({
               // Step 1: Generate JWT
               console.log("[CharacterSelect] 🔑 Generating JWT for agent...");
               const credentialsResponse = await fetch(
-                "http://localhost:5555/api/agents/credentials",
+                `${GAME_API_URL}/api/agents/credentials`,
                 {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
@@ -621,7 +621,7 @@ export function CharacterSelectScreen({
                     HYPERSCAPE_AUTH_TOKEN: credentials.authToken,
                     HYPERSCAPE_CHARACTER_ID: c.id,
                     HYPERSCAPE_ACCOUNT_ID: accountId,
-                    HYPERSCAPE_SERVER_URL: "ws://localhost:5555/ws",
+                    HYPERSCAPE_SERVER_URL: GAME_WS_URL,
                     wallet: c.wallet || "",
                   },
                 },
@@ -678,7 +678,7 @@ export function CharacterSelectScreen({
               );
               try {
                 const mappingResponse = await fetch(
-                  "http://localhost:5555/api/agents/mappings",
+                  `${GAME_API_URL}/api/agents/mappings`,
                   {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -826,7 +826,7 @@ export function CharacterSelectScreen({
                 throw new Error("No account ID - user not authenticated");
               }
               const hyperscapeResponse = await fetch(
-                `http://localhost:5555/api/characters/${accountId}`,
+                `${GAME_API_URL}/api/characters/${accountId}`,
               );
 
               let avatarUrl = "";
@@ -1307,9 +1307,7 @@ export function CharacterSelectScreen({
                       {/* 3D Preview Section - Compact height */}
                       <div className="relative w-full h-48 bg-black/60 rounded-lg overflow-hidden border border-[#f2d08a]/30">
                         <CharacterPreview
-                          vrmUrl={
-                            AVATAR_OPTIONS[selectedAvatarIndex].previewUrl
-                          }
+                          vrmUrl={`${import.meta.env.PUBLIC_CDN_URL || "http://localhost:8080"}${AVATAR_OPTIONS[selectedAvatarIndex].previewPath}`}
                           className="w-full h-full"
                         />
 

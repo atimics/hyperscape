@@ -1,4 +1,6 @@
+import { GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
 import {
   THREE,
   createClientWorld,
@@ -163,8 +165,7 @@ export function GameClient({ wsUrl, onSetup }: GameClientProps) {
 
       // Direct connection - no Vite proxy
       // Default to game server on 5555, CDN on 8080
-      const finalWsUrl =
-        wsUrl || import.meta.env.PUBLIC_WS_URL || "ws://localhost:5555/ws";
+      const finalWsUrl = wsUrl || import.meta.env.PUBLIC_WS_URL || GAME_WS_URL;
 
       // Always use absolute CDN URL for all assets
       const cdnUrl = import.meta.env.PUBLIC_CDN_URL || "http://localhost:8080";

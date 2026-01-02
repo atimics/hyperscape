@@ -1,4 +1,6 @@
+import { GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
 import React, { useEffect, useState } from "react";
+import { GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
 import { DashboardLayout } from "../components/dashboard/DashboardLayout";
 import { AgentChat } from "../components/dashboard/AgentChat";
 import { AgentViewportChat } from "../components/dashboard/AgentViewportChat";
@@ -94,7 +96,7 @@ export const DashboardScreen: React.FC = () => {
       if (userAccountId) {
         try {
           const mappingResponse = await fetch(
-            `http://localhost:5555/api/agents/mappings/${userAccountId}`,
+            `${GAME_API_URL}/api/agents/mappings/${userAccountId}`,
           );
 
           if (mappingResponse.ok) {
@@ -276,7 +278,7 @@ export const DashboardScreen: React.FC = () => {
       );
       try {
         const getMappingResponse = await fetch(
-          `http://localhost:5555/api/agents/mappings/${agentId}`,
+          `${GAME_API_URL}/api/agents/mappings/${agentId}`,
         );
 
         if (getMappingResponse.ok) {
@@ -309,7 +311,7 @@ export const DashboardScreen: React.FC = () => {
         `[Dashboard] 🗑️  Step 1/2: Deleting mapping from Hyperscape database...`,
       );
       const mappingResponse = await fetch(
-        `http://localhost:5555/api/agents/mappings/${agentId}`,
+        `${GAME_API_URL}/api/agents/mappings/${agentId}`,
         {
           method: "DELETE",
         },
@@ -363,7 +365,7 @@ export const DashboardScreen: React.FC = () => {
 
         try {
           const rollbackResponse = await fetch(
-            `http://localhost:5555/api/agents/mappings`,
+            `${GAME_API_URL}/api/agents/mappings`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
