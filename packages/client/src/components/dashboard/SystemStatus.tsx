@@ -249,7 +249,7 @@ export const SystemStatus: React.FC = () => {
               <div className="flex items-center gap-2 py-1">
                 <div className="w-2 h-2 rounded-full bg-green-400"></div>
                 <span className="text-[#e8ebf4]/80 font-mono">
-                  http://localhost:3333
+                  {window.location.origin}
                 </span>
                 <span className="text-[#f2d08a]/40">Dashboard (Current)</span>
               </div>

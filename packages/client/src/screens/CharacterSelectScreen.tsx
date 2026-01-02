@@ -197,7 +197,7 @@ const MusicToggleButton = () => {
 const AgentDashboardButton = () => {
   return (
     <a
-      href="http://localhost:3333/?page=dashboard"
+          href={`${window.location.origin}/?page=dashboard`}
       target="_blank"
       rel="noopener noreferrer"
       className="fixed bottom-4 right-4 z-50 bg-black/60 hover:bg-black/80 text-[#f2d08a] rounded-lg px-4 py-2 border border-[#f2d08a]/30 hover:border-[#f2d08a]/60 transition-all flex items-center gap-2 backdrop-blur-sm shadow-lg"

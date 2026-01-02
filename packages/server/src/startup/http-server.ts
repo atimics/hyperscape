@@ -59,23 +59,26 @@ export async function createHttpServer(
   const fastify = Fastify({ logger: { level: "error" } });
 
   // Configure CORS for development and production
+  const elizaOSUrl = process.env.ELIZAOS_URL || process.env.ELIZAOS_API_URL || "http://localhost:4001";
+  const clientUrl = process.env.CLIENT_URL || process.env.PUBLIC_APP_URL || "http://localhost:3333";
+  const serverUrl = process.env.SERVER_URL || `http://localhost:${config.port}`;
+  
   const allowedOrigins = [
     // Production domains
     "https://hyperscape.lol",
     "https://api.hyperscape.lol",
-    // Development
-    "http://localhost:4001", // ElizaOS API
-    "http://localhost:3333", // Game Client
-    "http://localhost:5555", // Game Server
-    "http://localhost:7777",
-    // Dynamic patterns
+    // Development (from env vars or defaults)
+    elizaOSUrl, // ElizaOS API
+    clientUrl, // Game Client
+    serverUrl, // Game Server
+    // Dynamic patterns (for localhost dev)
     /^https?:\/\/localhost:\d+$/,
     /^https:\/\/.+\.farcaster\.xyz$/,
     /^https:\/\/.+\.warpcast\.com$/,
     /^https:\/\/.+\.privy\.io$/,
     /^https:\/\/.+\.hyperscape\.lol$/,
   ];
-
+  
   // Add custom domain from env if set
   if (process.env.PUBLIC_APP_URL) {
     allowedOrigins.push(process.env.PUBLIC_APP_URL);
