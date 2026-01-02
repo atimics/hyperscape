@@ -1468,12 +1468,12 @@ export class ResourceSystem extends SystemBase {
   private getToolCategory(toolRequired: string): string {
     const lowerTool = toolRequired.toLowerCase();
 
-    // Handle common patterns
-    if (lowerTool.includes("hatchet") || lowerTool.includes("axe")) {
-      return "hatchet";
-    }
+    // Handle common patterns (check pickaxe before axe since "pickaxe" contains "axe")
     if (lowerTool.includes("pickaxe") || lowerTool.includes("pick")) {
       return "pickaxe";
+    }
+    if (lowerTool.includes("hatchet") || lowerTool.includes("axe")) {
+      return "hatchet";
     }
     if (
       lowerTool.includes("fishing") ||
