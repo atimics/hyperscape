@@ -14,6 +14,7 @@ import type { TerrainResourceSpawnPoint } from "../../../types/world/terrain";
 import { TICK_DURATION_MS } from "../movement/TileSystem";
 import { getExternalResource } from "../../../utils/ExternalAssetUtils";
 import { ALL_WORLD_AREAS } from "../../../data/world-areas";
+import { GATHERING_CONSTANTS } from "../../../constants/GatheringConstants";
 
 /**
  * Resource System
@@ -78,7 +79,6 @@ export class ResourceSystem extends SystemBase {
 
   // ===== SECURITY: Rate limiting to prevent gather request spam =====
   private gatherRateLimits = new Map<PlayerID, number>();
-  private static readonly RATE_LIMIT_MS = 600; // 1 tick - minimum time between gather requests
 
   // ===== TOOL TIER SYSTEM (generalized for all gathering skills) =====
   /**
@@ -383,17 +383,16 @@ export class ResourceSystem extends SystemBase {
     if (this.world.isServer) {
       this.initializeWorldAreaResources();
 
-      // SECURITY: Periodic cleanup of stale rate limit entries (every 60 seconds)
+      // SECURITY: Periodic cleanup of stale rate limit entries
       // Prevents memory leak from disconnected players
       this.createInterval(() => {
         const now = Date.now();
-        const staleThreshold = 10000; // 10 seconds
         for (const [playerId, timestamp] of this.gatherRateLimits) {
-          if (now - timestamp > staleThreshold) {
+          if (now - timestamp > GATHERING_CONSTANTS.STALE_RATE_LIMIT_MS) {
             this.gatherRateLimits.delete(playerId);
           }
         }
-      }, 60000);
+      }, GATHERING_CONSTANTS.RATE_LIMIT_CLEANUP_INTERVAL_MS);
     }
   }
 
@@ -825,7 +824,7 @@ export class ResourceSystem extends SystemBase {
     // ===== SECURITY: Rate limiting - prevent gather request spam =====
     const now = Date.now();
     const lastAttempt = this.gatherRateLimits.get(playerId);
-    if (lastAttempt && now - lastAttempt < ResourceSystem.RATE_LIMIT_MS) {
+    if (lastAttempt && now - lastAttempt < GATHERING_CONSTANTS.RATE_LIMIT_MS) {
       // Silently drop rapid requests - don't send error to prevent timing attacks
       return;
     }
@@ -865,7 +864,10 @@ export class ResourceSystem extends SystemBase {
           nearest = r;
         }
       }
-      if (nearest && nearestDist < 15) {
+      if (
+        nearest &&
+        nearestDist < GATHERING_CONSTANTS.PROXIMITY_SEARCH_RADIUS
+      ) {
         console.warn(
           "[ResourceSystem] Matched nearest resource",
           nearest.id,
@@ -1142,7 +1144,11 @@ export class ResourceSystem extends SystemBase {
         p && (p as { position?: { x: number; y: number; z: number } }).position
           ? (p as { position: { x: number; y: number; z: number } }).position
           : null;
-      if (!playerPos || calculateDistance(playerPos, resource.position) > 4.0) {
+      if (
+        !playerPos ||
+        calculateDistance(playerPos, resource.position) >
+          GATHERING_CONSTANTS.DEFAULT_INTERACTION_RANGE
+      ) {
         // Player moved away from resource - cancel gathering session
         this.emitTypedEvent(EventType.RESOURCE_GATHERING_STOPPED, {
           playerId: playerId,
@@ -1343,12 +1349,15 @@ export class ResourceSystem extends SystemBase {
   ): number {
     const levelDelta = Math.max(0, skillLevel - tuned.levelRequired);
     // Up to ~30% faster at high level delta
-    const levelFactor = Math.min(0.3, levelDelta * 0.005);
+    const levelFactor = Math.min(
+      GATHERING_CONSTANTS.MAX_LEVEL_FACTOR,
+      levelDelta * GATHERING_CONSTANTS.LEVEL_FACTOR_PER_LEVEL,
+    );
     const baseTicks = Math.ceil(tuned.baseCycleTicks * (1 - levelFactor));
-    // Apply tool multiplier (better axes = fewer ticks)
+    // Apply tool multiplier (better tools = fewer ticks)
     const finalTicks = Math.floor(baseTicks * toolMultiplier);
-    // Minimum 2 ticks (1.2s) to prevent instant gathering
-    return Math.max(2, finalTicks);
+    // Minimum ticks to prevent instant gathering
+    return Math.max(GATHERING_CONSTANTS.MINIMUM_CYCLE_TICKS, finalTicks);
   }
 
   /**
@@ -1362,10 +1371,15 @@ export class ResourceSystem extends SystemBase {
     skillLevel: number,
     tuned: { levelRequired: number },
   ): number {
-    // Base 35% at requirement, +1% per level above, clamp [0.25, 0.85]
+    // Base rate at requirement level, +bonus per level above, clamped to [min, max]
     const delta = skillLevel - tuned.levelRequired;
-    const base = 0.35 + Math.max(0, delta) * 0.01;
-    return Math.max(0.25, Math.min(0.85, base));
+    const base =
+      GATHERING_CONSTANTS.BASE_SUCCESS_RATE +
+      Math.max(0, delta) * GATHERING_CONSTANTS.PER_LEVEL_SUCCESS_BONUS;
+    return Math.max(
+      GATHERING_CONSTANTS.MIN_SUCCESS_RATE,
+      Math.min(GATHERING_CONSTANTS.MAX_SUCCESS_RATE, base),
+    );
   }
 
   /**
@@ -1409,11 +1423,11 @@ export class ResourceSystem extends SystemBase {
     if (!resourceId || typeof resourceId !== "string") {
       return false;
     }
-    if (resourceId.length > 100) {
+    if (resourceId.length > GATHERING_CONSTANTS.MAX_RESOURCE_ID_LENGTH) {
       return false;
     }
     // Only allow alphanumeric, underscores, hyphens, and periods
-    if (!/^[a-zA-Z0-9_.-]+$/.test(resourceId)) {
+    if (!GATHERING_CONSTANTS.VALID_RESOURCE_ID_PATTERN.test(resourceId)) {
       return false;
     }
     return true;
