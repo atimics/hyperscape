@@ -22,11 +22,7 @@ export interface Resource {
   respawnTime: number; // Milliseconds
   isAvailable: boolean;
   lastDepleted: number;
-  drops: Array<{
-    itemId: string;
-    quantity: number;
-    chance: number; // 0-1
-  }>;
+  drops: ResourceDrop[];
 }
 
 /**

@@ -756,29 +756,43 @@ export class ResourceSystem extends SystemBase {
       return;
     }
 
-    // Tool check (RuneScape-style: any hatchet qualifies; tier affects speed)
-    if (resource.skillRequired === "woodcutting") {
-      const axeInfo = this.getBestAxeTier(data.playerId);
-      if (!axeInfo) {
-        this.sendChat(data.playerId, `You need an axe to chop this tree.`);
+    // Tool check using manifest's toolRequired field (RuneScape-style: any tier qualifies; tier affects speed)
+    if (resource.toolRequired) {
+      const toolCategory = this.getToolCategory(resource.toolRequired);
+      const hasTool = this.playerHasToolCategory(data.playerId, toolCategory);
+
+      if (!hasTool) {
+        const toolName = this.getToolDisplayName(toolCategory);
+        this.sendChat(
+          data.playerId,
+          `You need a ${toolName} to harvest the ${resource.name.toLowerCase()}.`,
+        );
         this.emitTypedEvent(EventType.UI_MESSAGE, {
           playerId: data.playerId,
-          message: `You need an axe to chop this tree.`,
+          message: `You need a ${toolName} to harvest the ${resource.name.toLowerCase()}.`,
           type: "error",
         });
         return;
       }
 
-      // Enforce axe level requirement
-      const cached = this.playerSkills.get(data.playerId);
-      const wcLevel = cached?.[resource.skillRequired]?.level ?? 1;
-      if (wcLevel < axeInfo.levelRequired) {
-        this.emitTypedEvent(EventType.UI_MESSAGE, {
-          playerId: data.playerId,
-          message: `You need level ${axeInfo.levelRequired} woodcutting to use this axe.`,
-          type: "error",
-        });
-        return;
+      // Enforce tool level requirement (for woodcutting/mining, get best tool tier)
+      if (toolCategory === "hatchet" || toolCategory === "pickaxe") {
+        const toolInfo =
+          toolCategory === "hatchet"
+            ? this.getBestAxeTier(data.playerId)
+            : this.getBestPickaxeTier(data.playerId);
+        if (toolInfo) {
+          const cached = this.playerSkills.get(data.playerId);
+          const skillLevel = cached?.[resource.skillRequired]?.level ?? 1;
+          if (skillLevel < toolInfo.levelRequired) {
+            this.emitTypedEvent(EventType.UI_MESSAGE, {
+              playerId: data.playerId,
+              message: `You need level ${toolInfo.levelRequired} ${resource.skillRequired} to use this ${toolCategory}.`,
+              type: "error",
+            });
+            return;
+          }
+        }
       }
     }
 
@@ -806,8 +820,18 @@ export class ResourceSystem extends SystemBase {
     const variant =
       this.resourceVariants.get(sessionResourceId) || "tree_normal";
     const tuned = this.getVariantTuning(variant);
-    const axe = this.getBestAxeTier(data.playerId);
-    const toolMultiplier = axe ? axe.cycleMultiplier : 1.0;
+
+    // Get best tool tier based on skill (generalized for all gathering skills)
+    let toolMultiplier = 1.0;
+    if (resource.skillRequired === "woodcutting") {
+      const axe = this.getBestAxeTier(data.playerId);
+      toolMultiplier = axe ? axe.cycleMultiplier : 1.0;
+    } else if (resource.skillRequired === "mining") {
+      const pick = this.getBestPickaxeTier(data.playerId);
+      toolMultiplier = pick ? pick.cycleMultiplier : 1.0;
+    }
+    // Fishing doesn't have tool tiers in OSRS - all equipment is same speed
+
     const cycleTickInterval = this.computeCycleTicks(
       skillLevel,
       tuned,
@@ -825,10 +849,14 @@ export class ResourceSystem extends SystemBase {
       successes: 0,
     });
 
-    // Set gathering emote for the player
-    if (resource.skillRequired === "woodcutting") {
-      this.setGatheringEmote(data.playerId, "chopping");
-    }
+    // Set gathering emote based on skill (generalized)
+    const skillEmotes: Record<string, string> = {
+      woodcutting: "chopping",
+      mining: "mining",
+      fishing: "fishing",
+    };
+    const emote = skillEmotes[resource.skillRequired] ?? resource.skillRequired;
+    this.setGatheringEmote(data.playerId, emote);
 
     // Emit gathering started event with tick timing info for client progress bar
     this.emitTypedEvent(EventType.RESOURCE_GATHERING_STARTED, {
@@ -969,9 +997,12 @@ export class ResourceSystem extends SystemBase {
         const capacity = (inv?.capacity as number) ?? 28;
         const count = Array.isArray(inv?.items) ? inv!.items!.length : 0;
         if (count >= capacity) {
+          // Use first drop's name for the message (manifest-driven)
+          const dropName =
+            resource.drops[0]?.itemName?.toLowerCase() || "items";
           this.emitTypedEvent(EventType.UI_MESSAGE, {
             playerId: playerId,
-            message: "Your inventory is too full to hold any more logs.",
+            message: `Your inventory is too full to hold any more ${dropName}.`,
             type: "warning",
           });
           this.emitTypedEvent(EventType.RESOURCE_GATHERING_STOPPED, {
@@ -1001,34 +1032,37 @@ export class ResourceSystem extends SystemBase {
       if (isSuccessful) {
         session.successes++;
 
-        // Add one log to inventory
+        // Roll against manifest drop table to determine what item drops
+        const drop = this.rollDrop(resource.drops);
+
+        // Add item to inventory using manifest data
         this.emitTypedEvent(EventType.INVENTORY_ITEM_ADDED, {
           playerId: playerId,
           item: {
-            id: `inv_${playerId}_${Date.now()}_logs`,
-            itemId: "logs",
-            quantity: 1,
+            id: `inv_${playerId}_${Date.now()}_${drop.itemId}`,
+            itemId: drop.itemId, // FROM MANIFEST
+            quantity: drop.quantity, // FROM MANIFEST
             slot: -1,
-            metadata: null,
+            metadata: drop.stackable ? { stackable: true } : null,
           },
         });
 
-        // Award XP per log immediately
-        const xpPerLog = tuned.xpPerLog;
+        // Award XP from the rolled drop (fixes multi-drop XP bug)
+        const xpAmount = drop.xpAmount;
         this.emitTypedEvent(EventType.SKILLS_XP_GAINED, {
           playerId: playerId,
           skill: resource.skillRequired,
-          amount: xpPerLog,
+          amount: xpAmount,
         });
 
-        // Feedback
+        // Feedback using manifest data
         this.sendChat(
           playerId as unknown as string,
-          `You receive 1x ${"Logs"}.`,
+          `You receive ${drop.quantity}x ${drop.itemName}.`,
         );
         this.emitTypedEvent(EventType.UI_MESSAGE, {
           playerId: playerId,
-          message: `You get some logs. (+${xpPerLog} ${resource.skillRequired} XP)`,
+          message: `You get some ${drop.itemName.toLowerCase()}. (+${xpAmount} ${resource.skillRequired} XP)`,
           type: "success",
         });
 
@@ -1051,7 +1085,10 @@ export class ResourceSystem extends SystemBase {
             resourceId: session.resourceId,
             position: resource.position,
           });
-          this.sendChat(playerId, "The tree is chopped down.");
+          this.sendChat(
+            playerId,
+            `The ${resource.name.toLowerCase()} is depleted.`,
+          );
           this.sendNetworkMessage("resourceDepleted", {
             resourceId: session.resourceId,
             position: resource.position,
@@ -1076,7 +1113,7 @@ export class ResourceSystem extends SystemBase {
         // Failure feedback (optional gentle info)
         this.emitTypedEvent(EventType.UI_MESSAGE, {
           playerId: playerId,
-          message: `You fail to chop the tree.`,
+          message: `You fail to gather from the ${resource.name.toLowerCase()}.`,
           type: "info",
         });
       }
@@ -1167,6 +1204,118 @@ export class ResourceSystem extends SystemBase {
     return Math.max(0.25, Math.min(0.85, base));
   }
 
+  /**
+   * Roll against harvestYield chances to determine drop
+   * Respects chance values from manifest for multi-drop resources (e.g., fishing)
+   * @param drops - Array of possible drops from manifest harvestYield
+   * @returns The rolled drop with all manifest data (itemId, itemName, quantity, xpAmount, etc.)
+   */
+  private rollDrop(drops: ResourceDrop[]): ResourceDrop {
+    if (drops.length === 0) {
+      throw new Error(
+        "[ResourceSystem] Resource has no drops defined in manifest",
+      );
+    }
+
+    // Single drop - no roll needed
+    if (drops.length === 1) {
+      return drops[0];
+    }
+
+    // Roll against cumulative chances for multiple drops
+    const roll = Math.random();
+    let cumulative = 0;
+
+    for (const drop of drops) {
+      cumulative += drop.chance;
+      if (roll < cumulative) {
+        return drop;
+      }
+    }
+
+    // Fallback to first drop if chances don't sum to 1.0
+    return drops[0];
+  }
+
+  /**
+   * Extract tool category from toolRequired field
+   * e.g., "bronze_hatchet" → "hatchet", "bronze_pickaxe" → "pickaxe"
+   */
+  private getToolCategory(toolRequired: string): string {
+    const lowerTool = toolRequired.toLowerCase();
+
+    // Handle common patterns
+    if (lowerTool.includes("hatchet") || lowerTool.includes("axe")) {
+      return "hatchet";
+    }
+    if (lowerTool.includes("pickaxe") || lowerTool.includes("pick")) {
+      return "pickaxe";
+    }
+    if (
+      lowerTool.includes("fishing") ||
+      lowerTool.includes("net") ||
+      lowerTool.includes("rod") ||
+      lowerTool.includes("harpoon")
+    ) {
+      return "fishing";
+    }
+
+    // Fallback: take last segment after underscore
+    const parts = toolRequired.split("_");
+    return parts[parts.length - 1];
+  }
+
+  /**
+   * Get display name for tool category
+   */
+  private getToolDisplayName(category: string): string {
+    const names: Record<string, string> = {
+      hatchet: "hatchet",
+      pickaxe: "pickaxe",
+      fishing: "fishing equipment",
+    };
+    return names[category] || category;
+  }
+
+  /**
+   * Check if player has any tool matching the required category
+   */
+  private playerHasToolCategory(playerId: string, category: string): boolean {
+    const inventorySystem = this.world.getSystem?.("inventory") as {
+      getInventory?: (playerId: string) => {
+        items?: Array<{ itemId?: string }>;
+      };
+    } | null;
+
+    if (!inventorySystem?.getInventory) {
+      return false;
+    }
+
+    const inv = inventorySystem.getInventory(playerId);
+    const items = inv?.items || [];
+
+    return items.some((item) => {
+      if (!item?.itemId) return false;
+      const itemId = item.itemId.toLowerCase();
+
+      switch (category) {
+        case "hatchet":
+          return itemId.includes("hatchet") || itemId.includes("axe");
+        case "pickaxe":
+          return itemId.includes("pickaxe") || itemId.includes("pick");
+        case "fishing":
+          return (
+            itemId.includes("fishing") ||
+            itemId.includes("net") ||
+            itemId.includes("rod") ||
+            itemId.includes("harpoon")
+          );
+        default:
+          return itemId.includes(category);
+      }
+    });
+  }
+
   private getBestAxeTier(
     playerId: string,
   ): { id: string; levelRequired: number; cycleMultiplier: number } | null {
@@ -1230,6 +1379,110 @@ export class ResourceSystem extends SystemBase {
         match: (id) =>
           id.includes("bronze") &&
           (id.includes("hatchet") || id.includes("axe")),
+      },
+    ];
+
+    const inventorySystem = this.world.getSystem?.("inventory") as {
+      getInventory?: (playerId: string) => {
+        items?: Array<{ itemId?: string }>;
+        capacity?: number;
+      };
+    } | null;
+    const inv = inventorySystem?.getInventory
+      ? inventorySystem.getInventory(playerId)
+      : undefined;
+    const items = (inv?.items as Array<{ itemId?: string }> | undefined) || [];
+    let best: {
+      id: string;
+      levelRequired: number;
+      cycleMultiplier: number;
+    } | null = null;
+    for (const t of tiers) {
+      const found = items.some(
+        (it) =>
+          typeof it?.itemId === "string" && t.match(it.itemId!.toLowerCase()),
+      );
+      if (found) {
+        best = {
+          id: t.id,
+          levelRequired: t.levelRequired,
+          cycleMultiplier: t.cycleMultiplier,
+        };
+        break;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Get best pickaxe tier from player inventory (for mining)
+   * Returns tool info with level requirement and speed multiplier
+   */
+  private getBestPickaxeTier(
+    playerId: string,
+  ): { id: string; levelRequired: number; cycleMultiplier: number } | null {
+    // Known pickaxe tiers: bronze, iron, steel, mithril, adamant, rune, dragon
+    const tiers: Array<{
+      id: string;
+      levelRequired: number;
+      cycleMultiplier: number;
+      match: (id: string) => boolean;
+    }> = [
+      {
+        id: "dragon_pickaxe",
+        levelRequired: 61,
+        cycleMultiplier: 0.7,
+        match: (id) =>
+          id.includes("dragon") &&
+          (id.includes("pickaxe") || id.includes("pick")),
+      },
+      {
+        id: "rune_pickaxe",
+        levelRequired: 41,
+        cycleMultiplier: 0.78,
+        match: (id) =>
+          id.includes("rune") &&
+          (id.includes("pickaxe") || id.includes("pick")),
+      },
+      {
+        id: "adamant_pickaxe",
+        levelRequired: 31,
+        cycleMultiplier: 0.84,
+        match: (id) =>
+          id.includes("adamant") &&
+          (id.includes("pickaxe") || id.includes("pick")),
+      },
+      {
+        id: "mithril_pickaxe",
+        levelRequired: 21,
+        cycleMultiplier: 0.88,
+        match: (id) =>
+          id.includes("mithril") &&
+          (id.includes("pickaxe") || id.includes("pick")),
+      },
+      {
+        id: "steel_pickaxe",
+        levelRequired: 6,
+        cycleMultiplier: 0.92,
+        match: (id) =>
+          id.includes("steel") &&
+          (id.includes("pickaxe") || id.includes("pick")),
+      },
+      {
+        id: "iron_pickaxe",
+        levelRequired: 1,
+        cycleMultiplier: 0.96,
+        match: (id) =>
+          id.includes("iron") &&
+          (id.includes("pickaxe") || id.includes("pick")),
+      },
+      {
+        id: "bronze_pickaxe",
+        levelRequired: 1,
+        cycleMultiplier: 1.0,
+        match: (id) =>
+          id.includes("bronze") &&
+          (id.includes("pickaxe") || id.includes("pick")),
       },
     ];
 
