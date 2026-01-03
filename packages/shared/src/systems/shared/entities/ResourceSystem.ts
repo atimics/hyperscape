@@ -15,6 +15,7 @@ import {
   TICK_DURATION_MS,
   snapToTileCenter,
   worldToTile,
+  isCardinallyAdjacentToResource,
   type TileCoord,
 } from "../movement/TileSystem";
 import {
@@ -1103,6 +1104,66 @@ export class ResourceSystem extends SystemBase {
       return;
     }
 
+    // ===== CARDINAL ADJACENCY CHECK =====
+    // Validate player is on a cardinal tile (N/E/S/W) adjacent to the resource
+    // This prevents gathering while standing ON the resource or from diagonal tiles
+    const footprint = resource.footprint || "standard";
+    const size = FOOTPRINT_SIZES[footprint];
+    const resourceAnchorTile = worldToTile(
+      resource.position.x,
+      resource.position.z,
+    );
+    const playerTile = worldToTile(
+      data.playerPosition.x,
+      data.playerPosition.z,
+    );
+
+    // Check if player is standing ON the resource
+    const isOnResource =
+      playerTile.x >= resourceAnchorTile.x &&
+      playerTile.x < resourceAnchorTile.x + size.x &&
+      playerTile.z >= resourceAnchorTile.z &&
+      playerTile.z < resourceAnchorTile.z + size.z;
+
+    if (isOnResource) {
+      console.warn(
+        `[ResourceSystem] Player ${data.playerId} at tile (${playerTile.x}, ${playerTile.z}) is ON resource ` +
+          `at anchor (${resourceAnchorTile.x}, ${resourceAnchorTile.z}) with footprint ${size.x}x${size.z}. Rejecting gather.`,
+      );
+      this.emitTypedEvent(EventType.UI_MESSAGE, {
+        playerId: data.playerId,
+        message: `You can't gather while standing on the resource. Move to an adjacent tile.`,
+        type: "error",
+      });
+      return;
+    }
+
+    // Check if player is on a cardinal adjacent tile (not diagonal)
+    const isOnCardinal = isCardinallyAdjacentToResource(
+      playerTile,
+      resourceAnchorTile,
+      size.x,
+      size.z,
+    );
+
+    if (!isOnCardinal) {
+      console.warn(
+        `[ResourceSystem] Player ${data.playerId} at tile (${playerTile.x}, ${playerTile.z}) is NOT on cardinal tile ` +
+          `adjacent to resource at (${resourceAnchorTile.x}, ${resourceAnchorTile.z}). Rejecting gather.`,
+      );
+      this.emitTypedEvent(EventType.UI_MESSAGE, {
+        playerId: data.playerId,
+        message: `Move closer to the resource.`,
+        type: "info",
+      });
+      return;
+    }
+
+    console.log(
+      `[ResourceSystem] ✅ Player ${data.playerId} at tile (${playerTile.x}, ${playerTile.z}) is on CARDINAL tile ` +
+        `adjacent to resource at anchor (${resourceAnchorTile.x}, ${resourceAnchorTile.z}). Proceeding with gather.`,
+    );
+
     // Check player skill level (reactive pattern)
     const cachedSkills = this.playerSkills.get(data.playerId);
     const skillLevel = cachedSkills?.[resource.skillRequired]?.level ?? 1;
@@ -1209,10 +1270,16 @@ export class ResourceSystem extends SystemBase {
 
     // OSRS-ACCURACY: Rotate player to face the resource (instant rotation like OSRS)
     // This happens before session starts so animation plays in correct direction
+    const footprintForRotation = resource.footprint || "standard";
+    console.log(
+      `[ResourceSystem] startGathering: Calling rotatePlayerToFaceResource for ${data.playerId}, ` +
+        `resource at (${resource.position.x.toFixed(1)}, ${resource.position.z.toFixed(1)}), ` +
+        `footprint=${footprintForRotation}, player at (${startPosition.x.toFixed(1)}, ${startPosition.z.toFixed(1)})`,
+    );
     this.rotatePlayerToFaceResource(
       data.playerId,
       resource.position,
-      resource.footprint || "standard",
+      footprintForRotation,
     );
 
     // Schedule first attempt on next tick with CACHED data
@@ -1340,28 +1407,50 @@ export class ResourceSystem extends SystemBase {
   ): void {
     // OSRS-ACCURACY: Use FaceDirectionManager for deferred tick-end processing
     // The manager will apply rotation at end of tick only if player didn't move
+    //
+    // CARDINAL-ONLY: Uses deterministic cardinal face direction for AAA quality.
+    // Player standing N of resource faces S, E faces W, S faces N, W faces E.
     const faceManager = (
       this.world as {
         faceDirectionManager?: {
           setFaceTarget: (playerId: string, x: number, z: number) => void;
+          setCardinalFaceTarget: (
+            playerId: string,
+            anchorTile: { x: number; z: number },
+            footprintX: number,
+            footprintZ: number,
+          ) => void;
         };
       }
     ).faceDirectionManager;
 
     if (faceManager) {
-      // Calculate face target based on resource footprint
-      // For 1×1: face the tile center (resource position is already tile-centered)
-      // For 2×2+: face the center of the occupied tile area
       const size = FOOTPRINT_SIZES[footprint];
       const anchorTile = worldToTile(resourcePosition.x, resourcePosition.z);
 
-      // Center of the resource's tile area
-      // For 1×1 at anchor (15,-10): target = (15.5, -9.5) = tile center
-      // For 2×2 at anchor (15,-10): target = (16, -9) = center of 2×2 area
-      const targetX = anchorTile.x + size.x / 2;
-      const targetZ = anchorTile.z + size.z / 2;
+      console.log(
+        `[ResourceSystem] rotatePlayerToFaceResource: ` +
+          `resourcePos=(${resourcePosition.x.toFixed(1)}, ${resourcePosition.z.toFixed(1)}), ` +
+          `anchorTile=(${anchorTile.x}, ${anchorTile.z}), size=${size.x}x${size.z}`,
+      );
 
-      faceManager.setFaceTarget(playerId, targetX, targetZ);
+      // Use cardinal-only face direction for deterministic behavior
+      if (faceManager.setCardinalFaceTarget) {
+        console.log(`[ResourceSystem] Using setCardinalFaceTarget`);
+        faceManager.setCardinalFaceTarget(playerId, anchorTile, size.x, size.z);
+      } else {
+        // Fallback to legacy center-based targeting
+        console.log(
+          `[ResourceSystem] FALLBACK: Using setFaceTarget (no setCardinalFaceTarget)`,
+        );
+        const targetX = anchorTile.x + size.x / 2;
+        const targetZ = anchorTile.z + size.z / 2;
+        faceManager.setFaceTarget(playerId, targetX, targetZ);
+      }
+    } else {
+      console.warn(
+        `[ResourceSystem] rotatePlayerToFaceResource: No faceManager found!`,
+      );
     }
   }
 

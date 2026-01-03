@@ -10,10 +10,22 @@
  */
 
 export const GATHERING_CONSTANTS = {
-  // === Proximity and Range (tiles) ===
+  // === Tile-Based Range (tiles) ===
+  /**
+   * Gathering interaction range in tiles.
+   * Uses cardinal-only adjacent tiles (N/S/E/W) like standard melee combat.
+   *
+   * OSRS: Players must stand on a cardinal adjacent tile to gather resources.
+   * This is equivalent to COMBAT_CONSTANTS.MELEE_RANGE_STANDARD.
+   *
+   * @see https://oldschool.runescape.wiki/w/Pathfinding
+   */
+  GATHERING_RANGE: 1,
+
+  // === Proximity and Range (world units - legacy) ===
   /** Maximum distance to search for nearby resources when exact match fails */
   PROXIMITY_SEARCH_RADIUS: 15,
-  /** Default interaction range for gathering */
+  /** Default interaction range for gathering (world units, legacy) */
   DEFAULT_INTERACTION_RANGE: 4.0,
   /** Floating point tolerance for position comparison (OSRS: any movement cancels) */
   POSITION_EPSILON: 0.01,

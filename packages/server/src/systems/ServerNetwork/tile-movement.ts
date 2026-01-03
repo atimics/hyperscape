@@ -783,6 +783,15 @@ export class TileMovementManager {
   }
 
   /**
+   * Check if a player has run mode enabled
+   * Used by resource/combat handlers to determine movement speed
+   */
+  getIsRunning(playerId: string): boolean {
+    const state = this.playerStates.get(playerId);
+    return state?.isRunning ?? false;
+  }
+
+  /**
    * Server-initiated movement toward a target position
    * Used for combat follow when target moves out of range
    *

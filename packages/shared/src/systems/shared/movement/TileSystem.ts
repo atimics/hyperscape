@@ -1030,3 +1030,233 @@ export function isAdjacentToResource(
 
   return true;
 }
+
+// ============================================================================
+// CARDINAL-ONLY RESOURCE INTERACTION (AAA QUALITY)
+// ============================================================================
+
+/**
+ * Cardinal direction type for resource interaction
+ */
+export type CardinalDirection = "N" | "E" | "S" | "W";
+
+/**
+ * Face angles for each cardinal direction (with VRM 1.0+ 180° offset)
+ * These are the exact Y-axis rotation angles in radians
+ */
+export const CARDINAL_FACE_ANGLES: Record<CardinalDirection, number> = {
+  N: Math.PI, // Face North (towards +Z) = 180° base + 180° VRM = 360° = 0°... wait
+  E: Math.PI / 2 + Math.PI, // Face East (towards +X)
+  S: 0 + Math.PI, // Face South (towards -Z)
+  W: (3 * Math.PI) / 2 + Math.PI, // Face West (towards -X)
+};
+
+/**
+ * Get ONLY cardinal adjacent tiles (N, E, S, W) for a resource.
+ * Excludes diagonal corner tiles for consistent face direction.
+ *
+ * CARDINAL-ONLY: This ensures players always stand directly N, E, S, or W
+ * of a resource, making face direction calculation deterministic.
+ *
+ * For a 1×1 resource at tile (15, -10):
+ * - North: (15, -9)
+ * - South: (15, -11)
+ * - East:  (16, -10)
+ * - West:  (14, -10)
+ *
+ * @param anchorTile - SW corner tile of the resource
+ * @param footprintX - Width of the resource in tiles
+ * @param footprintZ - Depth of the resource in tiles
+ * @returns Array of cardinal adjacent tiles only (no corners)
+ */
+export function getCardinalAdjacentTiles(
+  anchorTile: TileCoord,
+  footprintX: number,
+  footprintZ: number,
+): TileCoord[] {
+  const adjacent: TileCoord[] = [];
+
+  // North edge (z + footprintZ) - tiles directly north of resource
+  for (let dx = 0; dx < footprintX; dx++) {
+    adjacent.push({ x: anchorTile.x + dx, z: anchorTile.z + footprintZ });
+  }
+
+  // South edge (z - 1) - tiles directly south of resource
+  for (let dx = 0; dx < footprintX; dx++) {
+    adjacent.push({ x: anchorTile.x + dx, z: anchorTile.z - 1 });
+  }
+
+  // East edge (x + footprintX) - tiles directly east of resource
+  for (let dz = 0; dz < footprintZ; dz++) {
+    adjacent.push({ x: anchorTile.x + footprintX, z: anchorTile.z + dz });
+  }
+
+  // West edge (x - 1) - tiles directly west of resource
+  for (let dz = 0; dz < footprintZ; dz++) {
+    adjacent.push({ x: anchorTile.x - 1, z: anchorTile.z + dz });
+  }
+
+  // NO corner tiles - cardinal only for consistent facing!
+  return adjacent;
+}
+
+/**
+ * Find the best CARDINAL adjacent tile for resource interaction.
+ * Only considers N, E, S, W tiles (no diagonals).
+ *
+ * @param playerTile - Player's current tile position
+ * @param anchorTile - SW corner tile of the resource
+ * @param footprintX - Width of the resource in tiles
+ * @param footprintZ - Depth of the resource in tiles
+ * @param isWalkable - Function to check if a tile is walkable
+ * @returns Best cardinal tile to stand on, or null if all are blocked
+ */
+export function findBestCardinalInteractionTile(
+  playerTile: TileCoord,
+  anchorTile: TileCoord,
+  footprintX: number,
+  footprintZ: number,
+  isWalkable: (tile: TileCoord) => boolean,
+): TileCoord | null {
+  const adjacent = getCardinalAdjacentTiles(anchorTile, footprintX, footprintZ);
+
+  let best: TileCoord | null = null;
+  let bestDist = Infinity;
+
+  for (const tile of adjacent) {
+    if (!isWalkable(tile)) continue;
+
+    // Manhattan distance - natural for cardinal movement
+    const dist =
+      Math.abs(tile.x - playerTile.x) + Math.abs(tile.z - playerTile.z);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = tile;
+    }
+  }
+
+  return best;
+}
+
+/**
+ * Check if player is on a CARDINAL adjacent tile (not diagonal)
+ *
+ * @param playerTile - Player's current tile position
+ * @param anchorTile - SW corner tile of the resource
+ * @param footprintX - Width of the resource in tiles
+ * @param footprintZ - Depth of the resource in tiles
+ * @returns true if player is on a cardinal adjacent tile
+ */
+export function isCardinallyAdjacentToResource(
+  playerTile: TileCoord,
+  anchorTile: TileCoord,
+  footprintX: number,
+  footprintZ: number,
+): boolean {
+  const cardinalTiles = getCardinalAdjacentTiles(
+    anchorTile,
+    footprintX,
+    footprintZ,
+  );
+  return cardinalTiles.some(
+    (t) => t.x === playerTile.x && t.z === playerTile.z,
+  );
+}
+
+/**
+ * Determine which cardinal direction the player should face based on their position
+ * relative to the resource. This is deterministic for cardinal positions.
+ *
+ * Standing North of resource → Face South (towards resource)
+ * Standing East of resource → Face West (towards resource)
+ * Standing South of resource → Face North (towards resource)
+ * Standing West of resource → Face East (towards resource)
+ *
+ * @param playerTile - Player's current tile position
+ * @param anchorTile - SW corner tile of the resource
+ * @param footprintX - Width of the resource in tiles
+ * @param footprintZ - Depth of the resource in tiles
+ * @returns The cardinal direction to face, or null if not on cardinal tile
+ */
+export function getCardinalFaceDirection(
+  playerTile: TileCoord,
+  anchorTile: TileCoord,
+  footprintX: number,
+  footprintZ: number,
+): CardinalDirection | null {
+  // Check if player is on North edge (z >= anchorTile.z + footprintZ)
+  if (playerTile.z >= anchorTile.z + footprintZ) {
+    // Player is North, should face South
+    if (
+      playerTile.x >= anchorTile.x &&
+      playerTile.x < anchorTile.x + footprintX
+    ) {
+      return "S";
+    }
+  }
+
+  // Check if player is on South edge (z < anchorTile.z)
+  if (playerTile.z < anchorTile.z) {
+    // Player is South, should face North
+    if (
+      playerTile.x >= anchorTile.x &&
+      playerTile.x < anchorTile.x + footprintX
+    ) {
+      return "N";
+    }
+  }
+
+  // Check if player is on East edge (x >= anchorTile.x + footprintX)
+  if (playerTile.x >= anchorTile.x + footprintX) {
+    // Player is East, should face West
+    if (
+      playerTile.z >= anchorTile.z &&
+      playerTile.z < anchorTile.z + footprintZ
+    ) {
+      return "W";
+    }
+  }
+
+  // Check if player is on West edge (x < anchorTile.x)
+  if (playerTile.x < anchorTile.x) {
+    // Player is West, should face East
+    if (
+      playerTile.z >= anchorTile.z &&
+      playerTile.z < anchorTile.z + footprintZ
+    ) {
+      return "E";
+    }
+  }
+
+  // Not on a cardinal edge (might be on a corner or inside)
+  return null;
+}
+
+/**
+ * Get the exact Y-axis rotation angle for a cardinal face direction.
+ * Includes VRM 1.0+ 180° base rotation offset.
+ *
+ * @param direction - Cardinal direction to face
+ * @returns Y-axis rotation angle in radians
+ */
+export function getCardinalFaceAngle(direction: CardinalDirection): number {
+  // Base angles (without VRM offset):
+  // N (towards +Z): atan2(0, 1) = 0
+  // E (towards +X): atan2(1, 0) = π/2
+  // S (towards -Z): atan2(0, -1) = π
+  // W (towards -X): atan2(-1, 0) = -π/2 = 3π/2
+
+  // With VRM 1.0+ 180° offset (add π):
+  switch (direction) {
+    case "N":
+      return 0 + Math.PI; // 0 + π = π
+    case "E":
+      return Math.PI / 2 + Math.PI; // π/2 + π = 3π/2
+    case "S":
+      return Math.PI + Math.PI; // π + π = 2π (normalize to 0)
+    case "W":
+      return -Math.PI / 2 + Math.PI; // -π/2 + π = π/2
+    default:
+      return Math.PI; // Default to facing South
+  }
+}

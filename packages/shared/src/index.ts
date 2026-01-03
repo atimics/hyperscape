@@ -772,6 +772,13 @@ export {
   getResourceAdjacentTiles,
   findBestResourceInteractionTile,
   isAdjacentToResource,
+  // Cardinal-only resource interaction (AAA quality)
+  getCardinalAdjacentTiles,
+  findBestCardinalInteractionTile,
+  isCardinallyAdjacentToResource,
+  getCardinalFaceDirection,
+  getCardinalFaceAngle,
+  CARDINAL_FACE_ANGLES,
   isDiagonal,
   tileKey,
   parseTileKey,
@@ -782,6 +789,7 @@ export type {
   TileCoord,
   TileMovementState,
   TileFlags,
+  CardinalDirection,
 } from "./systems/shared/movement/TileSystem";
 export { BFSPathfinder } from "./systems/shared/movement/BFSPathfinder";
 export {
@@ -811,6 +819,9 @@ export {
 
 // Combat constants (tick-based timing, ranges, etc.)
 export { COMBAT_CONSTANTS } from "./constants/CombatConstants";
+
+// Gathering constants (tick-based timing, ranges, etc.)
+export { GATHERING_CONSTANTS } from "./constants/GatheringConstants";
 
 // Weapon style configuration (OSRS-accurate style restrictions per weapon)
 export {
