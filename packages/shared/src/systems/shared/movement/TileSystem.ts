@@ -119,6 +119,31 @@ export function tileToWorld(tile: TileCoord): {
 }
 
 /**
+ * Snap a world position to the center of its containing tile
+ *
+ * OSRS-ACCURACY: All interactable objects are tile-aligned in OSRS.
+ * This function ensures resources, NPCs, and other objects are positioned
+ * at tile centers rather than arbitrary coordinates.
+ *
+ * Position (15.3, y, -10.7) → (15.5, y, -10.5)
+ * Position (0.1, y, 0.9) → (0.5, y, 0.5)
+ *
+ * @param position - World position to snap
+ * @returns Position snapped to tile center (Y unchanged for terrain height)
+ */
+export function snapToTileCenter(position: {
+  x: number;
+  y: number;
+  z: number;
+}): { x: number; y: number; z: number } {
+  return {
+    x: Math.floor(position.x / TILE_SIZE) * TILE_SIZE + 0.5 * TILE_SIZE,
+    y: position.y, // Y unchanged (terrain height)
+    z: Math.floor(position.z / TILE_SIZE) * TILE_SIZE + 0.5 * TILE_SIZE,
+  };
+}
+
+/**
  * Convert tile coordinates to world coordinates (zero-allocation)
  * Writes to an existing object to avoid GC pressure in hot paths.
  *

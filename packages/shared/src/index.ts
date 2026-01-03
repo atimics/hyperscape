@@ -755,6 +755,7 @@ export {
   worldToTileInto,
   tileToWorld,
   tileToWorldInto,
+  snapToTileCenter,
   tileManhattanDistance,
   tileChebyshevDistance,
   tilesEqual,

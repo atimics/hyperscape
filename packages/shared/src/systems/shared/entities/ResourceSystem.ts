@@ -11,7 +11,7 @@ import {
   createResourceID,
 } from "../../../utils/IdentifierUtils";
 import type { TerrainResourceSpawnPoint } from "../../../types/world/terrain";
-import { TICK_DURATION_MS } from "../movement/TileSystem";
+import { TICK_DURATION_MS, snapToTileCenter } from "../movement/TileSystem";
 import { getExternalResource } from "../../../utils/ExternalAssetUtils";
 import { ALL_WORLD_AREAS } from "../../../data/world-areas";
 import { GATHERING_CONSTANTS } from "../../../constants/GatheringConstants";
@@ -871,15 +871,19 @@ export class ResourceSystem extends SystemBase {
       );
     }
 
+    // OSRS-ACCURACY: Snap position to tile center for proper face direction and interaction
+    // This ensures resources are always at tile centers (e.g., 15.5, -9.5) not corners (15, -10)
+    const snappedPosition = snapToTileCenter(position);
+
     // All values come from manifest - no hardcoding
     const resource: Resource = {
-      id: `${type}_${position.x.toFixed(0)}_${position.z.toFixed(0)}`,
+      id: `${type}_${snappedPosition.x.toFixed(0)}_${snappedPosition.z.toFixed(0)}`,
       type: resourceType,
       name: manifestData.name,
       position: {
-        x: position.x,
-        y: position.y,
-        z: position.z,
+        x: snappedPosition.x,
+        y: snappedPosition.y,
+        z: snappedPosition.z,
       },
       skillRequired: manifestData.harvestSkill,
       levelRequired: manifestData.levelRequired,
