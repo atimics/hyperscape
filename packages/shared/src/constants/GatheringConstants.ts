@@ -61,6 +61,60 @@ export const GATHERING_CONSTANTS = {
   MAX_RESOURCE_ID_LENGTH: 100,
   /** Pattern for valid resource IDs (alphanumeric, underscore, hyphen, dot) */
   VALID_RESOURCE_ID_PATTERN: /^[a-zA-Z0-9_.-]+$/,
+
+  // === Tree Despawn Times (ticks) - Forestry System ===
+  /**
+   * OSRS Forestry-style tree depletion timer.
+   * Timer starts on FIRST LOG, counts down while chopping, regenerates when idle.
+   * Tree only depletes when timer=0 AND player receives a log.
+   *
+   * @see https://oldschool.runescape.wiki/w/Forestry
+   * @see https://github.com/runelite/runelite/discussions/16894
+   */
+  TREE_DESPAWN_TICKS: {
+    tree: 0, // Regular trees use 1/8 chance, not timer
+    oak: 45, // 27 seconds
+    willow: 50, // 30 seconds
+    teak: 50, // 30 seconds
+    maple: 100, // 60 seconds
+    yew: 190, // 114 seconds
+    magic: 390, // 234 seconds
+    redwood: 440, // 264 seconds
+  } as const,
+
+  // === Tree Respawn Times (ticks) ===
+  /**
+   * Time for depleted trees to respawn.
+   *
+   * @see https://oldschool.runescape.wiki/w/Tree
+   */
+  TREE_RESPAWN_TICKS: {
+    tree: 10, // ~6 seconds
+    oak: 14, // ~8.4 seconds
+    willow: 14, // ~8.4 seconds
+    teak: 15, // ~9 seconds
+    maple: 59, // ~35.4 seconds
+    yew: 100, // ~60 seconds
+    magic: 199, // ~119.4 seconds
+    redwood: 199, // ~119.4 seconds
+  } as const,
+
+  // === Mining Depletion (chance-based, NOT timer) ===
+  /**
+   * Mining uses chance-based depletion, not timer-based like Forestry trees.
+   * Each ore mined has a chance to deplete the rock.
+   *
+   * @see https://oldschool.runescape.wiki/w/Mining
+   */
+  MINING_DEPLETE_CHANCE: 0.125, // 1/8 for most rocks
+  MINING_REDWOOD_DEPLETE_CHANCE: 0.091, // 1/11 for redwood stumps
+
+  // === Timer Regeneration ===
+  /**
+   * Rate at which tree timers regenerate when no one is gathering.
+   * OSRS: 1 tick of regeneration per 1 tick of not being gathered.
+   */
+  TIMER_REGEN_PER_TICK: 1,
 } as const;
 
 export type GatheringConstants = typeof GATHERING_CONSTANTS;

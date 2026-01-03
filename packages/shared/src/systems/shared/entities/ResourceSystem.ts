@@ -112,6 +112,28 @@ export class ResourceSystem extends SystemBase {
   // Terrain system reference for height lookups
   private terrainSystem: TerrainSystem | null = null;
 
+  // ===== FORESTRY-STYLE RESOURCE TIMERS (OSRS-accurate) =====
+  /**
+   * Per-resource depletion timer for Forestry-style tree mechanics.
+   * - Timer starts on FIRST LOG (not first interaction)
+   * - Counts down at 1 tick/tick while anyone is gathering
+   * - Regenerates at 1 tick/tick when no one is gathering
+   * - Tree depletes when timer=0 AND player receives a log
+   * - Multiple players share the same timer (no penalty)
+   *
+   * @see https://oldschool.runescape.wiki/w/Forestry
+   */
+  private resourceTimers = new Map<
+    ResourceID,
+    {
+      currentTicks: number; // Current timer value (counts down while gathering)
+      maxTicks: number; // Max timer value from TREE_DESPAWN_TICKS
+      hasReceivedFirstLog: boolean; // Timer only starts after first log
+      activeGatherers: Set<PlayerID>; // Players currently gathering this resource
+      lastUpdateTick: number; // For calculating tick deltas
+    }
+  >();
+
   // ===== SECURITY: Rate limiting to prevent gather request spam =====
   private gatherRateLimits = new Map<PlayerID, number>();
 
@@ -1300,6 +1322,9 @@ export class ResourceSystem extends SystemBase {
       cachedStartPosition: startPosition,
     });
 
+    // FORESTRY: Track as active gatherer for timer-based resources
+    this.addActiveGatherer(playerId, sessionResourceId, currentTick);
+
     // Set gathering emote based on skill (generalized)
     const skillEmotes: Record<string, string> = {
       woodcutting: "chopping",
@@ -1338,6 +1363,9 @@ export class ResourceSystem extends SystemBase {
     const playerId = createPlayerID(data.playerId);
     const session = this.activeGathering.get(playerId);
     if (session) {
+      // FORESTRY: Remove from active gatherers (timer will regenerate if no other gatherers)
+      this.removeActiveGatherer(playerId, session.resourceId);
+
       this.activeGathering.delete(playerId);
 
       // Reset emote back to idle when gathering stops
@@ -1352,6 +1380,11 @@ export class ResourceSystem extends SystemBase {
 
   private cleanupPlayerGathering(playerId: string): void {
     const pid = createPlayerID(playerId);
+    const session = this.activeGathering.get(pid);
+    if (session) {
+      // FORESTRY: Remove from active gatherers before deleting session
+      this.removeActiveGatherer(pid, session.resourceId);
+    }
     this.activeGathering.delete(pid);
     // SECURITY: Clean up rate limit tracking on disconnect
     this.gatherRateLimits.delete(pid);
@@ -1373,6 +1406,9 @@ export class ResourceSystem extends SystemBase {
           `[ResourceSystem] Cancelling gather for ${playerId} - reason: ${reason}`,
         );
       }
+      // FORESTRY: Remove from active gatherers (timer will regenerate if no other gatherers)
+      this.removeActiveGatherer(pid, session.resourceId);
+
       this.emitTypedEvent(EventType.RESOURCE_GATHERING_STOPPED, {
         playerId: playerId,
         resourceId: session.resourceId,
@@ -1455,6 +1491,185 @@ export class ResourceSystem extends SystemBase {
   }
 
   /**
+   * Process resource timers for Forestry-style depletion/regeneration.
+   * Called every tick to:
+   * - Decrement timers for resources being gathered
+   * - Regenerate timers for resources not being gathered
+   *
+   * @param tickNumber - Current server tick
+   */
+  private processResourceTimers(tickNumber: number): void {
+    for (const [resourceId, timer] of this.resourceTimers) {
+      const ticksDelta = tickNumber - timer.lastUpdateTick;
+      timer.lastUpdateTick = tickNumber;
+
+      if (timer.activeGatherers.size > 0 && timer.hasReceivedFirstLog) {
+        // Being gathered AND first log received - decrement timer
+        // OSRS-ACCURACY: Timer only counts down AFTER first log is received
+        const oldTicks = timer.currentTicks;
+        timer.currentTicks = Math.max(
+          0,
+          timer.currentTicks -
+            ticksDelta * GATHERING_CONSTANTS.TIMER_REGEN_PER_TICK,
+        );
+        if (oldTicks !== timer.currentTicks) {
+          console.log(
+            `[Forestry] ⏬ ${resourceId}: timer ${oldTicks} → ${timer.currentTicks} ` +
+              `(${timer.activeGatherers.size} gatherer${timer.activeGatherers.size > 1 ? "s" : ""})`,
+          );
+        }
+      } else if (
+        timer.activeGatherers.size === 0 &&
+        timer.hasReceivedFirstLog
+      ) {
+        // Not being gathered but was started - regenerate
+        const oldTicks = timer.currentTicks;
+        timer.currentTicks = Math.min(
+          timer.maxTicks,
+          timer.currentTicks +
+            ticksDelta * GATHERING_CONSTANTS.TIMER_REGEN_PER_TICK,
+        );
+
+        if (oldTicks !== timer.currentTicks) {
+          console.log(
+            `[Forestry] ⏫ ${resourceId}: timer REGEN ${oldTicks} → ${timer.currentTicks}/${timer.maxTicks} (no gatherers)`,
+          );
+        }
+
+        // If fully regenerated, reset the "first log" state
+        if (timer.currentTicks >= timer.maxTicks) {
+          console.log(
+            `[Forestry] ✅ ${resourceId}: timer FULLY REGENERATED - resetting firstLog flag`,
+          );
+          timer.hasReceivedFirstLog = false;
+        }
+      }
+    }
+  }
+
+  /**
+   * Add a player to a resource's active gatherers set.
+   * Creates the timer structure if it doesn't exist (for Forestry resources).
+   *
+   * @param playerId - Player starting to gather
+   * @param resourceId - Resource being gathered
+   * @param tickNumber - Current tick for timer initialization
+   */
+  private addActiveGatherer(
+    playerId: PlayerID,
+    resourceId: ResourceID,
+    tickNumber: number,
+  ): void {
+    // Only track for timer-based resources
+    const despawnTicks = this.getResourceDespawnTicks(resourceId);
+    if (despawnTicks <= 0) {
+      console.log(
+        `[Forestry] ℹ️ ${resourceId}: NOT timer-based (despawnTicks=0), using chance depletion`,
+      );
+      return;
+    }
+
+    let timer = this.resourceTimers.get(resourceId);
+    if (!timer) {
+      // Create timer structure (but don't start countdown yet - that's on first log)
+      timer = {
+        currentTicks: despawnTicks,
+        maxTicks: despawnTicks,
+        hasReceivedFirstLog: false,
+        activeGatherers: new Set(),
+        lastUpdateTick: tickNumber,
+      };
+      this.resourceTimers.set(resourceId, timer);
+      console.log(
+        `[Forestry] 🌲 ${resourceId}: Created timer structure (${despawnTicks} ticks max)`,
+      );
+    }
+
+    timer.activeGatherers.add(playerId);
+    console.log(
+      `[Forestry] 👤+ ${resourceId}: Added gatherer ${playerId} ` +
+        `(now ${timer.activeGatherers.size} total, timer=${timer.currentTicks}/${timer.maxTicks}, started=${timer.hasReceivedFirstLog})`,
+    );
+  }
+
+  /**
+   * Remove a player from a resource's active gatherers set.
+   *
+   * @param playerId - Player stopping gathering
+   * @param resourceId - Resource that was being gathered
+   */
+  private removeActiveGatherer(
+    playerId: PlayerID,
+    resourceId: ResourceID,
+  ): void {
+    const timer = this.resourceTimers.get(resourceId);
+    if (timer) {
+      const hadPlayer = timer.activeGatherers.has(playerId);
+      timer.activeGatherers.delete(playerId);
+      if (hadPlayer) {
+        console.log(
+          `[Forestry] 👤- ${resourceId}: Removed gatherer ${playerId} ` +
+            `(now ${timer.activeGatherers.size} total, timer=${timer.currentTicks}/${timer.maxTicks})` +
+            (timer.activeGatherers.size === 0 && timer.hasReceivedFirstLog
+              ? " - will start REGENERATING"
+              : ""),
+        );
+      }
+    }
+  }
+
+  /**
+   * Handle receiving a log from a Forestry-timer resource.
+   * Initializes the timer on first log and checks for depletion.
+   *
+   * @param playerId - Player who received the log
+   * @param resourceId - Resource being gathered
+   * @param tickNumber - Current tick
+   * @returns true if resource should deplete, false otherwise
+   */
+  private handleForestryLog(
+    playerId: PlayerID,
+    resourceId: ResourceID,
+    tickNumber: number,
+  ): boolean {
+    const timer = this.resourceTimers.get(resourceId);
+    if (!timer) {
+      console.log(
+        `[Forestry] ⚠️ ${resourceId}: handleForestryLog called but no timer exists!`,
+      );
+      return false;
+    }
+
+    // First log starts the timer countdown
+    if (!timer.hasReceivedFirstLog) {
+      timer.hasReceivedFirstLog = true;
+      timer.lastUpdateTick = tickNumber;
+      console.log(
+        `[Forestry] 🪵 ${resourceId}: FIRST LOG received by ${playerId}! ` +
+          `Timer NOW ACTIVE: ${timer.currentTicks}/${timer.maxTicks} ticks`,
+      );
+    } else {
+      console.log(
+        `[Forestry] 🪵 ${resourceId}: Log received by ${playerId}, ` +
+          `timer=${timer.currentTicks}/${timer.maxTicks}`,
+      );
+    }
+
+    // Check if tree should deplete (timer at 0 AND player receives log)
+    if (timer.currentTicks <= 0) {
+      console.log(
+        `[Forestry] 🌳💥 ${resourceId}: Timer=0 AND log received - TREE FALLS! ` +
+          `(${timer.activeGatherers.size} gatherers were active)`,
+      );
+      // Clean up timer
+      this.resourceTimers.delete(resourceId);
+      return true; // Deplete the resource
+    }
+
+    return false; // Don't deplete yet
+  }
+
+  /**
    * Process resource respawns on tick (OSRS-accurate tick-based timing)
    * Replaces setTimeout-based respawn with deterministic tick counting
    */
@@ -1524,6 +1739,9 @@ export class ResourceSystem extends SystemBase {
   public processGatheringTick(tickNumber: number): void {
     // Process respawns first (tick-based)
     this.processRespawns(tickNumber);
+
+    // FORESTRY: Process resource timers (depletion/regeneration)
+    this.processResourceTimers(tickNumber);
 
     // Process active gathering sessions
     const completedSessions: PlayerID[] = [];
@@ -1670,8 +1888,49 @@ export class ResourceSystem extends SystemBase {
           type: "success",
         });
 
-        // Depletion roll
-        if (Math.random() < tuned.depleteChance) {
+        // ===== DEPLETION CHECK =====
+        // OSRS-ACCURACY: Use Forestry timer for higher-level trees, chance-based for mining/regular trees
+        let shouldDeplete = false;
+        let depletionMethod = "";
+
+        if (this.usesTimerBasedDepletion(session.resourceId)) {
+          // FORESTRY: Timer-based depletion (oak, willow, maple, yew, magic, redwood)
+          // Timer started on first log, depletes when timer=0 AND player receives log
+          depletionMethod = "forestry-timer";
+          shouldDeplete = this.handleForestryLog(
+            playerId,
+            session.resourceId,
+            tickNumber,
+          );
+        } else if (
+          resource.type === "ore" ||
+          resource.skillRequired === "mining"
+        ) {
+          // MINING: Chance-based depletion (1/8 for most rocks)
+          depletionMethod = "mining-chance";
+          const roll = Math.random();
+          shouldDeplete = roll < GATHERING_CONSTANTS.MINING_DEPLETE_CHANCE;
+          console.log(
+            `[Forestry] ⛏️ ${session.resourceId}: Mining roll=${roll.toFixed(3)} vs ${GATHERING_CONSTANTS.MINING_DEPLETE_CHANCE} → ${shouldDeplete ? "DEPLETE" : "continue"}`,
+          );
+        } else if (
+          resource.type === "fishing_spot" ||
+          resource.skillRequired === "fishing"
+        ) {
+          // FISHING: Spots don't deplete (they move, handled elsewhere)
+          depletionMethod = "fishing-no-deplete";
+          shouldDeplete = false;
+        } else {
+          // REGULAR TREES & FALLBACK: Use manifest depleteChance (1/8 for regular trees)
+          depletionMethod = "chance-based";
+          const roll = Math.random();
+          shouldDeplete = roll < tuned.depleteChance;
+          console.log(
+            `[Forestry] 🌲 ${session.resourceId}: Chance roll=${roll.toFixed(3)} vs ${tuned.depleteChance} → ${shouldDeplete ? "DEPLETE" : "continue"}`,
+          );
+        }
+
+        if (shouldDeplete) {
           // Deplete resource and schedule tick-based respawn
           resource.isAvailable = false;
           resource.lastDepleted = Date.now();
@@ -1727,6 +1986,11 @@ export class ResourceSystem extends SystemBase {
 
     // Clean up completed sessions
     for (const playerId of completedSessions) {
+      const session = this.activeGathering.get(playerId);
+      if (session) {
+        // FORESTRY: Remove from active gatherers (timer will regenerate if no other gatherers)
+        this.removeActiveGatherer(playerId, session.resourceId);
+      }
       this.activeGathering.delete(playerId);
       // Reset emote back to idle when gathering completes
       this.resetGatheringEmote(playerId);
@@ -1952,6 +2216,47 @@ export class ResourceSystem extends SystemBase {
   }
 
   /**
+   * Get the despawn ticks for a resource based on its type (Forestry system).
+   * Returns 0 for resources that use chance-based depletion (regular trees, mining).
+   *
+   * @param resourceId - The resource ID to look up
+   * @returns Despawn time in ticks, or 0 if chance-based
+   */
+  private getResourceDespawnTicks(resourceId: ResourceID): number {
+    // Get the variant key (e.g., "tree_oak", "tree_willow")
+    const variantKey = this.resourceVariants.get(resourceId) || "tree_normal";
+
+    // Extract tree type from variant key (e.g., "tree_oak" -> "oak")
+    const parts = variantKey.split("_");
+    const resourceType = parts[0];
+    const subType = parts.length > 1 ? parts[1] : "tree";
+
+    // Only trees use the Forestry timer system
+    if (resourceType !== "tree") {
+      return 0; // Mining, fishing, etc. use chance-based or don't deplete
+    }
+
+    // Map subType to TREE_DESPAWN_TICKS key
+    const treeType = subType === "normal" ? "tree" : subType;
+    const despawnTicks =
+      GATHERING_CONSTANTS.TREE_DESPAWN_TICKS[
+        treeType as keyof typeof GATHERING_CONSTANTS.TREE_DESPAWN_TICKS
+      ];
+
+    return despawnTicks ?? 0;
+  }
+
+  /**
+   * Check if a resource uses timer-based depletion (Forestry) vs chance-based.
+   *
+   * @param resourceId - The resource ID
+   * @returns true if uses Forestry timer, false if chance-based
+   */
+  private usesTimerBasedDepletion(resourceId: ResourceID): boolean {
+    return this.getResourceDespawnTicks(resourceId) > 0;
+  }
+
+  /**
    * Check if player has any tool matching the required category
    */
   private playerHasToolCategory(playerId: string, category: string): boolean {
@@ -2021,6 +2326,9 @@ export class ResourceSystem extends SystemBase {
 
     // Clear tick-based respawn tracking
     this.respawnAtTick.clear();
+
+    // FORESTRY: Clear resource timer tracking
+    this.resourceTimers.clear();
 
     // Clear all resource data
     this.resources.clear();

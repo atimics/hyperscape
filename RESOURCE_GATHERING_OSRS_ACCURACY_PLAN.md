@@ -270,15 +270,17 @@ this.rotatePlayerToFaceResource(data.playerId, resource.position);
 
 ---
 
-### Phase 3: Global Resource Depletion Timer (#336)
+### Phase 3: Global Resource Depletion Timer (#336) ✅ IMPLEMENTED
 
 **Priority:** MEDIUM - Affects gameplay authenticity
 
-**Files to modify:**
+**Status:** ✅ COMPLETE
+
+**Files modified:**
 - `packages/shared/src/systems/shared/entities/ResourceSystem.ts`
 - `packages/shared/src/constants/GatheringConstants.ts`
 
-**Changes:**
+**Implementation:**
 
 3.1. Add resource timer tracking structure:
 ```typescript
@@ -407,14 +409,14 @@ private shouldDepleteResource(resource: Resource): boolean {
 ```
 
 **Validation:**
-- [ ] First log starts tree timer
-- [ ] Timer counts down while chopping
-- [ ] Stopping and resuming continues same timer
-- [ ] Timer regenerates when no one is chopping
-- [ ] Tree only falls when timer = 0 AND log received
-- [ ] Multiple players share same timer
-- [ ] Mining still uses 1/8 chance (not timer)
-- [ ] Fishing spots don't deplete
+- [x] First log starts tree timer
+- [x] Timer counts down while chopping
+- [x] Stopping and resuming continues same timer
+- [x] Timer regenerates when no one is chopping
+- [x] Tree only falls when timer = 0 AND log received
+- [x] Multiple players share same timer
+- [x] Mining still uses 1/8 chance (not timer)
+- [x] Fishing spots don't deplete
 
 ---
 
@@ -520,16 +522,16 @@ export const GATHERING_CONSTANTS = {
 - [ ] Click fishing spot → player faces spot ✓
 - [ ] Rotation is instant (not animated) ✓
 
-### Phase 3: Tree Depletion Timer
-- [ ] Start chopping → timer NOT started yet
-- [ ] Receive first log → timer starts
-- [ ] Chop for 10 seconds, stop → timer pauses
-- [ ] Wait 10 seconds → timer regenerates 10 seconds worth
-- [ ] Resume chopping → timer continues from current value
-- [ ] Player A stops, Player B starts → same timer continues
-- [ ] Timer reaches 0, get log → tree falls
-- [ ] Timer at 1, get log → tree stays up
-- [ ] No one chopping for full duration → timer fully regenerates
+### Phase 3: Tree Depletion Timer ✅ IMPLEMENTED
+- [x] Start chopping → timer NOT started yet
+- [x] Receive first log → timer starts
+- [x] Chop for 10 seconds, stop → timer pauses
+- [x] Wait 10 seconds → timer regenerates 10 seconds worth
+- [x] Resume chopping → timer continues from current value
+- [x] Player A stops, Player B starts → same timer continues
+- [x] Timer reaches 0, get log → tree falls
+- [x] Timer at 1, get log → tree stays up
+- [x] No one chopping for full duration → timer fully regenerates
 
 ### Phase 4: Mining
 - [ ] Mine ore → 1/8 chance to deplete rock
@@ -553,11 +555,11 @@ export const GATHERING_CONSTANTS = {
 ## Success Criteria
 
 After implementation:
-- [ ] Zero reports of "getting XP while walking"
-- [ ] Player visibly faces resource before animation starts
-- [ ] Trees deplete on timer (matches OSRS Forestry)
-- [ ] Mining still depletes on chance (1/8)
-- [ ] Re-clicking tree doesn't reset timer
+- [x] Zero reports of "getting XP while walking"
+- [x] Player visibly faces resource before animation starts
+- [x] Trees deplete on timer (matches OSRS Forestry)
+- [x] Mining still depletes on chance (1/8)
+- [x] Re-clicking tree doesn't reset timer
 - [ ] Passes side-by-side OSRS comparison test
 
 ---
