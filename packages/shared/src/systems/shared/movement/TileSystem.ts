@@ -883,3 +883,150 @@ export function hasUnoccupiedCardinalTile(
 
   return false;
 }
+
+// ============================================================================
+// RESOURCE INTERACTION TILE HELPERS
+// ============================================================================
+
+/**
+ * Get all tiles adjacent to a multi-tile resource (valid standing positions)
+ *
+ * OSRS-ACCURACY: For multi-tile resources (like large trees), players can
+ * interact from any adjacent tile around the resource's footprint.
+ *
+ * For a 2×2 resource at anchor (15,-10), this returns the 12 tiles surrounding it:
+ * - North edge: (15,-8), (16,-8)
+ * - South edge: (15,-11), (16,-11)
+ * - East edge: (17,-10), (17,-9)
+ * - West edge: (14,-10), (14,-9)
+ * - Corners: (14,-11), (17,-11), (14,-8), (17,-8)
+ *
+ * @param anchorTile - SW corner tile of the resource
+ * @param footprintX - Width of the resource in tiles
+ * @param footprintZ - Depth of the resource in tiles
+ * @returns Array of all adjacent tiles (valid interaction positions)
+ */
+export function getResourceAdjacentTiles(
+  anchorTile: TileCoord,
+  footprintX: number,
+  footprintZ: number,
+): TileCoord[] {
+  const adjacent: TileCoord[] = [];
+
+  // North edge (z + footprintZ)
+  for (let dx = 0; dx < footprintX; dx++) {
+    adjacent.push({ x: anchorTile.x + dx, z: anchorTile.z + footprintZ });
+  }
+
+  // South edge (z - 1)
+  for (let dx = 0; dx < footprintX; dx++) {
+    adjacent.push({ x: anchorTile.x + dx, z: anchorTile.z - 1 });
+  }
+
+  // East edge (x + footprintX)
+  for (let dz = 0; dz < footprintZ; dz++) {
+    adjacent.push({ x: anchorTile.x + footprintX, z: anchorTile.z + dz });
+  }
+
+  // West edge (x - 1)
+  for (let dz = 0; dz < footprintZ; dz++) {
+    adjacent.push({ x: anchorTile.x - 1, z: anchorTile.z + dz });
+  }
+
+  // Corner tiles (diagonal interaction)
+  adjacent.push({ x: anchorTile.x - 1, z: anchorTile.z - 1 }); // SW
+  adjacent.push({ x: anchorTile.x + footprintX, z: anchorTile.z - 1 }); // SE
+  adjacent.push({ x: anchorTile.x - 1, z: anchorTile.z + footprintZ }); // NW
+  adjacent.push({ x: anchorTile.x + footprintX, z: anchorTile.z + footprintZ }); // NE
+
+  return adjacent;
+}
+
+/**
+ * Find the best adjacent tile for a player to stand on when interacting with a resource
+ *
+ * OSRS-ACCURACY: Returns the walkable tile nearest to player's current position.
+ * This creates natural pathing behavior where players move to the closest valid spot.
+ *
+ * @param playerTile - Player's current tile position
+ * @param anchorTile - SW corner tile of the resource
+ * @param footprintX - Width of the resource in tiles
+ * @param footprintZ - Depth of the resource in tiles
+ * @param isWalkable - Function to check if a tile is walkable
+ * @returns Best tile to stand on, or null if all adjacent tiles are blocked
+ */
+export function findBestResourceInteractionTile(
+  playerTile: TileCoord,
+  anchorTile: TileCoord,
+  footprintX: number,
+  footprintZ: number,
+  isWalkable: (tile: TileCoord) => boolean,
+): TileCoord | null {
+  const adjacent = getResourceAdjacentTiles(anchorTile, footprintX, footprintZ);
+
+  let best: TileCoord | null = null;
+  let bestDist = Infinity;
+
+  for (const tile of adjacent) {
+    if (!isWalkable(tile)) continue;
+
+    // Use Manhattan distance for simplicity (could use Chebyshev for diagonal preference)
+    const dist =
+      Math.abs(tile.x - playerTile.x) + Math.abs(tile.z - playerTile.z);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = tile;
+    }
+  }
+
+  return best;
+}
+
+/**
+ * Check if a player tile is adjacent to a resource (can interact)
+ *
+ * @param playerTile - Player's current tile position
+ * @param anchorTile - SW corner tile of the resource
+ * @param footprintX - Width of the resource in tiles
+ * @param footprintZ - Depth of the resource in tiles
+ * @returns true if player is on an adjacent tile
+ */
+export function isAdjacentToResource(
+  playerTile: TileCoord,
+  anchorTile: TileCoord,
+  footprintX: number,
+  footprintZ: number,
+): boolean {
+  // Check if player is within the interaction ring around the resource
+  // Player must be:
+  // - X: between anchorTile.x - 1 and anchorTile.x + footprintX (inclusive)
+  // - Z: between anchorTile.z - 1 and anchorTile.z + footprintZ (inclusive)
+  // - NOT inside the resource footprint itself
+
+  const minX = anchorTile.x - 1;
+  const maxX = anchorTile.x + footprintX;
+  const minZ = anchorTile.z - 1;
+  const maxZ = anchorTile.z + footprintZ;
+
+  // Check if in the bounding ring
+  if (
+    playerTile.x < minX ||
+    playerTile.x > maxX ||
+    playerTile.z < minZ ||
+    playerTile.z > maxZ
+  ) {
+    return false;
+  }
+
+  // Check if NOT inside the resource (would be standing on the resource)
+  const insideX =
+    playerTile.x >= anchorTile.x && playerTile.x < anchorTile.x + footprintX;
+  const insideZ =
+    playerTile.z >= anchorTile.z && playerTile.z < anchorTile.z + footprintZ;
+
+  if (insideX && insideZ) {
+    return false; // Standing on the resource, not adjacent
+  }
+
+  return true;
+}
