@@ -52,6 +52,30 @@ import type { MobSpawnPoint, NPCLocation, WorldArea } from "./world-areas";
 import { WeaponType, EquipmentSlotName, AttackType } from "../types/core/core";
 
 /**
+ * Gathering Tool Data - loaded from tools.json manifest
+ * Defines tool properties for gathering skills (woodcutting, mining, fishing)
+ *
+ * OSRS Mechanics:
+ * - Woodcutting: tier used for success rate lookup, roll frequency is fixed (4 ticks)
+ * - Mining: rollTicks defines time between attempts, success is level-only
+ * - Fishing: equipment doesn't affect speed or success
+ */
+export interface GatheringToolData {
+  /** Item ID matching inventory items (e.g., "bronze_hatchet") */
+  itemId: string;
+  /** Gathering skill this tool is used for */
+  skill: "woodcutting" | "mining" | "fishing";
+  /** Metal tier for success rate lookup (e.g., "bronze", "dragon") */
+  tier: string;
+  /** Skill level required to use this tool */
+  levelRequired: number;
+  /** For mining: ticks between roll attempts (OSRS-accurate) */
+  rollTicks?: number;
+  /** Priority for best tool selection (lower = better, 1 = best) */
+  priority: number;
+}
+
+/**
  * External Resource Data - loaded from resources.json manifest
  */
 export interface ExternalResourceData {
@@ -228,6 +252,31 @@ export class DataManager {
       for (const store of storeList) {
         GENERAL_STORES[store.id] = store;
       }
+
+      // Load gathering tools
+      const toolsRes = await fetch(`${baseUrl}/tools.json`);
+      const toolList = (await toolsRes.json()) as Array<GatheringToolData>;
+
+      if (
+        !(
+          globalThis as {
+            EXTERNAL_TOOLS?: Map<string, GatheringToolData>;
+          }
+        ).EXTERNAL_TOOLS
+      ) {
+        (
+          globalThis as {
+            EXTERNAL_TOOLS?: Map<string, GatheringToolData>;
+          }
+        ).EXTERNAL_TOOLS = new Map();
+      }
+      for (const tool of toolList) {
+        (
+          globalThis as unknown as {
+            EXTERNAL_TOOLS: Map<string, GatheringToolData>;
+          }
+        ).EXTERNAL_TOOLS.set(tool.itemId, tool);
+      }
     } catch (error) {
       // In test/CI environments, CDN might not be available - this is non-fatal
       if (isTestEnv) {
@@ -388,8 +437,34 @@ export class DataManager {
         (GENERAL_STORES as Record<string, StoreData>)[store.id] = store;
       }
 
+      // Load gathering tools
+      const toolsPath = path.join(manifestsDir, "tools.json");
+      const toolsData = await fs.readFile(toolsPath, "utf-8");
+      const toolList = JSON.parse(toolsData) as Array<GatheringToolData>;
+
+      if (
+        !(
+          globalThis as {
+            EXTERNAL_TOOLS?: Map<string, GatheringToolData>;
+          }
+        ).EXTERNAL_TOOLS
+      ) {
+        (
+          globalThis as {
+            EXTERNAL_TOOLS?: Map<string, GatheringToolData>;
+          }
+        ).EXTERNAL_TOOLS = new Map();
+      }
+      for (const tool of toolList) {
+        (
+          globalThis as unknown as {
+            EXTERNAL_TOOLS: Map<string, GatheringToolData>;
+          }
+        ).EXTERNAL_TOOLS.set(tool.itemId, tool);
+      }
+
       console.log(
-        `[DataManager] ✅ Loaded manifests from filesystem (${(ITEMS as Map<string, Item>).size} items, ${(ALL_NPCS as Map<string, NPCData>).size} NPCs, ${Object.keys(BIOMES).length} biomes)`,
+        `[DataManager] ✅ Loaded manifests from filesystem (${(ITEMS as Map<string, Item>).size} items, ${(ALL_NPCS as Map<string, NPCData>).size} NPCs, ${Object.keys(BIOMES).length} biomes, ${toolList.length} tools)`,
       );
     } catch (error) {
       console.error(

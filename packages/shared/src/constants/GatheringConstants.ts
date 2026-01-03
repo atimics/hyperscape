@@ -10,6 +10,48 @@
  */
 
 export const GATHERING_CONSTANTS = {
+  // === Skill-Specific Mechanics (OSRS-accurate) ===
+  /**
+   * Different gathering skills have fundamentally different mechanics in OSRS.
+   *
+   * WOODCUTTING: Fixed roll frequency (4 ticks), tool tier affects SUCCESS RATE
+   * MINING: Variable roll frequency (tool-dependent), tool does NOT affect success rate
+   * FISHING: Fixed roll frequency (5 ticks), equipment doesn't affect anything
+   *
+   * @see https://oldschool.runescape.wiki/w/Woodcutting
+   * @see https://oldschool.runescape.wiki/w/Mining
+   * @see https://x.com/JagexAsh/status/1215007439692730370
+   */
+  SKILL_MECHANICS: {
+    woodcutting: {
+      /** Tool affects success rate per roll, not roll frequency */
+      type: "fixed-roll-variable-success" as const,
+      /** Rolls happen every 4 ticks regardless of axe tier */
+      baseRollTicks: 4,
+      /** Axe tier modifies success rate via low/high interpolation */
+      toolAffectsSuccess: true,
+      toolAffectsSpeed: false,
+    },
+    mining: {
+      /** Tool affects roll frequency, not success rate */
+      type: "variable-roll-fixed-success" as const,
+      /** Base roll ticks (bronze pickaxe), better picks = fewer ticks */
+      baseRollTicks: 8,
+      /** Pickaxe tier modifies time between rolls */
+      toolAffectsSuccess: false,
+      toolAffectsSpeed: true,
+    },
+    fishing: {
+      /** Fixed mechanics, equipment doesn't affect speed or success */
+      type: "fixed-roll-fixed-success" as const,
+      /** Rolls happen every 5 ticks */
+      baseRollTicks: 5,
+      /** Fishing equipment doesn't affect rates */
+      toolAffectsSuccess: false,
+      toolAffectsSpeed: false,
+    },
+  } as const,
+
   // === Tile-Based Range (tiles) ===
   /**
    * Gathering interaction range in tiles.

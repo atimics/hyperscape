@@ -22,7 +22,11 @@ import {
   FOOTPRINT_SIZES,
   type ResourceFootprint,
 } from "../../../types/game/resource-processing-types";
-import { getExternalResource } from "../../../utils/ExternalAssetUtils";
+import {
+  getExternalResource,
+  getExternalToolsForSkill,
+} from "../../../utils/ExternalAssetUtils";
+import type { GatheringToolData } from "../../../data/DataManager";
 import { ALL_WORLD_AREAS } from "../../../data/world-areas";
 import { GATHERING_CONSTANTS } from "../../../constants/GatheringConstants";
 // Note: quaternionPool no longer used here - face rotation is deferred to FaceDirectionManager
@@ -43,7 +47,7 @@ import { GATHERING_CONSTANTS } from "../../../constants/GatheringConstants";
  * ### Manifest Integration
  * All resource data comes from resources.json manifest:
  * - harvestSkill, levelRequired: Skill validation
- * - toolRequired: Tool validation (via unified TOOL_TIERS system)
+ * - toolRequired: Tool validation (via tools.json manifest)
  * - baseCycleTicks, depleteChance, respawnTicks: Timing configuration
  * - harvestYield: Drop table with itemId, itemName, quantity, chance, xpAmount, stackable
  *
@@ -58,13 +62,14 @@ import { GATHERING_CONSTANTS } from "../../../constants/GatheringConstants";
  * - Resource ID validation: Alphanumeric with length limit to prevent injection
  * - Proximity checks: Uses server-side player position for range validation
  *
- * ### Tool Tier System
- * Unified TOOL_TIERS structure supports all gathering skills:
- * - Woodcutting: Bronze → Dragon hatchet (0.7x - 1.0x cycle multiplier)
- * - Mining: Bronze → Dragon pickaxe (0.7x - 1.0x cycle multiplier)
- * - Fishing: Any equipment (1.0x - no speed tiers in OSRS)
+ * ### Tool Tier System (OSRS-Accurate, Manifest-Driven)
+ * Tool definitions loaded from tools.json manifest:
+ * - Woodcutting: Axe tier affects SUCCESS RATE (not speed), fixed 4-tick rolls
+ * - Mining: Pickaxe tier affects ROLL FREQUENCY (not success), variable ticks
+ * - Fishing: Equipment doesn't affect speed or success, fixed 5-tick rolls
  *
- * @see GATHERING_CONSTANTS for tunable values
+ * @see GATHERING_CONSTANTS for skill-specific mechanics
+ * @see tools.json for tool definitions
  * @see resources.json for resource definitions
  */
 export class ResourceSystem extends SystemBase {
@@ -137,119 +142,21 @@ export class ResourceSystem extends SystemBase {
   // ===== SECURITY: Rate limiting to prevent gather request spam =====
   private gatherRateLimits = new Map<PlayerID, number>();
 
-  // ===== TOOL TIER SYSTEM (generalized for all gathering skills) =====
-  /**
-   * Tool tier definitions by skill
-   * Defines speed multipliers for each tool tier (lower = faster)
-   * Order matters: best tools first (checked in order until match found)
-   */
-  private static readonly TOOL_TIERS: Record<
-    string,
-    Array<{
-      id: string;
-      pattern: RegExp;
-      levelRequired: number;
-      cycleMultiplier: number;
-    }>
-  > = {
-    woodcutting: [
-      {
-        id: "dragon_hatchet",
-        pattern: /dragon.*(hatchet|axe)/i,
-        levelRequired: 61,
-        cycleMultiplier: 0.7,
-      },
-      {
-        id: "rune_hatchet",
-        pattern: /rune.*(hatchet|axe)/i,
-        levelRequired: 41,
-        cycleMultiplier: 0.78,
-      },
-      {
-        id: "adamant_hatchet",
-        pattern: /adamant.*(hatchet|axe)/i,
-        levelRequired: 31,
-        cycleMultiplier: 0.84,
-      },
-      {
-        id: "mithril_hatchet",
-        pattern: /mithril.*(hatchet|axe)/i,
-        levelRequired: 21,
-        cycleMultiplier: 0.88,
-      },
-      {
-        id: "steel_hatchet",
-        pattern: /steel.*(hatchet|axe)/i,
-        levelRequired: 6,
-        cycleMultiplier: 0.92,
-      },
-      {
-        id: "iron_hatchet",
-        pattern: /iron.*(hatchet|axe)/i,
-        levelRequired: 1,
-        cycleMultiplier: 0.96,
-      },
-      {
-        id: "bronze_hatchet",
-        pattern: /bronze.*(hatchet|axe)/i,
-        levelRequired: 1,
-        cycleMultiplier: 1.0,
-      },
-    ],
-    mining: [
-      {
-        id: "dragon_pickaxe",
-        pattern: /dragon.*(pickaxe|pick)/i,
-        levelRequired: 61,
-        cycleMultiplier: 0.7,
-      },
-      {
-        id: "rune_pickaxe",
-        pattern: /rune.*(pickaxe|pick)/i,
-        levelRequired: 41,
-        cycleMultiplier: 0.78,
-      },
-      {
-        id: "adamant_pickaxe",
-        pattern: /adamant.*(pickaxe|pick)/i,
-        levelRequired: 31,
-        cycleMultiplier: 0.84,
-      },
-      {
-        id: "mithril_pickaxe",
-        pattern: /mithril.*(pickaxe|pick)/i,
-        levelRequired: 21,
-        cycleMultiplier: 0.88,
-      },
-      {
-        id: "steel_pickaxe",
-        pattern: /steel.*(pickaxe|pick)/i,
-        levelRequired: 6,
-        cycleMultiplier: 0.92,
-      },
-      {
-        id: "iron_pickaxe",
-        pattern: /iron.*(pickaxe|pick)/i,
-        levelRequired: 1,
-        cycleMultiplier: 0.96,
-      },
-      {
-        id: "bronze_pickaxe",
-        pattern: /bronze.*(pickaxe|pick)/i,
-        levelRequired: 1,
-        cycleMultiplier: 1.0,
-      },
-    ],
-    fishing: [
-      // Fishing tools don't have speed tiers in OSRS - all equipment is same speed
-      {
-        id: "fishing_equipment",
-        pattern: /(fishing|net|rod|harpoon)/i,
-        levelRequired: 1,
-        cycleMultiplier: 1.0,
-      },
-    ],
-  };
+  // =============================================================================
+  // TOOL DATA - Now loaded from tools.json manifest
+  // =============================================================================
+  //
+  // Tool definitions are in packages/server/world/assets/manifests/tools.json
+  // Loaded at runtime via DataManager → getExternalToolsForSkill()
+  //
+  // OSRS-ACCURATE MECHANICS:
+  // - Woodcutting: tier affects success rate, roll frequency is fixed (4 ticks)
+  // - Mining: rollTicks affects roll frequency, success rate is level-only
+  // - Fishing: Equipment doesn't affect speed or success
+  //
+  // @see https://oldschool.runescape.wiki/w/Axe
+  // @see https://oldschool.runescape.wiki/w/Pickaxe
+  // =============================================================================
 
   constructor(world: World) {
     super(world, {
@@ -1225,9 +1132,9 @@ export class ResourceSystem extends SystemBase {
         return;
       }
 
-      // Enforce tool level requirement using unified tool system
+      // Enforce tool level requirement using manifest-driven tool system
       const bestTool = this.getBestTool(data.playerId, resource.skillRequired);
-      if (bestTool && bestTool.id !== "none") {
+      if (bestTool) {
         const cached = this.playerSkills.get(data.playerId);
         const currentSkillLevel = cached?.[resource.skillRequired]?.level ?? 1;
         if (currentSkillLevel < bestTool.levelRequired) {
@@ -1269,12 +1176,15 @@ export class ResourceSystem extends SystemBase {
 
     // Get best tool tier using unified tool system
     const toolInfo = this.getBestTool(data.playerId, resource.skillRequired);
-    const toolMultiplier = toolInfo ? toolInfo.cycleMultiplier : 1.0;
 
+    // OSRS-ACCURATE: Compute cycle ticks based on skill-specific mechanics
+    // - Woodcutting: Fixed 4 ticks (axe affects success rate, not speed)
+    // - Mining: Variable ticks based on pickaxe tier
+    // - Fishing: Fixed 5 ticks
     const cycleTickInterval = this.computeCycleTicks(
-      skillLevel,
+      resource.skillRequired,
       tuned,
-      toolMultiplier,
+      toolInfo,
     );
 
     // PERFORMANCE: Pre-compute success rate to avoid per-tick calculation
@@ -2038,26 +1948,58 @@ export class ResourceSystem extends SystemBase {
   }
 
   /**
-   * Compute gathering cycle in ticks (OSRS-accurate)
-   * Higher skill level = fewer ticks between attempts
-   * Better tools = fewer ticks (via multiplier)
+   * Compute gathering cycle in ticks (OSRS-accurate, skill-specific)
+   *
+   * OSRS MECHANICS:
+   * - Woodcutting: Fixed 4 ticks, tool doesn't affect frequency
+   * - Mining: Tool determines tick interval (8 bronze → 3 rune/dragon)
+   * - Fishing: Fixed 5 ticks, equipment doesn't affect frequency
+   *
+   * @param skill - The gathering skill (woodcutting, mining, fishing)
+   * @param tuned - Resource tuning data from manifest
+   * @param toolData - Tool data from tools.json manifest (may have rollTicks for mining)
    */
   private computeCycleTicks(
-    skillLevel: number,
+    skill: string,
     tuned: { levelRequired: number; baseCycleTicks: number },
-    toolMultiplier: number = 1.0,
+    toolData: GatheringToolData | null,
   ): number {
-    const levelDelta = Math.max(0, skillLevel - tuned.levelRequired);
-    // Up to ~30% faster at high level delta
-    const levelFactor = Math.min(
-      GATHERING_CONSTANTS.MAX_LEVEL_FACTOR,
-      levelDelta * GATHERING_CONSTANTS.LEVEL_FACTOR_PER_LEVEL,
+    const mechanics =
+      GATHERING_CONSTANTS.SKILL_MECHANICS[
+        skill as keyof typeof GATHERING_CONSTANTS.SKILL_MECHANICS
+      ];
+
+    if (mechanics) {
+      if (mechanics.type === "fixed-roll-variable-success") {
+        // WOODCUTTING: Fixed roll frequency, tool affects success rate (handled elsewhere)
+        // Always use the skill's base roll ticks (4 for woodcutting)
+        return Math.max(
+          GATHERING_CONSTANTS.MINIMUM_CYCLE_TICKS,
+          mechanics.baseRollTicks,
+        );
+      }
+
+      if (mechanics.type === "variable-roll-fixed-success") {
+        // MINING: Tool tier determines roll frequency
+        // Use rollTicks from tool data, or fall back to base (bronze = 8)
+        const rollTicks = toolData?.rollTicks ?? mechanics.baseRollTicks;
+        return Math.max(GATHERING_CONSTANTS.MINIMUM_CYCLE_TICKS, rollTicks);
+      }
+
+      if (mechanics.type === "fixed-roll-fixed-success") {
+        // FISHING: Fixed roll frequency, equipment doesn't matter
+        return Math.max(
+          GATHERING_CONSTANTS.MINIMUM_CYCLE_TICKS,
+          mechanics.baseRollTicks,
+        );
+      }
+    }
+
+    // Fallback to base ticks for unknown skills
+    return Math.max(
+      GATHERING_CONSTANTS.MINIMUM_CYCLE_TICKS,
+      tuned.baseCycleTicks,
     );
-    const baseTicks = Math.ceil(tuned.baseCycleTicks * (1 - levelFactor));
-    // Apply tool multiplier (better tools = fewer ticks)
-    const finalTicks = Math.floor(baseTicks * toolMultiplier);
-    // Minimum ticks to prevent instant gathering
-    return Math.max(GATHERING_CONSTANTS.MINIMUM_CYCLE_TICKS, finalTicks);
   }
 
   /**
@@ -2134,19 +2076,27 @@ export class ResourceSystem extends SystemBase {
   }
 
   /**
-   * Get best tool for a skill from player inventory (unified tool tier system)
-   * Returns tool info with level requirement and speed multiplier
+   * Get best tool for a skill from player inventory (manifest-driven)
+   * Returns tool data from tools.json manifest
+   *
+   * Tools are loaded from packages/server/world/assets/manifests/tools.json
+   * and sorted by priority (1 = best, higher = worse)
+   *
    * @param playerId - Player to check inventory for
    * @param skill - Skill name (woodcutting, mining, fishing)
    */
   private getBestTool(
     playerId: string,
     skill: string,
-  ): { id: string; levelRequired: number; cycleMultiplier: number } | null {
-    const tiers = ResourceSystem.TOOL_TIERS[skill];
-    if (!tiers) {
-      // Unknown skill - no tool boost available
-      return { id: "none", levelRequired: 1, cycleMultiplier: 1.0 };
+  ): GatheringToolData | null {
+    // Get tools for this skill from manifest, sorted by priority (best first)
+    const skillTools = getExternalToolsForSkill(
+      skill as "woodcutting" | "mining" | "fishing",
+    );
+
+    if (skillTools.length === 0) {
+      // No tools defined for this skill in manifest
+      return null;
     }
 
     const inventorySystem = this.world.getSystem?.("inventory") as {
@@ -2158,17 +2108,15 @@ export class ResourceSystem extends SystemBase {
     const inv = inventorySystem?.getInventory?.(playerId);
     const items = inv?.items || [];
 
-    // Check tiers in order (best tools first)
-    for (const tier of tiers) {
-      const hasTool = items.some(
-        (item) => item?.itemId && tier.pattern.test(item.itemId),
-      );
-      if (hasTool) {
-        return {
-          id: tier.id,
-          levelRequired: tier.levelRequired,
-          cycleMultiplier: tier.cycleMultiplier,
-        };
+    // Build a set of item IDs for fast lookup
+    const playerItemIds = new Set(
+      items.map((item) => item?.itemId).filter(Boolean),
+    );
+
+    // Check tools in priority order (best first) - exact itemId match
+    for (const tool of skillTools) {
+      if (playerItemIds.has(tool.itemId)) {
+        return tool;
       }
     }
 
