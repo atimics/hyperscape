@@ -8,7 +8,9 @@
 | 1b | Manifest-driven tools refactor | ✅ COMPLETED |
 | 2 | OSRS success rate LERP formula | ✅ COMPLETED |
 | 3 | Tool tier definitions | ✅ COMPLETED (via tools.json) |
-| 4 | Debug logging | ⏳ PENDING |
+| 4 | Debug logging | ✅ COMPLETED |
+
+**All phases complete!** The gathering system now uses OSRS-accurate mechanics.
 
 **Note**: Phase 3 was merged into Phase 1b. Tool definitions moved from hardcoded `TOOL_TIERS`
 to `packages/server/world/assets/manifests/tools.json` for better maintainability.

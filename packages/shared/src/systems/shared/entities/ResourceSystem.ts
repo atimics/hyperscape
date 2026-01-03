@@ -103,6 +103,13 @@ export class ResourceSystem extends SystemBase {
       cachedResourceName: string; // For messages without lookup
       // OSRS-ACCURACY: Store start position to detect movement (cancels gathering)
       cachedStartPosition: { x: number; y: number; z: number };
+      // DEBUG: Cached for logging (only used when DEBUG_GATHERING=true)
+      debugInfo?: {
+        skill: string;
+        variant: string;
+        toolTier: string | null;
+        lowHigh: { low: number; high: number };
+      };
     }
   >();
   // Tick-based respawn tracking (replaces legacy setTimeout approach)
@@ -1222,6 +1229,14 @@ export class ResourceSystem extends SystemBase {
       footprintForRotation,
     );
 
+    // Get low/high values for debug logging
+    const toolTier = toolInfo?.tier ?? null;
+    const lowHigh = this.getSuccessRateValues(
+      resource.skillRequired,
+      variant,
+      toolTier,
+    );
+
     // Schedule first attempt on next tick with CACHED data
     this.activeGathering.set(playerId, {
       playerId,
@@ -1238,7 +1253,46 @@ export class ResourceSystem extends SystemBase {
       cachedResourceName: resourceName,
       // OSRS-ACCURACY: Store position to detect movement (any movement cancels gathering)
       cachedStartPosition: startPosition,
+      // DEBUG: Store for logging (only used when DEBUG_GATHERING=true)
+      debugInfo: ResourceSystem.DEBUG_GATHERING
+        ? {
+            skill: resource.skillRequired,
+            variant,
+            toolTier,
+            lowHigh,
+          }
+        : undefined,
     });
+
+    // DEBUG: Log session start with OSRS mechanics details
+    if (ResourceSystem.DEBUG_GATHERING) {
+      const mechanics =
+        GATHERING_CONSTANTS.SKILL_MECHANICS[
+          resource.skillRequired as keyof typeof GATHERING_CONSTANTS.SKILL_MECHANICS
+        ];
+      console.log(
+        `[Gathering DEBUG] ═══════════════════════════════════════════════════════`,
+      );
+      console.log(`[Gathering DEBUG] Session started for ${playerId}`);
+      console.log(
+        `[Gathering DEBUG] Resource: ${variant} (${resource.skillRequired})`,
+      );
+      console.log(
+        `[Gathering DEBUG] Tool: ${toolInfo?.itemId ?? "none"} (tier: ${toolTier ?? "none"})`,
+      );
+      console.log(
+        `[Gathering DEBUG] Mechanics: ${mechanics?.type ?? "unknown"}`,
+      );
+      console.log(
+        `[Gathering DEBUG] Cycle: ${cycleTickInterval} ticks (${(cycleTickInterval * 0.6).toFixed(1)}s)`,
+      );
+      console.log(
+        `[Gathering DEBUG] Success Rate: ${(successRate * 100).toFixed(1)}% (low=${lowHigh.low}, high=${lowHigh.high}, level=${skillLevel})`,
+      );
+      console.log(
+        `[Gathering DEBUG] ═══════════════════════════════════════════════════════`,
+      );
+    }
 
     // FORESTRY: Track as active gatherer for timer-based resources
     this.addActiveGatherer(playerId, sessionResourceId, currentTick);
@@ -1767,7 +1821,17 @@ export class ResourceSystem extends SystemBase {
       session.attempts++;
 
       // PERFORMANCE: Use cached success rate (zero allocation per tick)
-      const isSuccessful = Math.random() < session.cachedSuccessRate;
+      const roll = Math.random();
+      const isSuccessful = roll < session.cachedSuccessRate;
+
+      // DEBUG: Log each roll result
+      if (ResourceSystem.DEBUG_GATHERING) {
+        const debug = session.debugInfo;
+        console.log(
+          `[Gathering DEBUG] Roll #${session.attempts}: ${(roll * 100).toFixed(1)}% vs ${(session.cachedSuccessRate * 100).toFixed(1)}% → ${isSuccessful ? "SUCCESS" : "FAIL"} ` +
+            `(${debug?.skill ?? "?"} | ${debug?.variant ?? "?"} | ${debug?.toolTier ?? "no tool"})`,
+        );
+      }
 
       if (isSuccessful) {
         session.successes++;
