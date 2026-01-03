@@ -6,7 +6,7 @@
 |-------|-------------|--------|
 | 1 | Skill-specific roll mechanics | ✅ COMPLETED |
 | 1b | Manifest-driven tools refactor | ✅ COMPLETED |
-| 2 | OSRS success rate LERP formula | ⏳ PENDING |
+| 2 | OSRS success rate LERP formula | ✅ COMPLETED |
 | 3 | Tool tier definitions | ✅ COMPLETED (via tools.json) |
 | 4 | Debug logging | ⏳ PENDING |
 

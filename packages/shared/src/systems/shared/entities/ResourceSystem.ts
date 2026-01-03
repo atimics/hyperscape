@@ -1188,7 +1188,15 @@ export class ResourceSystem extends SystemBase {
     );
 
     // PERFORMANCE: Pre-compute success rate to avoid per-tick calculation
-    const successRate = this.computeSuccessRate(skillLevel, tuned);
+    // OSRS-ACCURATE: Uses LERP formula with skill-specific tables
+    // - Woodcutting: Tree type + axe tier determines success
+    // - Mining/Fishing: Resource type only (tool doesn't affect success)
+    const successRate = this.computeSuccessRate(
+      skillLevel,
+      resource.skillRequired,
+      variant,
+      toolInfo?.tier ?? null,
+    );
 
     // OSRS-ACCURACY: Get server-authoritative player position for movement detection
     const player = this.world.getPlayer?.(data.playerId);
@@ -2009,19 +2017,113 @@ export class ResourceSystem extends SystemBase {
     return ticks * TICK_DURATION_MS;
   }
 
+  /**
+   * Compute success rate using OSRS's LERP interpolation formula.
+   *
+   * OSRS Formula: P(Level) = (1 + floor(low × (99 - L) / 98 + high × (L - 1) / 98 + 0.5)) / 256
+   *
+   * The low/high values come from skill-specific tables:
+   * - Woodcutting: Varies by tree type AND axe tier
+   * - Mining: Varies by ore type only (pickaxe doesn't affect success)
+   * - Fishing: Varies by spot type only (equipment doesn't affect success)
+   *
+   * @param skillLevel - Player's current skill level (1-99)
+   * @param skill - The gathering skill (woodcutting, mining, fishing)
+   * @param resourceVariant - Resource type key (e.g., "tree_normal", "ore_copper")
+   * @param toolTier - Tool tier for woodcutting (e.g., "bronze", "rune"), ignored for other skills
+   * @returns Success probability (0-1)
+   *
+   * @see https://oldschool.runescape.wiki/w/Skilling_success_rate
+   */
   private computeSuccessRate(
     skillLevel: number,
-    tuned: { levelRequired: number },
+    skill: string,
+    resourceVariant: string,
+    toolTier: string | null,
   ): number {
-    // Base rate at requirement level, +bonus per level above, clamped to [min, max]
-    const delta = skillLevel - tuned.levelRequired;
-    const base =
-      GATHERING_CONSTANTS.BASE_SUCCESS_RATE +
-      Math.max(0, delta) * GATHERING_CONSTANTS.PER_LEVEL_SUCCESS_BONUS;
-    return Math.max(
-      GATHERING_CONSTANTS.MIN_SUCCESS_RATE,
-      Math.min(GATHERING_CONSTANTS.MAX_SUCCESS_RATE, base),
+    // Get low/high values based on skill type
+    const { low, high } = this.getSuccessRateValues(
+      skill,
+      resourceVariant,
+      toolTier,
     );
+
+    // Apply OSRS LERP formula
+    return this.lerpSuccessRate(low, high, skillLevel);
+  }
+
+  /**
+   * Get low/high success rate values from the appropriate table.
+   */
+  private getSuccessRateValues(
+    skill: string,
+    resourceVariant: string,
+    toolTier: string | null,
+  ): { low: number; high: number } {
+    if (skill === "woodcutting") {
+      // Woodcutting: lookup by tree type AND axe tier
+      const treeRates =
+        GATHERING_CONSTANTS.WOODCUTTING_SUCCESS_RATES[
+          resourceVariant as keyof typeof GATHERING_CONSTANTS.WOODCUTTING_SUCCESS_RATES
+        ];
+      if (treeRates) {
+        const tier = toolTier || "bronze";
+        const tierRates = treeRates[tier as keyof typeof treeRates];
+        if (tierRates) {
+          return tierRates;
+        }
+        // Unknown tier, fall back to bronze
+        return treeRates.bronze;
+      }
+    }
+
+    if (skill === "mining") {
+      // Mining: lookup by ore type only (pickaxe doesn't affect success)
+      const oreRates =
+        GATHERING_CONSTANTS.MINING_SUCCESS_RATES[
+          resourceVariant as keyof typeof GATHERING_CONSTANTS.MINING_SUCCESS_RATES
+        ];
+      if (oreRates) {
+        return oreRates;
+      }
+    }
+
+    if (skill === "fishing") {
+      // Fishing: lookup by spot type only (equipment doesn't affect success)
+      const fishRates =
+        GATHERING_CONSTANTS.FISHING_SUCCESS_RATES[
+          resourceVariant as keyof typeof GATHERING_CONSTANTS.FISHING_SUCCESS_RATES
+        ];
+      if (fishRates) {
+        return fishRates;
+      }
+    }
+
+    // Fallback to default values
+    return GATHERING_CONSTANTS.DEFAULT_SUCCESS_RATE;
+  }
+
+  /**
+   * OSRS linear interpolation formula for success rates.
+   *
+   * Formula: P(Level) = (1 + floor(low × (99 - L) / 98 + high × (L - 1) / 98 + 0.5)) / 256
+   *
+   * @param low - Success numerator at level 1 (x/256)
+   * @param high - Success numerator at level 99 (x/256)
+   * @param level - Current skill level (1-99)
+   * @returns Success probability (0-1), clamped to valid range
+   */
+  private lerpSuccessRate(low: number, high: number, level: number): number {
+    // Clamp level to valid range
+    const clampedLevel = Math.min(99, Math.max(1, level));
+
+    // OSRS interpolation formula
+    const lowComponent = (low * (99 - clampedLevel)) / 98;
+    const highComponent = (high * (clampedLevel - 1)) / 98;
+    const numerator = 1 + Math.floor(lowComponent + highComponent + 0.5);
+
+    // Convert to probability and clamp to [0, 1]
+    return Math.min(1, Math.max(0, numerator / 256));
   }
 
   /**
