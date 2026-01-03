@@ -1209,7 +1209,11 @@ export class ResourceSystem extends SystemBase {
 
     // OSRS-ACCURACY: Rotate player to face the resource (instant rotation like OSRS)
     // This happens before session starts so animation plays in correct direction
-    this.rotatePlayerToFaceResource(data.playerId, resource.position);
+    this.rotatePlayerToFaceResource(
+      data.playerId,
+      resource.position,
+      resource.footprint || "standard",
+    );
 
     // Schedule first attempt on next tick with CACHED data
     this.activeGathering.set(playerId, {
@@ -1320,14 +1324,19 @@ export class ResourceSystem extends SystemBase {
    * 3. If player moved, rotation is skipped but faceTarget persists
    * 4. Player will face the resource when they eventually stop moving
    *
+   * For multi-tile resources (2×2, 3×3), the player faces the center of the
+   * occupied tile area, not just a single tile.
+   *
    * @see https://osrs-docs.com/docs/packets/outgoing/updating/masks/face-direction/
    *
    * @param playerId - The player to set face target for
-   * @param resourcePosition - The position of the resource to face
+   * @param resourcePosition - The position of the resource (tile-centered)
+   * @param footprint - The resource's tile footprint (defaults to "standard")
    */
   private rotatePlayerToFaceResource(
     playerId: string,
     resourcePosition: { x: number; y: number; z: number },
+    footprint: ResourceFootprint = "standard",
   ): void {
     // OSRS-ACCURACY: Use FaceDirectionManager for deferred tick-end processing
     // The manager will apply rotation at end of tick only if player didn't move
@@ -1340,11 +1349,19 @@ export class ResourceSystem extends SystemBase {
     ).faceDirectionManager;
 
     if (faceManager) {
-      faceManager.setFaceTarget(
-        playerId,
-        resourcePosition.x,
-        resourcePosition.z,
-      );
+      // Calculate face target based on resource footprint
+      // For 1×1: face the tile center (resource position is already tile-centered)
+      // For 2×2+: face the center of the occupied tile area
+      const size = FOOTPRINT_SIZES[footprint];
+      const anchorTile = worldToTile(resourcePosition.x, resourcePosition.z);
+
+      // Center of the resource's tile area
+      // For 1×1 at anchor (15,-10): target = (15.5, -9.5) = tile center
+      // For 2×2 at anchor (15,-10): target = (16, -9) = center of 2×2 area
+      const targetX = anchorTile.x + size.x / 2;
+      const targetZ = anchorTile.z + size.z / 2;
+
+      faceManager.setFaceTarget(playerId, targetX, targetZ);
     }
   }
 
