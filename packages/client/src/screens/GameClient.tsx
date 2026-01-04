@@ -186,14 +186,7 @@ export function GameClient({ wsUrl, onSetup }: GameClientProps) {
       }
 
       // Ensure RPG systems are registered before initializing the world
-      const systemsPromise = (
-        world as InstanceType<typeof World> & {
-          systemsLoadedPromise?: Promise<void>;
-        }
-      ).systemsLoadedPromise;
-      if (systemsPromise) {
-        await systemsPromise;
-      }
+      await world.systemsLoadedPromise;
 
       await world.init(config);
     };

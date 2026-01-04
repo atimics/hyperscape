@@ -1649,7 +1649,9 @@ export class World extends EventEmitter {
     return this.$eventBus;
   }
 
-  systemsLoadedPromise(): Promise<void> {
-    return Promise.resolve();
-  }
+  /**
+   * Promise that resolves when all systems are loaded.
+   * Can be overridden by createClientWorld to track async system loading.
+   */
+  systemsLoadedPromise: Promise<void> = Promise.resolve();
 }

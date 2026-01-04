@@ -1,9 +1,8 @@
-import { GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
-import React, { useState, useEffect, useRef } from "react";
-import { GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
-import { Agent } from "../../screens/DashboardScreen";
-import { Send, Bot, Paperclip, Mic } from "lucide-react";
+import { GAME_API_URL } from "@/lib/api-config";
 import { usePrivy } from "@privy-io/react-auth";
+import { Bot, Mic, Paperclip, Send } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { Agent } from "../../screens/DashboardScreen";
 
 interface Message {
   id: string;

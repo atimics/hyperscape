@@ -218,15 +218,13 @@ export function createClientWorld() {
   // CRITICAL: Create a promise that tracks when registerSystems() completes
   // This ensures DataManager is initialized before world.init() is called
 
-  let systemsLoadedResolve: () => void;
+  let systemsLoadedResolve!: () => void;
   const systemsLoadedPromise = new Promise<void>((resolve) => {
     systemsLoadedResolve = resolve;
   });
 
   // Attach promise to world so GameClient can wait for it
-  (
-    world as World & { systemsLoadedPromise?: Promise<void> }
-  ).systemsLoadedPromise = systemsLoadedPromise;
+  world.systemsLoadedPromise = systemsLoadedPromise;
 
   (async () => {
     try {

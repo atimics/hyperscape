@@ -1,6 +1,5 @@
 import { GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
 import React, { useState, useEffect } from "react";
-import { GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
 import { Agent } from "../../screens/DashboardScreen";
 import { ChevronDown, ChevronUp, MapPin } from "lucide-react";
 

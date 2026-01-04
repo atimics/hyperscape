@@ -846,10 +846,20 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     };
 
     // Character selection handlers
+    // Support both with and without "on" prefix for client compatibility
     this.handlers["onCharacterListRequest"] = (socket) =>
+      handleCharacterListRequest(socket, this.world);
+    this.handlers["characterListRequest"] = (socket) =>
       handleCharacterListRequest(socket, this.world);
 
     this.handlers["onCharacterCreate"] = (socket, data) =>
+      handleCharacterCreate(
+        socket,
+        data,
+        this.world,
+        this.broadcastManager.sendToSocket.bind(this.broadcastManager),
+      );
+    this.handlers["characterCreate"] = (socket, data) =>
       handleCharacterCreate(
         socket,
         data,
@@ -863,8 +873,23 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         data,
         this.broadcastManager.sendToSocket.bind(this.broadcastManager),
       );
+    this.handlers["characterSelected"] = (socket, data) =>
+      handleCharacterSelected(
+        socket,
+        data,
+        this.broadcastManager.sendToSocket.bind(this.broadcastManager),
+      );
 
     this.handlers["onEnterWorld"] = (socket, data) =>
+      handleEnterWorld(
+        socket,
+        data,
+        this.world,
+        this.spawn,
+        this.broadcastManager.sendToAll.bind(this.broadcastManager),
+        this.broadcastManager.sendToSocket.bind(this.broadcastManager),
+      );
+    this.handlers["enterWorld"] = (socket, data) =>
       handleEnterWorld(
         socket,
         data,

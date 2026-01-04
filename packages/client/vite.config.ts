@@ -212,7 +212,13 @@ export default defineConfig(({ mode }) => {
             ? "https://hyperscape.lol"
             : "http://localhost:3333"),
       ),
-      "import.meta.env.PROD": JSON.stringify(mode === "production"),
+      "import.meta.env.PUBLIC_ELIZAOS_URL": JSON.stringify(
+        env.PUBLIC_ELIZAOS_URL ||
+          (mode === "production"
+            ? "https://api.hyperscape.lol"
+            : "http://localhost:4001"),
+      ),
+      "import.meta.env.PROD": mode === "production",
     },
     server: {
       port: Number(env.VITE_PORT) || 3333,

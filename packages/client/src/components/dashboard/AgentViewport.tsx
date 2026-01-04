@@ -1,6 +1,5 @@
 import { GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
 import React, { useState, useEffect, useRef } from "react";
-import { GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
 import { Agent } from "../../screens/DashboardScreen";
 import { usePrivy } from "@privy-io/react-auth";
 

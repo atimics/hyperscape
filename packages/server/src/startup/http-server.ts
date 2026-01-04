@@ -62,7 +62,9 @@ export async function createHttpServer(
   const elizaOSUrl =
     process.env.ELIZAOS_URL ||
     process.env.ELIZAOS_API_URL ||
-    "http://localhost:4001";
+    (process.env.NODE_ENV === "production"
+      ? "https://api.hyperscape.lol"
+      : "http://localhost:4001");
   const clientUrl =
     process.env.CLIENT_URL ||
     process.env.PUBLIC_APP_URL ||

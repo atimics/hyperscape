@@ -365,26 +365,43 @@ export const CharacterPreview: React.FC<CharacterPreviewProps> = ({
       resizeObserver.observe(containerRef.current);
     }
 
-    // Cleanup
+    // Cleanup - IMPORTANT: Order matters!
+    // VRM must be disposed BEFORE renderer to avoid "usedTimes undefined" error.
+    // The WebGPU renderer tracks materials internally, and disposing it first
+    // leaves stale event listeners that fail when VRM materials are disposed.
     return () => {
       isMounted = false;
       window.removeEventListener("resize", handleResize);
       resizeObserver.disconnect();
       // eslint-disable-next-line no-undef
       cancelAnimationFrame(frameIdRef.current);
+
+      // 1. Stop animations first
+      if (mixerRef.current) {
+        mixerRef.current.stopAllAction();
+        if (vrmRef.current) {
+          mixerRef.current.uncacheRoot(vrmRef.current.scene);
+        }
+        mixerRef.current = null;
+      }
+
+      // 2. Remove VRM from scene and dispose it BEFORE renderer
+      if (vrmRef.current && sceneRef.current) {
+        sceneRef.current.remove(vrmRef.current.scene);
+        VRMUtils.deepDispose(vrmRef.current.scene);
+        vrmRef.current = null;
+      }
+
+      // 3. Dispose renderer AFTER VRM cleanup
       if (rendererRef.current && containerRef.current) {
         containerRef.current.removeChild(rendererRef.current.domElement);
         rendererRef.current.dispose();
         rendererRef.current = null;
         rendererInitializedRef.current = false;
       }
-      if (vrmRef.current) {
-        VRMUtils.deepDispose(vrmRef.current.scene);
-      }
-      if (mixerRef.current) {
-        mixerRef.current.stopAllAction();
-        mixerRef.current = null;
-      }
+
+      // 4. Clear scene reference
+      sceneRef.current = null;
     };
   }, [vrmUrl]); // Re-run everything when vrmUrl changes
 

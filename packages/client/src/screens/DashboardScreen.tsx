@@ -1,6 +1,5 @@
 import { GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
 import React, { useEffect, useState } from "react";
-import { GAME_API_URL, GAME_WS_URL } from "@/lib/api-config";
 import { DashboardLayout } from "../components/dashboard/DashboardLayout";
 import { AgentChat } from "../components/dashboard/AgentChat";
 import { AgentViewportChat } from "../components/dashboard/AgentViewportChat";

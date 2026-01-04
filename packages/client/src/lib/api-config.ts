@@ -20,7 +20,10 @@
 // =============================================================================
 
 export const ELIZAOS_URL =
-  import.meta.env.PUBLIC_ELIZAOS_URL || "http://localhost:4001";
+  import.meta.env.PUBLIC_ELIZAOS_URL ||
+  (import.meta.env.PROD
+    ? "https://api.hyperscape.lol"
+    : "http://localhost:4001");
 
 export const ELIZAOS_API = `${ELIZAOS_URL}/api`;
 
