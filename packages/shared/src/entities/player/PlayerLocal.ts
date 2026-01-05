@@ -927,6 +927,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
             combat: Emotes.COMBAT,
             sword_swing: Emotes.SWORD_SWING,
             chopping: Emotes.CHOPPING,
+            fishing: Emotes.FISHING,
             death: Emotes.DEATH,
           };
           const emoteUrl = emoteMap[this.emote] || Emotes.IDLE;
