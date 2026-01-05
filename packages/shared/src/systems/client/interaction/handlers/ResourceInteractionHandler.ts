@@ -117,10 +117,14 @@ export class ResourceInteractionHandler extends BaseInteractionHandler {
       `[ResourceInteraction] SERVER-AUTHORITATIVE: Sending resourceInteract for ${target.entityId}`,
     );
 
-    // SERVER-AUTHORITATIVE: Just send the resource ID
+    // Get player's run mode preference
+    const runMode = (player as { runMode?: boolean }).runMode ?? true;
+
+    // SERVER-AUTHORITATIVE: Send resource ID and run mode
     // Server will calculate the correct cardinal tile using its authoritative position data
     this.send(MESSAGE_TYPES.RESOURCE_INTERACT, {
       resourceId: target.entityId,
+      runMode,
     });
   }
 

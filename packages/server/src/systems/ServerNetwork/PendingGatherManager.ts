@@ -10,16 +10,17 @@
  * 3. Server calculates best cardinal tile using GATHERING_CONSTANTS.GATHERING_RANGE
  * 4. Server paths player to that tile via movePlayerToward()
  * 5. Every tick, server checks if player arrived at cardinal tile
- * 6. When arrived, server rotates player to face resource and starts gathering
+ * 6. When arrived, server sets face target via FaceDirectionManager and starts gathering
+ * 7. At end of tick, FaceDirectionManager applies rotation (OSRS-accurate deferred facing)
  *
  * KEY DIFFERENCES FROM OLD APPROACH:
  * - Uses movePlayerToward() with GATHERING_RANGE (like combat's MELEE_RANGE_STANDARD)
  * - Tick-based processing (like PendingAttackManager) instead of setInterval
- * - Direct rotation on entity.rotation (like CombatRotationManager) for reliable broadcast
+ * - Uses FaceDirectionManager for rotation (OSRS-accurate deferred face direction)
  * - No client-side position calculations
  *
  * @see PendingAttackManager - combat equivalent
- * @see CombatRotationManager - rotation approach we copy
+ * @see FaceDirectionManager - handles OSRS-accurate rotation
  */
 
 import type { World } from "@hyperscape/shared";
@@ -29,7 +30,6 @@ import {
   worldToTileInto,
   tileToWorld,
   tilesWithinMeleeRange,
-  quaternionPool,
   type TileCoord,
   type ResourceFootprint,
   FOOTPRINT_SIZES,
@@ -56,28 +56,6 @@ interface PendingGather {
   isFishing: boolean;
   /** Resource world position (for distance calculations) */
   resourcePosition: { x: number; y: number; z: number };
-}
-
-/**
- * Entity interface for rotation operations (matches CombatRotationManager)
- */
-interface RotatableEntity {
-  id: string;
-  position?: { x: number; y: number; z: number };
-  // Server-side rotation (plain object with x,y,z,w) - CRITICAL for network sync
-  rotation?: { x: number; y: number; z: number; w: number };
-  // Client-side transforms (THREE.js objects)
-  base?: {
-    quaternion?: {
-      set(x: number, y: number, z: number, w: number): void;
-    };
-  };
-  node?: {
-    quaternion?: {
-      set(x: number, y: number, z: number, w: number): void;
-    };
-  };
-  markNetworkDirty?: () => void;
 }
 
 /**
@@ -182,11 +160,17 @@ export class PendingGatherManager {
    * Called when player clicks a resource.
    *
    * SERVER-AUTHORITATIVE: Server looks up resource position and paths player.
+   *
+   * @param playerId - The player ID
+   * @param resourceId - The resource to gather
+   * @param currentTick - Current game tick
+   * @param runMode - Player's run mode preference from client (true = run, false = walk)
    */
   queuePendingGather(
     playerId: string,
     resourceId: string,
     currentTick: number,
+    runMode?: boolean,
   ): void {
     // Cancel any existing pending gather
     this.cancelPendingGather(playerId);
@@ -283,11 +267,13 @@ export class PendingGatherManager {
       }
     }
 
-    // Get player's run mode from TileMovementManager
-    const isRunning = this.tileMovementManager.getIsRunning(playerId);
+    // Use run mode from client if provided, otherwise fall back to server state
+    // Client sends runMode with resourceInteract message based on their UI toggle
+    const isRunning =
+      runMode ?? this.tileMovementManager.getIsRunning(playerId);
 
     console.log(
-      `[PendingGather]   Movement mode: ${isRunning ? "running" : "walking"}`,
+      `[PendingGather]   Movement mode: ${isRunning ? "running" : "walking"} (from ${runMode !== undefined ? "client" : "server"})`,
     );
 
     if (isFishing) {
@@ -317,6 +303,10 @@ export class PendingGatherManager {
             `[PendingGather]   🎣 Player ${playerId} doesn't meet level ${resource.levelRequired} ${resource.skillRequired} - no fishing emote`,
           );
         }
+
+        // NOTE: Rotation is handled by FaceDirectionManager when player arrives
+        // via setCardinalFaceTarget() in processTick(). This is the OSRS-accurate
+        // approach that handles both cardinal (tree/rock) and point-based (fishing) rotation.
 
         // Use meleeRange=0 for non-combat direct movement to the shore tile
         this.tileMovementManager.movePlayerToward(
@@ -442,13 +432,32 @@ export class PendingGatherManager {
         // and bundled with tileMovementEnd packet for atomic delivery to client.
         // This prevents race condition where client sets "idle" before emote arrives.
 
-        // Rotate player to face resource center
-        this.rotateToFaceResource(
-          playerId,
-          pending.resourceAnchorTile,
-          pending.footprintX,
-          pending.footprintZ,
-        );
+        // Use FaceDirectionManager for OSRS-accurate rotation (like other resources)
+        // This handles both cardinal-based (tree/rock) and point-based (fishing) rotation
+        const faceManager = (
+          this.world as {
+            faceDirectionManager?: {
+              setCardinalFaceTarget: (
+                playerId: string,
+                anchorTile: TileCoord,
+                footprintX: number,
+                footprintZ: number,
+              ) => void;
+            };
+          }
+        ).faceDirectionManager;
+
+        if (faceManager) {
+          faceManager.setCardinalFaceTarget(
+            playerId,
+            pending.resourceAnchorTile,
+            pending.footprintX,
+            pending.footprintZ,
+          );
+          console.log(
+            `[PendingGather] 🧭 Set cardinal face target for ${playerId} via FaceDirectionManager`,
+          );
+        }
 
         // Start gathering
         this.startGathering(playerId, pending.resourceId);
@@ -490,79 +499,6 @@ export class PendingGatherManager {
       }
     }
     return false;
-  }
-
-  /**
-   * Rotate player to face the center of the resource.
-   * Uses the SAME approach as CombatRotationManager for reliable broadcast.
-   */
-  private rotateToFaceResource(
-    playerId: string,
-    resourceAnchor: TileCoord,
-    footprintX: number,
-    footprintZ: number,
-  ): void {
-    const player = this.world.getPlayer?.(playerId) as RotatableEntity | null;
-    if (!player?.position) return;
-
-    // Calculate resource center in world coordinates
-    // For 1×1 at anchor (15,-10): center = (15.5, -9.5)
-    // For 2×2 at anchor (15,-10): center = (16.0, -9.0)
-    const centerWorld = tileToWorld({
-      x: resourceAnchor.x + footprintX / 2,
-      z: resourceAnchor.z + footprintZ / 2,
-    });
-
-    // Calculate angle from player to resource center
-    const dx = centerWorld.x - player.position.x;
-    const dz = centerWorld.z - player.position.z;
-    let angle = Math.atan2(dx, dz);
-
-    // VRM 1.0+ models have 180° base rotation
-    angle += Math.PI;
-
-    // Apply rotation using pooled quaternion (same as CombatRotationManager)
-    const tempQuat = quaternionPool.acquire();
-    quaternionPool.setYRotation(tempQuat, angle);
-
-    const qx = tempQuat.x;
-    const qy = tempQuat.y;
-    const qz = tempQuat.z;
-    const qw = tempQuat.w;
-
-    quaternionPool.release(tempQuat);
-
-    // CRITICAL: Set entity.rotation for server-side sync
-    // This is what EntityManager reads to broadcast
-    if (player.rotation) {
-      player.rotation.x = qx;
-      player.rotation.y = qy;
-      player.rotation.z = qz;
-      player.rotation.w = qw;
-    }
-
-    // Also set client-side transforms
-    if (player.base?.quaternion) {
-      player.base.quaternion.set(qx, qy, qz, qw);
-    }
-    if (player.node?.quaternion) {
-      player.node.quaternion.set(qx, qy, qz, qw);
-    }
-
-    // Mark network dirty
-    player.markNetworkDirty?.();
-
-    // ALSO send explicit entityModified packet for immediate sync
-    this.sendFn("entityModified", {
-      id: playerId,
-      changes: {
-        q: [qx, qy, qz, qw],
-      },
-    });
-
-    console.log(
-      `[PendingGather] 🧭 Rotated ${playerId} to face resource: angle=${((angle * 180) / Math.PI).toFixed(1)}°`,
-    );
   }
 
   /**

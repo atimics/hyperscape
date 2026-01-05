@@ -46,7 +46,7 @@ export function handleResourceInteract(
     return;
   }
 
-  const payload = data as { resourceId?: string };
+  const payload = data as { resourceId?: string; runMode?: boolean };
   if (!payload.resourceId) {
     console.warn("[Resources] handleResourceInteract: no resourceId");
     return;
@@ -151,8 +151,8 @@ export function handleResourceInteract(
     `[Resources]   Calculated cardinal tile: (${cardinalTile.x}, ${cardinalTile.z}) → world (${cardinalWorldPos.x.toFixed(1)}, ${cardinalWorldPos.z.toFixed(1)})`,
   );
 
-  // Get player's current run mode setting
-  const runMode = getIsRunning(playerEntity.id);
+  // Get player's run mode from client payload (preferred) or fall back to server state
+  const runMode = payload.runMode ?? getIsRunning(playerEntity.id);
 
   console.log(
     `[Resources]   Movement mode: ${runMode ? "running" : "walking"}`,

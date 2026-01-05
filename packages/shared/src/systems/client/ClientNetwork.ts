@@ -2484,6 +2484,7 @@ export class ClientNetwork extends SystemBase {
     worldPos: [number, number, number];
     moveSeq?: number;
     emote?: string;
+    quaternion?: [number, number, number, number];
   }) => {
     // Use pre-allocated Vector3 to avoid allocation per network message
     _v3_1.set(data.worldPos[0], data.worldPos[1], data.worldPos[2]);
@@ -2506,6 +2507,24 @@ export class ClientNetwork extends SystemBase {
     // The flag will be managed by TileInterpolator during its update cycle
     if (entity?.data) {
       entity.data.tileInterpolatorControlled = true;
+    }
+
+    // Apply rotation from server if provided (atomic delivery with movement end)
+    // This is bundled with tileMovementEnd to ensure client applies it immediately
+    // even when TileInterpolator has state (which normally filters out server rotation)
+    if (data.quaternion && entity) {
+      _quat_1.set(
+        data.quaternion[0],
+        data.quaternion[1],
+        data.quaternion[2],
+        data.quaternion[3],
+      );
+      entity.data.quaternion = data.quaternion;
+      // Apply ONLY to node quaternion (not base) - matches movement code pattern
+      // Setting both node AND base causes double rotation due to parent-child hierarchy
+      if (entity.node) {
+        entity.node.quaternion.copy(_quat_1);
+      }
     }
 
     // Apply emote from server if provided (atomic delivery with movement end)

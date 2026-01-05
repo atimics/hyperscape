@@ -697,14 +697,16 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const player = socket.player;
       if (!player) return;
 
-      const payload = data as { resourceId?: string };
+      const payload = data as { resourceId?: string; runMode?: boolean };
       if (!payload.resourceId) return;
 
       // Use PendingGatherManager (like PendingAttackManager for combat)
+      // Pass runMode from client to ensure player runs/walks based on their preference
       this.pendingGatherManager.queuePendingGather(
         player.id,
         payload.resourceId,
         this.tickSystem.getCurrentTick(),
+        payload.runMode,
       );
     };
 
