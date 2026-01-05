@@ -1886,7 +1886,8 @@ export class ResourceSystem extends SystemBase {
   }
 
   /**
-   * Relocate a fishing spot to a nearby valid tile.
+   * Relocate a fishing spot to a nearby valid shore position.
+   * Uses terrain-based shore detection to find valid water edges.
    * Cancels gathering for any players fishing at the old location.
    */
   private relocateFishingSpot(
@@ -1902,35 +1903,50 @@ export class ResourceSystem extends SystemBase {
     const timer = this.fishingSpotMoveTimers.get(resourceId);
     if (!timer) return;
 
-    const { relocateRadius, relocateMinDistance } =
-      GATHERING_CONSTANTS.FISHING_SPOT_MOVE;
-
-    // Find a new position nearby
-    const oldPos = resource.position;
-    let newX = oldPos.x;
-    let newZ = oldPos.z;
-
-    // Try to find a valid new position (simple random offset within radius)
-    // In a full implementation, this would check for water tiles, walkability, etc.
-    for (let attempts = 0; attempts < 10; attempts++) {
-      const angle = Math.random() * Math.PI * 2;
-      const distance =
-        relocateMinDistance +
-        Math.random() * (relocateRadius - relocateMinDistance);
-      const candidateX = oldPos.x + Math.cos(angle) * distance * 2; // 2 = tile size
-      const candidateZ = oldPos.z + Math.sin(angle) * distance * 2;
-
-      // Check distance from original
-      const dx = candidateX - oldPos.x;
-      const dz = candidateZ - oldPos.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
-
-      if (dist >= relocateMinDistance * 2) {
-        newX = candidateX;
-        newZ = candidateZ;
-        break;
-      }
+    // If no terrain system, stay put and try again later
+    if (!this.terrainSystem) {
+      this.initializeFishingSpotTimer(resourceId, resource.position);
+      return;
     }
+
+    const oldPos = resource.position;
+
+    // Search for valid shore points near current position
+    const searchRadius = 15;
+    const searchBounds = {
+      minX: oldPos.x - searchRadius,
+      maxX: oldPos.x + searchRadius,
+      minZ: oldPos.z - searchRadius,
+      maxZ: oldPos.z + searchRadius,
+    };
+
+    const nearbyShores = findShorePoints(
+      searchBounds,
+      this.terrainSystem.getHeightAt.bind(this.terrainSystem),
+      {
+        waterThreshold: 5.4,
+        shoreMaxHeight: 8.0,
+        minSpacing: 3, // Smaller spacing for relocation candidates
+      },
+    );
+
+    // Filter out positions too close to current location (must move at least 5m)
+    const candidates = nearbyShores.filter((p) => {
+      const dist = Math.sqrt((p.x - oldPos.x) ** 2 + (p.z - oldPos.z) ** 2);
+      return dist >= 5;
+    });
+
+    // If no valid spots nearby, stay put and try again later
+    if (candidates.length === 0) {
+      console.log(
+        `[Fishing] Spot ${resourceId} couldn't find new shore position - staying put`,
+      );
+      this.initializeFishingSpotTimer(resourceId, resource.position);
+      return;
+    }
+
+    // Pick random candidate
+    const newPos = candidates[Math.floor(Math.random() * candidates.length)];
 
     // Cancel gathering for any players fishing at this spot
     for (const [playerId, session] of this.activeGathering.entries()) {
@@ -1952,13 +1968,14 @@ export class ResourceSystem extends SystemBase {
     }
 
     // Update resource position
-    resource.position = { x: newX, y: oldPos.y, z: newZ };
+    resource.position = { x: newPos.x, y: newPos.y, z: newPos.z };
 
     // Update entity position if it exists
     const entity = this.world.entities.get(resourceId);
     if (entity?.position) {
-      entity.position.x = newX;
-      entity.position.z = newZ;
+      entity.position.x = newPos.x;
+      entity.position.y = newPos.y;
+      entity.position.z = newPos.z;
     }
 
     // Broadcast position update to clients
@@ -1969,7 +1986,9 @@ export class ResourceSystem extends SystemBase {
     });
 
     console.log(
-      `[Fishing] Spot ${resourceId} moved from (${oldPos.x.toFixed(1)}, ${oldPos.z.toFixed(1)}) to (${newX.toFixed(1)}, ${newZ.toFixed(1)})`,
+      `[Fishing] Spot ${resourceId} moved from ` +
+        `(${oldPos.x.toFixed(1)}, ${oldPos.z.toFixed(1)}) to ` +
+        `(${newPos.x.toFixed(1)}, ${newPos.z.toFixed(1)})`,
     );
 
     // Reset timer for next movement
