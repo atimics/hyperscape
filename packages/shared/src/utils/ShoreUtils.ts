@@ -118,6 +118,75 @@ export function findShorePoints(
 }
 
 /**
+ * Finds points IN the water that are adjacent to walkable land.
+ * This is the OSRS-accurate placement - fishing spots appear as ripples
+ * in the water near the shore where players can reach them.
+ *
+ * @param bounds - Rectangle to search within (world coordinates)
+ * @param getHeightAt - Function to sample terrain height at (x, z)
+ * @param options - Configuration options
+ * @returns Array of valid water edge points
+ */
+export function findWaterEdgePoints(
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  getHeightAt: (x: number, z: number) => number,
+  options: FindShorePointsOptions = {},
+): ShorePoint[] {
+  const {
+    sampleInterval = 2,
+    waterThreshold = 5.4,
+    shoreMaxHeight = 8.0,
+    minSpacing = 6,
+  } = options;
+
+  const results: ShorePoint[] = [];
+
+  for (let x = bounds.minX; x <= bounds.maxX; x += sampleInterval) {
+    for (let z = bounds.minZ; z <= bounds.maxZ; z += sampleInterval) {
+      const height = getHeightAt(x, z);
+
+      // Must be IN water (underwater)
+      if (height >= waterThreshold) continue;
+
+      // Must not be too deep (within 2m of water surface for visibility)
+      if (height < waterThreshold - 2) continue;
+
+      // Must have adjacent LAND - check all directions
+      let landDir: ShorePoint["waterDirection"] | null = null;
+      for (const dir of DIRECTIONS) {
+        const neighborHeight = getHeightAt(x + dir.dx, z + dir.dz);
+        // Adjacent land should be walkable (above water but not too steep)
+        if (
+          neighborHeight >= waterThreshold &&
+          neighborHeight <= shoreMaxHeight
+        ) {
+          landDir = dir.name;
+          break;
+        }
+      }
+      if (!landDir) continue;
+
+      // Check minimum spacing from existing points
+      const tooClose = results.some((p) => {
+        const dist = Math.sqrt((p.x - x) ** 2 + (p.z - z) ** 2);
+        return dist < minSpacing;
+      });
+      if (tooClose) continue;
+
+      // Use water threshold as the Y position (water surface level)
+      results.push({
+        x,
+        y: waterThreshold,
+        z,
+        waterDirection: landDir,
+      });
+    }
+  }
+
+  return results;
+}
+
+/**
  * Shuffle array in place using Fisher-Yates algorithm.
  * Used to randomize shore point selection for variety.
  *

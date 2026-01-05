@@ -30,7 +30,7 @@ import type { GatheringToolData } from "../../../data/DataManager";
 import { ALL_WORLD_AREAS } from "../../../data/world-areas";
 import { GATHERING_CONSTANTS } from "../../../constants/GatheringConstants";
 import {
-  findShorePoints,
+  findWaterEdgePoints,
   shuffleArray,
   type ShorePoint,
 } from "../../../utils/ShoreUtils";
@@ -622,6 +622,11 @@ export class ResourceSystem extends SystemBase {
    * @param area - World area configuration with fishing config
    */
   private spawnDynamicFishingSpots(areaId: string, area: WorldArea): void {
+    console.log(
+      `[ResourceSystem] 🎣 spawnDynamicFishingSpots called for ${areaId} ` +
+        `bounds: (${area.bounds.minX},${area.bounds.minZ}) to (${area.bounds.maxX},${area.bounds.maxZ})`,
+    );
+
     if (!this.terrainSystem) {
       console.warn(
         `[ResourceSystem] No terrain system available - skipping dynamic fishing for ${areaId}`,
@@ -629,54 +634,100 @@ export class ResourceSystem extends SystemBase {
       return;
     }
 
+    // Debug: Sample heights across the bounds to find water
+    const sampleStep = 50; // Sample every 50m
+    let minHeight = Infinity;
+    let maxHeight = -Infinity;
+    let waterCount = 0;
+    let shoreCount = 0;
+    let totalSamples = 0;
+    let lowestPoint = { x: 0, z: 0, h: Infinity };
+
+    for (let x = area.bounds.minX; x <= area.bounds.maxX; x += sampleStep) {
+      for (let z = area.bounds.minZ; z <= area.bounds.maxZ; z += sampleStep) {
+        const h = this.terrainSystem!.getHeightAt(x, z);
+        totalSamples++;
+        if (h < minHeight) {
+          minHeight = h;
+          lowestPoint = { x, z, h };
+        }
+        if (h > maxHeight) maxHeight = h;
+        if (h < 5.4) waterCount++;
+        if (h >= 5.4 && h <= 8.0) shoreCount++;
+      }
+    }
+
+    console.log(
+      `[ResourceSystem] 🎣 Terrain scan in ${areaId}: ` +
+        `min=${minHeight.toFixed(1)}m, max=${maxHeight.toFixed(1)}m, ` +
+        `water=${waterCount}/${totalSamples}, shore=${shoreCount}/${totalSamples}`,
+    );
+    console.log(
+      `[ResourceSystem] 🎣 Lowest point: (${lowestPoint.x},${lowestPoint.z})=${lowestPoint.h.toFixed(2)}m`,
+    );
+    console.log(
+      `[ResourceSystem] 🎣 Looking for: water < 5.4m adjacent to shore 5.4-8.0m`,
+    );
+
     const fishing = area.fishing!;
 
-    // Find shore points within area bounds
-    const shorePoints = findShorePoints(
+    // Find water edge points (IN the water, adjacent to walkable land)
+    const waterEdgePoints = findWaterEdgePoints(
       area.bounds,
       this.terrainSystem.getHeightAt.bind(this.terrainSystem),
       {
         waterThreshold: 5.4, // TerrainSystem.CONFIG.WATER_THRESHOLD
         shoreMaxHeight: 8.0,
-        minSpacing: 6,
+        minSpacing: 8, // Increased spacing to spread spots out more
       },
     );
 
-    if (shorePoints.length === 0) {
+    console.log(
+      `[ResourceSystem] 🎣 findWaterEdgePoints found ${waterEdgePoints.length} water edge points in ${areaId}`,
+    );
+
+    if (waterEdgePoints.length === 0) {
       console.warn(
-        `[ResourceSystem] No shore points found in ${areaId} - no dynamic fishing spots spawned`,
+        `[ResourceSystem] ⚠️ No water edge points found in ${areaId} - no dynamic fishing spots spawned. ` +
+          `Area may not have shallow water near walkable shore.`,
       );
       return;
     }
 
     // Randomize order for variety
-    shuffleArray(shorePoints);
+    shuffleArray(waterEdgePoints);
 
-    // Determine how many spots to spawn
-    const spotsToSpawn = Math.min(fishing.spotCount, shorePoints.length);
+    // Determine how many spots to spawn (at least one of each type if possible)
+    const spotsToSpawn = Math.min(fishing.spotCount, waterEdgePoints.length);
 
-    // Build spawn points (round-robin through spot types)
+    // Build spawn points (round-robin through spot types to ensure variety)
     const spawnPoints: TerrainResourceSpawnPoint[] = [];
+    const spawnedTypes: string[] = [];
 
     for (let i = 0; i < spotsToSpawn; i++) {
-      const point = shorePoints[i];
+      const point = waterEdgePoints[i];
       const spotTypeId = fishing.spotTypes[i % fishing.spotTypes.length];
 
       // Extract subType: "fishing_spot_net" -> "net"
       const subType = spotTypeId.replace("fishing_spot_", "");
 
       spawnPoints.push({
-        position: { x: point.x, y: point.y + 0.1, z: point.z },
+        position: { x: point.x, y: point.y, z: point.z },
         type: "fish",
         subType: subType as TerrainResourceSpawnPoint["subType"],
       });
+      spawnedTypes.push(subType);
     }
+
+    console.log(
+      `[ResourceSystem] 🎣 Spawning fishing spots in ${areaId}: ${spawnedTypes.join(", ")}`,
+    );
 
     // Use existing spawn infrastructure
     if (spawnPoints.length > 0) {
       console.log(
         `[ResourceSystem] Spawning ${spawnPoints.length} dynamic fishing spots in ${areaId} ` +
-          `(found ${shorePoints.length} shore points)`,
+          `(found ${waterEdgePoints.length} water edge points)`,
       );
       this.registerTerrainResources({ spawnPoints, isManifest: true });
     }
@@ -1911,7 +1962,7 @@ export class ResourceSystem extends SystemBase {
 
     const oldPos = resource.position;
 
-    // Search for valid shore points near current position
+    // Search for valid water edge points near current position
     const searchRadius = 15;
     const searchBounds = {
       minX: oldPos.x - searchRadius,
@@ -1920,7 +1971,7 @@ export class ResourceSystem extends SystemBase {
       maxZ: oldPos.z + searchRadius,
     };
 
-    const nearbyShores = findShorePoints(
+    const nearbyWaterEdges = findWaterEdgePoints(
       searchBounds,
       this.terrainSystem.getHeightAt.bind(this.terrainSystem),
       {
@@ -1931,7 +1982,7 @@ export class ResourceSystem extends SystemBase {
     );
 
     // Filter out positions too close to current location (must move at least 5m)
-    const candidates = nearbyShores.filter((p) => {
+    const candidates = nearbyWaterEdges.filter((p) => {
       const dist = Math.sqrt((p.x - oldPos.x) ** 2 + (p.z - oldPos.z) ** 2);
       return dist >= 5;
     });
