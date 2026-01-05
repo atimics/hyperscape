@@ -171,10 +171,14 @@ export const GATHERING_CONSTANTS = {
    * @see https://oldschool.runescape.wiki/w/Fishing
    */
   FISHING_SUCCESS_RATES: {
-    // Shrimp/Anchovies (level 1)
-    fishing_spot_normal: { low: 48, high: 180 },
-    // Trout/Salmon fly fishing (level 20)
+    // Net fishing - Shrimp/Anchovies (level 1+)
+    fishing_spot_net: { low: 48, high: 180 },
+    // Bait fishing - Sardine/Herring/Pike (level 5+)
+    fishing_spot_bait: { low: 45, high: 170 },
+    // Fly fishing - Trout/Salmon (level 20+)
     fishing_spot_fly: { low: 40, high: 150 },
+    // Legacy fallback for old fishing_spot_normal
+    fishing_spot_normal: { low: 48, high: 180 },
   } as const,
 
   /**

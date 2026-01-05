@@ -47,6 +47,8 @@ export interface Resource {
   skillRequired: string;
   levelRequired: number;
   toolRequired: string; // Tool item ID
+  /** Secondary consumable required (e.g., "fishing_bait" for rod fishing, "feathers" for fly fishing) */
+  secondaryRequired?: string;
   respawnTime: number; // Milliseconds
   isAvailable: boolean;
   lastDepleted: number;
@@ -57,14 +59,28 @@ export interface Resource {
 
 /**
  * Resource drop - what a resource can drop when gathered
+ *
+ * For fishing with OSRS priority rolling:
+ * - `levelRequired`: Minimum skill level to catch this fish
+ * - `catchLow`: Catch rate at level 1 (x/256 numerator)
+ * - `catchHigh`: Catch rate at level 99 (x/256 numerator)
+ *
+ * Fish are rolled in priority order (highest level first).
+ * @see https://oldschool.runescape.wiki/w/Catch_rate
  */
 export interface ResourceDrop {
   itemId: string;
   itemName: string;
   quantity: number;
-  chance: number; // 0-1
+  chance: number; // 0-1 (for weighted random) or 1.0 (for priority rolling)
   xpAmount: number;
   stackable: boolean;
+  /** Skill level required to catch this specific item */
+  levelRequired?: number;
+  /** OSRS catch rate numerator at level 1 (x/256) */
+  catchLow?: number;
+  /** OSRS catch rate numerator at level 99 (x/256) */
+  catchHigh?: number;
 }
 
 // ============== FIRE TYPES ==============

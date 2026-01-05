@@ -89,6 +89,8 @@ export interface ExternalResourceData {
   depletedScale: number;
   harvestSkill: string;
   toolRequired: string | null;
+  /** Secondary consumable required (e.g., "fishing_bait", "feathers") */
+  secondaryRequired?: string;
   levelRequired: number;
   baseCycleTicks: number;
   depleteChance: number;
@@ -100,6 +102,12 @@ export interface ExternalResourceData {
     chance: number;
     xpAmount: number;
     stackable: boolean;
+    /** Level required to catch this specific fish (OSRS-accurate) */
+    levelRequired?: number;
+    /** OSRS catch rate at level 1 (x/256) - for priority rolling */
+    catchLow?: number;
+    /** OSRS catch rate at level 99 (x/256) - for priority rolling */
+    catchHigh?: number;
   }>;
 }
 

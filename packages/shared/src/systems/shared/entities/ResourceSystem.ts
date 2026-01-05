@@ -857,6 +857,10 @@ export class ResourceSystem extends SystemBase {
       chance: yield_.chance,
       xpAmount: yield_.xpAmount,
       stackable: yield_.stackable,
+      // OSRS-ACCURACY: Include fishing priority rolling fields
+      levelRequired: yield_.levelRequired,
+      catchLow: yield_.catchLow,
+      catchHigh: yield_.catchHigh,
     }));
   }
 
@@ -912,6 +916,7 @@ export class ResourceSystem extends SystemBase {
       skillRequired: manifestData.harvestSkill,
       levelRequired: manifestData.levelRequired,
       toolRequired: manifestData.toolRequired || "",
+      secondaryRequired: manifestData.secondaryRequired,
       respawnTime: this.ticksToMs(manifestData.respawnTicks),
       isAvailable: true,
       lastDepleted: 0,
@@ -1192,6 +1197,25 @@ export class ResourceSystem extends SystemBase {
           });
           return;
         }
+      }
+    }
+
+    // OSRS-ACCURACY: Check for secondary consumable (bait, feathers, etc.)
+    // @see https://oldschool.runescape.wiki/w/Fishing - "Bait fishing requires fishing bait"
+    if (resource.secondaryRequired) {
+      const hasSecondary = this.playerHasItem(
+        data.playerId,
+        resource.secondaryRequired,
+      );
+      if (!hasSecondary) {
+        const secondaryName = resource.secondaryRequired.replace(/_/g, " ");
+        this.sendChat(data.playerId, `You need ${secondaryName} to fish here.`);
+        this.emitTypedEvent(EventType.UI_MESSAGE, {
+          playerId: data.playerId,
+          message: `You need ${secondaryName} to fish here.`,
+          type: "error",
+        });
+        return;
       }
     }
 
@@ -2003,6 +2027,30 @@ export class ResourceSystem extends SystemBase {
         }
       }
 
+      // OSRS-ACCURACY: Check for secondary consumable (bait, feathers) on each tick
+      // Stop gathering if player runs out of bait/feathers
+      if (resource.secondaryRequired) {
+        const hasSecondary = this.playerHasItem(
+          playerId,
+          resource.secondaryRequired,
+        );
+        if (!hasSecondary) {
+          const secondaryName = resource.secondaryRequired.replace(/_/g, " ");
+          this.emitTypedEvent(EventType.UI_MESSAGE, {
+            playerId: playerId,
+            message: `You have run out of ${secondaryName}.`,
+            type: "warning",
+          });
+          this.emitTypedEvent(EventType.RESOURCE_GATHERING_STOPPED, {
+            playerId: playerId,
+            resourceId: session.resourceId,
+          });
+          this.resetGatheringEmote(playerId);
+          completedSessions.push(playerId);
+          continue;
+        }
+      }
+
       // PERFORMANCE: Use cached tuning data (zero allocation per tick)
       const tuned = session.cachedTuning;
 
@@ -2026,8 +2074,14 @@ export class ResourceSystem extends SystemBase {
       if (isSuccessful) {
         session.successes++;
 
+        // OSRS-ACCURACY: Get player's skill level for priority-based fish rolling
+        const cachedSkills = this.playerSkills.get(playerId);
+        const playerSkillLevel =
+          cachedSkills?.[resource.skillRequired]?.level ?? 1;
+
         // PERFORMANCE: Roll against cached drop table (avoids resource lookup)
-        const drop = this.rollDrop(session.cachedDrops);
+        // For fishing, this uses OSRS priority rolling with per-fish catch rates
+        const drop = this.rollDrop(session.cachedDrops, playerSkillLevel);
 
         // Add item to inventory using manifest data
         this.emitTypedEvent(EventType.INVENTORY_ITEM_ADDED, {
@@ -2048,6 +2102,16 @@ export class ResourceSystem extends SystemBase {
           skill: resource.skillRequired,
           amount: xpAmount,
         });
+
+        // OSRS-ACCURACY: Consume secondary item (bait, feathers) on successful harvest
+        // @see https://oldschool.runescape.wiki/w/Fishing - "One bait is used per fish caught"
+        if (resource.secondaryRequired) {
+          this.emitTypedEvent(EventType.INVENTORY_ITEM_REMOVED, {
+            playerId: playerId,
+            itemId: resource.secondaryRequired,
+            quantity: 1,
+          });
+        }
 
         // Feedback using manifest data
         this.sendChat(
@@ -2384,9 +2448,10 @@ export class ResourceSystem extends SystemBase {
    * Roll against harvestYield chances to determine drop
    * Respects chance values from manifest for multi-drop resources (e.g., fishing)
    * @param drops - Array of possible drops from manifest harvestYield
+   * @param playerLevel - Optional player skill level (required for OSRS priority rolling)
    * @returns The rolled drop with all manifest data (itemId, itemName, quantity, xpAmount, etc.)
    */
-  private rollDrop(drops: ResourceDrop[]): ResourceDrop {
+  private rollDrop(drops: ResourceDrop[], playerLevel?: number): ResourceDrop {
     if (drops.length === 0) {
       throw new Error(
         "[ResourceSystem] Resource has no drops defined in manifest",
@@ -2398,7 +2463,17 @@ export class ResourceSystem extends SystemBase {
       return drops[0];
     }
 
-    // Roll against cumulative chances for multiple drops
+    // OSRS-ACCURACY: Check if drops use priority rolling (catchLow/catchHigh defined)
+    // This is used for fishing spots where higher-level fish are rolled first
+    const usesPriorityRolling = drops.some(
+      (d) => d.catchLow !== undefined && d.catchHigh !== undefined,
+    );
+
+    if (usesPriorityRolling && playerLevel !== undefined) {
+      return this.rollFishDrop(drops, playerLevel);
+    }
+
+    // Fallback to weighted random for other resources (trees, ores)
     const roll = Math.random();
     let cumulative = 0;
 
@@ -2411,6 +2486,75 @@ export class ResourceSystem extends SystemBase {
 
     // Fallback to first drop if chances don't sum to 1.0
     return drops[0];
+  }
+
+  /**
+   * OSRS Priority-based fish rolling system
+   *
+   * Fish are ordered by level requirement (highest first in manifest).
+   * For each fish, the system:
+   * 1. Checks if player meets level requirement
+   * 2. If yes, rolls using that fish's catchLow/catchHigh success rate
+   * 3. If roll succeeds, returns that fish
+   * 4. If roll fails, moves to the next (lower-level) fish
+   *
+   * Formula: P(Level) = (1 + floor(low × (99 - L) / 98 + high × (L - 1) / 98 + 0.5)) / 256
+   *
+   * @see https://oldschool.runescape.wiki/w/Catch_rate
+   * @param drops - Array of fish drops (must be ordered highest-level first)
+   * @param playerLevel - Player's fishing level
+   * @returns The fish caught, or lowest-level fish as fallback
+   */
+  private rollFishDrop(
+    drops: ResourceDrop[],
+    playerLevel: number,
+  ): ResourceDrop {
+    // Drops should already be ordered highest-level first in manifest
+    for (const drop of drops) {
+      const fishLevel = drop.levelRequired ?? 1;
+
+      // Skip if player doesn't meet level requirement
+      if (playerLevel < fishLevel) {
+        continue;
+      }
+
+      // Roll using this fish's catch rate
+      const catchLow = drop.catchLow ?? 48;
+      const catchHigh = drop.catchHigh ?? 127;
+      const successRate = this.lerpSuccessRate(
+        catchLow,
+        catchHigh,
+        playerLevel,
+      );
+
+      const roll = Math.random();
+      if (roll < successRate) {
+        // Caught this fish!
+        if (ResourceSystem.DEBUG_GATHERING) {
+          console.log(
+            `[Fishing] 🎣 Caught ${drop.itemName} (level ${fishLevel}) - ` +
+              `roll=${(roll * 100).toFixed(1)}% vs ${(successRate * 100).toFixed(1)}%`,
+          );
+        }
+        return drop;
+      } else {
+        // Failed, try next fish in priority order
+        if (ResourceSystem.DEBUG_GATHERING) {
+          console.log(
+            `[Fishing] ❌ Failed ${drop.itemName} (level ${fishLevel}) - ` +
+              `roll=${(roll * 100).toFixed(1)}% vs ${(successRate * 100).toFixed(1)}%, trying next...`,
+          );
+        }
+      }
+    }
+
+    // Fallback: return lowest-level fish (last in array)
+    // This ensures player always catches something if they're fishing
+    const fallback = drops[drops.length - 1];
+    if (ResourceSystem.DEBUG_GATHERING) {
+      console.log(`[Fishing] 🎣 Fallback catch: ${fallback.itemName}`);
+    }
+    return fallback;
   }
 
   /**
@@ -2482,9 +2626,29 @@ export class ResourceSystem extends SystemBase {
   /**
    * Extract tool category from toolRequired field
    * e.g., "bronze_hatchet" → "hatchet", "bronze_pickaxe" → "pickaxe"
+   *
+   * OSRS-ACCURACY: Fishing tools use EXACT matching because:
+   * - small_fishing_net catches shrimp/anchovies (level 1)
+   * - fishing_rod + bait catches sardine/herring/pike (level 5+)
+   * - fly_fishing_rod + feathers catches trout/salmon (level 20+)
+   * These are NOT interchangeable like pickaxe tiers.
    */
   private getToolCategory(toolRequired: string): string {
     const lowerTool = toolRequired.toLowerCase();
+
+    // OSRS-ACCURACY: Fishing tools require EXACT matching (not interchangeable)
+    // Return the exact tool ID for fishing equipment
+    const exactFishingTools = [
+      "small_fishing_net",
+      "fishing_rod",
+      "fly_fishing_rod",
+      "harpoon",
+      "lobster_pot",
+      "big_fishing_net",
+    ];
+    if (exactFishingTools.includes(lowerTool)) {
+      return lowerTool; // Return exact ID, not category
+    }
 
     // Handle common patterns (check pickaxe before axe since "pickaxe" contains "axe")
     if (lowerTool.includes("pickaxe") || lowerTool.includes("pick")) {
@@ -2492,14 +2656,6 @@ export class ResourceSystem extends SystemBase {
     }
     if (lowerTool.includes("hatchet") || lowerTool.includes("axe")) {
       return "hatchet";
-    }
-    if (
-      lowerTool.includes("fishing") ||
-      lowerTool.includes("net") ||
-      lowerTool.includes("rod") ||
-      lowerTool.includes("harpoon")
-    ) {
-      return "fishing";
     }
 
     // Fallback: take last segment after underscore
@@ -2514,9 +2670,15 @@ export class ResourceSystem extends SystemBase {
     const names: Record<string, string> = {
       hatchet: "hatchet",
       pickaxe: "pickaxe",
-      fishing: "fishing equipment",
+      // OSRS-accurate fishing tool names
+      small_fishing_net: "small fishing net",
+      fishing_rod: "fishing rod",
+      fly_fishing_rod: "fly fishing rod",
+      harpoon: "harpoon",
+      lobster_pot: "lobster pot",
+      big_fishing_net: "big fishing net",
     };
-    return names[category] || category;
+    return names[category] || category.replace(/_/g, " ");
   }
 
   /**
@@ -2561,7 +2723,35 @@ export class ResourceSystem extends SystemBase {
   }
 
   /**
+   * Check if player has a specific item in their inventory
+   * Used for secondary consumable checks (bait, feathers, etc.)
+   */
+  private playerHasItem(playerId: string, itemId: string): boolean {
+    const inventorySystem = this.world.getSystem?.("inventory") as {
+      getInventory?: (playerId: string) => {
+        items?: Array<{ itemId?: string; quantity?: number }>;
+      };
+    } | null;
+
+    if (!inventorySystem?.getInventory) {
+      return false;
+    }
+
+    const inv = inventorySystem.getInventory(playerId);
+    const items = inv?.items || [];
+
+    return items.some(
+      (item) =>
+        item?.itemId?.toLowerCase() === itemId.toLowerCase() &&
+        (item.quantity ?? 1) > 0,
+    );
+  }
+
+  /**
    * Check if player has any tool matching the required category
+   *
+   * OSRS-ACCURACY: Fishing tools use EXACT matching (category === exact item ID)
+   * Other tools (pickaxe, hatchet) use category matching (any tier works)
    */
   private playerHasToolCategory(playerId: string, category: string): boolean {
     const inventorySystem = this.world.getSystem?.("inventory") as {
@@ -2577,22 +2767,31 @@ export class ResourceSystem extends SystemBase {
     const inv = inventorySystem.getInventory(playerId);
     const items = inv?.items || [];
 
+    // OSRS-ACCURACY: Fishing tools require EXACT matching
+    const exactFishingTools = [
+      "small_fishing_net",
+      "fishing_rod",
+      "fly_fishing_rod",
+      "harpoon",
+      "lobster_pot",
+      "big_fishing_net",
+    ];
+
     return items.some((item) => {
       if (!item?.itemId) return false;
       const itemId = item.itemId.toLowerCase();
 
+      // If category is an exact fishing tool, require exact match
+      if (exactFishingTools.includes(category)) {
+        return itemId === category;
+      }
+
+      // Otherwise use category-based matching (any tier works)
       switch (category) {
         case "hatchet":
           return itemId.includes("hatchet") || itemId.includes("axe");
         case "pickaxe":
           return itemId.includes("pickaxe") || itemId.includes("pick");
-        case "fishing":
-          return (
-            itemId.includes("fishing") ||
-            itemId.includes("net") ||
-            itemId.includes("rod") ||
-            itemId.includes("harpoon")
-          );
         default:
           return itemId.includes(category);
       }
