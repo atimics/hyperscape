@@ -173,6 +173,14 @@ export class ResourceSystem extends SystemBase {
     }
   >();
 
+  // ===== PERFORMANCE: Pre-allocated buffers for zero-allocation hot paths =====
+  // These buffers are reused every tick to avoid GC pressure from array allocations
+  // Pattern: buffer.length = 0 to clear, then push items, then process
+  private readonly _completedSessionsBuffer: PlayerID[] = [];
+  private readonly _respawnedResourcesBuffer: ResourceID[] = [];
+  private readonly _spotsToMoveBuffer: ResourceID[] = [];
+  private readonly _fallbackPosition = { x: 0, y: 0, z: 0 };
+
   // =============================================================================
   // TOOL DATA - Now loaded from tools.json manifest
   // =============================================================================
@@ -1890,7 +1898,9 @@ export class ResourceSystem extends SystemBase {
    * Replaces setTimeout-based respawn with deterministic tick counting
    */
   private processRespawns(tickNumber: number): void {
-    const respawnedResources: ResourceID[] = [];
+    // PERFORMANCE: Use pre-allocated buffer to avoid GC pressure
+    const respawnedResources = this._respawnedResourcesBuffer;
+    respawnedResources.length = 0;
 
     for (const [resourceId, respawnTick] of this.respawnAtTick.entries()) {
       if (tickNumber >= respawnTick) {
@@ -1963,7 +1973,9 @@ export class ResourceSystem extends SystemBase {
    * @see https://oldschool.runescape.wiki/w/Fishing
    */
   private processFishingSpotMovement(tickNumber: number): void {
-    const spotsToMove: ResourceID[] = [];
+    // PERFORMANCE: Use pre-allocated buffer to avoid GC pressure
+    const spotsToMove = this._spotsToMoveBuffer;
+    spotsToMove.length = 0;
 
     for (const [resourceId, timer] of this.fishingSpotMoveTimers.entries()) {
       if (tickNumber >= timer.moveAtTick) {
@@ -2119,7 +2131,9 @@ export class ResourceSystem extends SystemBase {
     this.processResourceTimers(tickNumber);
 
     // Process active gathering sessions
-    const completedSessions: PlayerID[] = [];
+    // PERFORMANCE: Use pre-allocated buffer to avoid GC pressure
+    const completedSessions = this._completedSessionsBuffer;
+    completedSessions.length = 0;
 
     for (const [playerId, session] of this.activeGathering.entries()) {
       const resource = this.resources.get(session.resourceId);

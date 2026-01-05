@@ -2,20 +2,20 @@
 
 **Goal:** Achieve 9/10 production quality rating
 
-**Current Rating:** 7.5/10 (after memory leak fixes)
+**Current Rating:** 8.0/10 (after Phase 1 & 2 + fishing fixes)
 
 ---
 
 ## Current Ratings Breakdown
 
-| Criteria | Current | Target | Gap |
-|----------|---------|--------|-----|
-| Production Quality | 7.5 | 9.0 | -1.5 |
-| Best Practices | 6.5 | 9.0 | -2.5 |
-| OWASP Security | 8.0 | 9.0 | -1.0 |
-| Memory Hygiene | 7.0 | 9.0 | -2.0 |
-| SOLID Principles | 5.0 | 8.5 | -3.5 |
-| OSRS Likeness | 9.0 | 9.0 | 0 |
+| Criteria | Current | Target | Gap | Notes |
+|----------|---------|--------|-----|-------|
+| Production Quality | 8.0 | 9.0 | -1.0 | Improved (dead code removed, buffers added) |
+| Best Practices | 7.0 | 9.0 | -2.0 | Improved (memory hygiene) |
+| OWASP Security | 8.0 | 9.0 | -1.0 | Unchanged |
+| Memory Hygiene | 8.5 | 9.0 | -0.5 | **Improved** (3 hot path allocations fixed) |
+| SOLID Principles | 5.0 | 8.5 | -3.5 | Unchanged |
+| OSRS Likeness | 9.0 | 9.0 | 0 | Unchanged |
 
 ---
 
@@ -139,16 +139,16 @@ describe('ResourceSystem', () => {
 
 ---
 
-## Phase 1: Dead Code Removal (Quick Wins)
+## Phase 1: Dead Code Removal (Quick Wins) ✅ COMPLETED
 
-### 1.1 Remove unused `setArrivalRotation` infrastructure
+### 1.1 Remove unused `setArrivalRotation` infrastructure ✅
 **File:** `packages/server/src/systems/ServerNetwork/tile-movement.ts`
 
-- [ ] Remove `arrivalRotations` Map (line 67-68)
-- [ ] Remove `setArrivalRotation()` method (lines 795-800)
-- [ ] Remove `clearArrivalRotation()` method (lines 805-807)
-- [ ] Remove arrivalRotation handling in `processPlayerTick()` (lines 557-558, 710-711)
-- [ ] Remove cleanup in `cleanup()` method (line 760)
+- [x] Remove `arrivalRotations` Map (line 67-68)
+- [x] Remove `setArrivalRotation()` method (lines 795-800)
+- [x] Remove `clearArrivalRotation()` method (lines 805-807)
+- [x] Remove arrivalRotation handling in `processPlayerTick()` (lines 557-558, 710-711)
+- [x] Remove cleanup in `cleanup()` method (line 760)
 
 **Reason:** Rotation is now handled by `FaceDirectionManager`. This code is never called.
 
@@ -168,25 +168,25 @@ AI agents use `resourceGather` for server-authoritative gathering. DO NOT REMOVE
 
 ---
 
-## Phase 2: Memory Hygiene (Critical)
+## Phase 2: Memory Hygiene (Critical) ✅ COMPLETED
 
-### 2.1 Pre-allocate tick processing buffers
+### 2.1 Pre-allocate tick processing buffers ✅
 **File:** `packages/shared/src/systems/shared/entities/ResourceSystem.ts`
 
-Add private reusable buffers:
+Added private reusable buffers at class level:
 ```typescript
-// Add to class properties
+// ===== PERFORMANCE: Pre-allocated buffers for zero-allocation hot paths =====
 private readonly _completedSessionsBuffer: PlayerID[] = [];
 private readonly _respawnedResourcesBuffer: ResourceID[] = [];
 private readonly _spotsToMoveBuffer: ResourceID[] = [];
 private readonly _fallbackPosition = { x: 0, y: 0, z: 0 };
 ```
 
-Update methods to use buffers:
-- [ ] `processGatheringTick()` - use `_completedSessionsBuffer`
-- [ ] `processResourceRespawns()` - use `_respawnedResourcesBuffer`
-- [ ] `processFishingSpotMovement()` - use `_spotsToMoveBuffer`
-- [ ] Event handler fallback position - use `_fallbackPosition`
+Updated methods to use buffers:
+- [x] `processGatheringTick()` - use `_completedSessionsBuffer`
+- [x] `processRespawns()` - use `_respawnedResourcesBuffer`
+- [x] `processFishingSpotMovement()` - use `_spotsToMoveBuffer`
+- [~] Event handler fallback position - **SKIPPED** (stored by reference in session, not a hot path)
 
 ### ~~2.2 Replace `.filter()` with for-loop in hot path~~ - NOT NEEDED
 
@@ -337,16 +337,16 @@ packages/shared/src/systems/shared/entities/
 
 ## Implementation Order (Revised)
 
-| Phase | Priority | Effort | Impact |
-|-------|----------|--------|--------|
-| Phase 2: Memory Hygiene | **CRITICAL** | 2-3 hrs | Fixes GC pressure, 60fps stability |
-| Phase 3.2: Error Handling | **CRITICAL** | 1 hr | Prevents tick processing crashes |
-| Phase 1: Dead Code | HIGH | 1-2 hrs | Cleaner codebase |
-| Phase 3: Code Quality | HIGH | 1-2 hrs | Debug flags, consistency |
-| Phase 4: Type Safety | MEDIUM | 2-3 hrs | Reduces future bugs |
-| Phase 7: Testing | MEDIUM | 4-6 hrs | Confidence in changes |
-| Phase 5: SOLID | LOW | 4-6 hrs | Architecture improvement |
-| Phase 6: Security | LOW | 2-3 hrs | Already reasonably secure |
+| Phase | Priority | Effort | Impact | Status |
+|-------|----------|--------|--------|--------|
+| Phase 1: Dead Code | HIGH | 1-2 hrs | Cleaner codebase | ✅ DONE |
+| Phase 2: Memory Hygiene | **CRITICAL** | 2-3 hrs | Fixes GC pressure, 60fps stability | ✅ DONE |
+| Phase 3.2: Error Handling | **CRITICAL** | 1 hr | Prevents tick processing crashes | ⏳ NEXT |
+| Phase 3.1/3.3: Code Quality | HIGH | 1-2 hrs | Debug flags, consistency | Pending |
+| Phase 4: Type Safety | MEDIUM | 2-3 hrs | Reduces future bugs | Pending |
+| Phase 7: Testing | MEDIUM | 4-6 hrs | Confidence in changes | Pending |
+| Phase 5: SOLID | LOW | 4-6 hrs | Architecture improvement | Pending |
+| Phase 6: Security | LOW | 2-3 hrs | Already reasonably secure | Pending |
 
 ---
 
