@@ -5,7 +5,10 @@ import type { World } from "../../../types";
 import { EventType } from "../../../types/events";
 import { Resource, ResourceDrop } from "../../../types/core/core";
 import { PlayerID, ResourceID } from "../../../types/core/identifiers";
-import { calculateDistance } from "../../../utils/game/EntityUtils";
+import {
+  calculateDistance,
+  calculateDistance2D,
+} from "../../../utils/game/EntityUtils";
 import {
   createPlayerID,
   createResourceID,
@@ -1235,10 +1238,12 @@ export class ResourceSystem extends SystemBase {
     const isFishing = resource.skillRequired === "fishing";
 
     if (isFishing) {
-      // Fishing uses world-distance check - player can be up to 4m away from the fishing spot
+      // Fishing uses 2D (X/Z) world-distance check - player can be up to 4m away from the fishing spot
       // This is more forgiving since the player stands on shore and casts into water
+      // IMPORTANT: Use 2D distance because fishing spots are in water (different Y than player on shore)
+      // This matches PendingGatherManager which also uses 2D distance for fishing arrival checks
       const FISHING_INTERACTION_RANGE = 4.0; // meters
-      const worldDistance = calculateDistance(
+      const worldDistance = calculateDistance2D(
         data.playerPosition,
         resource.position,
       );
