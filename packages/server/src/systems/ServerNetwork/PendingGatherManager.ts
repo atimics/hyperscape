@@ -244,7 +244,12 @@ export class PendingGatherManager {
         console.log(
           `[PendingGather]   🎣 Already in fishing range - starting gather immediately`,
         );
-        this.rotateToFaceResource(playerId, this._resourceTile, size.x, size.z);
+        this.setFaceTargetViaManager(
+          playerId,
+          this._resourceTile,
+          size.x,
+          size.z,
+        );
         this.startGathering(playerId, resourceId);
         return;
       }
@@ -261,7 +266,12 @@ export class PendingGatherManager {
         console.log(
           `[PendingGather]   Already on cardinal tile - starting gather immediately`,
         );
-        this.rotateToFaceResource(playerId, this._resourceTile, size.x, size.z);
+        this.setFaceTargetViaManager(
+          playerId,
+          this._resourceTile,
+          size.x,
+          size.z,
+        );
         this.startGathering(playerId, resourceId);
         return;
       }
@@ -433,31 +443,12 @@ export class PendingGatherManager {
         // This prevents race condition where client sets "idle" before emote arrives.
 
         // Use FaceDirectionManager for OSRS-accurate rotation (like other resources)
-        // This handles both cardinal-based (tree/rock) and point-based (fishing) rotation
-        const faceManager = (
-          this.world as {
-            faceDirectionManager?: {
-              setCardinalFaceTarget: (
-                playerId: string,
-                anchorTile: TileCoord,
-                footprintX: number,
-                footprintZ: number,
-              ) => void;
-            };
-          }
-        ).faceDirectionManager;
-
-        if (faceManager) {
-          faceManager.setCardinalFaceTarget(
-            playerId,
-            pending.resourceAnchorTile,
-            pending.footprintX,
-            pending.footprintZ,
-          );
-          console.log(
-            `[PendingGather] 🧭 Set cardinal face target for ${playerId} via FaceDirectionManager`,
-          );
-        }
+        this.setFaceTargetViaManager(
+          playerId,
+          pending.resourceAnchorTile,
+          pending.footprintX,
+          pending.footprintZ,
+        );
 
         // Start gathering
         this.startGathering(playerId, pending.resourceId);
@@ -499,6 +490,42 @@ export class PendingGatherManager {
       }
     }
     return false;
+  }
+
+  /**
+   * Helper to set face target via FaceDirectionManager.
+   * Avoids code duplication for the multiple places we need to set rotation.
+   */
+  private setFaceTargetViaManager(
+    playerId: string,
+    resourceAnchor: TileCoord,
+    footprintX: number,
+    footprintZ: number,
+  ): void {
+    const faceManager = (
+      this.world as {
+        faceDirectionManager?: {
+          setCardinalFaceTarget: (
+            playerId: string,
+            anchorTile: TileCoord,
+            footprintX: number,
+            footprintZ: number,
+          ) => void;
+        };
+      }
+    ).faceDirectionManager;
+
+    if (faceManager) {
+      faceManager.setCardinalFaceTarget(
+        playerId,
+        resourceAnchor,
+        footprintX,
+        footprintZ,
+      );
+      console.log(
+        `[PendingGather] 🧭 Set cardinal face target for ${playerId} via FaceDirectionManager`,
+      );
+    }
   }
 
   /**
