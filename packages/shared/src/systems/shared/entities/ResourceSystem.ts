@@ -32,13 +32,23 @@ import {
 import type { GatheringToolData } from "../../../data/DataManager";
 import { ALL_WORLD_AREAS } from "../../../data/world-areas";
 import { GATHERING_CONSTANTS } from "../../../constants/GatheringConstants";
-import {
-  findWaterEdgePoints,
-  shuffleArray,
-  type ShorePoint,
-} from "../../../utils/ShoreUtils";
+import { findWaterEdgePoints, shuffleArray } from "../../../utils/ShoreUtils";
 import type { WorldArea } from "../../../types/world/world-types";
 // Note: quaternionPool no longer used here - face rotation is deferred to FaceDirectionManager
+
+// SOLID: Extracted pure utility functions
+import { rollDrop as rollDropUtil } from "./gathering/DropRoller";
+import {
+  getToolCategory as getToolCategoryUtil,
+  getToolDisplayName as getToolDisplayNameUtil,
+  itemMatchesToolCategory,
+} from "./gathering/ToolUtils";
+import {
+  computeSuccessRate as computeSuccessRateUtil,
+  computeCycleTicks as computeCycleTicksUtil,
+  getSuccessRateValues as getSuccessRateValuesUtil,
+  ticksToMs as ticksToMsUtil,
+} from "./gathering/SuccessRateCalculator";
 
 /**
  * Player entity interface for emote operations.
@@ -198,7 +208,6 @@ export class ResourceSystem extends SystemBase {
   private readonly _completedSessionsBuffer: PlayerID[] = [];
   private readonly _respawnedResourcesBuffer: ResourceID[] = [];
   private readonly _spotsToMoveBuffer: ResourceID[] = [];
-  private readonly _fallbackPosition = { x: 0, y: 0, z: 0 };
 
   // =============================================================================
   // TOOL DATA - Now loaded from tools.json manifest
@@ -453,8 +462,8 @@ export class ResourceSystem extends SystemBase {
     ) as TerrainSystem | null;
   }
 
-  private sendChat(playerId: string | PlayerID, text: string): void {
-    // World.chat is properly typed, no cast needed
+  private sendChat(_playerId: string | PlayerID, text: string): void {
+    // Note: playerId unused - system messages are broadcast, not targeted
     const chat = this.world.chat;
     const msg = {
       id: uuid(),
@@ -2003,7 +2012,7 @@ export class ResourceSystem extends SystemBase {
    */
   private relocateFishingSpot(
     resourceId: ResourceID,
-    currentTick: number,
+    _currentTick: number,
   ): void {
     const resource = this.resources.get(resourceId);
     if (!resource) {
@@ -2335,12 +2344,10 @@ export class ResourceSystem extends SystemBase {
         // ===== DEPLETION CHECK =====
         // OSRS-ACCURACY: Use Forestry timer for higher-level trees, chance-based for mining/regular trees
         let shouldDeplete = false;
-        let depletionMethod = "";
 
         if (this.usesTimerBasedDepletion(session.resourceId)) {
           // FORESTRY: Timer-based depletion (oak, willow, maple, yew, magic, redwood)
           // Timer started on first log, depletes when timer=0 AND player receives log
-          depletionMethod = "forestry-timer";
           shouldDeplete = this.handleForestryLog(
             playerId,
             session.resourceId,
@@ -2351,7 +2358,6 @@ export class ResourceSystem extends SystemBase {
           resource.skillRequired === "mining"
         ) {
           // MINING: Chance-based depletion (1/8 for most rocks)
-          depletionMethod = "mining-chance";
           const roll = Math.random();
           shouldDeplete = roll < GATHERING_CONSTANTS.MINING_DEPLETE_CHANCE;
           console.log(
@@ -2362,11 +2368,9 @@ export class ResourceSystem extends SystemBase {
           resource.skillRequired === "fishing"
         ) {
           // FISHING: Spots don't deplete (they move, handled elsewhere)
-          depletionMethod = "fishing-no-deplete";
           shouldDeplete = false;
         } else {
           // REGULAR TREES & FALLBACK: Use manifest depleteChance (1/8 for regular trees)
-          depletionMethod = "chance-based";
           const roll = Math.random();
           shouldDeplete = roll < tuned.depleteChance;
           console.log(
@@ -2480,84 +2484,28 @@ export class ResourceSystem extends SystemBase {
   }
 
   /**
-   * Compute gathering cycle in ticks (OSRS-accurate, skill-specific)
-   *
-   * OSRS MECHANICS:
-   * - Woodcutting: Fixed 4 ticks, tool doesn't affect frequency
-   * - Mining: Tool determines tick interval (8 bronze → 3 rune/dragon)
-   * - Fishing: Fixed 5 ticks, equipment doesn't affect frequency
-   *
-   * @param skill - The gathering skill (woodcutting, mining, fishing)
-   * @param tuned - Resource tuning data from manifest
-   * @param toolData - Tool data from tools.json manifest (may have rollTicks for mining)
+   * Compute gathering cycle in ticks (OSRS-accurate, skill-specific).
+   * @see gathering/SuccessRateCalculator.ts for implementation
    */
   private computeCycleTicks(
     skill: string,
     tuned: { levelRequired: number; baseCycleTicks: number },
     toolData: GatheringToolData | null,
   ): number {
-    const mechanics =
-      GATHERING_CONSTANTS.SKILL_MECHANICS[
-        skill as keyof typeof GATHERING_CONSTANTS.SKILL_MECHANICS
-      ];
-
-    if (mechanics) {
-      if (mechanics.type === "fixed-roll-variable-success") {
-        // WOODCUTTING: Fixed roll frequency, tool affects success rate (handled elsewhere)
-        // Always use the skill's base roll ticks (4 for woodcutting)
-        return Math.max(
-          GATHERING_CONSTANTS.MINIMUM_CYCLE_TICKS,
-          mechanics.baseRollTicks,
-        );
-      }
-
-      if (mechanics.type === "variable-roll-fixed-success") {
-        // MINING: Tool tier determines roll frequency
-        // Use rollTicks from tool data, or fall back to base (bronze = 8)
-        const rollTicks = toolData?.rollTicks ?? mechanics.baseRollTicks;
-        return Math.max(GATHERING_CONSTANTS.MINIMUM_CYCLE_TICKS, rollTicks);
-      }
-
-      if (mechanics.type === "fixed-roll-fixed-success") {
-        // FISHING: Fixed roll frequency, equipment doesn't matter
-        return Math.max(
-          GATHERING_CONSTANTS.MINIMUM_CYCLE_TICKS,
-          mechanics.baseRollTicks,
-        );
-      }
-    }
-
-    // Fallback to base ticks for unknown skills
-    return Math.max(
-      GATHERING_CONSTANTS.MINIMUM_CYCLE_TICKS,
-      tuned.baseCycleTicks,
-    );
+    return computeCycleTicksUtil(skill, tuned.baseCycleTicks, toolData);
   }
 
   /**
-   * Convert ticks to milliseconds for client progress bar
+   * Convert ticks to milliseconds for client progress bar.
+   * @see gathering/SuccessRateCalculator.ts for implementation
    */
   private ticksToMs(ticks: number): number {
-    return ticks * TICK_DURATION_MS;
+    return ticksToMsUtil(ticks);
   }
 
   /**
    * Compute success rate using OSRS's LERP interpolation formula.
-   *
-   * OSRS Formula: P(Level) = (1 + floor(low × (99 - L) / 98 + high × (L - 1) / 98 + 0.5)) / 256
-   *
-   * The low/high values come from skill-specific tables:
-   * - Woodcutting: Varies by tree type AND axe tier
-   * - Mining: Varies by ore type only (pickaxe doesn't affect success)
-   * - Fishing: Varies by spot type only (equipment doesn't affect success)
-   *
-   * @param skillLevel - Player's current skill level (1-99)
-   * @param skill - The gathering skill (woodcutting, mining, fishing)
-   * @param resourceVariant - Resource type key (e.g., "tree_normal", "ore_copper")
-   * @param toolTier - Tool tier for woodcutting (e.g., "bronze", "rune"), ignored for other skills
-   * @returns Success probability (0-1)
-   *
-   * @see https://oldschool.runescape.wiki/w/Skilling_success_rate
+   * @see gathering/SuccessRateCalculator.ts for implementation
    */
   private computeSuccessRate(
     skillLevel: number,
@@ -2565,202 +2513,27 @@ export class ResourceSystem extends SystemBase {
     resourceVariant: string,
     toolTier: string | null,
   ): number {
-    // Get low/high values based on skill type
-    const { low, high } = this.getSuccessRateValues(
-      skill,
-      resourceVariant,
-      toolTier,
-    );
-
-    // Apply OSRS LERP formula
-    return this.lerpSuccessRate(low, high, skillLevel);
+    return computeSuccessRateUtil(skillLevel, skill, resourceVariant, toolTier);
   }
 
   /**
    * Get low/high success rate values from the appropriate table.
+   * @see gathering/SuccessRateCalculator.ts for implementation
    */
   private getSuccessRateValues(
     skill: string,
     resourceVariant: string,
     toolTier: string | null,
   ): { low: number; high: number } {
-    if (skill === "woodcutting") {
-      // Woodcutting: lookup by tree type AND axe tier
-      const treeRates =
-        GATHERING_CONSTANTS.WOODCUTTING_SUCCESS_RATES[
-          resourceVariant as keyof typeof GATHERING_CONSTANTS.WOODCUTTING_SUCCESS_RATES
-        ];
-      if (treeRates) {
-        const tier = toolTier || "bronze";
-        const tierRates = treeRates[tier as keyof typeof treeRates];
-        if (tierRates) {
-          return tierRates;
-        }
-        // Unknown tier, fall back to bronze
-        return treeRates.bronze;
-      }
-    }
-
-    if (skill === "mining") {
-      // Mining: lookup by ore type only (pickaxe doesn't affect success)
-      const oreRates =
-        GATHERING_CONSTANTS.MINING_SUCCESS_RATES[
-          resourceVariant as keyof typeof GATHERING_CONSTANTS.MINING_SUCCESS_RATES
-        ];
-      if (oreRates) {
-        return oreRates;
-      }
-    }
-
-    if (skill === "fishing") {
-      // Fishing: lookup by spot type only (equipment doesn't affect success)
-      const fishRates =
-        GATHERING_CONSTANTS.FISHING_SUCCESS_RATES[
-          resourceVariant as keyof typeof GATHERING_CONSTANTS.FISHING_SUCCESS_RATES
-        ];
-      if (fishRates) {
-        return fishRates;
-      }
-    }
-
-    // Fallback to default values
-    return GATHERING_CONSTANTS.DEFAULT_SUCCESS_RATE;
+    return getSuccessRateValuesUtil(skill, resourceVariant, toolTier);
   }
 
   /**
-   * OSRS linear interpolation formula for success rates.
-   *
-   * Formula: P(Level) = (1 + floor(low × (99 - L) / 98 + high × (L - 1) / 98 + 0.5)) / 256
-   *
-   * @param low - Success numerator at level 1 (x/256)
-   * @param high - Success numerator at level 99 (x/256)
-   * @param level - Current skill level (1-99)
-   * @returns Success probability (0-1), clamped to valid range
-   */
-  private lerpSuccessRate(low: number, high: number, level: number): number {
-    // Clamp level to valid range
-    const clampedLevel = Math.min(99, Math.max(1, level));
-
-    // OSRS interpolation formula
-    const lowComponent = (low * (99 - clampedLevel)) / 98;
-    const highComponent = (high * (clampedLevel - 1)) / 98;
-    const numerator = 1 + Math.floor(lowComponent + highComponent + 0.5);
-
-    // Convert to probability and clamp to [0, 1]
-    return Math.min(1, Math.max(0, numerator / 256));
-  }
-
-  /**
-   * Roll against harvestYield chances to determine drop
-   * Respects chance values from manifest for multi-drop resources (e.g., fishing)
-   * @param drops - Array of possible drops from manifest harvestYield
-   * @param playerLevel - Optional player skill level (required for OSRS priority rolling)
-   * @returns The rolled drop with all manifest data (itemId, itemName, quantity, xpAmount, etc.)
+   * Roll against harvestYield chances to determine drop.
+   * @see gathering/DropRoller.ts for implementation
    */
   private rollDrop(drops: ResourceDrop[], playerLevel?: number): ResourceDrop {
-    if (drops.length === 0) {
-      throw new Error(
-        "[ResourceSystem] Resource has no drops defined in manifest",
-      );
-    }
-
-    // Single drop - no roll needed
-    if (drops.length === 1) {
-      return drops[0];
-    }
-
-    // OSRS-ACCURACY: Check if drops use priority rolling (catchLow/catchHigh defined)
-    // This is used for fishing spots where higher-level fish are rolled first
-    const usesPriorityRolling = drops.some(
-      (d) => d.catchLow !== undefined && d.catchHigh !== undefined,
-    );
-
-    if (usesPriorityRolling && playerLevel !== undefined) {
-      return this.rollFishDrop(drops, playerLevel);
-    }
-
-    // Fallback to weighted random for other resources (trees, ores)
-    const roll = Math.random();
-    let cumulative = 0;
-
-    for (const drop of drops) {
-      cumulative += drop.chance;
-      if (roll < cumulative) {
-        return drop;
-      }
-    }
-
-    // Fallback to first drop if chances don't sum to 1.0
-    return drops[0];
-  }
-
-  /**
-   * OSRS Priority-based fish rolling system
-   *
-   * Fish are ordered by level requirement (highest first in manifest).
-   * For each fish, the system:
-   * 1. Checks if player meets level requirement
-   * 2. If yes, rolls using that fish's catchLow/catchHigh success rate
-   * 3. If roll succeeds, returns that fish
-   * 4. If roll fails, moves to the next (lower-level) fish
-   *
-   * Formula: P(Level) = (1 + floor(low × (99 - L) / 98 + high × (L - 1) / 98 + 0.5)) / 256
-   *
-   * @see https://oldschool.runescape.wiki/w/Catch_rate
-   * @param drops - Array of fish drops (must be ordered highest-level first)
-   * @param playerLevel - Player's fishing level
-   * @returns The fish caught, or lowest-level fish as fallback
-   */
-  private rollFishDrop(
-    drops: ResourceDrop[],
-    playerLevel: number,
-  ): ResourceDrop {
-    // Drops should already be ordered highest-level first in manifest
-    for (const drop of drops) {
-      const fishLevel = drop.levelRequired ?? 1;
-
-      // Skip if player doesn't meet level requirement
-      if (playerLevel < fishLevel) {
-        continue;
-      }
-
-      // Roll using this fish's catch rate
-      const catchLow = drop.catchLow ?? 48;
-      const catchHigh = drop.catchHigh ?? 127;
-      const successRate = this.lerpSuccessRate(
-        catchLow,
-        catchHigh,
-        playerLevel,
-      );
-
-      const roll = Math.random();
-      if (roll < successRate) {
-        // Caught this fish!
-        if (ResourceSystem.DEBUG_GATHERING) {
-          console.log(
-            `[Fishing] 🎣 Caught ${drop.itemName} (level ${fishLevel}) - ` +
-              `roll=${(roll * 100).toFixed(1)}% vs ${(successRate * 100).toFixed(1)}%`,
-          );
-        }
-        return drop;
-      } else {
-        // Failed, try next fish in priority order
-        if (ResourceSystem.DEBUG_GATHERING) {
-          console.log(
-            `[Fishing] ❌ Failed ${drop.itemName} (level ${fishLevel}) - ` +
-              `roll=${(roll * 100).toFixed(1)}% vs ${(successRate * 100).toFixed(1)}%, trying next...`,
-          );
-        }
-      }
-    }
-
-    // Fallback: return lowest-level fish (last in array)
-    // This ensures player always catches something if they're fishing
-    const fallback = drops[drops.length - 1];
-    if (ResourceSystem.DEBUG_GATHERING) {
-      console.log(`[Fishing] 🎣 Fallback catch: ${fallback.itemName}`);
-    }
-    return fallback;
+    return rollDropUtil(drops, playerLevel, ResourceSystem.DEBUG_GATHERING);
   }
 
   /**
@@ -2830,61 +2603,19 @@ export class ResourceSystem extends SystemBase {
   }
 
   /**
-   * Extract tool category from toolRequired field
-   * e.g., "bronze_hatchet" → "hatchet", "bronze_pickaxe" → "pickaxe"
-   *
-   * OSRS-ACCURACY: Fishing tools use EXACT matching because:
-   * - small_fishing_net catches shrimp/anchovies (level 1)
-   * - fishing_rod + bait catches sardine/herring/pike (level 5+)
-   * - fly_fishing_rod + feathers catches trout/salmon (level 20+)
-   * These are NOT interchangeable like pickaxe tiers.
+   * Extract tool category from toolRequired field.
+   * @see gathering/ToolUtils.ts for implementation
    */
   private getToolCategory(toolRequired: string): string {
-    const lowerTool = toolRequired.toLowerCase();
-
-    // OSRS-ACCURACY: Fishing tools require EXACT matching (not interchangeable)
-    // Return the exact tool ID for fishing equipment
-    const exactFishingTools = [
-      "small_fishing_net",
-      "fishing_rod",
-      "fly_fishing_rod",
-      "harpoon",
-      "lobster_pot",
-      "big_fishing_net",
-    ];
-    if (exactFishingTools.includes(lowerTool)) {
-      return lowerTool; // Return exact ID, not category
-    }
-
-    // Handle common patterns (check pickaxe before axe since "pickaxe" contains "axe")
-    if (lowerTool.includes("pickaxe") || lowerTool.includes("pick")) {
-      return "pickaxe";
-    }
-    if (lowerTool.includes("hatchet") || lowerTool.includes("axe")) {
-      return "hatchet";
-    }
-
-    // Fallback: take last segment after underscore
-    const parts = toolRequired.split("_");
-    return parts[parts.length - 1];
+    return getToolCategoryUtil(toolRequired);
   }
 
   /**
-   * Get display name for tool category
+   * Get display name for tool category.
+   * @see gathering/ToolUtils.ts for implementation
    */
   private getToolDisplayName(category: string): string {
-    const names: Record<string, string> = {
-      hatchet: "hatchet",
-      pickaxe: "pickaxe",
-      // OSRS-accurate fishing tool names
-      small_fishing_net: "small fishing net",
-      fishing_rod: "fishing rod",
-      fly_fishing_rod: "fly fishing rod",
-      harpoon: "harpoon",
-      lobster_pot: "lobster pot",
-      big_fishing_net: "big fishing net",
-    };
-    return names[category] || category.replace(/_/g, " ");
+    return getToolDisplayNameUtil(category);
   }
 
   /**
@@ -2954,10 +2685,8 @@ export class ResourceSystem extends SystemBase {
   }
 
   /**
-   * Check if player has any tool matching the required category
-   *
-   * OSRS-ACCURACY: Fishing tools use EXACT matching (category === exact item ID)
-   * Other tools (pickaxe, hatchet) use category matching (any tier works)
+   * Check if player has any tool matching the required category.
+   * @see gathering/ToolUtils.ts for matching logic
    */
   private playerHasToolCategory(playerId: string, category: string): boolean {
     const inventorySystem = this.world.getSystem?.("inventory") as {
@@ -2973,34 +2702,9 @@ export class ResourceSystem extends SystemBase {
     const inv = inventorySystem.getInventory(playerId);
     const items = inv?.items || [];
 
-    // OSRS-ACCURACY: Fishing tools require EXACT matching
-    const exactFishingTools = [
-      "small_fishing_net",
-      "fishing_rod",
-      "fly_fishing_rod",
-      "harpoon",
-      "lobster_pot",
-      "big_fishing_net",
-    ];
-
     return items.some((item) => {
       if (!item?.itemId) return false;
-      const itemId = item.itemId.toLowerCase();
-
-      // If category is an exact fishing tool, require exact match
-      if (exactFishingTools.includes(category)) {
-        return itemId === category;
-      }
-
-      // Otherwise use category-based matching (any tier works)
-      switch (category) {
-        case "hatchet":
-          return itemId.includes("hatchet") || itemId.includes("axe");
-        case "pickaxe":
-          return itemId.includes("pickaxe") || itemId.includes("pick");
-        default:
-          return itemId.includes(category);
-      }
+      return itemMatchesToolCategory(item.itemId, category);
     });
   }
 

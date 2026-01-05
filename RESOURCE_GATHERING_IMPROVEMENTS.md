@@ -2,7 +2,7 @@
 
 **Goal:** Achieve 9/10 production quality rating
 
-**Current Rating:** 8.7/10 (after Phase 1-4 + Phase 7 unit tests)
+**Current Rating:** 8.9/10 (after Phase 1-5 + Phase 7)
 
 ---
 
@@ -10,12 +10,12 @@
 
 | Criteria | Current | Target | Gap | Notes |
 |----------|---------|--------|-----|-------|
-| Production Quality | 8.7 | 9.0 | -0.3 | **Improved** (30 unit tests, all passing) |
-| Best Practices | 8.7 | 9.0 | -0.3 | **Improved** (unit tests validate OSRS mechanics) |
+| Production Quality | 8.8 | 9.0 | -0.2 | 30 unit tests, 4 modules extracted |
+| Best Practices | 8.8 | 9.0 | -0.2 | Unit tests validate OSRS mechanics |
 | OWASP Security | 8.0 | 9.0 | -1.0 | Unchanged |
-| Memory Hygiene | 8.5 | 9.0 | -0.5 | Improved (3 hot path allocations fixed) |
-| SOLID Principles | 6.0 | 8.5 | -2.5 | Improved (interfaces, method extraction) |
-| OSRS Likeness | 9.0 | 9.0 | 0 | **Tested** (lerpSuccessRate, rollFishDrop) |
+| Memory Hygiene | 8.5 | 9.0 | -0.5 | 3 hot path allocations fixed |
+| SOLID Principles | 7.5 | 8.5 | -1.0 | **Improved** (4 modules: DropRoller, ToolUtils, SuccessRateCalculator, types) |
+| OSRS Likeness | 9.0 | 9.0 | 0 | Tested (lerpSuccessRate, rollFishDrop) |
 
 ---
 
@@ -254,20 +254,26 @@ interface ResourceEntityMethods {
 
 ---
 
-## Phase 5: SOLID Principles (Architecture)
+## Phase 5: SOLID Principles (Architecture) ✅ DONE
 
 ### 5.1 Split ResourceSystem into modules
-**Current:** Single 3000+ line `ResourceSystem.ts`
+**Result:** ResourceSystem.ts reduced from 3055 to 2792 lines (263 lines extracted)
 
-**Proposed Structure:**
+**Implemented Structure:**
 ```
 packages/shared/src/systems/shared/entities/
-├── ResourceSystem.ts (orchestrator, ~500 lines)
-├── gathering/
-│   ├── GatheringSessionManager.ts (~400 lines)
-│   ├── ToolValidator.ts (~200 lines)
-│   ├── DropRoller.ts (~300 lines)
-│   └── types.ts
+├── ResourceSystem.ts (2792 lines, delegates to modules)
+└── gathering/
+    ├── DropRoller.ts (155 lines) ✅ DONE
+    ├── ToolUtils.ts (124 lines) ✅ DONE
+    ├── SuccessRateCalculator.ts (164 lines) ✅ DONE
+    ├── types.ts (115 lines) ✅ DONE
+    └── index.ts (42 lines)
+```
+
+**Remaining (Future - Low Priority):**
+```
+├── GatheringSessionManager.ts (~400 lines) - complex, many system deps
 ├── skills/
 │   ├── WoodcuttingModule.ts (~300 lines)
 │   ├── MiningModule.ts (~300 lines)
@@ -277,18 +283,39 @@ packages/shared/src/systems/shared/entities/
     └── FishingSpotManager.ts (~300 lines)
 ```
 
-### 5.2 Extract GatheringSessionManager
+### 5.2 Extract GatheringSessionManager (Future - Not Recommended)
+Analysis showed GatheringSessionManager has heavy system dependencies (world, events, multiple Maps).
+Extraction would require complex dependency injection with minimal benefit.
 - [ ] Move `activeGathering` Map and session logic
 - [ ] Move `startGathering()`, `stopGathering()`, `cancelGatheringForPlayer()`
 - [ ] Move tick processing logic (`processGatheringTick`)
 
-### 5.3 Extract ToolValidator
-- [ ] Move `getBestTool()`, `playerHasToolCategory()`, `getToolCategory()`
-- [ ] Move tool-related constants and validation
+### 5.3 Extract ToolUtils ✅ DONE
+- [x] Move `getToolCategory()` - pure string manipulation
+- [x] Move `getToolDisplayName()` - display name mapping
+- [x] Move `itemMatchesToolCategory()` - tool matching logic
+- [x] Export `EXACT_FISHING_TOOLS` constant
+- Note: `getBestTool()`, `playerHasToolCategory()` remain in ResourceSystem (require world.getSystem)
 
-### 5.4 Extract DropRoller
-- [ ] Move `rollDrop()`, `rollFishDrop()`, `lerpSuccessRate()`
-- [ ] Move drop table processing logic
+### 5.4 Extract DropRoller ✅ DONE
+- [x] Move `rollDrop()` - weighted random drop rolling
+- [x] Move `rollFishDrop()` - OSRS priority rolling
+- [x] Move `lerpSuccessRate()` - OSRS catch rate formula
+- [x] All functions are pure (no system dependencies)
+
+### 5.5 Extract SuccessRateCalculator ✅ DONE
+- [x] Move `computeSuccessRate()` - OSRS success rate calculation
+- [x] Move `getSuccessRateValues()` - lookup tables
+- [x] Move `computeCycleTicks()` - skill-specific tick intervals
+- [x] Move `ticksToMs()` - tick to millisecond conversion
+
+### 5.6 Extract Types ✅ DONE
+- [x] Create `GatheringSession` interface - session data structure
+- [x] Create `GatheringTuning` interface - cached tuning data
+- [x] Create `ResourceTimer` interface - Forestry mechanics
+- [x] Create `FishingSpotTimer` interface - spot movement
+- [x] Create `SuccessRateValues` interface - LERP formula values
+- [x] Create `VariantTuning` interface - manifest tuning data
 
 ---
 
@@ -338,7 +365,7 @@ packages/shared/src/systems/shared/entities/
 | Phase 3: Code Quality | **CRITICAL** | 1-2 hrs | Error handling, debug flags | ✅ DONE |
 | Phase 4: Type Safety | MEDIUM | 2-3 hrs | Reduces future bugs | ✅ DONE |
 | Phase 7: Testing | MEDIUM | 4-6 hrs | Confidence in changes | ✅ PARTIAL (unit tests) |
-| Phase 5: SOLID | LOW | 4-6 hrs | Architecture improvement | Pending |
+| Phase 5: SOLID | LOW | 4-6 hrs | Architecture improvement | ✅ DONE (4 modules) |
 | Phase 6: Security | LOW | 2-3 hrs | Already reasonably secure | Pending |
 
 ---
@@ -361,10 +388,14 @@ packages/shared/src/systems/shared/entities/
 
 | File | Lines | Issues |
 |------|-------|--------|
-| `ResourceSystem.ts` | ~3000 | 3 hot path allocations, type casts, needs splitting |
-| `PendingGatherManager.ts` | ~560 | Missing error handling, type casts |
-| `FaceDirectionManager.ts` | ~450 | Verbose logging without debug flag |
-| `tile-movement.ts` | ~850 | Dead code (arrivalRotations infrastructure) |
+| `ResourceSystem.ts` | ~2792 | Reduced from 3055 (-263 lines), delegates to gathering/ |
+| `PendingGatherManager.ts` | ~560 | Error handling added in Phase 3 |
+| `FaceDirectionManager.ts` | ~450 | Debug flag added in Phase 3 |
+| `tile-movement.ts` | ~850 | Dead code removed in Phase 1 |
 | `handlers/resources.ts` | ~55 | Used by ElizaOS AI agents - DO NOT DELETE |
 | `GatheringConstants.ts` | ~270 | Good, well-documented |
 | `ResourceSystem.test.ts` | ~510 | 30 tests covering utility + OSRS mechanics |
+| `gathering/DropRoller.ts` | 155 | Pure drop rolling functions |
+| `gathering/ToolUtils.ts` | 124 | Pure tool utility functions |
+| `gathering/SuccessRateCalculator.ts` | 164 | **NEW** OSRS success rate calculations |
+| `gathering/types.ts` | 115 | **NEW** Type definitions for gathering system |

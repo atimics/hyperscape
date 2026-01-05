@@ -8,13 +8,18 @@
  * - Success rate calculation (OSRS-style)
  * - Cycle time calculation
  *
- * Note: Tests access private methods via bracket notation for unit testing.
- * This is acceptable for testing internals that have complex logic.
+ * Note: Some tests access private methods via bracket notation for unit testing.
+ * Module functions (lerpSuccessRate, rollFishDrop) are imported directly.
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ResourceSystem } from "../ResourceSystem";
 import type { ResourceDrop } from "../../../../types/core/core";
+// Import module functions directly for testing
+import {
+  lerpSuccessRate as lerpSuccessRateModule,
+  rollFishDrop as rollFishDropModule,
+} from "../gathering/DropRoller";
 
 // Mock world object for testing
 const createMockWorld = () => ({
@@ -350,37 +355,26 @@ describe("ResourceSystem", () => {
   });
 
   // ===== OSRS CATCH RATE FORMULA TESTS =====
+  // Tests the module function directly (no ResourceSystem dependency)
   describe("lerpSuccessRate", () => {
-    const lerpSuccessRate = (
-      sys: ResourceSystem,
-      low: number,
-      high: number,
-      level: number,
-    ) =>
-      (
-        sys as unknown as {
-          lerpSuccessRate: (low: number, high: number, level: number) => number;
-        }
-      ).lerpSuccessRate(low, high, level);
-
     it("should use low value at level 1", () => {
       // At level 1: numerator = 1 + floor(low + 0.5) = 1 + low
-      const rate = lerpSuccessRate(system, 48, 127, 1);
+      const rate = lerpSuccessRateModule(48, 127, 1);
       // Expected: (1 + floor(48 + 0 + 0.5)) / 256 = 49/256 ≈ 0.191
       expect(rate).toBeCloseTo(49 / 256, 2);
     });
 
     it("should use high value at level 99", () => {
       // At level 99: numerator = 1 + floor(0 + high + 0.5) = 1 + high
-      const rate = lerpSuccessRate(system, 48, 127, 99);
+      const rate = lerpSuccessRateModule(48, 127, 99);
       // Expected: (1 + floor(0 + 127 + 0.5)) / 256 = 128/256 = 0.5
       expect(rate).toBeCloseTo(128 / 256, 2);
     });
 
     it("should interpolate between low and high at mid levels", () => {
-      const rate1 = lerpSuccessRate(system, 48, 127, 1);
-      const rate50 = lerpSuccessRate(system, 48, 127, 50);
-      const rate99 = lerpSuccessRate(system, 48, 127, 99);
+      const rate1 = lerpSuccessRateModule(48, 127, 1);
+      const rate50 = lerpSuccessRateModule(48, 127, 50);
+      const rate99 = lerpSuccessRateModule(48, 127, 99);
 
       // Mid-level should be between level 1 and level 99
       expect(rate50).toBeGreaterThan(rate1);
@@ -388,10 +382,10 @@ describe("ResourceSystem", () => {
     });
 
     it("should clamp level to valid range [1, 99]", () => {
-      const rateAt1 = lerpSuccessRate(system, 48, 127, 1);
-      const rateAt0 = lerpSuccessRate(system, 48, 127, 0);
-      const rateAt99 = lerpSuccessRate(system, 48, 127, 99);
-      const rateAt150 = lerpSuccessRate(system, 48, 127, 150);
+      const rateAt1 = lerpSuccessRateModule(48, 127, 1);
+      const rateAt0 = lerpSuccessRateModule(48, 127, 0);
+      const rateAt99 = lerpSuccessRateModule(48, 127, 99);
+      const rateAt150 = lerpSuccessRateModule(48, 127, 150);
 
       expect(rateAt0).toBe(rateAt1); // Clamped to 1
       expect(rateAt150).toBe(rateAt99); // Clamped to 99
@@ -399,8 +393,8 @@ describe("ResourceSystem", () => {
 
     it("should clamp result to [0, 1]", () => {
       // Even with extreme values, rate should be bounded
-      const lowRate = lerpSuccessRate(system, 0, 0, 1);
-      const highRate = lerpSuccessRate(system, 255, 255, 99);
+      const lowRate = lerpSuccessRateModule(0, 0, 1);
+      const highRate = lerpSuccessRateModule(255, 255, 99);
 
       expect(lowRate).toBeGreaterThanOrEqual(0);
       expect(highRate).toBeLessThanOrEqual(1);
@@ -408,21 +402,8 @@ describe("ResourceSystem", () => {
   });
 
   // ===== OSRS PRIORITY FISH ROLLING TESTS =====
+  // Tests the module function directly (no ResourceSystem dependency)
   describe("rollFishDrop", () => {
-    const rollFishDrop = (
-      sys: ResourceSystem,
-      drops: ResourceDrop[],
-      playerLevel: number,
-    ) =>
-      (
-        sys as unknown as {
-          rollFishDrop: (
-            drops: ResourceDrop[],
-            playerLevel: number,
-          ) => ResourceDrop;
-        }
-      ).rollFishDrop(drops, playerLevel);
-
     // Test drops ordered by level requirement (highest first, like OSRS)
     const fishDrops: ResourceDrop[] = [
       {
@@ -469,7 +450,7 @@ describe("ResourceSystem", () => {
       };
 
       for (let i = 0; i < 100; i++) {
-        const drop = rollFishDrop(system, fishDrops, 30);
+        const drop = rollFishDropModule(fishDrops, 30);
         results[drop.itemId]++;
       }
 
@@ -487,7 +468,7 @@ describe("ResourceSystem", () => {
       };
 
       for (let i = 0; i < 500; i++) {
-        const drop = rollFishDrop(system, fishDrops, 50);
+        const drop = rollFishDropModule(fishDrops, 50);
         results[drop.itemId]++;
       }
 
@@ -507,7 +488,7 @@ describe("ResourceSystem", () => {
       };
 
       for (let i = 0; i < 1000; i++) {
-        const drop = rollFishDrop(system, fishDrops, 99);
+        const drop = rollFishDropModule(fishDrops, 99);
         results[drop.itemId]++;
       }
 
@@ -533,7 +514,7 @@ describe("ResourceSystem", () => {
       ];
 
       // Should always succeed with only one fish option
-      const drop = rollFishDrop(system, singleDrop, 99);
+      const drop = rollFishDropModule(singleDrop, 99);
       expect(drop.itemId).toBe("shrimp");
     });
   });
