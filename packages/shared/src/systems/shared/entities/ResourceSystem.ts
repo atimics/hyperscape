@@ -29,6 +29,12 @@ import {
 import type { GatheringToolData } from "../../../data/DataManager";
 import { ALL_WORLD_AREAS } from "../../../data/world-areas";
 import { GATHERING_CONSTANTS } from "../../../constants/GatheringConstants";
+import {
+  findShorePoints,
+  shuffleArray,
+  type ShorePoint,
+} from "../../../utils/ShoreUtils";
+import type { WorldArea } from "../../../types/world/world-types";
 // Note: quaternionPool no longer used here - face rotation is deferred to FaceDirectionManager
 
 /**
@@ -600,6 +606,79 @@ export class ResourceSystem extends SystemBase {
         // Pass isManifest: true to protect these resources from tile unload deletion
         this.registerTerrainResources({ spawnPoints, isManifest: true });
       }
+
+      // Spawn dynamic fishing spots if configured for this area
+      if (area.fishing?.enabled) {
+        this.spawnDynamicFishingSpots(areaId, area);
+      }
+    }
+  }
+
+  /**
+   * Dynamically spawn fishing spots at detected shore positions within an area.
+   * Uses terrain height sampling to find valid water edges.
+   *
+   * @param areaId - Area identifier for logging
+   * @param area - World area configuration with fishing config
+   */
+  private spawnDynamicFishingSpots(areaId: string, area: WorldArea): void {
+    if (!this.terrainSystem) {
+      console.warn(
+        `[ResourceSystem] No terrain system available - skipping dynamic fishing for ${areaId}`,
+      );
+      return;
+    }
+
+    const fishing = area.fishing!;
+
+    // Find shore points within area bounds
+    const shorePoints = findShorePoints(
+      area.bounds,
+      this.terrainSystem.getHeightAt.bind(this.terrainSystem),
+      {
+        waterThreshold: 5.4, // TerrainSystem.CONFIG.WATER_THRESHOLD
+        shoreMaxHeight: 8.0,
+        minSpacing: 6,
+      },
+    );
+
+    if (shorePoints.length === 0) {
+      console.warn(
+        `[ResourceSystem] No shore points found in ${areaId} - no dynamic fishing spots spawned`,
+      );
+      return;
+    }
+
+    // Randomize order for variety
+    shuffleArray(shorePoints);
+
+    // Determine how many spots to spawn
+    const spotsToSpawn = Math.min(fishing.spotCount, shorePoints.length);
+
+    // Build spawn points (round-robin through spot types)
+    const spawnPoints: TerrainResourceSpawnPoint[] = [];
+
+    for (let i = 0; i < spotsToSpawn; i++) {
+      const point = shorePoints[i];
+      const spotTypeId = fishing.spotTypes[i % fishing.spotTypes.length];
+
+      // Extract subType: "fishing_spot_net" -> "net"
+      const subType = spotTypeId.replace("fishing_spot_", "");
+
+      spawnPoints.push({
+        position: { x: point.x, y: point.y + 0.1, z: point.z },
+        type: "fish",
+        subType: subType as TerrainResourceSpawnPoint["subType"],
+      });
+    }
+
+    // Use existing spawn infrastructure
+    if (spawnPoints.length > 0) {
+      console.log(
+        `[ResourceSystem] Spawning ${spawnPoints.length} dynamic fishing spots in ${areaId} ` +
+          `(found ${shorePoints.length} shore points)`,
+      );
+      this.registerTerrainResources({ spawnPoints, isManifest: true });
     }
   }
 
