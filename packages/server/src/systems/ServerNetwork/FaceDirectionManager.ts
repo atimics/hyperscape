@@ -66,6 +66,9 @@ const DIRECTION_STEP = (Math.PI * 2) / DIRECTION_COUNT; // 45 degrees = PI/4
  * FaceDirectionManager handles OSRS-accurate deferred face direction
  */
 export class FaceDirectionManager {
+  /** Debug logging flag - set to true to enable verbose face direction logs */
+  static DEBUG = false;
+
   private world: World;
   private sendFn: ((name: string, data: unknown) => void) | null = null;
 
@@ -107,11 +110,13 @@ export class FaceDirectionManager {
     // This is important when gathering starts - the player has stopped moving
     player.movedThisTick = false;
 
-    console.log(
-      `[FaceDirection] 🎯 Set face target for ${playerId}: target=(${targetX.toFixed(1)}, ${targetZ.toFixed(1)}), ` +
-        `player=(${player.position?.x.toFixed(1) ?? "?"}, ${player.position?.z.toFixed(1) ?? "?"}), ` +
-        `movedThisTick=${player.movedThisTick}`,
-    );
+    if (FaceDirectionManager.DEBUG) {
+      console.log(
+        `[FaceDirection] 🎯 Set face target for ${playerId}: target=(${targetX.toFixed(1)}, ${targetZ.toFixed(1)}), ` +
+          `player=(${player.position?.x.toFixed(1) ?? "?"}, ${player.position?.z.toFixed(1) ?? "?"}), ` +
+          `movedThisTick=${player.movedThisTick}`,
+      );
+    }
   }
 
   /**
@@ -158,18 +163,22 @@ export class FaceDirectionManager {
       footprintZ,
     );
 
-    console.log(
-      `[FaceDirection] getCardinalFaceDirection result: direction=${direction || "null"}, ` +
-        `playerTile=(${playerTile.x}, ${playerTile.z}), anchorTile=(${anchorTile.x}, ${anchorTile.z}), ` +
-        `footprint=${footprintX}x${footprintZ}`,
-    );
+    if (FaceDirectionManager.DEBUG) {
+      console.log(
+        `[FaceDirection] getCardinalFaceDirection result: direction=${direction || "null"}, ` +
+          `playerTile=(${playerTile.x}, ${playerTile.z}), anchorTile=(${anchorTile.x}, ${anchorTile.z}), ` +
+          `footprint=${footprintX}x${footprintZ}`,
+      );
+    }
 
     if (!direction) {
       // Player is not on a cardinal tile - fall back to target-based facing
-      console.warn(
-        `[FaceDirection] Player ${playerId} not on cardinal tile relative to resource at (${anchorTile.x}, ${anchorTile.z}). ` +
-          `Player tile: (${playerTile.x}, ${playerTile.z}). Falling back to center-based facing.`,
-      );
+      if (FaceDirectionManager.DEBUG) {
+        console.warn(
+          `[FaceDirection] Player ${playerId} not on cardinal tile relative to resource at (${anchorTile.x}, ${anchorTile.z}). ` +
+            `Player tile: (${playerTile.x}, ${playerTile.z}). Falling back to center-based facing.`,
+        );
+      }
       // Calculate resource center in world coordinates
       // For 1×1 at anchor (15,-10): center = (15.5, -9.5)
       // For 2×2 at anchor (15,-10): center = (16, -9)
@@ -186,11 +195,13 @@ export class FaceDirectionManager {
     // Reset movedThisTick so rotation applies this tick
     player.movedThisTick = false;
 
-    console.log(
-      `[FaceDirection] 🧭 Set CARDINAL face direction for ${playerId}: ${direction} ` +
-        `(player tile=${playerTile.x},${playerTile.z}, anchor=${anchorTile.x},${anchorTile.z}, ` +
-        `footprint=${footprintX}x${footprintZ})`,
-    );
+    if (FaceDirectionManager.DEBUG) {
+      console.log(
+        `[FaceDirection] 🧭 Set CARDINAL face direction for ${playerId}: ${direction} ` +
+          `(player tile=${playerTile.x},${playerTile.z}, anchor=${anchorTile.x},${anchorTile.z}, ` +
+          `footprint=${footprintX}x${footprintZ})`,
+      );
+    }
   }
 
   /**
@@ -263,7 +274,10 @@ export class FaceDirectionManager {
       }
 
       // Debug: Log state at start of processing
-      if (player.cardinalFaceDirection || player.faceTarget) {
+      if (
+        FaceDirectionManager.DEBUG &&
+        (player.cardinalFaceDirection || player.faceTarget)
+      ) {
         console.log(
           `[FaceDirection] Processing ${playerId}: cardinalFaceDirection=${player.cardinalFaceDirection || "none"}, ` +
             `faceTarget=${player.faceTarget ? `(${player.faceTarget.x.toFixed(1)}, ${player.faceTarget.z.toFixed(1)})` : "none"}, ` +
@@ -273,14 +287,16 @@ export class FaceDirectionManager {
 
       // OSRS: Skip if player moved this tick (but keep targets for later)
       if (player.movedThisTick) {
-        if (player.cardinalFaceDirection) {
-          console.log(
-            `[FaceDirection] Skipping ${playerId}: movedThisTick=true, cardinalFaceDirection=${player.cardinalFaceDirection} persists`,
-          );
-        } else if (player.faceTarget) {
-          console.log(
-            `[FaceDirection] Skipping ${playerId}: movedThisTick=true, faceTarget=(${player.faceTarget.x.toFixed(1)}, ${player.faceTarget.z.toFixed(1)}) persists`,
-          );
+        if (FaceDirectionManager.DEBUG) {
+          if (player.cardinalFaceDirection) {
+            console.log(
+              `[FaceDirection] Skipping ${playerId}: movedThisTick=true, cardinalFaceDirection=${player.cardinalFaceDirection} persists`,
+            );
+          } else if (player.faceTarget) {
+            console.log(
+              `[FaceDirection] Skipping ${playerId}: movedThisTick=true, faceTarget=(${player.faceTarget.x.toFixed(1)}, ${player.faceTarget.z.toFixed(1)}) persists`,
+            );
+          }
         }
         continue;
       }
@@ -288,16 +304,20 @@ export class FaceDirectionManager {
       // PRIORITY 1: Cardinal direction (deterministic for resources)
       if (player.cardinalFaceDirection) {
         const angle = getCardinalFaceAngle(player.cardinalFaceDirection);
-        console.log(
-          `[FaceDirection] 🧭 Applying CARDINAL rotation for ${playerId}: ` +
-            `direction=${player.cardinalFaceDirection}, angle=${((angle * 180) / Math.PI).toFixed(1)}° (${angle.toFixed(4)} rad)`,
-        );
+        if (FaceDirectionManager.DEBUG) {
+          console.log(
+            `[FaceDirection] 🧭 Applying CARDINAL rotation for ${playerId}: ` +
+              `direction=${player.cardinalFaceDirection}, angle=${((angle * 180) / Math.PI).toFixed(1)}° (${angle.toFixed(4)} rad)`,
+          );
+        }
 
         this.applyRotation(player, angle);
 
-        console.log(
-          `[FaceDirection] ✅ CARDINAL rotation applied for ${playerId}`,
-        );
+        if (FaceDirectionManager.DEBUG) {
+          console.log(
+            `[FaceDirection] ✅ CARDINAL rotation applied for ${playerId}`,
+          );
+        }
 
         // Clear cardinal direction after applying
         player.cardinalFaceDirection = undefined;
@@ -311,7 +331,9 @@ export class FaceDirectionManager {
 
       // Skip if player has no position
       if (!player.position) {
-        console.log(`[FaceDirection] Skipping ${playerId}: no position`);
+        if (FaceDirectionManager.DEBUG) {
+          console.log(`[FaceDirection] Skipping ${playerId}: no position`);
+        }
         continue;
       }
 
@@ -321,7 +343,11 @@ export class FaceDirectionManager {
 
       // Skip if already at target (avoid divide by zero / weird angles)
       if (Math.abs(dx) < 0.01 && Math.abs(dz) < 0.01) {
-        console.log(`[FaceDirection] Skipping ${playerId}: already at target`);
+        if (FaceDirectionManager.DEBUG) {
+          console.log(
+            `[FaceDirection] Skipping ${playerId}: already at target`,
+          );
+        }
         player.faceTarget = undefined;
         continue;
       }
@@ -346,13 +372,15 @@ export class FaceDirectionManager {
       );
       const compassDir = directions[dirIndex] || "?";
 
-      console.log(
-        `[FaceDirection] ✅ Applied rotation for ${playerId}: ` +
-          `angle=${((snappedAngle * 180) / Math.PI).toFixed(0)}° (${compassDir}), ` +
-          `target=(${player.faceTarget.x.toFixed(1)}, ${player.faceTarget.z.toFixed(1)}), ` +
-          `player=(${player.position.x.toFixed(1)}, ${player.position.z.toFixed(1)}), ` +
-          `dx=${dx.toFixed(1)}, dz=${dz.toFixed(1)}`,
-      );
+      if (FaceDirectionManager.DEBUG) {
+        console.log(
+          `[FaceDirection] ✅ Applied rotation for ${playerId}: ` +
+            `angle=${((snappedAngle * 180) / Math.PI).toFixed(0)}° (${compassDir}), ` +
+            `target=(${player.faceTarget.x.toFixed(1)}, ${player.faceTarget.z.toFixed(1)}), ` +
+            `player=(${player.position.x.toFixed(1)}, ${player.position.z.toFixed(1)}), ` +
+            `dx=${dx.toFixed(1)}, dz=${dz.toFixed(1)}`,
+        );
+      }
 
       // OSRS: Clear face target after successfully applying
       player.faceTarget = undefined;
@@ -373,10 +401,12 @@ export class FaceDirectionManager {
     const qz = tempQuat.z;
     const qw = tempQuat.w;
 
-    console.log(
-      `[FaceDirection] applyRotation: angle=${((angle * 180) / Math.PI).toFixed(1)}°, ` +
-        `quat=(${qx.toFixed(4)}, ${qy.toFixed(4)}, ${qz.toFixed(4)}, ${qw.toFixed(4)})`,
-    );
+    if (FaceDirectionManager.DEBUG) {
+      console.log(
+        `[FaceDirection] applyRotation: angle=${((angle * 180) / Math.PI).toFixed(1)}°, ` +
+          `quat=(${qx.toFixed(4)}, ${qy.toFixed(4)}, ${qz.toFixed(4)}, ${qw.toFixed(4)})`,
+      );
+    }
 
     let appliedTo = "";
 
@@ -404,12 +434,13 @@ export class FaceDirectionManager {
       }
 
       if (!appliedTo) {
+        // Always warn about missing rotation target (this is a bug)
         console.warn(
           `[FaceDirection] WARNING: No rotation target found for ${player.id}! ` +
             `node=${!!player.node}, node.quaternion=${!!player.node?.quaternion}, ` +
             `rotation=${!!player.rotation}, base=${!!player.base}`,
         );
-      } else {
+      } else if (FaceDirectionManager.DEBUG) {
         console.log(`[FaceDirection] Applied rotation to: ${appliedTo.trim()}`);
       }
     } finally {
@@ -419,8 +450,11 @@ export class FaceDirectionManager {
     // CRITICAL: Mark for network broadcast so clients see the rotation change
     if (player.markNetworkDirty) {
       player.markNetworkDirty();
-      console.log(`[FaceDirection] Marked ${player.id} as network dirty`);
+      if (FaceDirectionManager.DEBUG) {
+        console.log(`[FaceDirection] Marked ${player.id} as network dirty`);
+      }
     } else {
+      // Always warn about missing markNetworkDirty (this is a bug)
       console.warn(
         `[FaceDirection] WARNING: Player ${player.id} has no markNetworkDirty method!`,
       );
@@ -436,9 +470,11 @@ export class FaceDirectionManager {
           q: [qx, qy, qz, qw],
         },
       });
-      console.log(
-        `[FaceDirection] 📡 Broadcast rotation for ${player.id}: q=[${qx.toFixed(4)}, ${qy.toFixed(4)}, ${qz.toFixed(4)}, ${qw.toFixed(4)}]`,
-      );
+      if (FaceDirectionManager.DEBUG) {
+        console.log(
+          `[FaceDirection] 📡 Broadcast rotation for ${player.id}: q=[${qx.toFixed(4)}, ${qy.toFixed(4)}, ${qz.toFixed(4)}, ${qw.toFixed(4)}]`,
+        );
+      }
     } else {
       console.warn(
         `[FaceDirection] WARNING: No sendFn available, rotation not broadcast for ${player.id}!`,
