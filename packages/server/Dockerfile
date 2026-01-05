@@ -67,11 +67,11 @@ COPY --from=builder /app/packages/shared/build ./packages/shared/build
 COPY --from=builder /app/packages/server/dist ./packages/server/dist
 COPY --from=builder /app/packages/plugin-hyperscape ./packages/plugin-hyperscape
 
-# Copy manifests (small JSON files needed for server-side logic)
-COPY assets/manifests ./assets/manifests
+# Create world directory structure and copy manifests where server expects them
+RUN mkdir -p ./packages/server/world/assets/manifests
 
-# Create world directory structure without assets (assets served from S3/CloudFront CDN)
-RUN mkdir -p ./packages/server/world
+# Copy manifests (small JSON files needed for server-side logic)
+COPY assets/manifests ./packages/server/world/assets/manifests
 
 # Copy server source files needed at runtime
 COPY --from=builder /app/packages/server/src ./packages/server/src

@@ -12,12 +12,17 @@ WORKDIR /app
 # Install build dependencies
 RUN apk add --no-cache python3 make g++
 
-# Copy workspace package files first for caching
-COPY package.json bun.lock ./
+# Copy asset-forge package.json and create a minimal root package.json
 COPY packages/asset-forge/package.json ./packages/asset-forge/
 
-# Install dependencies
-RUN bun install --ignore-scripts
+# Create a minimal root package.json without workspace dependencies
+RUN echo '{"name":"asset-forge-build","private":true,"workspaces":["packages/asset-forge"]}' > package.json
+
+# Copy bun.lock for dependency resolution
+COPY bun.lock ./
+
+# Install dependencies (will only install asset-forge deps)
+RUN cd packages/asset-forge && bun install --ignore-scripts || bun install
 
 # Copy source code
 COPY packages/asset-forge/ ./packages/asset-forge/
