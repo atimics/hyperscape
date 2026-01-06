@@ -28,6 +28,7 @@ import { SystemBase } from "../infrastructure/SystemBase";
 import { Logger } from "../../../utils/Logger";
 import { PROCESSING_CONSTANTS } from "../../../constants/ProcessingConstants";
 import { getTargetValidator } from "./TargetValidator";
+import { MESSAGE_TYPES } from "../../client/interaction/constants";
 
 /**
  * Create a minimal Item with all required properties
@@ -165,6 +166,25 @@ export class InventoryInteractionSystem extends SystemBase {
       lootItems?: Array<{ itemId: string; quantity: number }>;
       position: { x: number; y: number; z: number };
     }>(EventType.CORPSE_CLICK, (data) => this.handleCorpseClick(data));
+
+    // Listen for targeting mode selection (player clicked a valid target)
+    this.subscribe<{
+      playerId: string;
+      sourceItemId: string;
+      sourceSlot: number;
+      targetId: string;
+      targetType: "inventory_item" | "world_entity";
+      targetSlot?: number;
+    }>(EventType.TARGETING_SELECT, (data) => {
+      this.handleTargetSelected(
+        data.playerId,
+        data.sourceItemId,
+        data.sourceSlot,
+        data.targetId,
+        data.targetType,
+        data.targetSlot,
+      );
+    });
   }
 
   start(): void {}
@@ -1236,32 +1256,59 @@ export class InventoryInteractionSystem extends SystemBase {
   }
 
   /**
-   * Handle action selection from context menu
+   * Handle action selection from context menu or direct invocation.
+   *
+   * Can be called either:
+   * 1. From context menu (has stored contextMenu) - legacy flow
+   * 2. Directly with itemId/slot (client-side menu) - new flow
    */
   private handleActionSelected(event: {
     playerId: string;
     actionId: string;
+    itemId?: string;
+    slot?: number;
   }): void {
+    // Try to get from stored context menu first (legacy flow)
     const contextMenu = this.contextMenus.get(event.playerId);
-    if (!contextMenu) {
+
+    // Determine item info from either context menu or direct event
+    const itemId = event.itemId ?? contextMenu?.itemId;
+    const slot = event.slot ?? contextMenu?.slot ?? 0;
+
+    if (!itemId) {
       Logger.system(
         "InventoryInteractionSystem",
-        `No context menu for player: ${event.playerId}`,
+        `No itemId available for action: ${event.actionId}`,
       );
       return;
     }
 
-    const action = contextMenu.actions.find((a) => a.id === event.actionId);
+    // Get the item data to find available actions
+    const item = this.getItemData(itemId);
+    if (!item) {
+      Logger.system("InventoryInteractionSystem", `Item not found: ${itemId}`);
+      return;
+    }
+
+    // Get all available actions for this item
+    const availableActions = this.getAvailableActions(item, event.playerId);
+    const action = availableActions.find((a) => a.id === event.actionId);
+
     if (!action) {
       Logger.system(
         "InventoryInteractionSystem",
-        `Action not found: ${event.actionId}`,
+        `Action "${event.actionId}" not found for item: ${itemId}`,
       );
       return;
     }
 
-    action.callback(contextMenu.playerId, contextMenu.itemId, contextMenu.slot);
-    this.closeContextMenu(event.playerId);
+    // Execute the action callback
+    action.callback(event.playerId, itemId, slot);
+
+    // Clean up context menu if it exists
+    if (contextMenu) {
+      this.closeContextMenu(event.playerId);
+    }
   }
 
   /**
@@ -1429,29 +1476,60 @@ export class InventoryInteractionSystem extends SystemBase {
     targetType: "inventory_item" | "world_entity",
     targetSlot?: number,
   ): void {
+    console.log(
+      "[InventoryInteractionSystem] 🎯 handleTargetSelected called:",
+      {
+        playerId,
+        sourceItemId,
+        sourceSlot,
+        targetId,
+        targetType,
+        targetSlot,
+      },
+    );
+
     const validator = getTargetValidator();
     const actionType = validator.getActionType(sourceItemId);
+    console.log("[InventoryInteractionSystem] 🎯 Action type:", actionType);
 
     if (actionType === "firemaking") {
       // Firemaking: tinderbox + logs or logs + tinderbox
-      // Determine which is logs
-      const logsId = PROCESSING_CONSTANTS.VALID_LOG_IDS.has(sourceItemId)
-        ? sourceItemId
-        : targetId;
-      const logsSlot = PROCESSING_CONSTANTS.VALID_LOG_IDS.has(sourceItemId)
-        ? sourceSlot
-        : (targetSlot ?? 0);
+      // Determine which is logs and which is tinderbox
+      const isSourceLogs = PROCESSING_CONSTANTS.VALID_LOG_IDS.has(sourceItemId);
+      const logsId = isSourceLogs ? sourceItemId : targetId;
+      const logsSlot = isSourceLogs ? sourceSlot : (targetSlot ?? 0);
+      const tinderboxSlot = isSourceLogs ? (targetSlot ?? 0) : sourceSlot;
 
-      this.emitTypedEvent(EventType.FIREMAKING_REQUEST, {
-        playerId,
-        logsId,
-        logsSlot,
-      });
+      // Send to server for authoritative processing
+      if (this.world.network?.send) {
+        console.log(
+          "[InventoryInteractionSystem] 🔥 Sending firemakingRequest to server:",
+          {
+            logsId,
+            logsSlot,
+            tinderboxSlot,
+          },
+        );
+        this.world.network.send(MESSAGE_TYPES.FIREMAKING_REQUEST, {
+          logsId,
+          logsSlot,
+          tinderboxSlot,
+        });
+      } else {
+        // Fallback: emit local event (for single-player/testing)
+        this.emitTypedEvent(EventType.PROCESSING_FIREMAKING_REQUEST, {
+          playerId,
+          logsId,
+          logsSlot,
+          tinderboxSlot,
+        });
+      }
 
       Logger.system("InventoryInteractionSystem", "Firemaking request", {
         playerId,
         logsId,
         logsSlot,
+        tinderboxSlot,
       });
     } else if (actionType === "cooking") {
       // Cooking: raw food + fire/range
@@ -1464,18 +1542,34 @@ export class InventoryInteractionSystem extends SystemBase {
         return;
       }
 
-      this.emitTypedEvent(EventType.COOKING_REQUEST, {
-        playerId,
-        rawFoodId: sourceItemId,
-        rawFoodSlot: sourceSlot,
-        cookingSourceId: targetId,
-        cookingSourceType: targetId.includes("range") ? "range" : "fire",
-      });
+      // Send to server for authoritative processing
+      if (this.world.network?.send) {
+        console.log(
+          "[InventoryInteractionSystem] 🍳 Sending cookingRequest to server:",
+          {
+            rawFoodId: sourceItemId,
+            rawFoodSlot: sourceSlot,
+            fireId: targetId,
+          },
+        );
+        this.world.network.send(MESSAGE_TYPES.COOKING_REQUEST, {
+          rawFoodId: sourceItemId,
+          rawFoodSlot: sourceSlot,
+          fireId: targetId,
+        });
+      } else {
+        // Fallback: emit local event (for single-player/testing)
+        this.emitTypedEvent(EventType.PROCESSING_COOKING_REQUEST, {
+          playerId,
+          fishSlot: sourceSlot,
+          fireId: targetId,
+        });
+      }
 
       Logger.system("InventoryInteractionSystem", "Cooking request", {
         playerId,
-        rawFoodId: sourceItemId,
-        cookingSourceId: targetId,
+        fishSlot: sourceSlot,
+        fireId: targetId,
       });
     }
 

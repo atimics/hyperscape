@@ -719,6 +719,77 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onResourceGather"] = (socket, data) =>
       handleResourceGather(socket, data, this.world);
 
+    // Firemaking - use tinderbox on logs to create fire
+    this.handlers["onFiremakingRequest"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      const payload = data as {
+        logsId?: string;
+        logsSlot?: number;
+        tinderboxSlot?: number;
+      };
+
+      if (
+        !payload.logsId ||
+        payload.logsSlot === undefined ||
+        payload.tinderboxSlot === undefined
+      ) {
+        console.log("[ServerNetwork] Invalid firemaking request:", payload);
+        return;
+      }
+
+      console.log(
+        "[ServerNetwork] 🔥 Firemaking request from",
+        player.id,
+        ":",
+        payload,
+      );
+
+      // Emit event for ProcessingSystem to handle
+      this.world.emit(EventType.PROCESSING_FIREMAKING_REQUEST, {
+        playerId: player.id,
+        logsId: payload.logsId,
+        logsSlot: payload.logsSlot,
+        tinderboxSlot: payload.tinderboxSlot,
+      });
+    };
+
+    // Cooking - use raw food on fire/range
+    this.handlers["onCookingRequest"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      const payload = data as {
+        rawFoodId?: string;
+        rawFoodSlot?: number;
+        fireId?: string;
+      };
+
+      if (
+        !payload.rawFoodId ||
+        payload.rawFoodSlot === undefined ||
+        !payload.fireId
+      ) {
+        console.log("[ServerNetwork] Invalid cooking request:", payload);
+        return;
+      }
+
+      console.log(
+        "[ServerNetwork] 🍳 Cooking request from",
+        player.id,
+        ":",
+        payload,
+      );
+
+      // Emit event for ProcessingSystem to handle
+      this.world.emit(EventType.PROCESSING_COOKING_REQUEST, {
+        playerId: player.id,
+        fishSlot: payload.rawFoodSlot,
+        fireId: payload.fireId,
+      });
+    };
+
     // Route movement and combat through action queue for OSRS-style tick processing
     // Actions are queued and processed on tick boundaries, not immediately
     this.handlers["onMoveRequest"] = (socket, data) => {

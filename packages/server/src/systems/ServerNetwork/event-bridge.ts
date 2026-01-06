@@ -83,6 +83,7 @@ export class EventBridge {
     this.setupDialogueEvents();
     this.setupBankingEvents();
     this.setupStoreEvents();
+    this.setupFireEvents();
   }
 
   /**
@@ -806,5 +807,43 @@ export class EventBridge {
       if (npc?.position) return npc.position;
     }
     return undefined;
+  }
+
+  /**
+   * Setup fire/processing event listeners
+   *
+   * Forwards fire creation and extinguish events to clients
+   * for visual fire rendering.
+   *
+   * @private
+   */
+  private setupFireEvents(): void {
+    try {
+      // Broadcast fire creation to all clients for visual rendering
+      this.world.on(EventType.FIRE_CREATED, (payload: unknown) => {
+        const data = payload as {
+          fireId: string;
+          playerId: string;
+          position: { x: number; y: number; z: number };
+        };
+
+        console.log("[EventBridge] 🔥 Broadcasting fire created:", data);
+
+        // Send to all clients so they can render the fire visual
+        this.broadcast.sendToAll("fireCreated", data);
+      });
+
+      // Broadcast fire extinguish to all clients
+      this.world.on(EventType.FIRE_EXTINGUISHED, (payload: unknown) => {
+        const data = payload as { fireId: string };
+
+        console.log("[EventBridge] 💨 Broadcasting fire extinguished:", data);
+
+        // Send to all clients so they can remove the fire visual
+        this.broadcast.sendToAll("fireExtinguished", data);
+      });
+    } catch (_err) {
+      console.error("[EventBridge] Error setting up fire events:", _err);
+    }
   }
 }

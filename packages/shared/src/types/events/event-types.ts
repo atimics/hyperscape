@@ -373,6 +373,7 @@ export enum EventType {
 
   // Item Targeting System
   TARGETING_START = "targeting:start",
+  TARGETING_SELECT = "targeting:select",
   TARGETING_COMPLETE = "targeting:complete",
   TARGETING_CANCEL = "targeting:cancel",
 

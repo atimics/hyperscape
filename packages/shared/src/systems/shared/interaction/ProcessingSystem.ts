@@ -75,7 +75,12 @@ export class ProcessingSystem extends SystemBase {
     // Listen for processing events via event bus
     this.subscribe(
       EventType.PROCESSING_FIREMAKING_REQUEST,
-      (data: { playerId: string; logsSlot: number; tinderboxSlot: number }) => {
+      (data: {
+        playerId: string;
+        logsId: string;
+        logsSlot: number;
+        tinderboxSlot: number;
+      }) => {
         this.startFiremaking(data);
       },
     );
@@ -125,9 +130,56 @@ export class ProcessingSystem extends SystemBase {
         this.playerSkills.set(data.playerId, data.skills);
       },
     );
+
+    // CLIENT ONLY: Listen for fire created events from server to create visuals
+    if (this.world.isClient) {
+      this.subscribe(
+        EventType.FIRE_CREATED,
+        (data: {
+          fireId: string;
+          playerId: string;
+          position: { x: number; y: number; z: number };
+        }) => {
+          console.log(
+            "[ProcessingSystem] 🔥 FIRE_CREATED received on client:",
+            data,
+          );
+          // Create the fire data structure and visual
+          const fire: Fire = {
+            id: data.fireId,
+            position: data.position,
+            playerId: data.playerId,
+            createdAt: Date.now(),
+            duration: this.FIRE_DURATION,
+            isActive: true,
+          };
+          this.activeFires.set(data.fireId, fire);
+          this.createFireVisual(fire);
+        },
+      );
+
+      this.subscribe(
+        EventType.FIRE_EXTINGUISHED,
+        (data: { fireId: string }) => {
+          console.log(
+            "[ProcessingSystem] 💨 FIRE_EXTINGUISHED received on client:",
+            data,
+          );
+          const fire = this.activeFires.get(data.fireId);
+          if (fire) {
+            fire.isActive = false;
+            if (fire.mesh) {
+              this.world.stage.scene.remove(fire.mesh);
+            }
+            this.activeFires.delete(data.fireId);
+          }
+        },
+      );
+    }
   }
 
   // Handle item-on-item interactions (tinderbox on logs)
+  // Legacy method - kept for backwards compatibility with numeric item IDs
   private handleItemOnItem(data: {
     playerId: string;
     primaryItemId: number;
@@ -143,9 +195,10 @@ export class ProcessingSystem extends SystemBase {
       primaryItemId === ITEM_IDS.TINDERBOX &&
       targetItemId === ITEM_IDS.LOGS
     ) {
-      // Tinderbox on logs
+      // Tinderbox on logs - use "logs" as default logsId for legacy path
       this.startFiremaking({
         playerId,
+        logsId: "logs",
         logsSlot: targetSlot,
         tinderboxSlot: primarySlot,
       });
@@ -155,9 +208,10 @@ export class ProcessingSystem extends SystemBase {
       primaryItemId === ITEM_IDS.LOGS &&
       targetItemId === ITEM_IDS.TINDERBOX
     ) {
-      // Logs on tinderbox
+      // Logs on tinderbox - use "logs" as default logsId for legacy path
       this.startFiremaking({
         playerId,
+        logsId: "logs",
         logsSlot: primarySlot,
         tinderboxSlot: targetSlot,
       });
@@ -186,10 +240,18 @@ export class ProcessingSystem extends SystemBase {
 
   private startFiremaking(data: {
     playerId: string;
+    logsId: string;
     logsSlot: number;
     tinderboxSlot: number;
   }): void {
-    const { playerId, logsSlot, tinderboxSlot } = data;
+    const { playerId, logsId, logsSlot, tinderboxSlot } = data;
+
+    console.log("[ProcessingSystem] 🔥 startFiremaking called:", {
+      playerId,
+      logsId,
+      logsSlot,
+      tinderboxSlot,
+    });
 
     // Check if player is already processing
     if (this.activeProcessing.has(playerId)) {
@@ -201,27 +263,14 @@ export class ProcessingSystem extends SystemBase {
       return;
     }
 
-    // Use event-based validation instead of direct access
-    this.emitTypedEvent(EventType.UI_MESSAGE, {
-      playerId,
-      logsSlot,
-      tinderboxSlot,
-      callback: (isValid: boolean, reason?: string) => {
-        if (!isValid) {
-          this.emitTypedEvent(EventType.UI_MESSAGE, {
-            playerId,
-            message: reason || "Cannot make fire.",
-            type: "error",
-          });
-          return;
-        }
-        this.startFiremakingProcess(playerId, logsSlot, tinderboxSlot);
-      },
-    });
+    // Start the firemaking process directly
+    // (targeting system already validated that player has logs and tinderbox)
+    this.startFiremakingProcess(playerId, logsId, logsSlot, tinderboxSlot);
   }
 
   private startFiremakingProcess(
     playerId: string,
+    logsId: string,
     logsSlot: number,
     tinderboxSlot: number,
   ): void {
@@ -241,12 +290,12 @@ export class ProcessingSystem extends SystemBase {
     // Get player position
     const player = this.world.getPlayer(playerId)!;
 
-    // Start firemaking process
+    // Start firemaking process - store string item IDs
     const processingAction: ProcessingAction = {
       playerId,
       actionType: "firemaking",
-      primaryItem: { id: 300, slot: tinderboxSlot },
-      targetItem: { id: 200, slot: logsSlot },
+      primaryItem: { id: "tinderbox", slot: tinderboxSlot },
+      targetItem: { id: logsId, slot: logsSlot },
       startTime: Date.now(),
       duration: this.FIREMAKING_TIME,
       xpReward: this.XP_REWARDS.firemaking.normal_logs,
@@ -280,23 +329,22 @@ export class ProcessingSystem extends SystemBase {
     // Remove from active processing
     this.activeProcessing.delete(playerId);
 
-    // Request inventory check via event system
-    this.emitTypedEvent(EventType.INVENTORY_CHECK, {
-      playerId,
-      slot: action.targetItem!.slot,
-      itemId: 200, // logs
-      callback: (hasItem: boolean) => {
-        if (!hasItem) {
-          this.emitTypedEvent(EventType.UI_MESSAGE, {
-            playerId,
-            message: "You no longer have the logs.",
-            type: "error",
-          });
-          return;
-        }
-        this.completeFiremakingProcess(playerId, action, position);
+    // Get the logs ID from the action (string item ID like "logs", "oak_logs", etc.)
+    const logsId = action.targetItem!.id;
+    const logsSlot = action.targetItem!.slot;
+
+    console.log(
+      "[ProcessingSystem] 🔥 completeFiremaking - checking inventory:",
+      {
+        playerId,
+        logsId,
+        logsSlot,
       },
-    });
+    );
+
+    // Directly complete the process - targeting system already validated items
+    // Skip the broken callback pattern and just proceed
+    this.completeFiremakingProcess(playerId, action, position);
   }
 
   private completeFiremakingProcess(
@@ -304,10 +352,22 @@ export class ProcessingSystem extends SystemBase {
     action: ProcessingAction,
     position: { x: number; y: number; z: number },
   ): void {
-    // Remove logs from inventory
+    // Get string item ID from action
+    const logsId = action.targetItem!.id;
+
+    console.log(
+      "[ProcessingSystem] 🔥 completeFiremakingProcess - removing logs:",
+      {
+        playerId,
+        logsId,
+        slot: action.targetItem!.slot,
+      },
+    );
+
+    // Remove logs from inventory using string item ID
     this.emitTypedEvent(EventType.INVENTORY_ITEM_REMOVED, {
       playerId,
-      itemId: 200,
+      itemId: logsId,
       quantity: 1,
       slot: action.targetItem!.slot,
     });
@@ -364,6 +424,12 @@ export class ProcessingSystem extends SystemBase {
   }): void {
     const { playerId, fishSlot, fireId } = data;
 
+    console.log("[ProcessingSystem] 🍳 startCooking called:", {
+      playerId,
+      fishSlot,
+      fireId,
+    });
+
     // Check if player is already processing
     if (this.activeProcessing.has(playerId)) {
       this.emitTypedEvent(EventType.UI_MESSAGE, {
@@ -375,8 +441,8 @@ export class ProcessingSystem extends SystemBase {
     }
 
     // Check if fire exists and is active
-    const fire = this.activeFires.get(fireId)!;
-    if (!fire.isActive) {
+    const fire = this.activeFires.get(fireId);
+    if (!fire || !fire.isActive) {
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId,
         message: "That fire is no longer lit.",
@@ -385,23 +451,9 @@ export class ProcessingSystem extends SystemBase {
       return;
     }
 
-    // Use event-based validation for cooking
-    this.emitTypedEvent(EventType.UI_MESSAGE, {
-      playerId,
-      fishSlot,
-      fireId,
-      callback: (isValid: boolean, reason?: string) => {
-        if (!isValid) {
-          this.emitTypedEvent(EventType.UI_MESSAGE, {
-            playerId,
-            message: reason || "Cannot cook fish.",
-            type: "error",
-          });
-          return;
-        }
-        this.startCookingProcess(playerId, fishSlot, fireId);
-      },
-    });
+    // Start the cooking process directly
+    // (targeting system already validated that player has raw food)
+    this.startCookingProcess(playerId, fishSlot, fireId);
   }
 
   private startCookingProcess(

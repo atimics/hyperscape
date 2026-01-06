@@ -47,6 +47,8 @@ interface DraggableItemProps {
   item: InventorySlotViewItem | null;
   index: number;
   onShiftClick?: (item: InventorySlotViewItem, index: number) => void;
+  targetingState?: TargetingState;
+  onTargetClick?: (item: InventorySlotViewItem, index: number) => void;
 }
 
 // OSRS-style: 4 columns × 7 rows = 28 slots, all visible (no pagination)
@@ -99,6 +101,8 @@ function DraggableInventorySlot({
   item,
   index,
   onShiftClick,
+  targetingState,
+  onTargetClick,
 }: DraggableItemProps) {
   // Use both draggable (for picking up) and droppable (for receiving)
   const {
@@ -126,6 +130,13 @@ function DraggableInventorySlot({
 
   // Slots stay fixed - no transform! Only the DragOverlay moves.
   const isEmpty = !item;
+
+  // Check if this item is a valid target during targeting mode
+  const isValidTarget =
+    targetingState?.active &&
+    item &&
+    targetingState.validTargetIds.has(item.itemId);
+  const isTargetingActive = targetingState?.active ?? false;
 
   // BANK NOTE SYSTEM: Check if item is a bank note (ends with "_noted")
   // Used for visual styling (parchment background) and context menu filtering
@@ -182,6 +193,21 @@ function DraggableInventorySlot({
       {...listeners}
       className="relative border rounded-sm transition-all duration-100 group aspect-square"
       onClick={(e) => {
+        // Handle targeting mode clicks (Use X on Y)
+        if (isTargetingActive && item && onTargetClick) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (isValidTarget) {
+            console.log("[InventorySlot] 🎯 Target clicked:", {
+              itemId: item.itemId,
+              slot: index,
+            });
+            onTargetClick(item, index);
+          } else {
+            console.log("[InventorySlot] ❌ Invalid target:", item.itemId);
+          }
+          return;
+        }
         // Shift-click to drop instantly (OSRS-style)
         if (e.shiftKey && item && onShiftClick) {
           e.preventDefault();
@@ -245,15 +271,18 @@ function DraggableInventorySlot({
         opacity: isDragging ? 0.3 : 1,
         // RS3-style modern slot colors
         // BANK NOTE SYSTEM: Noted items get a distinctive paper/parchment background
-        borderColor: isOver
-          ? "rgba(180, 160, 100, 0.9)" // Gold highlight when dragging over
-          : isEmpty
-            ? "rgba(50, 45, 40, 0.6)"
-            : isNotedItem
-              ? "rgba(180, 160, 120, 0.7)" // Tan border for notes
-              : "rgba(70, 60, 50, 0.7)",
+        // TARGETING MODE: Valid targets get green glow, invalid targets get dimmed
+        borderColor: isValidTarget
+          ? "rgba(100, 220, 100, 0.9)" // Green highlight for valid targets
+          : isOver
+            ? "rgba(180, 160, 100, 0.9)" // Gold highlight when dragging over
+            : isEmpty
+              ? "rgba(50, 45, 40, 0.6)"
+              : isNotedItem
+                ? "rgba(180, 160, 120, 0.7)" // Tan border for notes
+                : "rgba(70, 60, 50, 0.7)",
+        borderWidth: isValidTarget ? "2px" : "1px",
         borderStyle: "solid",
-        borderWidth: "1px",
         background: isOver
           ? "rgba(180, 160, 100, 0.25)" // Gold tint when dragging over
           : isEmpty
@@ -261,14 +290,22 @@ function DraggableInventorySlot({
             : isNotedItem
               ? "linear-gradient(135deg, rgba(245, 235, 210, 0.95) 0%, rgba(225, 210, 175, 0.95) 100%)" // Parchment/paper for notes
               : "linear-gradient(180deg, rgba(55, 48, 42, 0.95) 0%, rgba(40, 35, 30, 0.95) 100%)", // Subtle gradient for items
-        boxShadow: isOver
-          ? "inset 0 0 8px rgba(180, 160, 100, 0.4), 0 0 4px rgba(180, 160, 100, 0.3)"
+        boxShadow: isValidTarget
+          ? "inset 0 0 8px rgba(100, 220, 100, 0.4), 0 0 8px rgba(100, 220, 100, 0.5)" // Green glow for valid targets
+          : isOver
+            ? "inset 0 0 8px rgba(180, 160, 100, 0.4), 0 0 4px rgba(180, 160, 100, 0.3)"
+            : isEmpty
+              ? "inset 0 1px 2px rgba(0, 0, 0, 0.4)"
+              : isNotedItem
+                ? "inset 0 1px 0 rgba(255, 255, 255, 0.5), inset 0 -1px 0 rgba(0, 0, 0, 0.1), 1px 1px 2px rgba(0, 0, 0, 0.2)" // Paper shadow
+                : "inset 0 1px 0 rgba(80, 70, 55, 0.3), inset 0 -1px 0 rgba(0, 0, 0, 0.2)",
+        cursor: isValidTarget
+          ? "pointer" // Pointer cursor for valid targets
           : isEmpty
-            ? "inset 0 1px 2px rgba(0, 0, 0, 0.4)"
-            : isNotedItem
-              ? "inset 0 1px 0 rgba(255, 255, 255, 0.5), inset 0 -1px 0 rgba(0, 0, 0, 0.1), 1px 1px 2px rgba(0, 0, 0, 0.2)" // Paper shadow
-              : "inset 0 1px 0 rgba(80, 70, 55, 0.3), inset 0 -1px 0 rgba(0, 0, 0, 0.2)",
-        cursor: isEmpty ? "default" : isDragging ? "grabbing" : "grab",
+            ? "default"
+            : isDragging
+              ? "grabbing"
+              : "grab",
       }}
     >
       {/* Item Icon - Centered */}
@@ -335,6 +372,23 @@ interface PendingMove {
   preMoveSlotsSnapshot: (InventorySlotViewItem | null)[];
 }
 
+/**
+ * Targeting mode state for "Use X on Y" interactions (firemaking, cooking)
+ */
+interface TargetingState {
+  active: boolean;
+  sourceItem: { id: string; slot: number; name?: string } | null;
+  validTargetIds: Set<string>;
+  actionType: "firemaking" | "cooking" | "none";
+}
+
+const initialTargetingState: TargetingState = {
+  active: false,
+  sourceItem: null,
+  validTargetIds: new Set(),
+  actionType: "none",
+};
+
 export function InventoryPanel({
   items,
   coins,
@@ -347,6 +401,11 @@ export function InventoryPanel({
   const [dragSlotSize, setDragSlotSize] = useState<number | null>(null);
   const [slotItems, setSlotItems] = useState<(InventorySlotViewItem | null)[]>(
     [],
+  );
+
+  // Targeting mode state for "Use X on Y" interactions
+  const [targetingState, setTargetingState] = useState<TargetingState>(
+    initialTargetingState,
   );
 
   // Track pending move for rollback detection
@@ -447,7 +506,8 @@ export function InventoryPanel({
           });
         }
       }
-      // OSRS-style "Use" action - enters targeting mode
+      // OSRS-style "Use" action - enters targeting mode (client-side first)
+      // Actual network request is sent after target selection
       if (ce.detail.actionId === "use") {
         const localPlayer = world?.getPlayer();
         if (localPlayer) {
@@ -458,22 +518,14 @@ export function InventoryPanel({
               slot: slotIndex,
             },
           );
-          // Emit TARGETING_START to enter targeting mode
-          // The InventoryInteractionSystem will validate and determine valid targets
-          world?.emit(EventType.ITEM_RIGHT_CLICK, {
+          // Emit ITEM_ACTION_SELECTED to trigger InventoryInteractionSystem
+          // which calls the registered "use" action callback → startTargetingMode()
+          world?.emit(EventType.ITEM_ACTION_SELECTED, {
             playerId: localPlayer.id,
+            actionId: "use",
             itemId: it.itemId,
             slot: slotIndex,
-            position: ce.detail.position || { x: 0, y: 0 },
           });
-          // Also send to server if network available
-          if (world?.network?.send) {
-            world.network.send("useItem", {
-              playerId: localPlayer.id,
-              itemId: it.itemId,
-              slot: slotIndex,
-            });
-          }
         }
       }
     };
@@ -484,6 +536,74 @@ export function InventoryPanel({
         onCtxSelect as EventListener,
       );
   }, [slotItems, world]);
+
+  // Listen for targeting mode events (OSRS-style "Use X on Y")
+  useEffect(() => {
+    if (!world) return;
+
+    const onTargetingStart = (data: {
+      sourceItem: { id: string; slot: number; name?: string };
+      validTargetTypes: string[];
+      validTargetIds: string[];
+      actionType: "firemaking" | "cooking" | "none";
+    }) => {
+      console.log("[InventoryPanel] 🎯 TARGETING_START received:", {
+        sourceItem: data.sourceItem,
+        validTargetTypes: data.validTargetTypes,
+        validTargetIds: data.validTargetIds,
+        actionType: data.actionType,
+      });
+      const validIds = new Set(data.validTargetIds);
+      console.log(
+        "[InventoryPanel] 🎯 Valid target IDs:",
+        Array.from(validIds),
+      );
+      setTargetingState({
+        active: true,
+        sourceItem: data.sourceItem,
+        validTargetIds: validIds,
+        actionType: data.actionType,
+      });
+    };
+
+    const onTargetingComplete = () => {
+      console.log(
+        "[InventoryPanel] ✅ TARGETING_COMPLETE - exiting targeting mode",
+      );
+      setTargetingState(initialTargetingState);
+    };
+
+    const onTargetingCancel = () => {
+      console.log(
+        "[InventoryPanel] ❌ TARGETING_CANCEL - exiting targeting mode",
+      );
+      setTargetingState(initialTargetingState);
+    };
+
+    // Escape key to cancel targeting mode
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && targetingState.active) {
+        console.log("[InventoryPanel] ⎋ Escape pressed - cancelling targeting");
+        const localPlayer = world.getPlayer();
+        if (localPlayer) {
+          world.emit(EventType.TARGETING_CANCEL, { playerId: localPlayer.id });
+        }
+        setTargetingState(initialTargetingState);
+      }
+    };
+
+    world.on(EventType.TARGETING_START, onTargetingStart);
+    world.on(EventType.TARGETING_COMPLETE, onTargetingComplete);
+    world.on(EventType.TARGETING_CANCEL, onTargetingCancel);
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      world.off(EventType.TARGETING_START, onTargetingStart);
+      world.off(EventType.TARGETING_COMPLETE, onTargetingComplete);
+      world.off(EventType.TARGETING_CANCEL, onTargetingCancel);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [world, targetingState.active]);
 
   useEffect(() => {
     // If we have a pending move and server sent an update, check if move was accepted
@@ -633,6 +753,24 @@ export function InventoryPanel({
       onDragEnd={handleDragEnd}
     >
       <div className="flex flex-col h-full overflow-hidden gap-1">
+        {/* Targeting Mode Banner - OSRS-style "Use X on..." indicator */}
+        {targetingState.active && targetingState.sourceItem && (
+          <div
+            className="text-center py-1 px-2 rounded text-xs font-medium animate-pulse"
+            style={{
+              background:
+                "linear-gradient(90deg, rgba(100, 220, 100, 0.3) 0%, rgba(100, 220, 100, 0.2) 100%)",
+              borderColor: "rgba(100, 220, 100, 0.6)",
+              border: "1px solid",
+              color: "rgba(200, 255, 200, 0.95)",
+              textShadow: "0 1px 2px rgba(0, 0, 0, 0.5)",
+            }}
+          >
+            Use {targetingState.sourceItem.name || targetingState.sourceItem.id}{" "}
+            on... <span style={{ opacity: 0.7 }}>(ESC to cancel)</span>
+          </div>
+        )}
+
         {/* Inventory Grid - 7 columns × 4 rows with square slots */}
         <div
           className="flex-1 border rounded p-1 overflow-hidden"
@@ -653,6 +791,31 @@ export function InventoryPanel({
                 key={index}
                 item={item}
                 index={index}
+                targetingState={targetingState}
+                onTargetClick={(clickedItem, slotIndex) => {
+                  // Handle targeting mode click - emit TARGETING_SELECT event
+                  if (targetingState.active && targetingState.sourceItem) {
+                    const localPlayer = world?.getPlayer();
+                    if (localPlayer) {
+                      console.log(
+                        "[InventoryPanel] 🎯 Emitting TARGETING_SELECT:",
+                        {
+                          sourceItem: targetingState.sourceItem,
+                          targetItem: clickedItem.itemId,
+                          targetSlot: slotIndex,
+                        },
+                      );
+                      world?.emit(EventType.TARGETING_SELECT, {
+                        playerId: localPlayer.id,
+                        sourceItemId: targetingState.sourceItem.id,
+                        sourceSlot: targetingState.sourceItem.slot,
+                        targetId: clickedItem.itemId,
+                        targetType: "inventory_item",
+                        targetSlot: slotIndex,
+                      });
+                    }
+                  }
+                }}
                 onShiftClick={(clickedItem, slotIndex) => {
                   if (world?.network?.dropItem) {
                     world.network.dropItem(

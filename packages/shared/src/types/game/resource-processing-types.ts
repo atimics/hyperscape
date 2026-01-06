@@ -106,8 +106,8 @@ export interface Fire {
 export interface ProcessingAction {
   playerId: string;
   actionType: "firemaking" | "cooking";
-  primaryItem: { id: number; slot: number }; // Item being used (tinderbox/raw fish)
-  targetItem?: { id: number; slot: number }; // Target item (logs/fire)
+  primaryItem: { id: string | number; slot: number }; // Item being used (tinderbox/raw fish)
+  targetItem?: { id: string | number; slot: number }; // Target item (logs/fire)
   targetFire?: string; // Fire ID for cooking
   startTime: number;
   duration: number;
