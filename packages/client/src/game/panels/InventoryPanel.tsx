@@ -208,7 +208,19 @@ function DraggableInventorySlot({
             item.itemId.includes("chainbody") ||
             item.itemId.includes("platebody"));
 
+        // OSRS-style "Use" for firemaking/cooking items
+        // Tinderbox, logs, and raw food can be used on targets
+        const isUsable =
+          item.itemId === "tinderbox" ||
+          item.itemId.includes("_logs") ||
+          item.itemId === "logs" ||
+          item.itemId.startsWith("raw_");
+
         const items = [
+          // "Use" appears first for usable items (OSRS-style)
+          ...(isUsable
+            ? [{ id: "use", label: `Use ${item.itemId}`, enabled: true }]
+            : []),
           ...(isEquippable
             ? [{ id: "equip", label: `Equip ${item.itemId}`, enabled: true }]
             : []),
@@ -433,6 +445,35 @@ export function InventoryPanel({
             createdAt: new Date().toISOString(),
             timestamp: Date.now(),
           });
+        }
+      }
+      // OSRS-style "Use" action - enters targeting mode
+      if (ce.detail.actionId === "use") {
+        const localPlayer = world?.getPlayer();
+        if (localPlayer) {
+          console.log(
+            "[InventoryPanel] 🎯 Use clicked - entering targeting mode:",
+            {
+              itemId: it.itemId,
+              slot: slotIndex,
+            },
+          );
+          // Emit TARGETING_START to enter targeting mode
+          // The InventoryInteractionSystem will validate and determine valid targets
+          world?.emit(EventType.ITEM_RIGHT_CLICK, {
+            playerId: localPlayer.id,
+            itemId: it.itemId,
+            slot: slotIndex,
+            position: ce.detail.position || { x: 0, y: 0 },
+          });
+          // Also send to server if network available
+          if (world?.network?.send) {
+            world.network.send("useItem", {
+              playerId: localPlayer.id,
+              itemId: it.itemId,
+              slot: slotIndex,
+            });
+          }
         }
       }
     };

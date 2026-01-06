@@ -26,6 +26,8 @@ import { EventType } from "../../../types/events";
 import type { World } from "../../../types/index";
 import { SystemBase } from "../infrastructure/SystemBase";
 import { Logger } from "../../../utils/Logger";
+import { PROCESSING_CONSTANTS } from "../../../constants/ProcessingConstants";
+import { getTargetValidator } from "./TargetValidator";
 
 /**
  * Create a minimal Item with all required properties
@@ -1070,6 +1072,43 @@ export class InventoryInteractionSystem extends SystemBase {
       },
     });
 
+    // === OSRS-STYLE "USE" ACTIONS FOR FIREMAKING/COOKING ===
+
+    // Tinderbox: Use on logs to light fire
+    this.registerAction("processing", {
+      id: "use",
+      label: "Use",
+      priority: 1,
+      condition: (item: Item) => item.id === "tinderbox",
+      callback: (playerId: string, itemId: string, slot: number | null) => {
+        this.startTargetingMode(playerId, itemId, slot ?? 0);
+      },
+    });
+
+    // Logs: Use on tinderbox (reverse direction also works in OSRS)
+    this.registerAction("processing", {
+      id: "use",
+      label: "Use",
+      priority: 1,
+      condition: (item: Item) =>
+        PROCESSING_CONSTANTS.VALID_LOG_IDS.has(item.id),
+      callback: (playerId: string, itemId: string, slot: number | null) => {
+        this.startTargetingMode(playerId, itemId, slot ?? 0);
+      },
+    });
+
+    // Raw food: Use on fire or range to cook
+    this.registerAction("processing", {
+      id: "use",
+      label: "Use",
+      priority: 1,
+      condition: (item: Item) =>
+        PROCESSING_CONSTANTS.VALID_RAW_FOOD_IDS.has(item.id),
+      callback: (playerId: string, itemId: string, slot: number | null) => {
+        this.startTargetingMode(playerId, itemId, slot ?? 0);
+      },
+    });
+
     // Universal actions
     this.registerAction("universal", {
       id: "examine",
@@ -1249,6 +1288,14 @@ export class InventoryInteractionSystem extends SystemBase {
       }
     }
 
+    // Processing actions (firemaking/cooking - tinderbox, logs, raw food)
+    const processingActions = this.itemActions.get("processing") || [];
+    for (const action of processingActions) {
+      if (!action.condition || action.condition(item, playerId)) {
+        availableActions.push(action);
+      }
+    }
+
     const typeActions = this.itemActions.get(item.type) || [];
     for (const action of typeActions) {
       if (!action.condition || action.condition(item, playerId)) {
@@ -1314,5 +1361,129 @@ export class InventoryInteractionSystem extends SystemBase {
 
   private getItemData(itemId: string): Item | null {
     return dataManager.getItem(itemId);
+  }
+
+  // === TARGETING MODE FOR OSRS-STYLE "USE X ON Y" ===
+
+  /**
+   * Start targeting mode for "Use X on Y" interactions.
+   * Validates item and determines valid targets (inventory items or world entities).
+   *
+   * @param playerId - Player starting the interaction
+   * @param itemId - Item being used (tinderbox, logs, raw food)
+   * @param slot - Inventory slot of the source item
+   */
+  private startTargetingMode(
+    playerId: string,
+    itemId: string,
+    slot: number,
+  ): void {
+    const validator = getTargetValidator();
+    const validation = validator.validateUse({ id: itemId, slot }, playerId);
+
+    if (!validation.canUse) {
+      // Show error message (e.g., "You need some logs to light.")
+      this.emitTypedEvent(EventType.UI_MESSAGE, {
+        playerId,
+        message: validation.error || "Nothing interesting happens.",
+        type: "error",
+      });
+      return;
+    }
+
+    // Emit targeting start event for UI to show cursor change and highlights
+    this.emitTypedEvent(EventType.TARGETING_START, {
+      playerId,
+      sourceItem: { id: itemId, slot, name: itemId },
+      validTargetTypes: validation.validTargetTypes,
+      validTargetIds: Array.from(validation.validTargetIds),
+      actionType: validation.actionType,
+    });
+
+    Logger.system(
+      "InventoryInteractionSystem",
+      `Started targeting: ${itemId} → ${validation.actionType}`,
+      {
+        validTargets: validation.validTargetIds.size,
+        targetTypes: validation.validTargetTypes,
+      },
+    );
+  }
+
+  /**
+   * Handle target selection during targeting mode.
+   * Called when player clicks a valid target (inventory item or world entity).
+   *
+   * @param playerId - Player ID
+   * @param sourceItemId - Source item being used
+   * @param sourceSlot - Source item slot
+   * @param targetId - Target item/entity ID
+   * @param targetType - Target type (inventory_item or world_entity)
+   * @param targetSlot - Target slot (for inventory items)
+   */
+  public handleTargetSelected(
+    playerId: string,
+    sourceItemId: string,
+    sourceSlot: number,
+    targetId: string,
+    targetType: "inventory_item" | "world_entity",
+    targetSlot?: number,
+  ): void {
+    const validator = getTargetValidator();
+    const actionType = validator.getActionType(sourceItemId);
+
+    if (actionType === "firemaking") {
+      // Firemaking: tinderbox + logs or logs + tinderbox
+      // Determine which is logs
+      const logsId = PROCESSING_CONSTANTS.VALID_LOG_IDS.has(sourceItemId)
+        ? sourceItemId
+        : targetId;
+      const logsSlot = PROCESSING_CONSTANTS.VALID_LOG_IDS.has(sourceItemId)
+        ? sourceSlot
+        : (targetSlot ?? 0);
+
+      this.emitTypedEvent(EventType.FIREMAKING_REQUEST, {
+        playerId,
+        logsId,
+        logsSlot,
+      });
+
+      Logger.system("InventoryInteractionSystem", "Firemaking request", {
+        playerId,
+        logsId,
+        logsSlot,
+      });
+    } else if (actionType === "cooking") {
+      // Cooking: raw food + fire/range
+      if (targetType !== "world_entity") {
+        this.emitTypedEvent(EventType.UI_MESSAGE, {
+          playerId,
+          message: "You need to use that on a fire or range.",
+          type: "error",
+        });
+        return;
+      }
+
+      this.emitTypedEvent(EventType.COOKING_REQUEST, {
+        playerId,
+        rawFoodId: sourceItemId,
+        rawFoodSlot: sourceSlot,
+        cookingSourceId: targetId,
+        cookingSourceType: targetId.includes("range") ? "range" : "fire",
+      });
+
+      Logger.system("InventoryInteractionSystem", "Cooking request", {
+        playerId,
+        rawFoodId: sourceItemId,
+        cookingSourceId: targetId,
+      });
+    }
+
+    // Emit targeting complete event
+    this.emitTypedEvent(EventType.TARGETING_COMPLETE, {
+      playerId,
+      sourceItem: { id: sourceItemId, slot: sourceSlot },
+      target: { type: targetType, id: targetId, slot: targetSlot },
+    });
   }
 }
