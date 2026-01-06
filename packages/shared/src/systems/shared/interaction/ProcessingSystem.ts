@@ -3,6 +3,11 @@ import { ITEM_IDS } from "../../../constants/GameConstants";
 import { Fire, ProcessingAction } from "../../../types/core/core";
 import { calculateDistance2D } from "../../../utils/game/EntityUtils";
 import { EventType } from "../../../types/events";
+import {
+  worldToTile,
+  tileToWorld,
+  type TileCoord,
+} from "../../shared/movement/TileSystem";
 
 /**
  * Processing System
@@ -57,6 +62,16 @@ export class ProcessingSystem extends SystemBase {
     stopBurnLevel: 34,
     maxBurnChance: 0.5, // 50% at level 1
   };
+
+  // OSRS firemaking movement priority: West → East → South → North
+  // After lighting a fire, player moves to an adjacent tile in this priority order
+  // @see https://oldschool.runescape.wiki/w/Firemaking
+  private readonly FIREMAKING_MOVE_PRIORITY = [
+    { dx: -1, dz: 0 }, // West (-X)
+    { dx: 1, dz: 0 }, // East (+X)
+    { dx: 0, dz: 1 }, // South (+Z in Three.js)
+    { dx: 0, dz: -1 }, // North (-Z in Three.js)
+  ];
 
   constructor(world: World) {
     super(world, {
@@ -406,6 +421,13 @@ export class ProcessingSystem extends SystemBase {
 
     this.fireCleanupTimers.set(fireId, cleanupTimer);
 
+    // OSRS: Move player to adjacent tile after lighting fire
+    // Priority: West → East → South → North
+    const moveTarget = this.findFiremakingMoveTarget(position);
+    if (moveTarget) {
+      this.movePlayerAfterFiremaking(playerId, moveTarget);
+    }
+
     // Grant XP
     this.emitTypedEvent(EventType.SKILLS_XP_GAINED, {
       playerId,
@@ -416,7 +438,7 @@ export class ProcessingSystem extends SystemBase {
     // Success message
     this.emitTypedEvent(EventType.UI_MESSAGE, {
       playerId,
-      message: "You successfully light the fire.",
+      message: "The fire catches and the logs begin to burn.",
       type: "success",
     });
   }
@@ -813,6 +835,88 @@ export class ProcessingSystem extends SystemBase {
       if (!fire.isActive) return false;
       const distance = calculateDistance2D(fire.position, position);
       return distance <= range;
+    });
+  }
+
+  /**
+   * Check if there's an active fire at a given tile position
+   */
+  hasFireAtTile(tile: TileCoord): boolean {
+    for (const [, fire] of this.activeFires) {
+      if (!fire.isActive) continue;
+      const fireTile = worldToTile(fire.position.x, fire.position.z);
+      if (fireTile.x === tile.x && fireTile.z === tile.z) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // === FIREMAKING MOVEMENT (OSRS-accurate) ===
+
+  /**
+   * Find the tile to move to after lighting a fire (OSRS-accurate)
+   * Priority: West → East → South → North
+   *
+   * @see https://oldschool.runescape.wiki/w/Firemaking
+   */
+  private findFiremakingMoveTarget(firePosition: {
+    x: number;
+    y: number;
+    z: number;
+  }): { x: number; y: number; z: number } | null {
+    const fireTile = worldToTile(firePosition.x, firePosition.z);
+
+    for (const offset of this.FIREMAKING_MOVE_PRIORITY) {
+      const targetTile: TileCoord = {
+        x: fireTile.x + offset.dx,
+        z: fireTile.z + offset.dz,
+      };
+
+      // Check if tile is walkable (no fires, no terrain blockers)
+      if (this.isTileWalkableForFiremaking(targetTile)) {
+        const worldPos = tileToWorld(targetTile);
+        return { x: worldPos.x, y: firePosition.y, z: worldPos.z };
+      }
+    }
+
+    // All 4 directions blocked - stay in place
+    return null;
+  }
+
+  /**
+   * Check if a tile is walkable for firemaking movement
+   */
+  private isTileWalkableForFiremaking(tile: TileCoord): boolean {
+    // Check for existing fires at this tile
+    if (this.hasFireAtTile(tile)) {
+      return false;
+    }
+
+    // TODO: Check terrain walkability via TerrainSystem if available
+    // const terrain = this.world.getSystem('terrain');
+    // if (terrain && !terrain.isWalkable(tile.x, tile.z)) return false;
+
+    return true;
+  }
+
+  /**
+   * Move player to target tile after lighting fire
+   * Emits FIREMAKING_MOVE_REQUEST event for ServerNetwork to handle via playerTeleport packet
+   */
+  private movePlayerAfterFiremaking(
+    playerId: string,
+    target: { x: number; y: number; z: number },
+  ): void {
+    console.log(
+      `[ProcessingSystem] 🔥 Moving player ${playerId} after firemaking to (${target.x.toFixed(1)}, ${target.z.toFixed(1)})`,
+    );
+
+    // Emit event for ServerNetwork to handle - it will send playerTeleport packet
+    // which properly syncs position to client and resets tile movement state
+    this.emitTypedEvent(EventType.FIREMAKING_MOVE_REQUEST, {
+      playerId,
+      position: { x: target.x, y: target.y, z: target.z },
     });
   }
 

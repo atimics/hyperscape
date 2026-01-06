@@ -382,6 +382,7 @@ export enum EventType {
   FIREMAKING_START = "firemaking:start",
   FIREMAKING_SUCCESS = "firemaking:success",
   FIREMAKING_FAILURE = "firemaking:failure",
+  FIREMAKING_MOVE_REQUEST = "firemaking:move:request", // Player should move to adjacent tile after lighting fire
 
   // Cooking Events
   COOKING_REQUEST = "cooking:request",

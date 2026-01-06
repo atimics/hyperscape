@@ -137,6 +137,7 @@ import {
 } from "./handlers/dialogue";
 import { PendingAttackManager } from "./PendingAttackManager";
 import { PendingGatherManager } from "./PendingGatherManager";
+import { PendingCookManager } from "./PendingCookManager";
 import { FollowManager } from "./FollowManager";
 import { FaceDirectionManager } from "./FaceDirectionManager";
 import { handleFollowPlayer } from "./handlers/player";
@@ -206,6 +207,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   private mobTileMovementManager!: MobTileMovementManager;
   private pendingAttackManager!: PendingAttackManager;
   private pendingGatherManager!: PendingGatherManager;
+  private pendingCookManager!: PendingCookManager;
   private followManager!: FollowManager;
   private actionQueue!: ActionQueue;
   private tickSystem!: TickSystem;
@@ -360,6 +362,18 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Register pending gather processing (same priority as movement)
     this.tickSystem.onTick((tickNumber) => {
       this.pendingGatherManager.processTick(tickNumber);
+    }, TickPriority.MOVEMENT);
+
+    // Pending cook manager - server-authoritative tracking of "walk to fire and cook" actions
+    // Uses same approach as PendingGatherManager: movePlayerToward with meleeRange=1 for cardinal-only
+    this.pendingCookManager = new PendingCookManager(
+      this.world,
+      this.tileMovementManager,
+    );
+
+    // Register pending cook processing (same priority as movement)
+    this.tickSystem.onTick((tickNumber) => {
+      this.pendingCookManager.processTick(tickNumber);
     }, TickPriority.MOVEMENT);
 
     // Follow manager - server-authoritative tracking of players following other players
@@ -587,6 +601,40 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.pendingAttackManager.cancelPendingAttack(playerId);
     });
 
+    // OSRS-accurate: Move player to adjacent tile after lighting fire
+    // Priority: West → East → South → North (handled by ProcessingSystem)
+    // Uses proper tile movement for smooth walking animation (not teleport)
+    this.world.on(EventType.FIREMAKING_MOVE_REQUEST, (event) => {
+      const { playerId, position } = event as {
+        playerId: string;
+        position: { x: number; y: number; z: number };
+      };
+
+      console.log(
+        `[ServerNetwork] 🔥 Firemaking move request for ${playerId} to (${position.x.toFixed(1)}, ${position.z.toFixed(1)})`,
+      );
+
+      // Get player entity
+      const socket = this.broadcastManager.getPlayerSocket(playerId);
+      const player = socket?.player;
+      if (!player) {
+        console.warn(
+          `[ServerNetwork] Cannot find player for firemaking move: ${playerId}`,
+        );
+        return;
+      }
+
+      // OSRS-accurate: Use tile movement system for smooth walking animation
+      // Walking (not running) to adjacent tile, meleeRange=0 means go directly to tile
+      // This sends tileMovementStart packet for smooth client interpolation
+      this.tileMovementManager.movePlayerToward(
+        playerId,
+        position,
+        false, // OSRS firemaking step is a walk, not a run
+        0, // meleeRange=0 = non-combat, go directly to the tile
+      );
+    });
+
     // Save manager
     this.saveManager = new SaveManager(this.world, this.db);
 
@@ -613,12 +661,13 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.world as { interactionSessionManager?: InteractionSessionManager }
     ).interactionSessionManager = this.interactionSessionManager;
 
-    // Clean up interaction sessions, pending attacks, follows, and gathers when player disconnects
+    // Clean up interaction sessions, pending attacks, follows, gathers, and cooks when player disconnects
     this.world.on(EventType.PLAYER_LEFT, (event: { playerId: string }) => {
       this.interactionSessionManager.onPlayerDisconnect(event.playerId);
       this.pendingAttackManager.onPlayerDisconnect(event.playerId);
       this.followManager.onPlayerDisconnect(event.playerId);
       this.pendingGatherManager.onPlayerDisconnect(event.playerId);
+      this.pendingCookManager.onPlayerDisconnect(event.playerId);
     });
 
     // Initialization manager
@@ -719,6 +768,35 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onResourceGather"] = (socket, data) =>
       handleResourceGather(socket, data, this.world);
 
+    // SERVER-AUTHORITATIVE: Cooking source interaction - uses PendingCookManager
+    // Same approach as resource gathering: movePlayerToward() with meleeRange=1 for cardinal-only positioning
+    this.handlers["onCookingSourceInteract"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      const payload = data as {
+        sourceId?: string;
+        sourceType?: string;
+        position?: [number, number, number];
+        runMode?: boolean;
+      };
+      if (!payload.sourceId || !payload.position) return;
+
+      // Use PendingCookManager (like PendingGatherManager for resources)
+      // Pass runMode from client to ensure player runs/walks based on their preference
+      this.pendingCookManager.queuePendingCook(
+        player.id,
+        payload.sourceId,
+        {
+          x: payload.position[0],
+          y: payload.position[1],
+          z: payload.position[2],
+        },
+        this.tickSystem.getCurrentTick(),
+        payload.runMode,
+      );
+    };
+
     // Firemaking - use tinderbox on logs to create fire
     this.handlers["onFiremakingRequest"] = (socket, data) => {
       const player = socket.player;
@@ -756,6 +834,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     };
 
     // Cooking - use raw food on fire/range
+    // SERVER-AUTHORITATIVE: Uses PendingCookManager for distance checking (like woodcutting)
     this.handlers["onCookingRequest"] = (socket, data) => {
       const player = socket.player;
       if (!player) return;
@@ -778,16 +857,19 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       console.log(
         "[ServerNetwork] 🍳 Cooking request from",
         player.id,
-        ":",
-        payload,
+        "- routing through PendingCookManager for distance check",
       );
 
-      // Emit event for ProcessingSystem to handle
-      this.world.emit(EventType.PROCESSING_COOKING_REQUEST, {
-        playerId: player.id,
-        fishSlot: payload.rawFoodSlot,
-        fireId: payload.fireId,
-      });
+      // Use PendingCookManager for distance checking (like PendingGatherManager for woodcutting)
+      // Fire position will be looked up server-side from ProcessingSystem
+      this.pendingCookManager.queuePendingCook(
+        player.id,
+        payload.fireId,
+        { x: 0, y: 0, z: 0 }, // Position ignored - server looks up from ProcessingSystem
+        this.tickSystem.getCurrentTick(),
+        undefined, // runMode - use server default
+        payload.rawFoodSlot, // Pass specific slot to cook
+      );
     };
 
     // Route movement and combat through action queue for OSRS-style tick processing

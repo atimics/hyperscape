@@ -120,6 +120,7 @@ const names = [
   // Processing packets (firemaking/cooking)
   'firemakingRequest', // Client -> Server: request to light fire (tinderbox + logs)
   'cookingRequest',    // Client -> Server: request to cook food on fire/range
+  'cookingSourceInteract', // Client -> Server: server-authoritative cooking (walk to fire first)
   'fireCreated',       // Server -> Client: fire entity created
   'fireExtinguished',  // Server -> Client: fire entity expired/removed
   // Combat packets
