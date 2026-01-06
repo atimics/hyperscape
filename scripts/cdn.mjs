@@ -61,9 +61,9 @@ function getDockerComposeCommand() {
 
 function isCDNRunning() {
   try {
-    const status = execSync('docker ps --filter "name=hyperscape-cdn" --format "{{.Status}}"', { 
+    const status = execSync('docker ps --filter "name=hyperscape-cdn" --format "{{.Status}}"', {
       encoding: 'utf8',
-      cwd: serverDir 
+      cwd: serverDir
     }).trim()
     return status && status.includes('Up')
   } catch {
@@ -84,10 +84,10 @@ function copyPhysXAssets() {
   // Copy PhysX assets to root assets directory (where CDN serves from)
   const assetsWebDir = path.join(assetsDir, 'web')
   fs.mkdirSync(assetsWebDir, { recursive: true })
-  
+
   const physxWasm = path.join(rootDir, 'node_modules/@hyperscape/physx-js-webidl/dist/physx-js-webidl.wasm')
   const physxJs = path.join(rootDir, 'node_modules/@hyperscape/physx-js-webidl/dist/physx-js-webidl.js')
-  
+
   if (fs.existsSync(physxWasm)) {
     fs.copyFileSync(physxWasm, path.join(assetsWebDir, 'physx-js-webidl.wasm'))
     fs.copyFileSync(physxJs, path.join(assetsWebDir, 'physx-js-webidl.js'))
@@ -119,6 +119,7 @@ async function waitForHealthy(maxAttempts = 30) {
   console.log(`${colors.yellow}⚠️  CDN health check timed out${colors.reset}`)
   return false
 }
+
 
 async function ensureCDNRunning() {
   if (!isDockerAvailable()) {
