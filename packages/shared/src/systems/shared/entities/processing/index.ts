@@ -63,3 +63,6 @@ export {
   getRecommendedCookingSource,
 } from "./FoodUtils";
 export type { FoodDisplayData } from "./FoodUtils";
+
+// Fire manager
+export { FireManager, getFireManager, resetFireManager } from "./FireManager";
