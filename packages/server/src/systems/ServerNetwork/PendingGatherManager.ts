@@ -348,6 +348,27 @@ export class PendingGatherManager {
       `[PendingGather]   Movement mode: ${isRunning ? "running" : "walking"} (from ${runMode !== undefined ? "client" : "server"})`,
     );
 
+    // CRITICAL: Set arrival emote BEFORE pathing (like fishing)
+    // This bundles the emote with tileMovementEnd packet for atomic delivery
+    if (this.playerMeetsLevelRequirement(playerId, resource)) {
+      // Map skill to emote name
+      const skillToEmote: Record<string, string> = {
+        woodcutting: "chopping",
+        mining: "mining",
+      };
+      const emote = skillToEmote[resource.skillRequired ?? ""] ?? null;
+      if (emote) {
+        this.tileMovementManager.setArrivalEmote(playerId, emote);
+        console.log(
+          `[PendingGather]   🎬 Set arrival emote "${emote}" for ${resource.skillRequired}`,
+        );
+      }
+    } else {
+      console.log(
+        `[PendingGather]   Player ${playerId} doesn't meet level ${resource.levelRequired} ${resource.skillRequired} - no gathering emote`,
+      );
+    }
+
     // Use GATHERING_RANGE (1) for cardinal-only positioning
     this.tileMovementManager.movePlayerToward(
       playerId,
