@@ -66,3 +66,17 @@ export type { FoodDisplayData } from "./FoodUtils";
 
 // Fire manager
 export { FireManager, getFireManager, resetFireManager } from "./FireManager";
+
+// Session managers
+export { FiremakingSessionManager } from "./FiremakingSessionManager";
+export type {
+  FiremakingAttemptResult,
+  FiremakingCallbacks,
+} from "./FiremakingSessionManager";
+
+export { CookingSessionManager } from "./CookingSessionManager";
+export type {
+  CookingAttemptResult,
+  CookingSessionComplete,
+  CookingCallbacks,
+} from "./CookingSessionManager";
