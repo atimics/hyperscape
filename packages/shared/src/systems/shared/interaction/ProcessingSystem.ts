@@ -437,9 +437,18 @@ export class ProcessingSystem extends SystemBase {
     // Remove from active processing
     this.activeProcessing.delete(playerId);
 
+    // Phase 5.3: Explicit null check instead of non-null assertion
+    if (!action.targetItem) {
+      console.error(
+        `[ProcessingSystem] Firemaking action missing targetItem for ${playerId}`,
+      );
+      this.releaseAction(action);
+      return;
+    }
+
     // Get the logs ID from the action (string item ID like "logs", "oak_logs", etc.)
-    const logsId = action.targetItem!.id;
-    const logsSlot = action.targetItem!.slot;
+    const logsId = action.targetItem.id;
+    const logsSlot = action.targetItem.slot;
 
     console.log(
       "[ProcessingSystem] 🔥 completeFiremaking - checking inventory:",
@@ -463,15 +472,24 @@ export class ProcessingSystem extends SystemBase {
     action: ProcessingAction,
     position: { x: number; y: number; z: number },
   ): void {
+    // Phase 5.3: Explicit null check instead of non-null assertion
+    if (!action.targetItem) {
+      console.error(
+        `[ProcessingSystem] completeFiremakingProcess missing targetItem for ${playerId}`,
+      );
+      return;
+    }
+
     // Get string item ID from action
-    const logsId = action.targetItem!.id;
+    const logsId = action.targetItem.id;
+    const logsSlot = action.targetItem.slot;
 
     console.log(
       "[ProcessingSystem] 🔥 completeFiremakingProcess - removing logs:",
       {
         playerId,
         logsId,
-        slot: action.targetItem!.slot,
+        slot: logsSlot,
       },
     );
 
@@ -480,7 +498,7 @@ export class ProcessingSystem extends SystemBase {
       playerId,
       itemId: logsId,
       quantity: 1,
-      slot: action.targetItem!.slot,
+      slot: logsSlot,
     });
 
     // Create fire

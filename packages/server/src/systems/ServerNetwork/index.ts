@@ -225,6 +225,12 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   private worldTimeSyncAccumulator = 0;
   private readonly WORLD_TIME_SYNC_INTERVAL = 5; // seconds
 
+  // === Phase 5.1: Rate Limiting for Processing Requests ===
+  /** Rate limiter for processing requests (playerId -> lastRequestTime) */
+  private readonly processingRateLimiter = new Map<string, number>();
+  /** Minimum time between processing requests (500ms) */
+  private readonly PROCESSING_COOLDOWN_MS = 500;
+
   constructor(world: World) {
     super(world);
     this.id = 0;
@@ -237,6 +243,30 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.maxUploadSize = 50; // Default 50MB upload limit
 
     // Initialize managers will happen in init() after world.db is set
+  }
+
+  // === Phase 5.1: Rate Limiting Helper ===
+
+  /**
+   * Check if a player can make a processing request (rate limiting).
+   * Prevents spam by requiring PROCESSING_COOLDOWN_MS between requests.
+   *
+   * @param playerId - The player ID to check
+   * @returns true if request is allowed, false if rate limited
+   */
+  private canProcessRequest(playerId: string): boolean {
+    const now = Date.now();
+    const lastRequest = this.processingRateLimiter.get(playerId) ?? 0;
+
+    if (now - lastRequest < this.PROCESSING_COOLDOWN_MS) {
+      console.warn(
+        `[ServerNetwork] Rate limited processing request from ${playerId}`,
+      );
+      return false;
+    }
+
+    this.processingRateLimiter.set(playerId, now);
+    return true;
   }
 
   /**
@@ -831,6 +861,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const player = socket.player;
       if (!player) return;
 
+      // Phase 5.1: Rate limiting
+      if (!this.canProcessRequest(player.id)) {
+        return;
+      }
+
       const payload = data as {
         logsId?: string;
         logsSlot?: number;
@@ -843,6 +878,19 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         payload.tinderboxSlot === undefined
       ) {
         console.log("[ServerNetwork] Invalid firemaking request:", payload);
+        return;
+      }
+
+      // Phase 5.2: Validate inventory slot bounds (OSRS inventory is 28 slots: 0-27)
+      if (
+        payload.logsSlot < 0 ||
+        payload.logsSlot > 27 ||
+        payload.tinderboxSlot < 0 ||
+        payload.tinderboxSlot > 27
+      ) {
+        console.warn(
+          `[ServerNetwork] Invalid slot bounds in firemaking request from ${player.id}`,
+        );
         return;
       }
 
@@ -868,6 +916,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const player = socket.player;
       if (!player) return;
 
+      // Phase 5.1: Rate limiting
+      if (!this.canProcessRequest(player.id)) {
+        return;
+      }
+
       const payload = data as {
         rawFoodId?: string;
         rawFoodSlot?: number;
@@ -880,6 +933,15 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         !payload.fireId
       ) {
         console.log("[ServerNetwork] Invalid cooking request:", payload);
+        return;
+      }
+
+      // Phase 5.2: Validate inventory slot bounds (OSRS inventory is 28 slots: 0-27)
+      // Note: -1 is allowed as it means "find first cookable item"
+      if (payload.rawFoodSlot < -1 || payload.rawFoodSlot > 27) {
+        console.warn(
+          `[ServerNetwork] Invalid slot bounds in cooking request from ${player.id}`,
+        );
         return;
       }
 
