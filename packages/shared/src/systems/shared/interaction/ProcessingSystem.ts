@@ -58,6 +58,11 @@ export class ProcessingSystem extends SystemBase {
     { dx: 0, dz: -1 }, // North (-Z in Three.js)
   ];
 
+  // === Phase 2: Memory Optimization ===
+  // ProcessingAction object pool (avoids allocation per action)
+  private readonly actionPool: ProcessingAction[] = [];
+  private readonly MAX_POOL_SIZE = 100;
+
   constructor(world: World) {
     super(world, {
       name: "processing",
@@ -67,6 +72,53 @@ export class ProcessingSystem extends SystemBase {
       },
       autoCleanup: true,
     });
+  }
+
+  // === Phase 2: Memory Optimization Helpers ===
+
+  /**
+   * Count active fires for a player without allocating arrays.
+   * Replaces Array.from().filter() in hot path.
+   */
+  private countPlayerFires(playerId: string): number {
+    let count = 0;
+    for (const fire of this.activeFires.values()) {
+      if (fire.playerId === playerId && fire.isActive) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * Acquire a ProcessingAction from the pool (or create new).
+   */
+  private acquireAction(): ProcessingAction {
+    if (this.actionPool.length > 0) {
+      return this.actionPool.pop()!;
+    }
+    return {
+      playerId: "",
+      actionType: "firemaking",
+      primaryItem: { id: "", slot: 0 },
+      startTime: 0,
+      duration: 0,
+      xpReward: 0,
+      skillRequired: "",
+    };
+  }
+
+  /**
+   * Release a ProcessingAction back to the pool for reuse.
+   */
+  private releaseAction(action: ProcessingAction): void {
+    if (this.actionPool.length < this.MAX_POOL_SIZE) {
+      // Reset to defaults
+      action.playerId = "";
+      action.targetItem = undefined;
+      action.targetFire = undefined;
+      this.actionPool.push(action);
+    }
   }
 
   async init(): Promise<void> {
@@ -278,11 +330,8 @@ export class ProcessingSystem extends SystemBase {
     logsSlot: number,
     tinderboxSlot: number,
   ): void {
-    // Check fire limit
-    const playerFires = Array.from(this.activeFires.values()).filter(
-      (fire) => fire.playerId === playerId && fire.isActive,
-    );
-    if (playerFires.length >= this.MAX_FIRES_PER_PLAYER) {
+    // Check fire limit (optimized: no array allocation)
+    if (this.countPlayerFires(playerId) >= this.MAX_FIRES_PER_PLAYER) {
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId,
         message: `You can only have ${this.MAX_FIRES_PER_PLAYER} fires lit at once.`,
@@ -305,17 +354,16 @@ export class ProcessingSystem extends SystemBase {
     // Get player position
     const player = this.world.getPlayer(playerId)!;
 
-    // Start firemaking process - store string item IDs
-    const processingAction: ProcessingAction = {
-      playerId,
-      actionType: "firemaking",
-      primaryItem: { id: "tinderbox", slot: tinderboxSlot },
-      targetItem: { id: logsId, slot: logsSlot },
-      startTime: Date.now(),
-      duration: this.FIREMAKING_TIME,
-      xpReward: firemakingData.xp,
-      skillRequired: "firemaking",
-    };
+    // Start firemaking process - use pooled action object (Phase 2 optimization)
+    const processingAction = this.acquireAction();
+    processingAction.playerId = playerId;
+    processingAction.actionType = "firemaking";
+    processingAction.primaryItem = { id: "tinderbox", slot: tinderboxSlot };
+    processingAction.targetItem = { id: logsId, slot: logsSlot };
+    processingAction.startTime = Date.now();
+    processingAction.duration = this.FIREMAKING_TIME;
+    processingAction.xpReward = firemakingData.xp;
+    processingAction.skillRequired = "firemaking";
 
     this.activeProcessing.set(playerId, processingAction);
 
@@ -340,7 +388,9 @@ export class ProcessingSystem extends SystemBase {
         console.log(
           `[ProcessingSystem] Player ${playerId} disconnected during firemaking - cancelling`,
         );
+        const action = this.activeProcessing.get(playerId);
         this.activeProcessing.delete(playerId);
+        if (action) this.releaseAction(action);
         return;
       }
 
@@ -384,6 +434,9 @@ export class ProcessingSystem extends SystemBase {
     // Directly complete the process - targeting system already validated items
     // Skip the broken callback pattern and just proceed
     this.completeFiremakingProcess(playerId, action, position);
+
+    // Release action back to pool (Phase 2: object pooling)
+    this.releaseAction(action);
   }
 
   private completeFiremakingProcess(
@@ -556,17 +609,16 @@ export class ProcessingSystem extends SystemBase {
       return;
     }
 
-    // Start cooking process - use actual item ID from inventory
-    const processingAction: ProcessingAction = {
-      playerId,
-      actionType: "cooking",
-      primaryItem: { id: rawItemId, slot: fishSlot },
-      targetFire: fireId,
-      startTime: Date.now(),
-      duration: this.COOKING_TIME,
-      xpReward: cookingData.xp,
-      skillRequired: "cooking",
-    };
+    // Start cooking process - use pooled action object (Phase 2 optimization)
+    const processingAction = this.acquireAction();
+    processingAction.playerId = playerId;
+    processingAction.actionType = "cooking";
+    processingAction.primaryItem = { id: rawItemId, slot: fishSlot };
+    processingAction.targetFire = fireId;
+    processingAction.startTime = Date.now();
+    processingAction.duration = this.COOKING_TIME;
+    processingAction.xpReward = cookingData.xp;
+    processingAction.skillRequired = "cooking";
 
     this.activeProcessing.set(playerId, processingAction);
 
@@ -614,14 +666,22 @@ export class ProcessingSystem extends SystemBase {
         playerId,
         emote: "idle",
       });
+      // Release action back to pool (Phase 2: object pooling)
+      this.releaseAction(action);
       return;
     }
 
     // Complete this cook
     this.completeCookingProcess(playerId, action);
 
+    // Store fireId before releasing action
+    const fireId = action.targetFire!;
+
+    // Release action back to pool (Phase 2: object pooling)
+    this.releaseAction(action);
+
     // OSRS Auto-cooking: Check if player has more cookable items and continue
-    this.tryAutoCookNext(playerId, action.targetFire!);
+    this.tryAutoCookNext(playerId, fireId);
   }
 
   /**
@@ -859,14 +919,27 @@ export class ProcessingSystem extends SystemBase {
     // Set layer 1 for raycasting (entities are on layer 1, matching other entities)
     fireMesh.layers.set(1);
 
-    // Add flickering animation
+    // Add flickering animation with proper cleanup
+    let animationFrameId: number | null = null;
+
     const animate = () => {
-      if (fire.isActive) {
+      if (fire.isActive && fire.mesh) {
         fireMaterial.opacity = 0.6 + Math.sin(Date.now() * 0.01) * 0.2;
-        requestAnimationFrame(animate);
+        animationFrameId = requestAnimationFrame(animate);
+      } else {
+        // Animation stopped - null out reference
+        animationFrameId = null;
       }
     };
     animate();
+
+    // Store cancel function on fire object for cleanup in extinguishFire()
+    (fire as { cancelAnimation?: () => void }).cancelAnimation = () => {
+      if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
+    };
 
     fire.mesh = fireMesh as THREE.Object3D;
 
@@ -899,6 +972,10 @@ export class ProcessingSystem extends SystemBase {
     }
 
     fire.isActive = false;
+
+    // Cancel animation before removing mesh (Phase 2: prevent RAF leak)
+    const fireWithAnimation = fire as { cancelAnimation?: () => void };
+    fireWithAnimation.cancelAnimation?.();
 
     // Remove visual and dispose THREE.js resources (only exists on client)
     if (fire.mesh && this.world.isClient) {
@@ -936,8 +1013,10 @@ export class ProcessingSystem extends SystemBase {
   private cleanupPlayer(data: { id: string }): void {
     const playerId = data.id;
 
-    // Remove active processing
+    // Remove active processing and release action to pool
+    const action = this.activeProcessing.get(playerId);
     this.activeProcessing.delete(playerId);
+    if (action) this.releaseAction(action);
 
     // Extinguish player's fires
     for (const [fireId, fire] of this.activeFires.entries()) {
@@ -1088,8 +1167,9 @@ export class ProcessingSystem extends SystemBase {
     const now = Date.now();
     for (const [playerId, action] of this.activeProcessing.entries()) {
       if (now - action.startTime > action.duration + 1000) {
-        // 1 second grace period
+        // 1 second grace period - release action back to pool
         this.activeProcessing.delete(playerId);
+        this.releaseAction(action);
       }
     }
   }
