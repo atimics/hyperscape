@@ -18,13 +18,14 @@ import { EventType } from "../../../types/events";
 import { SystemBase } from "../infrastructure/SystemBase";
 import type { World } from "../../../types/index";
 import type { Position3D } from "../../../types/core/base-types";
-import { getTargetValidator } from "./TargetValidator";
+import { getTargetValidator, type FireRegistry } from "./TargetValidator";
+import { worldToTile } from "../../shared/movement/TileSystem";
 
 /**
- * Interface for fire registry - allows dependency injection
+ * Extended fire registry interface - includes additional methods for cooking system.
+ * Extends the base FireRegistry from TargetValidator.
  */
-export interface FireRegistry {
-  getActiveFireIds(): string[];
+export interface FullFireRegistry extends FireRegistry {
   getActiveFires(): Map<string, Fire>;
   hasFireAtTile(tile: { x: number; z: number }): boolean;
 }
@@ -34,7 +35,7 @@ export interface FireRegistry {
  */
 export abstract class ProcessingSystemBase
   extends SystemBase
-  implements FireRegistry
+  implements FullFireRegistry
 {
   // Shared state
   protected activeFires = new Map<string, Fire>();
@@ -313,35 +314,66 @@ export abstract class ProcessingSystemBase
   // =========================================================================
 
   /**
-   * Get IDs of all active fires
+   * Get IDs of all active fires.
+   * Note: Allocates a new array. For hot paths, use forEachActiveFire() instead.
    */
   getActiveFireIds(): string[] {
-    return Array.from(this.activeFires.entries())
-      .filter(([_, fire]) => fire.isActive)
-      .map(([id]) => id);
+    const ids: string[] = [];
+    for (const [id, fire] of this.activeFires) {
+      if (fire.isActive) {
+        ids.push(id);
+      }
+    }
+    return ids;
   }
 
   /**
-   * Get all active fires
+   * Iterate over active fires without allocation (for hot paths).
+   * @param callback - Called for each active fire
+   */
+  forEachActiveFire(callback: (fire: Fire, id: string) => void): void {
+    for (const [id, fire] of this.activeFires) {
+      if (fire.isActive) {
+        callback(fire, id);
+      }
+    }
+  }
+
+  /**
+   * Get all active fires.
+   * Note: Returns a copy to prevent external mutation.
    */
   getActiveFires(): Map<string, Fire> {
     return new Map(this.activeFires);
   }
 
   /**
-   * Get fires as array
+   * Get fires as array.
+   * Note: Allocates a new array. For hot paths, use forEachActiveFire() instead.
    */
   getFires(): Fire[] {
     return Array.from(this.activeFires.values());
   }
 
   /**
-   * Get fires for a specific player
+   * Get fires for a specific player.
+   * Note: Allocates a new array.
    */
   getPlayerFires(playerId: string): Fire[] {
-    return Array.from(this.activeFires.values()).filter(
-      (fire) => fire.playerId === playerId && fire.isActive,
-    );
+    const fires: Fire[] = [];
+    for (const fire of this.activeFires.values()) {
+      if (fire.playerId === playerId && fire.isActive) {
+        fires.push(fire);
+      }
+    }
+    return fires;
+  }
+
+  /**
+   * Count fires for a specific player without allocation.
+   */
+  countPlayerFiresPublic(playerId: string): number {
+    return this.countPlayerFires(playerId);
   }
 
   /**
@@ -355,7 +387,6 @@ export abstract class ProcessingSystemBase
    * Check if there's an active fire at a given tile position
    */
   hasFireAtTile(tile: { x: number; z: number }): boolean {
-    const { worldToTile } = require("../../shared/movement/TileSystem");
     for (const [, fire] of this.activeFires) {
       if (!fire.isActive) continue;
       const fireTile = worldToTile(fire.position.x, fire.position.z);

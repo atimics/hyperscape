@@ -30,6 +30,13 @@ import { SystemBase } from "../infrastructure/SystemBase";
 import type { World } from "../../../types/index";
 import { getTargetValidator } from "./TargetValidator";
 
+/**
+ * Debug logging flag for processing system.
+ * Set to true during development/testing for verbose output.
+ * Should be false in production for performance.
+ */
+const DEBUG_PROCESSING = false;
+
 export class ProcessingSystem extends SystemBase {
   private activeFires = new Map<string, Fire>();
   private activeProcessing = new Map<string, ProcessingAction>();
@@ -218,10 +225,12 @@ export class ProcessingSystem extends SystemBase {
           playerId: string;
           position: { x: number; y: number; z: number };
         }) => {
-          console.log(
-            "[ProcessingSystem] 🔥 FIRE_CREATED received on client:",
-            data,
-          );
+          if (DEBUG_PROCESSING) {
+            console.log(
+              "[ProcessingSystem] 🔥 FIRE_CREATED received on client:",
+              data,
+            );
+          }
           // Create the fire data structure and visual
           const fire: Fire = {
             id: data.fireId,
@@ -239,10 +248,12 @@ export class ProcessingSystem extends SystemBase {
       this.subscribe(
         EventType.FIRE_EXTINGUISHED,
         (data: { fireId: string }) => {
-          console.log(
-            "[ProcessingSystem] 💨 FIRE_EXTINGUISHED received on client:",
-            data,
-          );
+          if (DEBUG_PROCESSING) {
+            console.log(
+              "[ProcessingSystem] 💨 FIRE_EXTINGUISHED received on client:",
+              data,
+            );
+          }
           const fire = this.activeFires.get(data.fireId);
           if (fire) {
             fire.isActive = false;
@@ -324,12 +335,14 @@ export class ProcessingSystem extends SystemBase {
   }): void {
     const { playerId, logsId, logsSlot, tinderboxSlot } = data;
 
-    console.log("[ProcessingSystem] 🔥 startFiremaking called:", {
-      playerId,
-      logsId,
-      logsSlot,
-      tinderboxSlot,
-    });
+    if (DEBUG_PROCESSING) {
+      console.log("[ProcessingSystem] 🔥 startFiremaking called:", {
+        playerId,
+        logsId,
+        logsSlot,
+        tinderboxSlot,
+      });
+    }
 
     // Check if player is already processing
     if (this.activeProcessing.has(playerId)) {
@@ -404,9 +417,11 @@ export class ProcessingSystem extends SystemBase {
       // Re-fetch player at callback time - they may have disconnected
       const currentPlayer = this.world.getPlayer(playerId);
       if (!currentPlayer?.node?.position) {
-        console.log(
-          `[ProcessingSystem] Player ${playerId} disconnected during firemaking - cancelling`,
-        );
+        if (DEBUG_PROCESSING) {
+          console.log(
+            `[ProcessingSystem] Player ${playerId} disconnected during firemaking - cancelling`,
+          );
+        }
         const action = this.activeProcessing.get(playerId);
         this.activeProcessing.delete(playerId);
         if (action) this.releaseAction(action);
@@ -415,9 +430,11 @@ export class ProcessingSystem extends SystemBase {
 
       // Verify player is still in activeProcessing (wasn't cancelled)
       if (!this.activeProcessing.has(playerId)) {
-        console.log(
-          `[ProcessingSystem] Firemaking was cancelled for ${playerId}`,
-        );
+        if (DEBUG_PROCESSING) {
+          console.log(
+            `[ProcessingSystem] Firemaking was cancelled for ${playerId}`,
+          );
+        }
         return;
       }
 
@@ -450,14 +467,16 @@ export class ProcessingSystem extends SystemBase {
     const logsId = action.targetItem.id;
     const logsSlot = action.targetItem.slot;
 
-    console.log(
-      "[ProcessingSystem] 🔥 completeFiremaking - checking inventory:",
-      {
-        playerId,
-        logsId,
-        logsSlot,
-      },
-    );
+    if (DEBUG_PROCESSING) {
+      console.log(
+        "[ProcessingSystem] 🔥 completeFiremaking - checking inventory:",
+        {
+          playerId,
+          logsId,
+          logsSlot,
+        },
+      );
+    }
 
     // Directly complete the process - targeting system already validated items
     // Skip the broken callback pattern and just proceed
@@ -484,14 +503,16 @@ export class ProcessingSystem extends SystemBase {
     const logsId = action.targetItem.id;
     const logsSlot = action.targetItem.slot;
 
-    console.log(
-      "[ProcessingSystem] 🔥 completeFiremakingProcess - removing logs:",
-      {
-        playerId,
-        logsId,
-        slot: logsSlot,
-      },
-    );
+    if (DEBUG_PROCESSING) {
+      console.log(
+        "[ProcessingSystem] 🔥 completeFiremakingProcess - removing logs:",
+        {
+          playerId,
+          logsId,
+          slot: logsSlot,
+        },
+      );
+    }
 
     // Remove logs from inventory using string item ID
     this.emitTypedEvent(EventType.INVENTORY_ITEM_REMOVED, {
@@ -576,11 +597,13 @@ export class ProcessingSystem extends SystemBase {
       }
     }
 
-    console.log("[ProcessingSystem] 🍳 startCooking called:", {
-      playerId,
-      fishSlot,
-      fireId,
-    });
+    if (DEBUG_PROCESSING) {
+      console.log("[ProcessingSystem] 🍳 startCooking called:", {
+        playerId,
+        fishSlot,
+        fireId,
+      });
+    }
 
     // Check if player is already processing
     if (this.activeProcessing.has(playerId)) {
@@ -672,7 +695,11 @@ export class ProcessingSystem extends SystemBase {
     setTimeout(() => {
       // Verify player is still in activeProcessing (wasn't cancelled/disconnected)
       if (!this.activeProcessing.has(playerId)) {
-        console.log(`[ProcessingSystem] Cooking was cancelled for ${playerId}`);
+        if (DEBUG_PROCESSING) {
+          console.log(
+            `[ProcessingSystem] Cooking was cancelled for ${playerId}`,
+          );
+        }
         return;
       }
 
@@ -684,8 +711,20 @@ export class ProcessingSystem extends SystemBase {
     // Remove from active processing
     this.activeProcessing.delete(playerId);
 
+    // Phase 5.3: Explicit null check instead of non-null assertion
+    if (!action.targetFire) {
+      console.error(
+        `[ProcessingSystem] Cooking action missing targetFire for ${playerId}`,
+      );
+      this.releaseAction(action);
+      return;
+    }
+
+    // Store fireId before any early returns (needed for auto-cook)
+    const fireId = action.targetFire;
+
     // Check if fire still exists
-    const fire = this.activeFires.get(action.targetFire!);
+    const fire = this.activeFires.get(fireId);
     if (!fire || !fire.isActive) {
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId,
@@ -701,9 +740,6 @@ export class ProcessingSystem extends SystemBase {
 
     // Complete this cook
     this.completeCookingProcess(playerId, action);
-
-    // Store fireId before releasing action
-    const fireId = action.targetFire!;
 
     // Release action back to pool (Phase 2: object pooling)
     this.releaseAction(action);
@@ -804,15 +840,17 @@ export class ProcessingSystem extends SystemBase {
     const roll = Math.random();
     const didBurn = roll < burnChance;
 
-    console.log("[ProcessingSystem] 🍳 completeCookingProcess:", {
-      playerId,
-      rawItemId,
-      cookingLevel,
-      burnChance: `${(burnChance * 100).toFixed(1)}%`,
-      roll: roll.toFixed(3),
-      didBurn,
-      rawFishSlot: action.primaryItem.slot,
-    });
+    if (DEBUG_PROCESSING) {
+      console.log("[ProcessingSystem] 🍳 completeCookingProcess:", {
+        playerId,
+        rawItemId,
+        cookingLevel,
+        burnChance: `${(burnChance * 100).toFixed(1)}%`,
+        roll: roll.toFixed(3),
+        didBurn,
+        rawFishSlot: action.primaryItem.slot,
+      });
+    }
 
     // Remove raw item using actual item ID from action
     this.emitTypedEvent(EventType.INVENTORY_ITEM_REMOVED, {
@@ -910,11 +948,16 @@ export class ProcessingSystem extends SystemBase {
     // Only create visuals on client
     if (!this.world.isClient) return;
 
-    console.log("[ProcessingSystem] 🔥 createFireVisual called for:", fire.id);
-    console.log(
-      "[ProcessingSystem] 🔥 Scene available:",
-      !!this.world.stage?.scene,
-    );
+    if (DEBUG_PROCESSING) {
+      console.log(
+        "[ProcessingSystem] 🔥 createFireVisual called for:",
+        fire.id,
+      );
+      console.log(
+        "[ProcessingSystem] 🔥 Scene available:",
+        !!this.world.stage?.scene,
+      );
+    }
 
     // Create fire mesh - orange glowing cube for now
     const fireGeometry = new THREE.BoxGeometry(0.5, 0.8, 0.5);
@@ -968,13 +1011,15 @@ export class ProcessingSystem extends SystemBase {
     // Add to scene - on client, scene MUST exist
     this.world.stage.scene.add(fireMesh);
 
-    console.log("[ProcessingSystem] 🔥 Fire mesh added to scene:", {
-      fireId: fire.id,
-      position: fireMesh.position.toArray(),
-      layers: fireMesh.layers.mask,
-      userData: fireMesh.userData,
-      inScene: this.world.stage.scene.children.includes(fireMesh),
-    });
+    if (DEBUG_PROCESSING) {
+      console.log("[ProcessingSystem] 🔥 Fire mesh added to scene:", {
+        fireId: fire.id,
+        position: fireMesh.position.toArray(),
+        layers: fireMesh.layers.mask,
+        userData: fireMesh.userData,
+        inScene: this.world.stage.scene.children.includes(fireMesh),
+      });
+    }
   }
 
   private extinguishFire(fireId: string): void {
@@ -1158,9 +1203,11 @@ export class ProcessingSystem extends SystemBase {
     playerId: string,
     target: { x: number; y: number; z: number },
   ): void {
-    console.log(
-      `[ProcessingSystem] 🔥 Moving player ${playerId} after firemaking to (${target.x.toFixed(1)}, ${target.z.toFixed(1)})`,
-    );
+    if (DEBUG_PROCESSING) {
+      console.log(
+        `[ProcessingSystem] 🔥 Moving player ${playerId} after firemaking to (${target.x.toFixed(1)}, ${target.z.toFixed(1)})`,
+      );
+    }
 
     // Emit event for ServerNetwork to handle - it will send playerTeleport packet
     // which properly syncs position to client and resets tile movement state
