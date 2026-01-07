@@ -6,26 +6,39 @@
  *
  * SERVER-AUTHORITATIVE FLOW:
  * 1. Player clicks fire → client sends cookingSourceInteract with fireId
- * 2. Server looks up fire's TRUE position from ProcessingSystem
+ * 2. Server looks up fire's TRUE position from injected FireRegistry
  * 3. Server calculates best cardinal tile using GATHERING_CONSTANTS.GATHERING_RANGE
  * 4. Server paths player to that tile via movePlayerToward()
  * 5. Every tick, server checks if player arrived at cardinal tile
  * 6. When arrived, server starts cooking via PROCESSING_COOKING_REQUEST event
  *
+ * DEPENDENCY INJECTION (Phase 4.2):
+ * FireRegistry is now injected via constructor instead of looked up via getSystem().
+ * This improves testability and follows the Dependency Inversion Principle.
+ *
  * @see PendingGatherManager - resource gathering equivalent
  * @see PendingAttackManager - combat equivalent
+ * @see Phase 4.2 of COOKING_FIREMAKING_HARDENING_PLAN.md
  */
 
-import type { World } from "@hyperscape/shared";
+import type { World, Fire } from "@hyperscape/shared";
 import {
   EventType,
-  worldToTile,
   worldToTileInto,
   tilesWithinMeleeRange,
   type TileCoord,
   GATHERING_CONSTANTS,
 } from "@hyperscape/shared";
 import type { TileMovementManager } from "./tile-movement";
+
+/**
+ * FireRegistry interface for dependency injection.
+ * Allows PendingCookManager to access fire data without
+ * directly coupling to ProcessingSystem.
+ */
+export interface FireRegistry {
+  getActiveFires(): Map<string, Fire>;
+}
 
 /**
  * Pending cook request data
@@ -45,22 +58,13 @@ interface PendingCook {
   fishSlot: number;
 }
 
-/**
- * Fire data from ProcessingSystem
- */
-interface FireData {
-  id: string;
-  position: { x: number; y: number; z: number };
-  isActive: boolean;
-  playerId: string;
-}
-
 /** Timeout for pending cooks (in ticks) - 20 ticks = 12 seconds at 600ms/tick */
 const PENDING_COOK_TIMEOUT_TICKS = 20;
 
 export class PendingCookManager {
   private world: World;
   private tileMovementManager: TileMovementManager;
+  private fireRegistry: FireRegistry;
 
   /** Map of playerId → pending cook data */
   private pendingCooks: Map<string, PendingCook> = new Map();
@@ -69,9 +73,21 @@ export class PendingCookManager {
   private readonly _playerTile: TileCoord = { x: 0, z: 0 };
   private readonly _fireTile: TileCoord = { x: 0, z: 0 };
 
-  constructor(world: World, tileMovementManager: TileMovementManager) {
+  /**
+   * Create a new PendingCookManager.
+   *
+   * @param world - World instance for player lookups
+   * @param tileMovementManager - Movement manager for pathing
+   * @param fireRegistry - Injected fire registry (Phase 4.2 DIP)
+   */
+  constructor(
+    world: World,
+    tileMovementManager: TileMovementManager,
+    fireRegistry: FireRegistry,
+  ) {
     this.world = world;
     this.tileMovementManager = tileMovementManager;
+    this.fireRegistry = fireRegistry;
   }
 
   /**
@@ -98,17 +114,8 @@ export class PendingCookManager {
     // Cancel any existing pending cook
     this.cancelPendingCook(playerId);
 
-    // Look up fire using SERVER's authoritative data
-    const processingSystem = this.world.getSystem("processing") as {
-      getActiveFires?: () => Map<string, FireData>;
-    } | null;
-
-    if (!processingSystem?.getActiveFires) {
-      console.warn("[PendingCook] No processing system available");
-      return;
-    }
-
-    const fires = processingSystem.getActiveFires();
+    // Look up fire using injected FireRegistry (Phase 4.2 DIP)
+    const fires = this.fireRegistry.getActiveFires();
     const fire = fires.get(fireId);
 
     if (!fire || !fire.isActive) {
@@ -247,13 +254,9 @@ export class PendingCookManager {
       return;
     }
 
-    // Check if fire still exists and is active
-    const processingSystem = this.world.getSystem("processing") as {
-      getActiveFires?: () => Map<string, FireData>;
-    } | null;
-
-    const fires = processingSystem?.getActiveFires?.();
-    const fire = fires?.get(pending.fireId);
+    // Check if fire still exists and is active (using injected FireRegistry)
+    const fires = this.fireRegistry.getActiveFires();
+    const fire = fires.get(pending.fireId);
 
     if (!fire || !fire.isActive) {
       console.log(`[PendingCook] Fire ${pending.fireId} no longer available`);

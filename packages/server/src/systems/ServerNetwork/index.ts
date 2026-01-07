@@ -366,9 +366,22 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Pending cook manager - server-authoritative tracking of "walk to fire and cook" actions
     // Uses same approach as PendingGatherManager: movePlayerToward with meleeRange=1 for cardinal-only
+    // Phase 4.2: FireRegistry is now injected via constructor (DIP)
+    const processingSystem = this.world.getSystem("processing") as {
+      getActiveFires: () => Map<
+        string,
+        {
+          id: string;
+          position: { x: number; y: number; z: number };
+          isActive: boolean;
+          playerId: string;
+        }
+      >;
+    };
     this.pendingCookManager = new PendingCookManager(
       this.world,
       this.tileMovementManager,
+      processingSystem,
     );
 
     // Register pending cook processing (same priority as movement)
