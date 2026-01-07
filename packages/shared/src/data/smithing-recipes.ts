@@ -66,9 +66,22 @@ export const CATEGORY_BARS_REQUIRED: Record<SmithingCategory, number> = {
 };
 
 /**
- * XP per bar used (OSRS: 12.5 XP per bar for all smithing)
+ * XP per bar by metal tier (OSRS-accurate)
+ *
+ * Each metal tier grants different XP per bar used:
+ * - Bronze: 12.5 XP/bar
+ * - Iron: 25 XP/bar
+ * - Steel: 37.5 XP/bar
+ * - Mithril: 50 XP/bar
+ *
+ * @see https://oldschool.runescape.wiki/w/Smithing
  */
-export const XP_PER_BAR = 12.5;
+export const XP_PER_BAR_BY_TIER: Record<BarTier, number> = {
+  bronze: 12.5,
+  iron: 25,
+  steel: 37.5,
+  mithril: 50,
+};
 
 /**
  * Generate a recipe for a specific bar tier and category
@@ -95,7 +108,7 @@ function generateRecipe(
     barType: `${tier}_bar`,
     barsRequired,
     levelRequired: baseLevel + levelOffset,
-    xp: barsRequired * XP_PER_BAR,
+    xp: barsRequired * XP_PER_BAR_BY_TIER[tier],
     category,
   };
 }
