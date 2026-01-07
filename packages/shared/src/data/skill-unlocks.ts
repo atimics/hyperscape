@@ -153,12 +153,12 @@ export const SKILL_UNLOCKS: Readonly<Record<string, readonly SkillUnlock[]>> = {
     { level: 91, description: "Anglerfish", type: "item" },
   ],
   smithing: [
-    { level: 1, description: "Bronze equipment", type: "item" },
-    { level: 15, description: "Iron equipment", type: "item" },
-    { level: 30, description: "Steel equipment", type: "item" },
-    { level: 50, description: "Mithril equipment", type: "item" },
-    { level: 70, description: "Adamant equipment", type: "item" },
-    { level: 85, description: "Rune equipment", type: "item" },
+    { level: 1, description: "Bronze bars and equipment", type: "item" },
+    { level: 15, description: "Iron bars and equipment", type: "item" },
+    { level: 20, description: "Silver bars", type: "item" },
+    { level: 30, description: "Steel bars and equipment", type: "item" },
+    { level: 40, description: "Gold bars", type: "item" },
+    { level: 50, description: "Mithril bars and equipment", type: "item" },
   ],
   firemaking: [
     { level: 1, description: "Normal logs", type: "item" },

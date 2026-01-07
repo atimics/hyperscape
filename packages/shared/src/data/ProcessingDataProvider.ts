@@ -1,19 +1,26 @@
 /**
  * ProcessingDataProvider - Runtime Data from Item Manifest
  *
- * Builds cooking and firemaking lookup tables dynamically from the ITEMS map.
+ * Builds cooking, firemaking, and smelting lookup tables dynamically from the ITEMS map.
  * This is the proper data-driven approach where items.json is the source of truth.
  *
  * Usage:
  *   const provider = ProcessingDataProvider.getInstance();
  *   await provider.initialize(); // Called after DataManager loads manifests
  *   const cookingData = provider.getCookingData("raw_shrimp");
+ *   const smeltingData = provider.getSmeltingData("bronze_bar");
  *
  * @see packages/server/world/assets/manifests/items.json for source data
  */
 
 import { ITEMS } from "./items";
 import type { Item } from "../types/game/item-types";
+import {
+  SMITHING_RECIPES,
+  getRecipesForBar,
+  getRecipeByItemId,
+  type SmithingRecipe,
+} from "./smithing-recipes";
 
 /**
  * Cooking data extracted from item manifest
@@ -40,7 +47,20 @@ export interface FiremakingItemData {
 }
 
 /**
- * Runtime data provider for cooking and firemaking systems.
+ * Smelting data extracted from item manifest (defined on bars)
+ */
+export interface SmeltingItemData {
+  barItemId: string;
+  primaryOre: string;
+  secondaryOre: string | null;
+  coalRequired: number;
+  levelRequired: number;
+  xp: number;
+  successRate: number;
+}
+
+/**
+ * Runtime data provider for cooking, firemaking, and smelting systems.
  * Builds lookup tables from the ITEMS manifest after DataManager loads.
  */
 export class ProcessingDataProvider {
@@ -55,6 +75,10 @@ export class ProcessingDataProvider {
   private firemakingDataMap = new Map<string, FiremakingItemData>();
   private burneableLogIds = new Set<string>();
 
+  // Smelting lookup tables (built from manifest)
+  private smeltingDataMap = new Map<string, SmeltingItemData>();
+  private smeltableBarIds = new Set<string>();
+
   private constructor() {
     // Singleton
   }
@@ -67,7 +91,7 @@ export class ProcessingDataProvider {
   }
 
   /**
-   * Initialize the data provider by scanning ITEMS for cooking/firemaking data.
+   * Initialize the data provider by scanning ITEMS for cooking/firemaking/smelting data.
    * Must be called AFTER DataManager.initialize() has loaded the manifest.
    */
   public initialize(): void {
@@ -77,10 +101,11 @@ export class ProcessingDataProvider {
 
     this.buildCookingData();
     this.buildFiremakingData();
+    this.buildSmeltingData();
     this.isInitialized = true;
 
     console.log(
-      `[ProcessingDataProvider] Initialized: ${this.cookableItemIds.size} cookable items, ${this.burneableLogIds.size} burnable logs`,
+      `[ProcessingDataProvider] Initialized: ${this.cookableItemIds.size} cookable items, ${this.burneableLogIds.size} burnable logs, ${this.smeltableBarIds.size} smeltable bars`,
     );
   }
 
@@ -92,6 +117,8 @@ export class ProcessingDataProvider {
     this.cookableItemIds.clear();
     this.firemakingDataMap.clear();
     this.burneableLogIds.clear();
+    this.smeltingDataMap.clear();
+    this.smeltableBarIds.clear();
     this.isInitialized = false;
     this.initialize();
   }
@@ -132,6 +159,27 @@ export class ProcessingDataProvider {
         };
         this.firemakingDataMap.set(itemId, firemakingData);
         this.burneableLogIds.add(itemId);
+      }
+    }
+  }
+
+  /**
+   * Scan ITEMS for items with `smelting` property (bars define their recipes)
+   */
+  private buildSmeltingData(): void {
+    for (const [itemId, item] of ITEMS) {
+      if (item.smelting) {
+        const smeltingData: SmeltingItemData = {
+          barItemId: itemId,
+          primaryOre: item.smelting.primaryOre,
+          secondaryOre: item.smelting.secondaryOre || null,
+          coalRequired: item.smelting.coalRequired,
+          levelRequired: item.smelting.levelRequired,
+          xp: item.smelting.xp,
+          successRate: item.smelting.successRate,
+        };
+        this.smeltingDataMap.set(itemId, smeltingData);
+        this.smeltableBarIds.add(itemId);
       }
     }
   }
@@ -249,6 +297,131 @@ export class ProcessingDataProvider {
   }
 
   // ==========================================================================
+  // SMELTING ACCESSORS
+  // ==========================================================================
+
+  /**
+   * Check if an item is a smeltable bar
+   */
+  public isSmeltableBar(itemId: string): boolean {
+    this.ensureInitialized();
+    return this.smeltableBarIds.has(itemId);
+  }
+
+  /**
+   * Get smelting data for a bar
+   */
+  public getSmeltingData(barItemId: string): SmeltingItemData | null {
+    this.ensureInitialized();
+    return this.smeltingDataMap.get(barItemId) || null;
+  }
+
+  /**
+   * Get all smeltable bar IDs
+   */
+  public getSmeltableBarIds(): Set<string> {
+    this.ensureInitialized();
+    return this.smeltableBarIds;
+  }
+
+  /**
+   * Get smelting level requirement for a bar
+   */
+  public getSmeltingLevel(barItemId: string): number {
+    const data = this.getSmeltingData(barItemId);
+    return data?.levelRequired ?? 1;
+  }
+
+  /**
+   * Get smelting XP for a bar
+   */
+  public getSmeltingXP(barItemId: string): number {
+    const data = this.getSmeltingData(barItemId);
+    return data?.xp ?? 0;
+  }
+
+  /**
+   * Get all bars that can be smelted from the given inventory items.
+   * Returns bars where player has all required ores and coal.
+   *
+   * @param inventory - Array of items with itemId and quantity
+   * @param smithingLevel - Player's smithing level
+   */
+  public getSmeltableBarsFromInventory(
+    inventory: Array<{ itemId: string; quantity?: number }>,
+    smithingLevel: number,
+  ): SmeltingItemData[] {
+    this.ensureInitialized();
+
+    // Build inventory counts
+    const itemCounts = new Map<string, number>();
+    for (const item of inventory) {
+      const current = itemCounts.get(item.itemId) || 0;
+      itemCounts.set(item.itemId, current + (item.quantity || 1));
+    }
+
+    const result: SmeltingItemData[] = [];
+
+    for (const smeltingData of this.smeltingDataMap.values()) {
+      // Check level requirement
+      if (smeltingData.levelRequired > smithingLevel) {
+        continue;
+      }
+
+      // Check primary ore
+      const primaryCount = itemCounts.get(smeltingData.primaryOre) || 0;
+      if (primaryCount < 1) {
+        continue;
+      }
+
+      // Check secondary ore (for bronze)
+      if (smeltingData.secondaryOre) {
+        const secondaryCount = itemCounts.get(smeltingData.secondaryOre) || 0;
+        if (secondaryCount < 1) {
+          continue;
+        }
+      }
+
+      // Check coal requirement
+      if (smeltingData.coalRequired > 0) {
+        const coalCount = itemCounts.get("coal") || 0;
+        if (coalCount < smeltingData.coalRequired) {
+          continue;
+        }
+      }
+
+      result.push(smeltingData);
+    }
+
+    return result;
+  }
+
+  // ==========================================================================
+  // SMITHING ACCESSORS (recipes from smithing-recipes.ts)
+  // ==========================================================================
+
+  /**
+   * Get smithing recipes for a specific bar type
+   */
+  public getSmithingRecipesForBar(barType: string): SmithingRecipe[] {
+    return getRecipesForBar(barType);
+  }
+
+  /**
+   * Get a specific smithing recipe by output item ID
+   */
+  public getSmithingRecipeByItemId(itemId: string): SmithingRecipe | undefined {
+    return getRecipeByItemId(itemId);
+  }
+
+  /**
+   * Get all smithing recipes
+   */
+  public getAllSmithingRecipes(): readonly SmithingRecipe[] {
+    return SMITHING_RECIPES;
+  }
+
+  // ==========================================================================
   // UTILITY
   // ==========================================================================
 
@@ -275,11 +448,15 @@ export class ProcessingDataProvider {
   public getSummary(): {
     cookableItems: number;
     burnableLogs: number;
+    smeltableBars: number;
+    smithingRecipes: number;
     isInitialized: boolean;
   } {
     return {
       cookableItems: this.cookableItemIds.size,
       burnableLogs: this.burneableLogIds.size,
+      smeltableBars: this.smeltableBarIds.size,
+      smithingRecipes: SMITHING_RECIPES.length,
       isInitialized: this.isInitialized,
     };
   }

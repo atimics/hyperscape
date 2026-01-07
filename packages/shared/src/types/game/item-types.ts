@@ -226,6 +226,27 @@ export interface Item {
     /** XP granted on successful fire */
     xp: number;
   };
+
+  // === SMELTING DATA (from manifest) ===
+  /**
+   * Smelting properties for bars.
+   * Present only on bar items that define their smelting recipe.
+   * Note: Smelting data is on BARS, not ores - bars define what ores they need.
+   */
+  smelting?: {
+    /** Primary ore required (e.g., "copper_ore", "iron_ore") */
+    primaryOre: string;
+    /** Secondary ore required (only for bronze: "tin_ore") */
+    secondaryOre: string | null;
+    /** Number of coal required (0 for bronze/iron/gold/silver) */
+    coalRequired: number;
+    /** Smithing level required to smelt */
+    levelRequired: number;
+    /** XP granted per bar smelted */
+    xp: number;
+    /** Success rate (0.5 = 50% for iron, 1.0 = always for others) */
+    successRate: number;
+  };
 }
 
 export interface EquipmentSlot {
