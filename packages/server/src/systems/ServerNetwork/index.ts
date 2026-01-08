@@ -1025,14 +1025,35 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       if (!player) return;
 
       const payload = data as {
-        barItemId?: string;
-        furnaceId?: string;
-        quantity?: number;
+        barItemId?: unknown;
+        furnaceId?: unknown;
+        quantity?: unknown;
       };
-      if (!payload.barItemId || !payload.furnaceId) return;
 
+      // Type validation
+      if (
+        typeof payload.barItemId !== "string" ||
+        typeof payload.furnaceId !== "string"
+      ) {
+        return;
+      }
+
+      // Length validation (prevent memory abuse)
+      if (payload.barItemId.length > 64 || payload.furnaceId.length > 64) {
+        return;
+      }
+
+      // Quantity validation with bounds
+      const quantity =
+        typeof payload.quantity === "number" &&
+        Number.isFinite(payload.quantity)
+          ? Math.floor(Math.max(1, Math.min(payload.quantity, 10000)))
+          : 1;
+
+      // Sanitize for logging (prevent log injection)
+      const safeBarId = payload.barItemId.replace(/[^\w_-]/g, "");
       console.log(
-        `[ServerNetwork] 🔥 Smelting request from ${player.id}: ${payload.quantity}x ${payload.barItemId}`,
+        `[ServerNetwork] 🔥 Smelting request from ${player.id}: ${quantity}x ${safeBarId}`,
       );
 
       // Emit event for SmeltingSystem to handle
@@ -1040,7 +1061,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         playerId: player.id,
         barItemId: payload.barItemId,
         furnaceId: payload.furnaceId,
-        quantity: payload.quantity || 1,
+        quantity,
       });
     };
 
@@ -1050,14 +1071,35 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       if (!player) return;
 
       const payload = data as {
-        recipeId?: string;
-        anvilId?: string;
-        quantity?: number;
+        recipeId?: unknown;
+        anvilId?: unknown;
+        quantity?: unknown;
       };
-      if (!payload.recipeId || !payload.anvilId) return;
 
+      // Type validation
+      if (
+        typeof payload.recipeId !== "string" ||
+        typeof payload.anvilId !== "string"
+      ) {
+        return;
+      }
+
+      // Length validation (prevent memory abuse)
+      if (payload.recipeId.length > 64 || payload.anvilId.length > 64) {
+        return;
+      }
+
+      // Quantity validation with bounds
+      const quantity =
+        typeof payload.quantity === "number" &&
+        Number.isFinite(payload.quantity)
+          ? Math.floor(Math.max(1, Math.min(payload.quantity, 10000)))
+          : 1;
+
+      // Sanitize for logging (prevent log injection)
+      const safeRecipeId = payload.recipeId.replace(/[^\w_-]/g, "");
       console.log(
-        `[ServerNetwork] 🔨 Smithing request from ${player.id}: ${payload.quantity}x ${payload.recipeId}`,
+        `[ServerNetwork] 🔨 Smithing request from ${player.id}: ${quantity}x ${safeRecipeId}`,
       );
 
       // Emit event for SmithingSystem to handle
@@ -1065,7 +1107,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         playerId: player.id,
         recipeId: payload.recipeId,
         anvilId: payload.anvilId,
-        quantity: payload.quantity || 1,
+        quantity,
       });
     };
 

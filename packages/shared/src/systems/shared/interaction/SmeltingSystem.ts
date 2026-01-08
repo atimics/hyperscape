@@ -12,6 +12,7 @@
  * @see ProcessingDataProvider for smelting recipes from manifest
  */
 
+import { SMITHING_CONSTANTS } from "../../../constants/SmithingConstants";
 import { processingDataProvider } from "../../../data/ProcessingDataProvider";
 import { EventType } from "../../../types/events";
 import { SystemBase } from "../infrastructure/SystemBase";
@@ -29,8 +30,8 @@ interface SmeltingSession {
   timeoutId: ReturnType<typeof setTimeout> | null;
 }
 
-/** Smelting timing constants (in milliseconds) */
-const SMELTING_TIME = 2400; // ~4 game ticks per bar
+/** Smelting timing constant (from centralized constants) */
+const SMELTING_TIME = SMITHING_CONSTANTS.SMELTING_TIME_MS;
 
 export class SmeltingSystem extends SystemBase {
   private activeSessions = new Map<string, SmeltingSession>();

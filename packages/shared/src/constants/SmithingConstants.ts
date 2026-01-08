@@ -1,0 +1,94 @@
+/**
+ * SmithingConstants - Centralized constants for smelting and smithing systems
+ *
+ * This file contains all hardcoded values used across the smithing feature,
+ * making it easier to maintain consistency and adjust values.
+ */
+
+export const SMITHING_CONSTANTS = {
+  // Item IDs
+  HAMMER_ITEM_ID: "hammer",
+  COAL_ITEM_ID: "coal",
+
+  // Timing (milliseconds) - ~4 game ticks
+  SMELTING_TIME_MS: 2400,
+  SMITHING_TIME_MS: 2400,
+
+  // Input validation limits
+  MAX_QUANTITY: 10000,
+  MIN_QUANTITY: 1,
+  MAX_ITEM_ID_LENGTH: 64,
+
+  // Messages - Smelting
+  MESSAGES: {
+    // Smelting messages
+    ALREADY_SMELTING: "You are already smelting.",
+    NO_ITEMS: "You have no items.",
+    NO_ORES: "You don't have the ores to smelt anything.",
+    INVALID_BAR: "Invalid bar type.",
+    LEVEL_TOO_LOW_SMELT: "You need level {level} Smithing to smelt that.",
+    SMELTING_START: "You begin smelting {item}s.",
+    OUT_OF_MATERIALS: "You have run out of materials.",
+    SMELT_SUCCESS: "You smelt a {item}.",
+    IRON_SMELT_FAIL: "The ore is too impure and you fail to smelt it.",
+
+    // Smithing messages
+    ALREADY_SMITHING: "You are already smithing.",
+    NO_HAMMER: "You need a hammer to work the metal on this anvil.",
+    NO_BARS: "You don't have the bars to smith anything.",
+    INVALID_RECIPE: "Invalid smithing recipe.",
+    LEVEL_TOO_LOW_SMITH: "You need level {level} Smithing to make that.",
+    SMITHING_START: "You begin smithing {item}s.",
+    OUT_OF_BARS: "You have run out of bars.",
+    SMITH_SUCCESS: "You hammer the {metal} and make a {item}.",
+  },
+} as const;
+
+/**
+ * Helper function to format messages with placeholders
+ * @param message - Message template with {placeholder} syntax
+ * @param values - Object with placeholder values
+ */
+export function formatMessage(
+  message: string,
+  values: Record<string, string | number>,
+): string {
+  let result = message;
+  for (const [key, value] of Object.entries(values)) {
+    result = result.replace(`{${key}}`, String(value));
+  }
+  return result;
+}
+
+/**
+ * Sanitize an item ID for safe logging (prevents log injection)
+ */
+export function sanitizeForLogging(input: string): string {
+  return input.replace(/[^\w_-]/g, "");
+}
+
+/**
+ * Validate and clamp quantity to safe bounds
+ */
+export function clampQuantity(quantity: unknown): number {
+  if (typeof quantity !== "number" || !Number.isFinite(quantity)) {
+    return SMITHING_CONSTANTS.MIN_QUANTITY;
+  }
+  return Math.floor(
+    Math.max(
+      SMITHING_CONSTANTS.MIN_QUANTITY,
+      Math.min(quantity, SMITHING_CONSTANTS.MAX_QUANTITY),
+    ),
+  );
+}
+
+/**
+ * Validate a string ID (barItemId, furnaceId, recipeId, anvilId)
+ */
+export function isValidItemId(id: unknown): id is string {
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    id.length <= SMITHING_CONSTANTS.MAX_ITEM_ID_LENGTH
+  );
+}

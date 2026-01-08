@@ -13,6 +13,7 @@
  * @see ProcessingDataProvider for smithing recipes from manifest
  */
 
+import { SMITHING_CONSTANTS } from "../../../constants/SmithingConstants";
 import { processingDataProvider } from "../../../data/ProcessingDataProvider";
 import { EventType } from "../../../types/events";
 import { SystemBase } from "../infrastructure/SystemBase";
@@ -29,11 +30,11 @@ interface SmithingSession {
   timeoutId: ReturnType<typeof setTimeout> | null;
 }
 
-/** Smithing timing constants (in milliseconds) */
-const SMITHING_TIME = 2400; // ~4 game ticks per item
+/** Smithing timing constant (from centralized constants) */
+const SMITHING_TIME = SMITHING_CONSTANTS.SMITHING_TIME_MS;
 
-/** Hammer item ID required for smithing */
-const HAMMER_ITEM_ID = "hammer";
+/** Hammer item ID required for smithing (from centralized constants) */
+const HAMMER_ITEM_ID = SMITHING_CONSTANTS.HAMMER_ITEM_ID;
 
 export class SmithingSystem extends SystemBase {
   private activeSessions = new Map<string, SmithingSession>();
