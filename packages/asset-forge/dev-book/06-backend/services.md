@@ -106,7 +106,7 @@ constructor() {
     openai: {
       apiKey: process.env.OPENAI_API_KEY || '',
       model: 'gpt-image-1',
-      imageServerBaseUrl: process.env.IMAGE_SERVER_URL || 'http://localhost:8088'
+      imageServerBaseUrl: process.env.IMAGE_SERVER_URL || 'http://localhost:8080'
     },
     meshy: {
       apiKey: process.env.MESHY_API_KEY || '',
@@ -1043,7 +1043,7 @@ Returns multi-line string with setup options:
 **Option 1: ngrok (Recommended for Development)**
 ```bash
 npm install -g ngrok
-ngrok http 8088
+ngrok http 8080
 # Set IMAGE_SERVER_URL to ngrok URL
 ```
 
@@ -1097,7 +1097,7 @@ IMGUR_CLIENT_ID=...
 
 # Configuration
 API_PORT=3004
-IMAGE_SERVER_URL=http://localhost:8088
+IMAGE_SERVER_URL=http://localhost:8080
 NODE_ENV=development
 
 # Meshy Timeouts
