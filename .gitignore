@@ -56,6 +56,8 @@ tmp/
 
 # Assets (generated/temporary)
 assets/
+# Exception: asset-forge component directory should be tracked
+!packages/asset-forge/src/components/Assets/
 
 # 3D Models and Avatars - downloaded from separate assets repo
 packages/server/world/assets/

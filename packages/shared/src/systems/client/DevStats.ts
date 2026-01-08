@@ -18,6 +18,7 @@ import type { WorldOptions } from "../../types";
 import { System } from "../shared";
 import { BIOMES } from "../../data/world-structure";
 import type { TerrainSystem } from "../shared/world/TerrainSystem";
+import THREE from "../../extras/three/three";
 
 /** Performance sample for rolling averages */
 type FrameSample = {
@@ -586,6 +587,10 @@ export class DevStats extends System {
             <span style="color: #e0e0e0;">${this.formatNumber(sceneInfo.totalObjects)}</span>
           </div>
           <div style="display: flex; justify-content: space-between;">
+            <span>Lights:</span>
+            <span style="color: #fbbf24;">${sceneInfo.lightCount}</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
             <span>Entities:</span>
             <span style="color: #e0e0e0;">${sceneInfo.entityCount}</span>
           </div>
@@ -768,14 +773,19 @@ export class DevStats extends System {
     totalObjects: number;
     entityCount: number;
     systemCount: number;
+    lightCount: number;
   } | null {
     const stage = this.world.stage;
     if (!stage?.scene) return null;
 
-    // Count scene objects (cached every few frames to avoid overhead)
+    // Count scene objects and lights
     let totalObjects = 0;
-    stage.scene.traverse(() => {
+    let lightCount = 0;
+    stage.scene.traverse((obj) => {
       totalObjects++;
+      if (obj instanceof THREE.Light) {
+        lightCount++;
+      }
     });
 
     // Entity and system counts
@@ -786,6 +796,7 @@ export class DevStats extends System {
       totalObjects,
       entityCount,
       systemCount,
+      lightCount,
     };
   }
 

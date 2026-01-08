@@ -1327,7 +1327,7 @@ resource "aws_ecs_service" "asset_forge_api" {
 
   network_configuration {
     subnets          = split(",", var.subnet_ids)
-    security_groups  = split(",", var.security_group_ids)
+    security_groups  = [aws_security_group.ecs_tasks.id]
     assign_public_ip = true
   }
 

@@ -3,7 +3,6 @@ import THREE from "../../../extras/three/three";
 import { Node as NodeClass } from "../../../nodes/Node";
 import { System } from "..";
 
-import { CSM } from "../../../libs/csm/CSM";
 import { SkySystem } from "..";
 import type {
   BaseEnvironment,
@@ -24,44 +23,40 @@ function asString(value: unknown): string {
   return value as string;
 }
 
-// Shadow settings - optimized for WebGPU
-// maxFar should match fog distance (~150m) to avoid wasted shadow passes
-const csmLevels = {
+// Shadow quality settings for single DirectionalLight
+// WebGPU works best with a single shadow-casting light
+const shadowLevels = {
   none: {
-    cascades: 1,
     shadowMapSize: 512,
     castShadow: false,
-    lightIntensity: 3,
-    shadowBias: -0.0005,
+    shadowBias: -0.0001,
     shadowNormalBias: 0.02,
-    maxFar: 50,
+    shadowRadius: 1,
+    shadowFrustumSize: 50, // Orthographic camera size
   },
   low: {
-    cascades: 1,
     shadowMapSize: 1024,
     castShadow: true,
-    lightIntensity: 3,
-    shadowBias: -0.0005,
+    shadowBias: -0.0001,
     shadowNormalBias: 0.02,
-    maxFar: 80,
+    shadowRadius: 2,
+    shadowFrustumSize: 80,
   },
   med: {
-    cascades: 2,
-    shadowMapSize: 1024,
-    castShadow: true,
-    lightIntensity: 1,
-    shadowBias: -0.0005,
-    shadowNormalBias: 0.02,
-    maxFar: 100,
-  },
-  high: {
-    cascades: 3,
     shadowMapSize: 2048,
     castShadow: true,
-    lightIntensity: 1,
-    shadowBias: -0.0003,
+    shadowBias: -0.00005,
     shadowNormalBias: 0.01,
-    maxFar: 150,
+    shadowRadius: 3,
+    shadowFrustumSize: 100,
+  },
+  high: {
+    shadowMapSize: 4096,
+    castShadow: true,
+    shadowBias: -0.00005,
+    shadowNormalBias: 0.005,
+    shadowRadius: 4,
+    shadowFrustumSize: 120,
   },
 };
 
@@ -77,7 +72,7 @@ const csmLevels = {
  * - Loads and renders 3D environment models (.glb)
  * - Manages sky sphere with equirectangular texture mapping
  * - Controls HDR environment lighting
- * - Handles Cascaded Shadow Maps (CSM) with configurable quality levels
+ * - Handles directional sun/moon lighting with configurable shadow quality
  * - Manages dynamic fog (near/far distances, color)
  * - Responds to graphics settings changes (shadows, model swaps)
  * - Updates sky position to follow camera rig (infinite distance illusion)
@@ -85,7 +80,7 @@ const csmLevels = {
  * **Server** - Configuration Only
  * - Skips all 3D asset loading (no rendering needed)
  * - Tracks environment settings for client synchronization
- * - Minimal memory footprint (no textures, meshes, or CSM)
+ * - Minimal memory footprint (no textures, meshes, or lights)
  * - Listens to settings changes to propagate to clients
  *
  * **Node Client (Bots)** - Headless
@@ -106,11 +101,14 @@ export class Environment extends System {
   skyN: number = 0;
   bgUrl?: string;
   hdrUrl?: string;
-  csm!: CSM;
   skyInfo!: SkyInfo;
   private skySystem?: SkySystem;
 
-  // Ambient lighting for day/night cycle
+  // Main directional light (sun/moon) - single shadow-casting light
+  public sunLight: THREE.DirectionalLight | null = null;
+  public lightDirection: THREE.Vector3 = new THREE.Vector3(0, -1, 0);
+
+  // Ambient lighting for day/night cycle (non-shadow casting)
   private hemisphereLight: THREE.HemisphereLight | null = null;
   private ambientLight: THREE.AmbientLight | null = null;
 
@@ -142,8 +140,8 @@ export class Environment extends System {
     }
 
     // Client with graphics - full environment setup
-    // Build CSM immediately - stage should be ready by start()
-    this.buildCSM();
+    // Create sun light immediately - stage should be ready by start()
+    this.buildSunLight();
 
     // Create ambient lighting for day/night visibility
     this.createAmbientLighting();
@@ -330,15 +328,10 @@ export class Environment extends System {
     this.world.stage.scene.environment = null;
     this.world.stage.scene.background = null;
 
-    if (this.csm) {
-      this.csm.lightDirection = sunDirection || _sunDirection;
-
-      if (this.csm.lights) {
-        for (const light of this.csm.lights) {
-          light.intensity = sunIntensity || 1;
-          light.color.set(sunColor || "#ffffff");
-        }
-      }
+    if (this.sunLight) {
+      this.lightDirection.copy(sunDirection || _sunDirection);
+      this.sunLight.intensity = sunIntensity || 1;
+      this.sunLight.color.set(sunColor || "#ffffff");
     }
 
     // Always apply fog with defaults
@@ -407,11 +400,17 @@ export class Environment extends System {
       this.world.stage.scene.environment = null;
     }
 
-    if (this.csm) {
-      interface CSMWithDispose {
-        dispose(): void;
+    // Dispose sun light
+    if (this.sunLight) {
+      if (this.sunLight.shadow.map) {
+        this.sunLight.shadow.map.dispose();
       }
-      (this.csm as unknown as CSMWithDispose).dispose();
+      if (this.sunLight.parent) {
+        this.sunLight.parent.remove(this.sunLight.target);
+        this.sunLight.parent.remove(this.sunLight);
+      }
+      this.sunLight.dispose();
+      this.sunLight = null;
     }
 
     // Dispose ambient lights
@@ -442,76 +441,77 @@ export class Environment extends System {
     if (this.skySystem) {
       this.skySystem.update(_delta);
 
-      // Sync CSM directional light with sun/moon position
-      if (this.csm) {
+      // Sync directional light (sun/moon) with sky position
+      if (this.sunLight) {
         const dayIntensity = this.skySystem.dayIntensity;
         const isDay = this.skySystem.isDay;
         const dayPhase = this.skySystem.dayPhase;
 
         // ===================
+        // TRANSITION FADE - fade light out during sun/moon swap
+        // ===================
+        const DAWN_START = 0.22;
+        const DAWN_MID = 0.25;
+        const DAWN_END = 0.28;
+        const DUSK_START = 0.72;
+        const DUSK_MID = 0.75;
+        const DUSK_END = 0.78;
+
+        let transitionFade = 1.0;
+        if (dayPhase >= DAWN_START && dayPhase < DAWN_MID) {
+          transitionFade =
+            1.0 - (dayPhase - DAWN_START) / (DAWN_MID - DAWN_START);
+        } else if (dayPhase >= DAWN_MID && dayPhase < DAWN_END) {
+          transitionFade = (dayPhase - DAWN_MID) / (DAWN_END - DAWN_MID);
+        } else if (dayPhase >= DUSK_START && dayPhase < DUSK_MID) {
+          transitionFade =
+            1.0 - (dayPhase - DUSK_START) / (DUSK_MID - DUSK_START);
+        } else if (dayPhase >= DUSK_MID && dayPhase < DUSK_END) {
+          transitionFade = (dayPhase - DUSK_MID) / (DUSK_END - DUSK_MID);
+        }
+        transitionFade =
+          transitionFade * transitionFade * (3 - 2 * transitionFade); // smoothstep
+
+        // ===================
         // LIGHT DIRECTION - Track sun during day, moon during night
         // ===================
-        // Sun position = sunDirection (points TO sun)
-        // Moon position = -sunDirection (opposite side of sky)
-        // CSM lightDirection = vector FROM light source TOWARD scene
-
         if (isDay) {
-          // Daytime: light comes FROM the sun
-          // sunDirection points TO the sun, so negate for light direction
-          this.csm.lightDirection.copy(this.skySystem.sunDirection).negate();
+          // Daytime: light comes FROM the sun (negate sunDirection which points TO sun)
+          this.lightDirection.copy(this.skySystem.sunDirection).negate();
         } else {
-          // Nighttime: light comes FROM the moon
-          // Moon is at -sunDirection position
-          // Light direction should point FROM moon TOWARD scene
-          // So we use sunDirection (which points toward sun = away from moon)
-          // But wait - we want light FROM moon, so negate the moon position
-          // Moon at -sunDir means light dir = -(-sunDir) = sunDir? No...
-          //
-          // Let's think: moon position = -sunDirection
-          // Light direction = normalize(scene - moon) = normalize(0 - (-sunDir)) = sunDir
-          // So light direction = sunDirection (pointing from moon toward origin)
-          this.csm.lightDirection.copy(this.skySystem.sunDirection);
+          // Nighttime: light comes FROM the moon (at -sunDirection position)
+          this.lightDirection.copy(this.skySystem.sunDirection);
         }
 
         // ===================
-        // LIGHT INTENSITY & COLOR
+        // LIGHT INTENSITY & COLOR - Single light, simple and correct
         // ===================
-        if (this.csm.lights) {
-          for (const light of this.csm.lights) {
-            if (isDay) {
-              // ===== SUNLIGHT =====
-              // Warm golden light, bright
-              const sunIntensity = dayIntensity * 1.8; // Bright sun
-              light.intensity = sunIntensity;
+        if (isDay) {
+          // Sunlight - warm golden light
+          const sunIntensity = dayIntensity * 1.8 * transitionFade;
+          this.sunLight.intensity = sunIntensity;
 
-              // Check if near sunrise/sunset for warmer color
-              const nearHorizon =
-                (dayPhase >= 0.22 && dayPhase < 0.32) || // Sunrise zone
-                (dayPhase >= 0.68 && dayPhase < 0.78); // Sunset zone
-
-              if (nearHorizon) {
-                // Golden hour - warm orange tint
-                light.color.setRGB(1.0, 0.85, 0.6); // Warm orange
-              } else {
-                // Midday - warm white
-                light.color.setRGB(1.0, 0.98, 0.92); // Slightly warm white
-              }
-            } else {
-              // ===== MOONLIGHT =====
-              // Cool blue light - bright enough to cast visible shadows
-              const nightIntensity = 1 - dayIntensity;
-              // Moonlight is dimmer than sun but should cast shadows
-              const moonIntensity = nightIntensity * 0.4; // Increased from 0.12
-              light.intensity = moonIntensity;
-
-              // Cool blue-silver moonlight color
-              light.color.setRGB(0.6, 0.7, 0.9); // Cool blue
-
-              // Ensure shadow casting is enabled for moonlight
-              light.castShadow = true;
-            }
+          // Golden hour coloring near horizon
+          const nearHorizon =
+            (dayPhase >= 0.22 && dayPhase < 0.32) ||
+            (dayPhase >= 0.68 && dayPhase < 0.78);
+          if (nearHorizon) {
+            this.sunLight.color.setRGB(1.0, 0.85, 0.6);
+          } else {
+            this.sunLight.color.setRGB(1.0, 0.98, 0.92);
           }
+        } else {
+          // Moonlight - cool blue light
+          const nightIntensity = 1 - dayIntensity;
+          const moonIntensity = nightIntensity * 0.4 * transitionFade;
+          this.sunLight.intensity = moonIntensity;
+          this.sunLight.color.setRGB(0.6, 0.7, 0.9);
         }
+
+        // ===================
+        // UPDATE LIGHT POSITION - Follow camera for consistent shadows
+        // ===================
+        this.updateSunLightPosition();
       }
 
       // Update ambient lighting based on day/night
@@ -521,15 +521,34 @@ export class Environment extends System {
       this.updateFogColor(this.skySystem.dayIntensity);
     }
 
-    if (this.csm) {
-      this.csm.update();
-    }
-
     // Ensure sky sphere never writes depth (prevents cutting moon)
     if (this.sky) {
       const m = this.sky.material as THREE.MeshBasicMaterial;
       if (m.depthWrite !== false) m.depthWrite = false;
     }
+  }
+
+  /**
+   * Update sun light position to follow camera for consistent shadow coverage
+   */
+  private updateSunLightPosition(): void {
+    if (!this.sunLight) return;
+
+    // Get camera position (where shadows should be centered)
+    const cameraPos = this.world.camera.position;
+
+    // Position light high above and behind the camera relative to light direction
+    // This ensures shadows are cast in the correct direction
+    const lightDistance = 200; // Distance from target
+    this.sunLight.position.set(
+      cameraPos.x - this.lightDirection.x * lightDistance,
+      cameraPos.y - this.lightDirection.y * lightDistance + 50, // Extra height
+      cameraPos.z - this.lightDirection.z * lightDistance,
+    );
+
+    // Target looks at camera position
+    this.sunLight.target.position.copy(cameraPos);
+    this.sunLight.target.updateMatrixWorld();
   }
 
   /**
@@ -650,73 +669,90 @@ export class Environment extends System {
     scene.add(this.ambientLight);
   }
 
-  buildCSM() {
+  /**
+   * Build single directional light (sun/moon) with shadow support
+   * WebGPU works best with a single shadow-casting directional light
+   */
+  buildSunLight(): void {
     if (!this.isClientWithGraphics) return;
 
     const shadowsLevel = this.world.prefs?.shadows || "med";
     const options =
-      csmLevels[shadowsLevel as keyof typeof csmLevels] || csmLevels.med;
+      shadowLevels[shadowsLevel as keyof typeof shadowLevels] ||
+      shadowLevels.med;
 
-    if (this.csm) {
-      this.csm.updateCascades(options.cascades);
-      this.csm.updateShadowMapSize(options.shadowMapSize);
-      if (this.skyInfo) {
-        this.csm.lightDirection = this.skyInfo.sunDirection;
-        // Update all cascade lights (sun)
-        for (const light of this.csm.lights) {
-          light.intensity = this.skyInfo.sunIntensity;
-          light.color.set(this.skyInfo.sunColor);
-          light.castShadow = options.castShadow;
-        }
+    if (!this.world.stage?.scene) {
+      console.warn(
+        "[Environment] Stage not available yet, deferring sun light creation",
+      );
+      return;
+    }
+
+    const scene = this.world.stage.scene;
+
+    // Update existing light or create new one
+    if (this.sunLight) {
+      // Update shadow settings
+      this.sunLight.shadow.mapSize.setScalar(options.shadowMapSize);
+      this.sunLight.shadow.bias = options.shadowBias;
+      this.sunLight.shadow.normalBias = options.shadowNormalBias;
+      this.sunLight.shadow.radius = options.shadowRadius;
+      this.sunLight.castShadow = options.castShadow;
+
+      // Update shadow camera frustum
+      const shadowCam = this.sunLight.shadow.camera;
+      const frustumSize = options.shadowFrustumSize;
+      shadowCam.left = -frustumSize;
+      shadowCam.right = frustumSize;
+      shadowCam.top = frustumSize;
+      shadowCam.bottom = -frustumSize;
+      shadowCam.near = 0.5;
+      shadowCam.far = 500;
+      shadowCam.updateProjectionMatrix();
+
+      // Dispose old shadow map to recreate with new size
+      if (this.sunLight.shadow.map) {
+        this.sunLight.shadow.map.dispose();
+        (this.sunLight.shadow.map as THREE.WebGLRenderTarget | null) = null;
       }
-    } else {
-      if (!this.world.stage) {
-        console.warn(
-          "[Environment] Stage system not available yet, deferring CSM creation",
-        );
-        return;
-      }
-
-      const scene = this.world.stage.scene;
-      const camera = this.world.camera;
-
-      if (!scene) {
-        console.error("[Environment] Scene is not a valid THREE.Scene:", scene);
-        return;
-      }
-
-      console.log(`[Environment] Creating CSM with options:`, options);
-
-      this.csm = new CSM({
-        mode: "practical",
-        cascades: options.cascades,
-        maxFar: options.maxFar || 100,
-        lightDirection: _sunDirection.clone().normalize(),
-        fade: true,
-        parent: scene,
-        camera: camera,
-        castShadow: options.castShadow ?? true,
-        shadowMapSize: options.shadowMapSize,
-        shadowBias: options.shadowBias,
-        shadowNormalBias: options.shadowNormalBias,
-        lightIntensity: options.lightIntensity,
-      });
 
       console.log(
-        `[Environment] CSM created with ${options.cascades} cascades, ${this.csm.lights.length} lights`,
+        `[Environment] Sun light updated: mapSize=${options.shadowMapSize}, frustum=${frustumSize}`,
       );
-      if (this.csm.lights.length > 0) {
-        const firstLight = this.csm.lights[0];
-        console.log(
-          `[Environment] First cascade light: castShadow=${firstLight.castShadow}, intensity=${firstLight.intensity}, shadow bias=${firstLight.shadow.bias}`,
-        );
-      }
+    } else {
+      // Create new directional light
+      this.sunLight = new THREE.DirectionalLight(0xffffff, 1.8);
+      this.sunLight.name = "SunLight";
+      this.sunLight.castShadow = options.castShadow;
 
-      if (!options.castShadow) {
-        for (const light of this.csm.lights) {
-          light.castShadow = false;
-        }
-      }
+      // Shadow map settings
+      this.sunLight.shadow.mapSize.setScalar(options.shadowMapSize);
+      this.sunLight.shadow.bias = options.shadowBias;
+      this.sunLight.shadow.normalBias = options.shadowNormalBias;
+      this.sunLight.shadow.radius = options.shadowRadius;
+
+      // Shadow camera (orthographic) - covers area around camera
+      const shadowCam = this.sunLight.shadow.camera;
+      const frustumSize = options.shadowFrustumSize;
+      shadowCam.left = -frustumSize;
+      shadowCam.right = frustumSize;
+      shadowCam.top = frustumSize;
+      shadowCam.bottom = -frustumSize;
+      shadowCam.near = 0.5;
+      shadowCam.far = 500;
+      shadowCam.updateProjectionMatrix();
+
+      // Initial position (will be updated in updateSunLightPosition)
+      this.sunLight.position.set(100, 200, 100);
+      this.sunLight.target.position.set(0, 0, 0);
+
+      // Add to scene
+      scene.add(this.sunLight);
+      scene.add(this.sunLight.target);
+
+      console.log(
+        `[Environment] Sun light created: castShadow=${options.castShadow}, mapSize=${options.shadowMapSize}, frustum=${frustumSize}`,
+      );
     }
   }
 
@@ -728,14 +764,12 @@ export class Environment extends System {
 
   onPrefsChange = (changes: { shadows?: string }) => {
     if (changes.shadows) {
-      this.buildCSM();
+      this.buildSunLight();
       this.updateSky();
     }
   };
 
   onViewportResize = () => {
-    if (this.csm) {
-      this.csm.updateFrustums();
-    }
+    // No-op for single light (shadow frustum doesn't need recalculating on resize)
   };
 }
