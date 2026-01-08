@@ -318,6 +318,13 @@ export class SmithingSystem extends SystemBase {
       return;
     }
 
+    // Play smithing animation (OSRS-style)
+    this.emitTypedEvent(EventType.ANIMATION_PLAY, {
+      entityId: playerId,
+      animation: "smithing",
+      loop: false,
+    });
+
     // Consume bars
     this.emitTypedEvent(EventType.INVENTORY_ITEM_REMOVED, {
       playerId,

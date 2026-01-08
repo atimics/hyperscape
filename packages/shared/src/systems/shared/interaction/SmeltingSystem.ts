@@ -290,6 +290,13 @@ export class SmeltingSystem extends SystemBase {
       return;
     }
 
+    // Play smelting animation (OSRS-style)
+    this.emitTypedEvent(EventType.ANIMATION_PLAY, {
+      entityId: playerId,
+      animation: "smelting",
+      loop: false,
+    });
+
     // Consume materials first
     this.consumeMaterials(playerId, smeltingData);
 

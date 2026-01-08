@@ -102,6 +102,9 @@ function formatItemName(itemId: string): string {
  */
 const CATEGORY_ORDER = ["weapons", "armor", "tools", "misc"];
 
+/** localStorage key for Make X memory */
+const SMITHING_LAST_X_KEY = "smithing_last_x";
+
 export function SmithingPanel({
   anvilId,
   availableRecipes,
@@ -113,6 +116,16 @@ export function SmithingPanel({
   );
   const [showQuantityInput, setShowQuantityInput] = useState(false);
   const [customQuantity, setCustomQuantity] = useState("");
+
+  // Make X memory - remember last custom quantity (OSRS feature)
+  const [lastCustomQuantity, setLastCustomQuantity] = useState(() => {
+    try {
+      const stored = localStorage.getItem(SMITHING_LAST_X_KEY);
+      return stored ? parseInt(stored, 10) || 10 : 10;
+    } catch {
+      return 10;
+    }
+  });
 
   // Group recipes by category
   const groupedRecipes = useMemo(() => {
@@ -155,8 +168,21 @@ export function SmithingPanel({
   };
 
   const handleCustomQuantitySubmit = () => {
-    const qty = parseInt(customQuantity, 10);
+    // Use entered quantity, or fall back to last X if empty (OSRS behavior)
+    const qty = customQuantity.trim()
+      ? parseInt(customQuantity, 10)
+      : lastCustomQuantity;
+
     if (qty > 0 && selectedRecipe) {
+      // Save to localStorage for Make X memory (only if custom value entered)
+      if (customQuantity.trim()) {
+        try {
+          localStorage.setItem(SMITHING_LAST_X_KEY, String(qty));
+          setLastCustomQuantity(qty);
+        } catch {
+          // localStorage may be unavailable
+        }
+      }
       handleSmith(selectedRecipe, qty);
     }
     setShowQuantityInput(false);
@@ -333,7 +359,7 @@ export function SmithingPanel({
                           border: "1px solid rgba(139, 69, 19, 0.5)",
                           color: COLORS.ACCENT,
                         }}
-                        placeholder="Amount"
+                        placeholder={`Amount (last: ${lastCustomQuantity})`}
                         autoFocus
                         onKeyDown={(e) => {
                           if (e.key === "Enter") handleCustomQuantitySubmit();
