@@ -90,6 +90,7 @@ export class SmithingSystem extends SystemBase {
       EventType.PLAYER_UNREGISTERED,
       (data: { playerId: string }) => {
         this.cancelSmithing(data.playerId);
+        this.playerSkills.delete(data.playerId); // Memory cleanup
       },
     );
   }
@@ -442,5 +443,6 @@ export class SmithingSystem extends SystemBase {
       this.completeSmithing(playerId);
     }
     this.activeSessions.clear();
+    this.playerSkills.clear(); // Memory cleanup
   }
 }

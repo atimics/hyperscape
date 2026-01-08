@@ -87,6 +87,7 @@ export class SmeltingSystem extends SystemBase {
       EventType.PLAYER_UNREGISTERED,
       (data: { playerId: string }) => {
         this.cancelSmelting(data.playerId);
+        this.playerSkills.delete(data.playerId); // Memory cleanup
       },
     );
   }
@@ -325,7 +326,7 @@ export class SmeltingSystem extends SystemBase {
       // Failure message (iron ore specific)
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId,
-        message: "The ore is too impure andite cannotite into a bar.",
+        message: "The ore is too impure and you fail to smelt it.",
         type: "warning",
       });
 
@@ -483,5 +484,6 @@ export class SmeltingSystem extends SystemBase {
       this.completeSmelting(playerId);
     }
     this.activeSessions.clear();
+    this.playerSkills.clear(); // Memory cleanup
   }
 }
