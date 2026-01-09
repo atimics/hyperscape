@@ -56,6 +56,8 @@ tmp/
 
 # Assets (generated/temporary)
 assets/
+# Exception: asset-forge component directory should be tracked
+!packages/asset-forge/src/components/Assets/
 
 # 3D Models and Avatars - downloaded from separate assets repo
 packages/server/world/assets/
@@ -83,6 +85,8 @@ clear-users.sql
 logs/
 
 # Terraform
+terraform.tfstate
+terraform.tfstate.*
 infrastructure/.terraform/
 infrastructure/*.tfstate
 infrastructure/*.tfstate.*

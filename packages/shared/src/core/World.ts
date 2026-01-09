@@ -1274,13 +1274,15 @@ export class World extends EventEmitter {
   // ============================================================================
 
   /**
-   * Setup material for Cascaded Shadow Maps (CSM).
-   * Delegates to environment system's CSM implementation.
+   * Setup material for shadow receiving.
+   * With WebGPU single directional light, this is mostly a no-op.
+   * Materials receive shadows automatically when in the scene.
    *
-   * @param material - Three.js material to configure for CSM
+   * @param material - Three.js material (no special setup needed for WebGPU)
    */
-  setupMaterial = (material: THREE.Material): void => {
-    this.environment?.csm?.setupMaterial(material);
+  setupMaterial = (_material: THREE.Material): void => {
+    // No special setup needed for WebGPU single directional light shadows.
+    // Materials receive shadows automatically based on mesh.receiveShadow.
   };
 
   /**

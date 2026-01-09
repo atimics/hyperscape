@@ -74,6 +74,7 @@ export type PostProcessingComposer = {
   setLUT: (lutName: LUTPresetName) => void;
   setLUTIntensity: (intensity: number) => void;
   getCurrentLUT: () => LUTPresetName;
+  isLUTEnabled: () => boolean;
 };
 
 export interface PostProcessingOptions {
@@ -209,8 +210,8 @@ export async function createPostProcessing(
     dispose: () => void;
   };
 
-  // Type for texture3D node
-  type Texture3DNode = ReturnType<typeof uniform>;
+  // Type for texture3D node (unused but kept for future use)
+  // type Texture3DNode = ReturnType<typeof uniform>;
 
   // Create PostProcessing instance from three/webgpu
   const PostProcessingClass = (
@@ -239,8 +240,9 @@ export async function createPostProcessing(
   // Create renderOutput node for proper tone mapping
   const outputPass = renderOutput(scenePass);
 
-  // Create a neutral/identity LUT for when no color grading is applied
-  function createNeutralLUT(): THREE.Data3DTexture {
+  // Create a placeholder LUT texture for initialization
+  // This will be replaced when a real LUT is loaded
+  function createPlaceholderLUT(): THREE.Data3DTexture {
     const size = 2;
     const data = new Uint8Array(size * size * size * 4);
     for (let z = 0; z < size; z++) {
@@ -264,9 +266,9 @@ export async function createPostProcessing(
   }
 
   // Create uniform for the LUT texture that we can update
-  const neutralLUT = createNeutralLUT();
-  const lutTextureUniform = uniform(neutralLUT);
-  const lutSizeUniform = uniform(neutralLUT.image.width);
+  const placeholderLUT = createPlaceholderLUT();
+  const lutTextureUniform = uniform(placeholderLUT);
+  const lutSizeUniform = uniform(placeholderLUT.image.width);
 
   // Create the LUT pass node once - we'll update its uniforms
   // Cast is needed because lut3D accepts uniform nodes but types are stricter
@@ -281,8 +283,11 @@ export async function createPostProcessing(
     intensityNode: { value: number };
   };
 
-  // Set the output node to the LUT pass (cast needed for dynamic node type)
+  // Use the LUT pass as output
   postProcessing.outputNode = lutPassNode as unknown as ReturnType<typeof pass>;
+
+  // Track if LUT is currently enabled (for performance bypass)
+  let lutEnabled = false;
 
   // Load initial LUT if color grading is enabled
   let currentLUTData: LUTData | null = null;
@@ -297,23 +302,42 @@ export async function createPostProcessing(
       // Update the LUT pass node's properties directly
       lutPassNode.lutNode.value = currentLUTData.texture3D;
       lutPassNode.size.value = currentLUTData.texture3D.image.width;
+      intensityUniform.value = options.colorGrading?.intensity ?? 1.0;
+      lutEnabled = true;
       console.log("[PostProcessing] LUT color grading applied");
+    } else {
+      // Failed to load LUT
+      lutEnabled = false;
+      console.log("[PostProcessing] Failed to load LUT, using direct render");
     }
   } else {
     console.log("[PostProcessing] Color grading disabled or LUT is none");
-    // Keep neutral LUT with intensity 0 effect
-    intensityUniform.value = 0;
+    lutEnabled = false;
   }
 
   const composer: PostProcessingComposer = {
-    render: () => postProcessing.render(),
-    renderAsync: () => postProcessing.renderAsync(),
+    render: () => {
+      if (lutEnabled) {
+        // Use post-processing with LUT
+        postProcessing.render();
+      } else {
+        // Bypass post-processing entirely for better performance
+        renderer.render(scene, camera);
+      }
+    },
+    renderAsync: async () => {
+      if (lutEnabled) {
+        await postProcessing.renderAsync();
+      } else {
+        await renderer.renderAsync(scene, camera);
+      }
+    },
     setSize: () => {
       // PostProcessing handles resize automatically
     },
     dispose: () => {
       postProcessing.dispose();
-      neutralLUT.dispose();
+      placeholderLUT.dispose();
       // Clean up LUT textures
       lutCache.forEach((lut) => {
         lut.texture3D.dispose();
@@ -327,11 +351,11 @@ export async function createPostProcessing(
       currentLUT = lutName;
 
       if (lutName === "none") {
-        // Use neutral LUT with zero intensity
-        lutPassNode.lutNode.value = neutralLUT;
-        lutPassNode.size.value = neutralLUT.image.width;
-        intensityUniform.value = 0;
-        console.log("[PostProcessing] LUT disabled (neutral)");
+        // Disable LUT - bypass post-processing entirely
+        lutEnabled = false;
+        console.log(
+          "[PostProcessing] LUT disabled (bypassing post-processing for performance)",
+        );
         return;
       }
 
@@ -341,10 +365,10 @@ export async function createPostProcessing(
         // Update the existing LUT pass node's properties
         lutPassNode.lutNode.value = lutData.texture3D;
         lutPassNode.size.value = lutData.texture3D.image.width;
-        // Restore intensity if it was zeroed
-        if (intensityUniform.value === 0) {
-          intensityUniform.value = options.colorGrading?.intensity ?? 1.0;
-        }
+        // Restore full intensity
+        intensityUniform.value = options.colorGrading?.intensity ?? 1.0;
+        // Enable LUT
+        lutEnabled = true;
         console.log(
           `[PostProcessing] LUT switched to ${lutName} (size: ${lutData.texture3D.image.width})`,
         );
@@ -354,6 +378,7 @@ export async function createPostProcessing(
       intensityUniform.value = Math.max(0, Math.min(1, intensity));
     },
     getCurrentLUT: () => currentLUT,
+    isLUTEnabled: () => lutEnabled,
   };
 
   return composer;
