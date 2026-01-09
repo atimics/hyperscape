@@ -652,10 +652,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.world.on(EventType.FIREMAKING_MOVE_REQUEST, (event) => {
       const payload = event as {
         playerId: string;
-        fromPosition: { x: number; y: number; z: number };
-        toPosition: { x: number; y: number; z: number };
+        position: { x: number; y: number; z: number };
       };
-      const { playerId, toPosition: position } = payload;
+      const { playerId, position } = payload;
 
       // Get player entity
       const socket = this.broadcastManager.getPlayerSocket(playerId);
