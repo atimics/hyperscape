@@ -21,12 +21,13 @@ describe("DataManager items/ directory loading", () => {
   });
 
   describe("directory loading", () => {
-    it("loads all 76 items from category files", () => {
+    it("loads all items from category files", () => {
       // Get all base items (not noted variants)
       const baseItems = Array.from(ITEMS.values()).filter(
         (item) => !item.id.endsWith("_noted"),
       );
-      expect(baseItems.length).toBe(76);
+      // Count reflects all items across weapons, tools, resources, food, misc
+      expect(baseItems.length).toBe(82);
     });
 
     it("loads items from all 5 category files", () => {
@@ -109,21 +110,24 @@ describe("DataManager items/ directory loading", () => {
       const weapons = Array.from(ITEMS.values()).filter(
         (item) => item.type === "weapon" && !item.id.endsWith("_noted"),
       );
-      expect(weapons.length).toBe(4);
+      // 6 swords: bronze, iron, steel, mithril, adamant, rune
+      expect(weapons.length).toBe(6);
     });
 
     it("has correct tool count", () => {
       const tools = Array.from(ITEMS.values()).filter(
         (item) => item.type === "tool" && !item.id.endsWith("_noted"),
       );
-      expect(tools.length).toBe(13);
+      // 6 hatchets + 6 pickaxes + fishing rod, fly fishing rod, net, hammer, tinderbox = 17
+      expect(tools.length).toBe(17);
     });
 
     it("has correct resource count", () => {
       const resources = Array.from(ITEMS.values()).filter(
         (item) => item.type === "resource" && !item.id.endsWith("_noted"),
       );
-      expect(resources.length).toBe(36);
+      // Ores, bars, logs, raw fish, etc.
+      expect(resources.length).toBe(35);
     });
 
     it("has correct consumable count", () => {

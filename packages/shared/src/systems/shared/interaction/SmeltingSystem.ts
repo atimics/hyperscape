@@ -13,7 +13,6 @@
  */
 
 import {
-  SMITHING_CONSTANTS,
   isLooseInventoryItem,
   getItemQuantity,
   getSmithingLevelSafe,
