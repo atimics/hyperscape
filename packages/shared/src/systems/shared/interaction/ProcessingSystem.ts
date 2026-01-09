@@ -386,6 +386,30 @@ export class ProcessingSystem extends SystemBase {
       return;
     }
 
+    // Check level requirement
+    let firemakingLevel = 1;
+    const cachedSkills = this.playerSkills.get(playerId);
+    if (cachedSkills?.firemaking?.level) {
+      firemakingLevel = cachedSkills.firemaking.level;
+    } else {
+      const player = this.world.getPlayer(playerId);
+      const playerSkills = (
+        player as { skills?: Record<string, { level: number }> }
+      )?.skills;
+      if (playerSkills?.firemaking?.level) {
+        firemakingLevel = playerSkills.firemaking.level;
+      }
+    }
+
+    if (firemakingLevel < firemakingData.levelRequired) {
+      this.emitTypedEvent(EventType.UI_MESSAGE, {
+        playerId,
+        message: `You need level ${firemakingData.levelRequired} Firemaking to light those logs.`,
+        type: "error",
+      });
+      return;
+    }
+
     // Get player position (validated above)
 
     // Start firemaking process - use pooled action object (Phase 2 optimization)
@@ -661,6 +685,30 @@ export class ProcessingSystem extends SystemBase {
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId,
         message: "You can't cook that.",
+        type: "error",
+      });
+      return;
+    }
+
+    // Check level requirement
+    let cookingLevel = 1;
+    const cachedSkills = this.playerSkills.get(playerId);
+    if (cachedSkills?.cooking?.level) {
+      cookingLevel = cachedSkills.cooking.level;
+    } else {
+      const player = this.world.getPlayer(playerId);
+      const playerSkills = (
+        player as { skills?: Record<string, { level: number }> }
+      )?.skills;
+      if (playerSkills?.cooking?.level) {
+        cookingLevel = playerSkills.cooking.level;
+      }
+    }
+
+    if (cookingLevel < cookingData.levelRequired) {
+      this.emitTypedEvent(EventType.UI_MESSAGE, {
+        playerId,
+        message: `You need level ${cookingData.levelRequired} Cooking to cook that.`,
         type: "error",
       });
       return;

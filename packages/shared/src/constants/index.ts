@@ -9,4 +9,5 @@ export * from "./EquipmentConstants";
 export * from "./GameConstants";
 export * from "./GatheringConstants";
 export * from "./interaction";
+export * from "./SmithingConstants";
 export * from "./WeaponStyleConfig";

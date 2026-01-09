@@ -95,6 +95,7 @@ export class EventBridge {
     this.setupBankingEvents();
     this.setupStoreEvents();
     this.setupFireEvents();
+    this.setupSmeltingEvents();
   }
 
   /**
@@ -870,8 +871,6 @@ export class EventBridge {
           position: { x: number; y: number; z: number };
         };
 
-        console.log("[EventBridge] 🔥 Broadcasting fire created:", data);
-
         // Send to all clients so they can render the fire visual
         this.broadcast.sendToAll("fireCreated", data);
       });
@@ -880,13 +879,71 @@ export class EventBridge {
       this.world.on(EventType.FIRE_EXTINGUISHED, (payload: unknown) => {
         const data = payload as { fireId: string };
 
-        console.log("[EventBridge] 💨 Broadcasting fire extinguished:", data);
-
         // Send to all clients so they can remove the fire visual
         this.broadcast.sendToAll("fireExtinguished", data);
       });
     } catch (_err) {
       console.error("[EventBridge] Error setting up fire events:", _err);
+    }
+  }
+
+  /**
+   * Setup smelting/smithing event listeners
+   *
+   * Forwards smelting and smithing interface open events to the appropriate player
+   * so they can see the available bars/items to craft.
+   *
+   * @private
+   */
+  private setupSmeltingEvents(): void {
+    try {
+      // Forward smelting interface open events to specific player
+      this.world.on(EventType.SMELTING_INTERFACE_OPEN, (payload: unknown) => {
+        const data = payload as {
+          playerId: string;
+          furnaceId: string;
+          availableBars: Array<{
+            barItemId: string;
+            levelRequired: number;
+            primaryOre: string;
+            secondaryOre: string | null;
+            coalRequired: number;
+          }>;
+        };
+
+        if (data.playerId) {
+          this.broadcast.sendToPlayer(data.playerId, "smeltingInterfaceOpen", {
+            furnaceId: data.furnaceId,
+            availableBars: data.availableBars,
+          });
+        }
+      });
+
+      // Forward smithing interface open events to specific player
+      this.world.on(EventType.SMITHING_INTERFACE_OPEN, (payload: unknown) => {
+        const data = payload as {
+          playerId: string;
+          anvilId: string;
+          availableRecipes: Array<{
+            itemId: string;
+            name: string;
+            barType: string;
+            barsRequired: number;
+            levelRequired: number;
+            xp: number;
+            category: string;
+          }>;
+        };
+
+        if (data.playerId) {
+          this.broadcast.sendToPlayer(data.playerId, "smithingInterfaceOpen", {
+            anvilId: data.anvilId,
+            availableRecipes: data.availableRecipes,
+          });
+        }
+      });
+    } catch (_err) {
+      console.error("[EventBridge] Error setting up smelting events:", _err);
     }
   }
 }

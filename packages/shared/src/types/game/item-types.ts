@@ -226,6 +226,72 @@ export interface Item {
     /** XP granted on successful fire */
     xp: number;
   };
+
+  // === SMELTING DATA (from manifest) ===
+  /**
+   * Smelting properties for bars.
+   * Present only on bar items that define their smelting recipe.
+   * Note: Smelting data is on BARS, not ores - bars define what ores they need.
+   */
+  smelting?: {
+    /** Primary ore required (e.g., "copper_ore", "iron_ore") */
+    primaryOre: string;
+    /** Secondary ore required (only for bronze: "tin_ore") */
+    secondaryOre: string | null;
+    /** Number of coal required (0 for bronze/iron/gold/silver) */
+    coalRequired: number;
+    /** Smithing level required to smelt */
+    levelRequired: number;
+    /** XP granted per bar smelted */
+    xp: number;
+    /** Success rate (0.5 = 50% for iron, 1.0 = always for others) */
+    successRate: number;
+    /** Time in game ticks (600ms per tick). Default: 4 ticks */
+    ticks?: number;
+  };
+
+  // === SMITHING DATA (from manifest) ===
+  /**
+   * Smithing properties for items that can be smithed at an anvil.
+   * Present on output items (swords, hatchets, pickaxes, etc.)
+   * Note: Smithing data is on OUTPUT items - they define what bars they need.
+   */
+  smithing?: {
+    /** Bar type required (e.g., "bronze_bar", "iron_bar") */
+    barType: string;
+    /** Number of bars required */
+    barsRequired: number;
+    /** Smithing level required */
+    levelRequired: number;
+    /** XP granted per item smithed */
+    xp: number;
+    /** Category for UI grouping ("sword", "hatchet", "pickaxe") */
+    category: string;
+    /** Time in game ticks (600ms per tick). Default: 4 ticks */
+    ticks?: number;
+  };
+
+  // === TIER-BASED EQUIPMENT SYSTEM ===
+  /**
+   * Equipment tier for deriving level requirements.
+   * E.g., "bronze", "iron", "steel", "mithril", "adamant", "rune", "dragon"
+   * Requirements are derived from tier-requirements.json at runtime.
+   */
+  tier?: string;
+
+  // === GATHERING TOOL DATA ===
+  /**
+   * Tool-specific properties for gathering tools (hatchets, pickaxes, fishing rods)
+   * Replaces the old tools.json - now embedded directly in items.
+   */
+  tool?: {
+    /** Gathering skill this tool is for (woodcutting, mining, fishing) */
+    skill: "woodcutting" | "mining" | "fishing";
+    /** Priority for best tool selection (lower = better, 1 = best) */
+    priority: number;
+    /** For mining: ticks between roll attempts (OSRS-accurate) */
+    rollTicks?: number;
+  };
 }
 
 export interface EquipmentSlot {

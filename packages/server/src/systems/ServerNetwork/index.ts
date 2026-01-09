@@ -652,14 +652,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.world.on(EventType.FIREMAKING_MOVE_REQUEST, (event) => {
       const payload = event as {
         playerId: string;
-        fromPosition: { x: number; y: number; z: number };
-        toPosition: { x: number; y: number; z: number };
+        position: { x: number; y: number; z: number };
       };
-      const { playerId, toPosition: position } = payload;
-
-      console.log(
-        `[ServerNetwork] 🔥 Firemaking move request for ${playerId} to (${position.x.toFixed(1)}, ${position.z.toFixed(1)})`,
-      );
+      const { playerId, position } = payload;
 
       // Get player entity
       const socket = this.broadcastManager.getPlayerSocket(playerId);
@@ -898,13 +893,6 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      console.log(
-        "[ServerNetwork] 🔥 Firemaking request from",
-        player.id,
-        ":",
-        payload,
-      );
-
       // Emit event for ProcessingSystem to handle
       this.world.emit(EventType.PROCESSING_FIREMAKING_REQUEST, {
         playerId: player.id,
@@ -913,6 +901,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         tinderboxSlot: payload.tinderboxSlot,
       });
     };
+    // Also register without "on" prefix for client compatibility
+    this.handlers["firemakingRequest"] = this.handlers["onFiremakingRequest"];
 
     // Cooking - use raw food on fire/range
     // SERVER-AUTHORITATIVE: Uses PendingCookManager for distance checking (like woodcutting)
@@ -965,6 +955,146 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         undefined, // runMode - use server default
         payload.rawFoodSlot, // Pass specific slot to cook
       );
+    };
+    // Also register without "on" prefix for client compatibility
+    this.handlers["cookingRequest"] = this.handlers["onCookingRequest"];
+
+    // Smelting - player clicked furnace
+    // SERVER-AUTHORITATIVE: Emit SMELTING_INTERACT event for SmeltingSystem to handle
+    this.handlers["onSmeltingSourceInteract"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      const payload = data as {
+        furnaceId?: string;
+        position?: [number, number, number];
+      };
+      if (!payload.furnaceId || !payload.position) return;
+
+      // Emit event for SmeltingSystem to handle
+      this.world.emit(EventType.SMELTING_INTERACT, {
+        playerId: player.id,
+        furnaceId: payload.furnaceId,
+        position: {
+          x: payload.position[0],
+          y: payload.position[1],
+          z: payload.position[2],
+        },
+      });
+    };
+
+    // Smithing - player clicked anvil
+    // SERVER-AUTHORITATIVE: Emit SMITHING_INTERACT event for SmithingSystem to handle
+    this.handlers["onSmithingSourceInteract"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      const payload = data as {
+        anvilId?: string;
+        position?: [number, number, number];
+      };
+      if (!payload.anvilId || !payload.position) return;
+
+      // Emit event for SmithingSystem to handle
+      this.world.emit(EventType.SMITHING_INTERACT, {
+        playerId: player.id,
+        anvilId: payload.anvilId,
+        position: {
+          x: payload.position[0],
+          y: payload.position[1],
+          z: payload.position[2],
+        },
+      });
+    };
+
+    // Processing smelting - player selected bar to smelt from UI
+    this.handlers["onProcessingSmelting"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      // Rate limiting - prevent request spam
+      if (!this.canProcessRequest(player.id)) {
+        return;
+      }
+
+      const payload = data as {
+        barItemId?: unknown;
+        furnaceId?: unknown;
+        quantity?: unknown;
+      };
+
+      // Type validation
+      if (
+        typeof payload.barItemId !== "string" ||
+        typeof payload.furnaceId !== "string"
+      ) {
+        return;
+      }
+
+      // Length validation (prevent memory abuse)
+      if (payload.barItemId.length > 64 || payload.furnaceId.length > 64) {
+        return;
+      }
+
+      // Quantity validation with bounds
+      const quantity =
+        typeof payload.quantity === "number" &&
+        Number.isFinite(payload.quantity)
+          ? Math.floor(Math.max(1, Math.min(payload.quantity, 10000)))
+          : 1;
+
+      // Emit event for SmeltingSystem to handle
+      this.world.emit(EventType.PROCESSING_SMELTING_REQUEST, {
+        playerId: player.id,
+        barItemId: payload.barItemId,
+        furnaceId: payload.furnaceId,
+        quantity,
+      });
+    };
+
+    // Processing smithing - player selected item to smith from UI
+    this.handlers["onProcessingSmithing"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      // Rate limiting - prevent request spam
+      if (!this.canProcessRequest(player.id)) {
+        return;
+      }
+
+      const payload = data as {
+        recipeId?: unknown;
+        anvilId?: unknown;
+        quantity?: unknown;
+      };
+
+      // Type validation
+      if (
+        typeof payload.recipeId !== "string" ||
+        typeof payload.anvilId !== "string"
+      ) {
+        return;
+      }
+
+      // Length validation (prevent memory abuse)
+      if (payload.recipeId.length > 64 || payload.anvilId.length > 64) {
+        return;
+      }
+
+      // Quantity validation with bounds
+      const quantity =
+        typeof payload.quantity === "number" &&
+        Number.isFinite(payload.quantity)
+          ? Math.floor(Math.max(1, Math.min(payload.quantity, 10000)))
+          : 1;
+
+      // Emit event for SmithingSystem to handle
+      this.world.emit(EventType.PROCESSING_SMITHING_REQUEST, {
+        playerId: player.id,
+        recipeId: payload.recipeId,
+        anvilId: payload.anvilId,
+        quantity,
+      });
     };
 
     // Route movement and combat through action queue for OSRS-style tick processing

@@ -393,6 +393,24 @@ export enum EventType {
   COOKING_COMPLETE = "cooking:complete",
   COOKING_INTERACT = "cooking:interact",
 
+  // Smelting Events (furnace: ore → bars)
+  SMELTING_INTERACT = "smelting:interact",
+  SMELTING_INTERFACE_OPEN = "smelting:interface:open", // UI: show available bars to smelt
+  SMELTING_REQUEST = "smelting:request",
+  SMELTING_START = "smelting:start",
+  SMELTING_SUCCESS = "smelting:success",
+  SMELTING_FAILURE = "smelting:failure",
+  SMELTING_COMPLETE = "smelting:complete",
+  PROCESSING_SMELTING_REQUEST = "processing:smelting:request",
+
+  // Smithing Events (anvil: bars → items)
+  SMITHING_INTERACT = "smithing:interact",
+  SMITHING_INTERFACE_OPEN = "smithing:interface:open", // UI: show available items to smith
+  SMITHING_REQUEST = "smithing:request",
+  SMITHING_START = "smithing:start",
+  SMITHING_COMPLETE = "smithing:complete",
+  PROCESSING_SMITHING_REQUEST = "processing:smithing:request",
+
   // Death System
   DEATH_LOOT_COLLECT = "death:loot:collect",
   DEATH_HEADSTONE_EXPIRED = "death:headstone:expired",

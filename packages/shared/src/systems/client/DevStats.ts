@@ -846,7 +846,9 @@ export class DevStats extends System {
     totalWaterMeshes: number;
     visibleWaterMeshes: number;
   } | null {
-    const waterSystem = this.world.getSystem<WaterSystem>("water");
+    const waterSystem = this.world.getSystem("water") as
+      | WaterSystem
+      | undefined;
     if (!waterSystem) return null;
 
     return {

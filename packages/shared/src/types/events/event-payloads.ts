@@ -492,6 +492,109 @@ export interface FiremakingMoveRequestPayload {
 }
 
 // =========================================================================
+// SMELTING EVENT PAYLOADS
+// =========================================================================
+
+/**
+ * Player clicked on a furnace
+ */
+export interface SmeltingInteractPayload {
+  playerId: string;
+  furnaceId: string;
+  position: Position3D;
+}
+
+/**
+ * Request to smelt a specific bar type
+ */
+export interface ProcessingSmeltingRequestPayload {
+  playerId: string;
+  barItemId: string;
+  furnaceId: string;
+  quantity: number;
+}
+
+/**
+ * Smelting process started
+ */
+export interface SmeltingStartPayload {
+  playerId: string;
+  barItemId: string;
+  furnaceId: string;
+}
+
+/**
+ * Smelting succeeded - bar created
+ */
+export interface SmeltingSuccessPayload {
+  playerId: string;
+  barItemId: string;
+  xpGained: number;
+}
+
+/**
+ * Smelting failed (iron ore 50% failure)
+ */
+export interface SmeltingFailurePayload {
+  playerId: string;
+  barItemId: string;
+}
+
+/**
+ * Smelting batch completed (all requested bars done or out of materials)
+ */
+export interface SmeltingCompletePayload {
+  playerId: string;
+  barItemId: string;
+  totalSmelted: number;
+  totalFailed: number;
+  totalXp: number;
+}
+
+// =========================================================================
+// SMITHING EVENT PAYLOADS
+// =========================================================================
+
+/**
+ * Player clicked on an anvil
+ */
+export interface SmithingInteractPayload {
+  playerId: string;
+  anvilId: string;
+  position: Position3D;
+}
+
+/**
+ * Request to smith a specific item
+ */
+export interface ProcessingSmithingRequestPayload {
+  playerId: string;
+  recipeId: string;
+  anvilId: string;
+  quantity: number;
+}
+
+/**
+ * Smithing process started
+ */
+export interface SmithingStartPayload {
+  playerId: string;
+  recipeId: string;
+  anvilId: string;
+}
+
+/**
+ * Smithing batch completed
+ */
+export interface SmithingCompletePayload {
+  playerId: string;
+  recipeId: string;
+  outputItemId: string;
+  totalSmithed: number;
+  totalXp: number;
+}
+
+// =========================================================================
 // TYPE-SAFE EVENT MAPPING
 // =========================================================================
 
@@ -813,6 +916,22 @@ export interface EventMap {
   [EventType.PROCESSING_FIREMAKING_REQUEST]: ProcessingFiremakingRequestPayload;
   [EventType.PROCESSING_COOKING_REQUEST]: ProcessingCookingRequestPayload;
   [EventType.FIREMAKING_MOVE_REQUEST]: FiremakingMoveRequestPayload;
+
+  // Smelting Events (furnace: ore → bars)
+  [EventType.SMELTING_INTERACT]: SmeltingInteractPayload;
+  [EventType.SMELTING_REQUEST]: ProcessingSmeltingRequestPayload;
+  [EventType.SMELTING_START]: SmeltingStartPayload;
+  [EventType.SMELTING_SUCCESS]: SmeltingSuccessPayload;
+  [EventType.SMELTING_FAILURE]: SmeltingFailurePayload;
+  [EventType.SMELTING_COMPLETE]: SmeltingCompletePayload;
+  [EventType.PROCESSING_SMELTING_REQUEST]: ProcessingSmeltingRequestPayload;
+
+  // Smithing Events (anvil: bars → items)
+  [EventType.SMITHING_INTERACT]: SmithingInteractPayload;
+  [EventType.SMITHING_REQUEST]: ProcessingSmithingRequestPayload;
+  [EventType.SMITHING_START]: SmithingStartPayload;
+  [EventType.SMITHING_COMPLETE]: SmithingCompletePayload;
+  [EventType.PROCESSING_SMITHING_REQUEST]: ProcessingSmithingRequestPayload;
 }
 
 /**

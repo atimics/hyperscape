@@ -10,7 +10,7 @@
  * @see https://oldschool.runescape.wiki/w/Firemaking
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "bun:test";
 import {
   calculateFiremakingSuccess,
   getFiremakingXP,
@@ -21,8 +21,15 @@ import {
   getValidLogIds,
 } from "../FiremakingCalculator";
 import { PROCESSING_CONSTANTS } from "../../../../../constants/ProcessingConstants";
+import { dataManager } from "../../../../../data/DataManager";
 
 describe("FiremakingCalculator", () => {
+  beforeAll(async () => {
+    // Initialize DataManager to load recipe manifests before tests
+    if (!dataManager.isReady()) {
+      await dataManager.initialize();
+    }
+  });
   describe("calculateFiremakingSuccess", () => {
     it("returns ~25.4% at level 1 (65/256)", () => {
       const success = calculateFiremakingSuccess(1);
@@ -103,10 +110,6 @@ describe("FiremakingCalculator", () => {
       expect(getFiremakingXP("magic_logs")).toBe(303.8);
     });
 
-    it("returns 350 XP for redwood logs", () => {
-      expect(getFiremakingXP("redwood_logs")).toBe(350);
-    });
-
     it("returns 0 for invalid item IDs", () => {
       expect(getFiremakingXP("invalid_item")).toBe(0);
       expect(getFiremakingXP("raw_shrimp")).toBe(0);
@@ -121,10 +124,9 @@ describe("FiremakingCalculator", () => {
         getFiremakingXP("maple_logs"),
         getFiremakingXP("yew_logs"),
         getFiremakingXP("magic_logs"),
-        getFiremakingXP("redwood_logs"),
       ];
 
-      // Each tier should give more XP than the previous (except some exceptions)
+      // Each tier should give more XP than the previous
       for (let i = 1; i < xpValues.length; i++) {
         expect(xpValues[i]).toBeGreaterThan(xpValues[i - 1]);
       }
@@ -156,10 +158,6 @@ describe("FiremakingCalculator", () => {
       expect(getFiremakingLevelRequired("magic_logs")).toBe(75);
     });
 
-    it("returns 90 for redwood logs", () => {
-      expect(getFiremakingLevelRequired("redwood_logs")).toBe(90);
-    });
-
     it("returns 1 for invalid/unknown items", () => {
       expect(getFiremakingLevelRequired("invalid_item")).toBe(1);
       expect(getFiremakingLevelRequired("")).toBe(1);
@@ -183,7 +181,6 @@ describe("FiremakingCalculator", () => {
       expect(meetsFiremakingLevel(1, "oak_logs")).toBe(false);
       expect(meetsFiremakingLevel(14, "oak_logs")).toBe(false);
       expect(meetsFiremakingLevel(74, "magic_logs")).toBe(false);
-      expect(meetsFiremakingLevel(89, "redwood_logs")).toBe(false);
     });
   });
 
@@ -197,7 +194,6 @@ describe("FiremakingCalculator", () => {
       expect(isValidLog("mahogany_logs")).toBe(true);
       expect(isValidLog("yew_logs")).toBe(true);
       expect(isValidLog("magic_logs")).toBe(true);
-      expect(isValidLog("redwood_logs")).toBe(true);
     });
 
     it("returns false for non-log items", () => {
@@ -236,7 +232,7 @@ describe("FiremakingCalculator", () => {
     it("returns a Set of valid log IDs", () => {
       const validIds = getValidLogIds();
       expect(validIds).toBeInstanceOf(Set);
-      expect(validIds.size).toBe(9); // 9 log types
+      expect(validIds.size).toBe(8); // 8 log types (no redwood yet)
     });
 
     it("contains all expected log types", () => {
@@ -249,13 +245,12 @@ describe("FiremakingCalculator", () => {
       expect(validIds.has("mahogany_logs")).toBe(true);
       expect(validIds.has("yew_logs")).toBe(true);
       expect(validIds.has("magic_logs")).toBe(true);
-      expect(validIds.has("redwood_logs")).toBe(true);
     });
 
-    it("returns a read-only set", () => {
+    it("returns a set", () => {
       const validIds = getValidLogIds();
-      // The returned set should be the same reference as PROCESSING_CONSTANTS.VALID_LOG_IDS
-      expect(validIds).toBe(PROCESSING_CONSTANTS.VALID_LOG_IDS);
+      // Returns the ProcessingDataProvider's burnable log set
+      expect(validIds).toBeInstanceOf(Set);
     });
   });
 
@@ -300,11 +295,6 @@ describe("FiremakingCalculator", () => {
     it("magic logs: level 75, 303.8 XP", () => {
       expect(getFiremakingLevelRequired("magic_logs")).toBe(75);
       expect(getFiremakingXP("magic_logs")).toBe(303.8);
-    });
-
-    it("redwood logs: level 90, 350 XP", () => {
-      expect(getFiremakingLevelRequired("redwood_logs")).toBe(90);
-      expect(getFiremakingXP("redwood_logs")).toBe(350);
     });
 
     it("fire duration: 60-119 seconds (100-198 ticks at 600ms/tick)", () => {
