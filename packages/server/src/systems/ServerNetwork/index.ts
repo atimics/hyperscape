@@ -1028,6 +1028,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const player = socket.player;
       if (!player) return;
 
+      // Rate limiting - prevent request spam
+      if (!this.canProcessRequest(player.id)) {
+        return;
+      }
+
       const payload = data as {
         barItemId?: unknown;
         furnaceId?: unknown;
@@ -1073,6 +1078,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onProcessingSmithing"] = (socket, data) => {
       const player = socket.player;
       if (!player) return;
+
+      // Rate limiting - prevent request spam
+      if (!this.canProcessRequest(player.id)) {
+        return;
+      }
 
       const payload = data as {
         recipeId?: unknown;
