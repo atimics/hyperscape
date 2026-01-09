@@ -127,6 +127,17 @@ export interface SmithingRecipeData {
 }
 
 /**
+ * Smithing recipe with availability info for UI display.
+ * Includes flags to show whether player can actually make the item.
+ */
+export interface SmithingRecipeWithAvailability extends SmithingRecipeData {
+  /** True if player meets the level requirement */
+  meetsLevel: boolean;
+  /** True if player has enough bars */
+  hasBars: boolean;
+}
+
+/**
  * Cooking data extracted from item manifest
  */
 export interface CookingItemData {
@@ -926,10 +937,11 @@ export class ProcessingDataProvider {
 
   /**
    * Get all items that can be smithed from the given inventory items.
-   * Returns recipes where player has required bars.
+   * Returns recipes where player has required bars AND meets level requirement.
    *
    * @param inventory - Array of items with itemId and quantity
    * @param smithingLevel - Player's smithing level
+   * @deprecated Use getSmithableItemsWithAvailability for UI display
    */
   public getSmithableItemsFromInventory(
     inventory: Array<{ itemId: string; quantity?: number }>,
@@ -955,6 +967,53 @@ export class ProcessingDataProvider {
       }
 
       result.push(recipe);
+    }
+
+    return result;
+  }
+
+  /**
+   * Get all smithable items with availability info for UI display.
+   * Returns ALL recipes for bar types the player has, with flags indicating:
+   * - meetsLevel: whether player has sufficient smithing level
+   * - hasBars: whether player has enough bars for this specific recipe
+   *
+   * Items that don't meet level requirements should be shown greyed out in UI.
+   *
+   * @param inventory - Array of items with itemId and quantity
+   * @param smithingLevel - Player's smithing level
+   */
+  public getSmithableItemsWithAvailability(
+    inventory: Array<{ itemId: string; quantity?: number }>,
+    smithingLevel: number,
+  ): SmithingRecipeWithAvailability[] {
+    this.ensureInitialized();
+
+    // Build inventory counts using pre-allocated buffer
+    const itemCounts = this.buildInventoryCounts(inventory);
+
+    // Find all bar types the player has at least 1 of
+    const availableBarTypes = new Set<string>();
+    for (const [itemId, count] of itemCounts) {
+      if (count >= 1 && this.smithingRecipesByBar.has(itemId)) {
+        availableBarTypes.add(itemId);
+      }
+    }
+
+    const result: SmithingRecipeWithAvailability[] = [];
+
+    // Get all recipes for available bar types
+    for (const barType of availableBarTypes) {
+      const recipes = this.smithingRecipesByBar.get(barType) || [];
+      const barCount = itemCounts.get(barType) || 0;
+
+      for (const recipe of recipes) {
+        result.push({
+          ...recipe,
+          meetsLevel: smithingLevel >= recipe.levelRequired,
+          hasBars: barCount >= recipe.barsRequired,
+        });
+      }
     }
 
     return result;

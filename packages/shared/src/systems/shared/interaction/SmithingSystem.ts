@@ -151,9 +151,9 @@ export class SmithingSystem extends SystemBase {
     // Get player smithing level
     const smithingLevel = this.getSmithingLevel(playerId);
 
-    // Get available recipes based on inventory
+    // Get all recipes for bar types the player has, with availability info
     const availableRecipes =
-      processingDataProvider.getSmithableItemsFromInventory(
+      processingDataProvider.getSmithableItemsWithAvailability(
         inventory.map((item: { itemId: string; quantity?: number }) => ({
           itemId: item.itemId,
           quantity: item.quantity || 1,
@@ -171,6 +171,7 @@ export class SmithingSystem extends SystemBase {
     }
 
     // Emit event with available recipes for UI to display
+    // Includes meetsLevel and hasBars flags for greying out unavailable items
     // Use SMITHING_INTERFACE_OPEN (not SMITHING_INTERACT) to avoid infinite recursion
     this.emitTypedEvent(EventType.SMITHING_INTERFACE_OPEN, {
       playerId,
@@ -183,6 +184,8 @@ export class SmithingSystem extends SystemBase {
         levelRequired: recipe.levelRequired,
         xp: recipe.xp,
         category: recipe.category,
+        meetsLevel: recipe.meetsLevel,
+        hasBars: recipe.hasBars,
       })),
     });
   }
