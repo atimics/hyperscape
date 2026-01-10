@@ -702,29 +702,65 @@ export function InventoryPanel({
       if (Number.isNaN(slotIndex)) return;
       const it = slotItems[slotIndex];
       if (!it) return;
-      if (ce.detail.actionId === "equip") {
-        // Send equip request to server - EquipmentSystem listens to this
+      // Handle "eat" action - consume food
+      if (ce.detail.actionId === "eat") {
         const localPlayer = world?.getPlayer();
-        console.log("[InventoryPanel] ⚡ Equip clicked:", {
-          itemId: it.itemId,
-          slot: slotIndex,
-          hasPlayer: !!localPlayer,
-        });
-        if (localPlayer && world?.network?.send) {
-          console.log("[InventoryPanel] 📤 Sending equipItem to server:", {
+        if (localPlayer) {
+          world?.emit(EventType.ITEM_ACTION_SELECTED, {
             playerId: localPlayer.id,
+            actionId: "eat",
             itemId: it.itemId,
             slot: slotIndex,
           });
+        }
+      }
+
+      // Handle "drink" action - consume potion
+      if (ce.detail.actionId === "drink") {
+        const localPlayer = world?.getPlayer();
+        if (localPlayer) {
+          world?.emit(EventType.ITEM_ACTION_SELECTED, {
+            playerId: localPlayer.id,
+            actionId: "drink",
+            itemId: it.itemId,
+            slot: slotIndex,
+          });
+        }
+      }
+
+      // Handle "bury" action - bury bones for Prayer XP
+      if (ce.detail.actionId === "bury") {
+        world?.network?.send("buryBones", {
+          itemId: it.itemId,
+          slot: slotIndex,
+        });
+      }
+
+      // Handle "wield" action - equip weapons/shields
+      if (ce.detail.actionId === "wield") {
+        const localPlayer = world?.getPlayer();
+        if (localPlayer && world?.network?.send) {
           world.network.send("equipItem", {
             playerId: localPlayer.id,
             itemId: it.itemId,
             inventorySlot: slotIndex,
           });
-        } else {
-          console.error("[InventoryPanel] ❌ No local player or network.send!");
         }
       }
+
+      // Handle "wear" action - equip armor/accessories
+      if (ce.detail.actionId === "wear") {
+        const localPlayer = world?.getPlayer();
+        if (localPlayer && world?.network?.send) {
+          world.network.send("equipItem", {
+            playerId: localPlayer.id,
+            itemId: it.itemId,
+            inventorySlot: slotIndex,
+          });
+        }
+      }
+
+      // Handle "drop" action
       if (ce.detail.actionId === "drop") {
         if (world?.network?.dropItem) {
           world.network.dropItem(it.itemId, slotIndex, it.quantity || 1);
