@@ -1,5 +1,4 @@
 name: Claude Code Review
-
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
@@ -17,14 +16,12 @@ jobs:
     #   github.event.pull_request.user.login == 'external-contributor' ||
     #   github.event.pull_request.user.login == 'new-developer' ||
     #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
       issues: read
       id-token: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,23 +33,27 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
-          plugins: 'code-review@claude-code-plugins'
           prompt: |
-            REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }}
+            Review pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
 
-            Please review this pull request and provide feedback on:
+            First, gather the PR information:
+            1. Run `gh pr view ${{ github.event.pull_request.number }}` to get PR details
+            2. Run `gh pr diff ${{ github.event.pull_request.number }}` to see the code changes
+
+            Then review the changes and provide feedback on:
             - Code quality and best practices
             - Potential bugs or issues
             - Performance considerations
             - Security concerns
             - Test coverage
 
-            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
+            Use the repository's CLAUDE.md for guidance on style and conventions if it exists.
+            Be constructive and helpful in your feedback.
 
-            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
+            If you encounter any issues (PR too large to review fully, merge conflicts, unclear context), explain the limitation in your comment.
+
+            Once your review is complete, use `gh pr comment ${{ github.event.pull_request.number }} --body "YOUR_REVIEW"` to post your feedback.
 
           # Use Claude Opus 4.5 for better code review quality
-          # See https://code.claude.com/docs/en/github-actions for available options
-          claude_args: '--model claude-opus-4-5-20251101 --allowed-tools "Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)"'
+          # Restrict Bash to only gh CLI commands for security
+          claude_args: '--model claude-opus-4-5-20251101 --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"'
