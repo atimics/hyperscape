@@ -6,8 +6,8 @@
  * OSRS Context Menu Format: "<Action> <TargetName>" with colored target
  *
  * Resource types and their context menu formats:
- * - Trees → "Chop down Oak" (strips "Tree" suffix, yellow target)
- * - Rocks/Ore → "Mine Copper rocks" (lowercase plural, yellow target)
+ * - Trees → "Chop down Oak" (strips "Tree" suffix, cyan target - object color)
+ * - Rocks/Ore → "Mine Copper rocks" (lowercase plural, cyan target - object color)
  * - Fishing spots → Multiple actions: "Net Fishing spot", "Bait Fishing spot"
  *
  * Actions:
@@ -22,6 +22,7 @@ import { BaseInteractionHandler } from "./BaseInteractionHandler";
 import type { RaycastTarget, ContextMenuAction, LabelSegment } from "../types";
 import { INTERACTION_RANGE, TIMING, MESSAGE_TYPES } from "../constants";
 import { getExternalResource } from "../../../../utils/ExternalAssetUtils";
+import { CONTEXT_MENU_COLORS } from "../../../../constants/GameConstants";
 
 /**
  * Fishing method definition for multi-action fishing spots.
@@ -75,12 +76,15 @@ export class ResourceInteractionHandler extends BaseInteractionHandler {
       resourceType.includes("ore") ||
       resourceType.includes("mining")
     ) {
-      // OSRS: "Mine Copper rocks" with yellow target name
+      // OSRS: "Mine Copper rocks" with cyan target name (object color)
       const rockName = this.getRockDisplayName(target);
       actions.push({
         id: "mine",
         label: `Mine ${rockName}`,
-        styledLabel: [{ text: "Mine " }, { text: rockName, color: "#ffff00" }],
+        styledLabel: [
+          { text: "Mine " },
+          { text: rockName, color: CONTEXT_MENU_COLORS.OBJECT },
+        ],
         enabled: true,
         priority: 1,
         handler: () => this.gatherResource(target, "mine"),
@@ -97,7 +101,7 @@ export class ResourceInteractionHandler extends BaseInteractionHandler {
           label: `${method.action} Fishing spot`,
           styledLabel: [
             { text: `${method.action} ` },
-            { text: "Fishing spot", color: "#ffff00" },
+            { text: "Fishing spot", color: CONTEXT_MENU_COLORS.OBJECT },
           ],
           enabled: true,
           priority: 1,
@@ -105,14 +109,14 @@ export class ResourceInteractionHandler extends BaseInteractionHandler {
         });
       }
     } else {
-      // Default: Trees - OSRS: "Chop down Oak" with yellow target name
+      // Default: Trees - OSRS: "Chop down Oak" with cyan target name (object color)
       const treeName = this.getTreeDisplayName(target);
       actions.push({
         id: "chop",
         label: `Chop down ${treeName}`,
         styledLabel: [
           { text: "Chop down " },
-          { text: treeName, color: "#ffff00" },
+          { text: treeName, color: CONTEXT_MENU_COLORS.OBJECT },
         ],
         enabled: true,
         priority: 1,

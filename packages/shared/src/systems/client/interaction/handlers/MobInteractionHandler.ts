@@ -22,6 +22,7 @@ import { getNPCById } from "../../../../data/npcs";
 import { getPlayerWeaponRange } from "../../../../utils/game/CombatUtils";
 import { calculateCombatLevel } from "../../../../utils/game/CombatLevelCalculator";
 import type { Player } from "../../../../types/core/core";
+import { CONTEXT_MENU_COLORS } from "../../../../constants/GameConstants";
 
 /**
  * Mob entity interface for type safety
@@ -79,7 +80,7 @@ export class MobInteractionHandler extends BaseInteractionHandler {
       label: `Attack ${target.name} (Level: ${mobLevel})`,
       styledLabel: [
         { text: "Attack " },
-        { text: target.name, color: "#ffff00" }, // Yellow for mob names (OSRS style)
+        { text: target.name, color: CONTEXT_MENU_COLORS.NPC }, // Yellow for mob names (OSRS style)
         { text: " (Level: " },
         { text: `${mobLevel}`, color: levelColor },
         { text: ")" },
@@ -99,7 +100,7 @@ export class MobInteractionHandler extends BaseInteractionHandler {
       label: `Examine ${target.name}`,
       styledLabel: [
         { text: "Examine " },
-        { text: target.name, color: "#ffff00" }, // Yellow for NPC/mob names
+        { text: target.name, color: CONTEXT_MENU_COLORS.NPC }, // Yellow for NPC/mob names
       ],
       enabled: true,
       priority: 100,

@@ -29,9 +29,7 @@ import { BaseInteractionHandler } from "./BaseInteractionHandler";
 import type { RaycastTarget, ContextMenuAction } from "../types";
 import { INTERACTION_RANGE, MESSAGE_TYPES } from "../constants";
 import { getNPCById } from "../../../../data/npcs";
-
-/** OSRS NPC color (yellow) for context menu target names */
-const NPC_COLOR = "#ffff00";
+import { CONTEXT_MENU_COLORS } from "../../../../constants/GameConstants";
 
 /**
  * NPC entity config interface for type safety
@@ -78,7 +76,10 @@ export class NPCInteractionHandler extends BaseInteractionHandler {
     actions.push({
       id: "talk",
       label: `Talk-to ${npcName}`,
-      styledLabel: [{ text: "Talk-to " }, { text: npcName, color: NPC_COLOR }],
+      styledLabel: [
+        { text: "Talk-to " },
+        { text: npcName, color: CONTEXT_MENU_COLORS.NPC },
+      ],
       enabled: true,
       priority: 1,
       handler: () => this.startDialogue(target),
@@ -89,7 +90,10 @@ export class NPCInteractionHandler extends BaseInteractionHandler {
       actions.push({
         id: "bank",
         label: `Bank ${npcName}`,
-        styledLabel: [{ text: "Bank " }, { text: npcName, color: NPC_COLOR }],
+        styledLabel: [
+          { text: "Bank " },
+          { text: npcName, color: CONTEXT_MENU_COLORS.NPC },
+        ],
         enabled: true,
         priority: 2,
         handler: () => this.openBank(target),
@@ -101,7 +105,7 @@ export class NPCInteractionHandler extends BaseInteractionHandler {
         label: `Collect ${npcName}`,
         styledLabel: [
           { text: "Collect " },
-          { text: npcName, color: NPC_COLOR },
+          { text: npcName, color: CONTEXT_MENU_COLORS.NPC },
         ],
         enabled: true,
         priority: 3,
@@ -114,7 +118,10 @@ export class NPCInteractionHandler extends BaseInteractionHandler {
       actions.push({
         id: "trade",
         label: `Trade ${npcName}`,
-        styledLabel: [{ text: "Trade " }, { text: npcName, color: NPC_COLOR }],
+        styledLabel: [
+          { text: "Trade " },
+          { text: npcName, color: CONTEXT_MENU_COLORS.NPC },
+        ],
         enabled: true,
         priority: 2,
         handler: () => this.openStore(target),
@@ -129,7 +136,10 @@ export class NPCInteractionHandler extends BaseInteractionHandler {
     actions.push({
       id: "examine",
       label: `Examine ${npcName}`,
-      styledLabel: [{ text: "Examine " }, { text: npcName, color: NPC_COLOR }],
+      styledLabel: [
+        { text: "Examine " },
+        { text: npcName, color: CONTEXT_MENU_COLORS.NPC },
+      ],
       enabled: true,
       priority: 100,
       handler: () => {
