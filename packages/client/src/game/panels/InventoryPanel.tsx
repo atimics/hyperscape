@@ -273,7 +273,17 @@ function DraggableInventorySlot({
           item.itemId === "logs" ||
           item.itemId.startsWith("raw_");
 
+        // Check if item is edible (has healAmount > 0)
+        // Uses getItem from @hyperscape/shared to get full item data
+        const itemData = getItem(item.itemId);
+        const isEdible =
+          itemData?.type === "consumable" &&
+          itemData?.healAmount !== undefined &&
+          itemData.healAmount > 0;
+
         const items = [
+          // "Eat" appears first for food items (OSRS-style: Eat is always primary action)
+          ...(isEdible ? [{ id: "eat", label: "Eat", enabled: true }] : []),
           // "Use" appears first for usable items (OSRS-style)
           ...(isUsable
             ? [{ id: "use", label: `Use ${item.itemId}`, enabled: true }]
