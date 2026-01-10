@@ -251,6 +251,12 @@ function DraggableInventorySlot({
         e.stopPropagation();
         if (!item) return;
 
+        // Get item display name from item data
+        // OSRS uses orange (#ff9040) for item names in context menus
+        const itemData = getItem(item.itemId);
+        const itemName = itemData?.name || item.itemId;
+        const ITEM_COLOR = "#ff9040";
+
         // Determine if item is equippable based on itemId
         // BANK NOTE SYSTEM: Noted items are NEVER equippable (must be un-noted first)
         const isEquippable =
@@ -273,23 +279,60 @@ function DraggableInventorySlot({
           item.itemId === "logs" ||
           item.itemId.startsWith("raw_");
 
+        // OSRS-accurate context menu with orange item names
         const items = [
           // "Use" appears first for usable items (OSRS-style)
           ...(isUsable
-            ? [{ id: "use", label: `Use ${item.itemId}`, enabled: true }]
+            ? [
+                {
+                  id: "use",
+                  label: `Use ${itemName}`,
+                  styledLabel: [
+                    { text: "Use " },
+                    { text: itemName, color: ITEM_COLOR },
+                  ],
+                  enabled: true,
+                },
+              ]
             : []),
           ...(isEquippable
-            ? [{ id: "equip", label: `Equip ${item.itemId}`, enabled: true }]
+            ? [
+                {
+                  id: "equip",
+                  label: `Wear ${itemName}`,
+                  styledLabel: [
+                    { text: "Wear " },
+                    { text: itemName, color: ITEM_COLOR },
+                  ],
+                  enabled: true,
+                },
+              ]
             : []),
-          { id: "drop", label: `Drop ${item.itemId}`, enabled: true },
-          { id: "examine", label: "Examine", enabled: true },
+          {
+            id: "drop",
+            label: `Drop ${itemName}`,
+            styledLabel: [
+              { text: "Drop " },
+              { text: itemName, color: ITEM_COLOR },
+            ],
+            enabled: true,
+          },
+          {
+            id: "examine",
+            label: `Examine ${itemName}`,
+            styledLabel: [
+              { text: "Examine " },
+              { text: itemName, color: ITEM_COLOR },
+            ],
+            enabled: true,
+          },
         ];
         const evt = new CustomEvent("contextmenu", {
           detail: {
             target: {
               id: `inventory_slot_${index}`,
               type: "inventory",
-              name: item.itemId,
+              name: itemName,
             },
             mousePosition: { x: e.clientX, y: e.clientY },
             items,

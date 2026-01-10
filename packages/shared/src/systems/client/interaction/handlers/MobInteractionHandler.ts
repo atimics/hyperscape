@@ -92,9 +92,21 @@ export class MobInteractionHandler extends BaseInteractionHandler {
     // Walk here
     actions.push(this.createWalkHereAction(target));
 
-    // Examine
+    // Examine - OSRS: "Examine Goblin"
     const examineText = this.getExamineText(target, mobData);
-    actions.push(this.createExamineAction(target, examineText));
+    actions.push({
+      id: "examine",
+      label: `Examine ${target.name}`,
+      styledLabel: [
+        { text: "Examine " },
+        { text: target.name, color: "#ffff00" }, // Yellow for NPC/mob names
+      ],
+      enabled: true,
+      priority: 100,
+      handler: () => {
+        this.showExamineMessage(examineText);
+      },
+    });
 
     return actions.sort((a, b) => a.priority - b.priority);
   }

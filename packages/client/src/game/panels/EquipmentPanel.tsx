@@ -53,9 +53,29 @@ function DroppableEquipmentSlot({
         e.stopPropagation();
         if (!slot.item) return;
 
+        // OSRS uses orange (#ff9040) for item names in context menus
+        const itemName = slot.item.name;
+        const ITEM_COLOR = "#ff9040";
+
         const items = [
-          { id: "unequip", label: `Unequip ${slot.item.name}`, enabled: true },
-          { id: "examine", label: "Examine", enabled: true },
+          {
+            id: "unequip",
+            label: `Remove ${itemName}`,
+            styledLabel: [
+              { text: "Remove " },
+              { text: itemName, color: ITEM_COLOR },
+            ],
+            enabled: true,
+          },
+          {
+            id: "examine",
+            label: `Examine ${itemName}`,
+            styledLabel: [
+              { text: "Examine " },
+              { text: itemName, color: ITEM_COLOR },
+            ],
+            enabled: true,
+          },
         ];
 
         const evt = new CustomEvent("contextmenu", {
@@ -63,7 +83,7 @@ function DroppableEquipmentSlot({
             target: {
               id: `equipment_slot_${slot.key}`,
               type: "equipment",
-              name: slot.item.name,
+              name: itemName,
             },
             mousePosition: { x: e.clientX, y: e.clientY },
             items,
