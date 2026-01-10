@@ -991,23 +991,23 @@ export class PlayerSystem extends SystemBase {
     // Record this eat action
     this.eatDelayManager.recordEat(data.playerId, currentTick);
 
-    // Apply healing
-    const healed = this.healPlayer(data.playerId, healAmount);
+    // Apply healing (may return false if already at full health)
+    // NOTE: healPlayer() emits PLAYER_HEALTH_UPDATED only if health changed
+    this.healPlayer(data.playerId, healAmount);
 
-    if (healed) {
-      // NOTE: healPlayer() already emits PLAYER_HEALTH_UPDATED
-      // Only emit the UI message here (avoid duplicate events)
+    // OSRS Behavior: Message and attack delay ALWAYS apply when eating,
+    // even at full health. Food is consumed regardless.
+    // @see https://oldschool.runescape.wiki/w/Food
 
-      // OSRS-style message (lowercase item name, no heal amount shown)
-      this.emitTypedEvent(EventType.UI_MESSAGE, {
-        playerId: data.playerId,
-        message: `You eat the ${itemData.name.toLowerCase()}.`,
-        type: "success" as const,
-      });
+    // OSRS-style message (lowercase item name, no heal amount shown)
+    this.emitTypedEvent(EventType.UI_MESSAGE, {
+      playerId: data.playerId,
+      message: `You eat the ${itemData.name.toLowerCase()}.`,
+      type: "success" as const,
+    });
 
-      // === COMBAT INTEGRATION: Apply attack delay if in combat ===
-      this.applyEatAttackDelay(data.playerId, currentTick);
-    }
+    // === COMBAT INTEGRATION: Apply attack delay if in combat ===
+    this.applyEatAttackDelay(data.playerId, currentTick);
   }
 
   /**
