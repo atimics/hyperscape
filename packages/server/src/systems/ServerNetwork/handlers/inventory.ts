@@ -390,6 +390,74 @@ export function handleEquipItem(
 }
 
 /**
+ * Handle item use request (eating food, drinking potions)
+ *
+ * Security:
+ * - Rate limited (shared with equip limiter)
+ * - Slot and itemId validation
+ * - Server-authoritative (actual consumption handled by InventorySystem)
+ *
+ * OSRS Flow:
+ * Client sends useItem → Server emits INVENTORY_USE → InventorySystem.useItem()
+ * → ITEM_USED → PlayerSystem.handleItemUsed() → healing + eat delay
+ *
+ * @param socket - Client socket with player entity
+ * @param data - Use item request data { itemId, slot }
+ * @param world - Game world instance
+ */
+export function handleUseItem(
+  socket: ServerSocket,
+  data: unknown,
+  world: World,
+): void {
+  const playerEntity = socket.player;
+  if (!playerEntity) {
+    console.warn("[Inventory] handleUseItem: no player entity for socket");
+    return;
+  }
+
+  // Rate limit check (reuse equip limiter - similar action frequency)
+  if (!getEquipRateLimiter().check(playerEntity.id)) {
+    return;
+  }
+
+  // Validate payload structure
+  if (!data || typeof data !== "object") {
+    console.warn("[Inventory] handleUseItem: invalid payload");
+    return;
+  }
+
+  const payload = data as Record<string, unknown>;
+
+  // Validate itemId
+  if (!isValidItemId(payload.itemId)) {
+    console.warn("[Inventory] handleUseItem: invalid itemId");
+    return;
+  }
+
+  // Validate slot
+  if (!isValidInventorySlot(payload.slot)) {
+    console.warn("[Inventory] handleUseItem: invalid slot");
+    return;
+  }
+
+  // Emit INVENTORY_USE for InventorySystem to handle
+  // InventorySystem will validate item exists at slot, consume it, and emit ITEM_USED
+  world.emit(EventType.INVENTORY_USE, {
+    playerId: playerEntity.id,
+    itemId: payload.itemId,
+    slot: payload.slot,
+  });
+
+  auditLog(
+    "USE_ITEM",
+    playerEntity.id,
+    { itemId: payload.itemId, slot: payload.slot },
+    true,
+  );
+}
+
+/**
  * Handle item unequip request
  *
  * Security:

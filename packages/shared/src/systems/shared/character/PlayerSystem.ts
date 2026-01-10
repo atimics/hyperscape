@@ -977,7 +977,7 @@ export class PlayerSystem extends SystemBase {
     );
 
     // === RATE LIMITING: Eat delay check (Anti-Cheat) ===
-    const currentTick = this.world.getCurrentTick?.() ?? 0;
+    const currentTick = this.world.currentTick ?? 0;
     if (!this.eatDelayManager.canEat(data.playerId, currentTick)) {
       // Already eating - send rejection message
       this.emitTypedEvent(EventType.UI_MESSAGE, {
@@ -990,6 +990,16 @@ export class PlayerSystem extends SystemBase {
 
     // Record this eat action
     this.eatDelayManager.recordEat(data.playerId, currentTick);
+
+    // === CONSUME THE FOOD ===
+    // Remove the item from inventory AFTER all checks pass
+    // This ensures food isn't lost if eating is rejected (e.g., eat delay)
+    this.emitTypedEvent(EventType.INVENTORY_REMOVE_ITEM, {
+      playerId: data.playerId,
+      itemId: data.itemId,
+      quantity: 1,
+      slot: data.slot,
+    });
 
     // Apply healing (may return false if already at full health)
     // NOTE: healPlayer() emits PLAYER_HEALTH_UPDATED only if health changed

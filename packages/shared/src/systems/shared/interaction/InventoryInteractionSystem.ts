@@ -1067,7 +1067,8 @@ export class InventoryInteractionSystem extends SystemBase {
     // Uses INVENTORY_USE instead of INVENTORY_CONSUME_ITEM because:
     // - INVENTORY_USE → InventorySystem.useItem() → ITEM_USED → PlayerSystem.handleItemUsed() → healing
     // - INVENTORY_CONSUME_ITEM has no subscriber (was broken)
-    this.registerAction("food", {
+    // NOTE: Must use "consumable" (item.type) not "food" - getAvailableActions() looks up by item.type
+    this.registerAction("consumable", {
       id: "eat",
       label: "Eat",
       priority: 1,

@@ -142,6 +142,7 @@ const names = [
   // Inventory action packets
   'dropItem',
   'moveItem',
+  'useItem',
   // Equipment packets
   'equipItem',
   'unequipItem',

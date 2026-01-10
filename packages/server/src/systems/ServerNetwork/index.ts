@@ -93,6 +93,7 @@ import {
   handlePickupItem,
   handleDropItem,
   handleEquipItem,
+  handleUseItem,
   handleUnequipItem,
   handleMoveItem,
 } from "./handlers/inventory";
@@ -1283,6 +1284,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     this.handlers["onEquipItem"] = (socket, data) =>
       handleEquipItem(socket, data, this.world);
+
+    this.handlers["onUseItem"] = (socket, data) =>
+      handleUseItem(socket, data, this.world);
 
     this.handlers["onUnequipItem"] = (socket, data) =>
       handleUnequipItem(socket, data, this.world);

@@ -793,7 +793,21 @@ export class InventorySystem extends SystemBase {
       return;
     }
 
+    // === SECURITY: Validate claimed itemId matches actual item at slot (OWASP) ===
+    // Prevents client from claiming a different item than what's in the slot
+    if (item.item.id !== data.itemId) {
+      Logger.systemError(
+        "InventorySystem",
+        `Item mismatch: claimed ${data.itemId} but slot ${data.slot} has ${item.item.id}`,
+        new Error("Item ID mismatch - potential exploit attempt"),
+      );
+      return;
+    }
+
     // Emit item used event for other systems to react to (different from INVENTORY_USE to avoid recursion)
+    // NOTE: Consumable removal is handled by the consuming system (e.g., PlayerSystem for food)
+    // after it validates the action can proceed (e.g., eat delay check).
+    // This prevents items being consumed when the action is rejected.
     this.emitTypedEvent(EventType.ITEM_USED, {
       playerId: data.playerId,
       itemId: data.itemId,
@@ -806,16 +820,6 @@ export class InventorySystem extends SystemBase {
         weight: item.item.weight,
       },
     });
-
-    // Remove consumables after use
-    if (item.item?.type === "consumable") {
-      this.removeItem({
-        playerId: data.playerId,
-        itemId: data.itemId,
-        quantity: 1,
-        slot: data.slot,
-      });
-    }
   }
 
   private pickupItem(data: {
