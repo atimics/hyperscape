@@ -21,7 +21,7 @@ import {
   pointerWithin,
   type Modifier,
 } from "@dnd-kit/core";
-import { EventType, getItem, uuid } from "@hyperscape/shared";
+import { EventType, getItem, uuid, type Item } from "@hyperscape/shared";
 import type { ClientWorld, InventorySlotItem } from "../../types";
 
 /**
@@ -75,6 +75,89 @@ function formatQuantity(qty: number): { text: string; color: string } {
     const m = Math.floor(qty / 1000000);
     return { text: `${m}M`, color: "rgba(0, 255, 128, 0.95)" };
   }
+}
+
+// =============================================================================
+// OSRS-ACCURATE ITEM TYPE DETECTION HELPERS
+// Used for context menu ordering and left-click default actions
+// =============================================================================
+
+/** OSRS item color for context menus */
+const ITEM_COLOR = "#ff9040";
+
+/** Food items - have healAmount and are consumable (excludes potions) */
+function isFood(item: Item | null): boolean {
+  if (!item) return false;
+  return (
+    item.type === "consumable" &&
+    typeof item.healAmount === "number" &&
+    item.healAmount > 0 &&
+    !item.id.includes("potion")
+  );
+}
+
+/** Potions - consumable items with "potion" in ID */
+function isPotion(item: Item | null): boolean {
+  if (!item) return false;
+  return item.type === "consumable" && item.id.includes("potion");
+}
+
+/** Bones - items that can be buried for Prayer XP */
+function isBone(item: Item | null): boolean {
+  if (!item) return false;
+  return item.id === "bones" || item.id.endsWith("_bones");
+}
+
+/** Weapons - equipSlot is weapon or 2h, or has weaponType */
+function isWeapon(item: Item | null): boolean {
+  if (!item) return false;
+  return (
+    item.equipSlot === "weapon" ||
+    item.equipSlot === "2h" ||
+    item.is2h === true ||
+    item.weaponType != null
+  );
+}
+
+/** Shields/Defenders - equipSlot is shield */
+function isShield(item: Item | null): boolean {
+  if (!item) return false;
+  return item.equipSlot === "shield";
+}
+
+/** Equipment that uses "Wield" (weapons + shields) */
+function usesWield(item: Item | null): boolean {
+  return isWeapon(item) || isShield(item);
+}
+
+/** Equipment that uses "Wear" (all other equipment: head, body, legs, etc.) */
+function usesWear(item: Item | null): boolean {
+  if (!item) return false;
+  if (!item.equipable && !item.equipSlot) return false;
+  return !usesWield(item);
+}
+
+/** Firemaking items - tinderbox and logs */
+function isFiremakingItem(item: Item | null): boolean {
+  if (!item) return false;
+  return (
+    item.id === "tinderbox" ||
+    item.id === "logs" ||
+    item.id.endsWith("_logs") ||
+    item.firemaking != null
+  );
+}
+
+/** Cooking items - raw food */
+function isCookingItem(item: Item | null): boolean {
+  if (!item) return false;
+  return item.id.startsWith("raw_") || item.cooking != null;
+}
+
+/** Bank notes - cannot be eaten/equipped, only Use/Drop/Examine */
+function isNotedItem(item: Item | null): boolean {
+  if (!item) return false;
+  return item.isNoted === true || item.id.endsWith("_noted");
 }
 
 /**
