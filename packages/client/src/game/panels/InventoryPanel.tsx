@@ -240,7 +240,7 @@ function DraggableInventorySlot({
   // Used for visual styling (parchment background) and context menu filtering
   // Mirrors: @hyperscape/shared isNotedItemId() from NoteGenerator.ts
   // Keep in sync with NOTE_SUFFIX = "_noted" constant
-  const isNotedItem = item?.itemId?.endsWith("_noted") ?? false;
+  const isItemNoted = item?.itemId?.endsWith("_noted") ?? false;
 
   // Get icon for item
   const getItemIcon = (itemId: string) => {
@@ -334,82 +334,113 @@ function DraggableInventorySlot({
         e.stopPropagation();
         if (!item) return;
 
-        // Get item display name from item data
-        // OSRS uses orange (#ff9040) for item names in context menus
+        // Get item data for type detection
         const itemData = getItem(item.itemId);
         const itemName = itemData?.name || item.itemId;
-        const ITEM_COLOR = "#ff9040";
+        const isNoted = isNotedItem(itemData);
 
-        // Determine if item is equippable based on itemId
-        // BANK NOTE SYSTEM: Noted items are NEVER equippable (must be un-noted first)
-        const isEquippable =
-          !isNotedItem &&
-          (item.itemId.includes("sword") ||
-            item.itemId.includes("bow") ||
-            item.itemId.includes("shield") ||
-            item.itemId.includes("helmet") ||
-            item.itemId.includes("body") ||
-            item.itemId.includes("legs") ||
-            item.itemId.includes("arrows") ||
-            item.itemId.includes("chainbody") ||
-            item.itemId.includes("platebody"));
+        // Build menu items in OSRS order
+        const menuItems: Array<{
+          id: string;
+          label: string;
+          styledLabel: Array<{ text: string; color?: string }>;
+          enabled: boolean;
+        }> = [];
 
-        // OSRS-style "Use" for firemaking/cooking items
-        // Tinderbox, logs, and raw food can be used on targets
-        const isUsable =
-          item.itemId === "tinderbox" ||
-          item.itemId.includes("_logs") ||
-          item.itemId === "logs" ||
-          item.itemId.startsWith("raw_");
+        // 1. Primary action (type-specific) - NOT for noted items
+        if (!isNoted) {
+          if (isFood(itemData)) {
+            // Food: "Eat Lobster"
+            menuItems.push({
+              id: "eat",
+              label: `Eat ${itemName}`,
+              styledLabel: [
+                { text: "Eat " },
+                { text: itemName, color: ITEM_COLOR },
+              ],
+              enabled: true,
+            });
+          } else if (isPotion(itemData)) {
+            // Potion: "Drink Strength potion"
+            menuItems.push({
+              id: "drink",
+              label: `Drink ${itemName}`,
+              styledLabel: [
+                { text: "Drink " },
+                { text: itemName, color: ITEM_COLOR },
+              ],
+              enabled: true,
+            });
+          } else if (isBone(itemData)) {
+            // Bones: "Bury Bones"
+            menuItems.push({
+              id: "bury",
+              label: `Bury ${itemName}`,
+              styledLabel: [
+                { text: "Bury " },
+                { text: itemName, color: ITEM_COLOR },
+              ],
+              enabled: true,
+            });
+          } else if (usesWield(itemData)) {
+            // Weapons & Shields: "Wield Bronze sword"
+            menuItems.push({
+              id: "wield",
+              label: `Wield ${itemName}`,
+              styledLabel: [
+                { text: "Wield " },
+                { text: itemName, color: ITEM_COLOR },
+              ],
+              enabled: true,
+            });
+          } else if (usesWear(itemData)) {
+            // Other equipment: "Wear Bronze chainbody"
+            menuItems.push({
+              id: "wear",
+              label: `Wear ${itemName}`,
+              styledLabel: [
+                { text: "Wear " },
+                { text: itemName, color: ITEM_COLOR },
+              ],
+              enabled: true,
+            });
+          }
+        }
 
-        // OSRS-accurate context menu with orange item names
-        const items = [
-          // "Use" appears first for usable items (OSRS-style)
-          ...(isUsable
-            ? [
-                {
-                  id: "use",
-                  label: `Use ${itemName}`,
-                  styledLabel: [
-                    { text: "Use " },
-                    { text: itemName, color: ITEM_COLOR },
-                  ],
-                  enabled: true,
-                },
-              ]
-            : []),
-          ...(isEquippable
-            ? [
-                {
-                  id: "equip",
-                  label: `Wear ${itemName}`,
-                  styledLabel: [
-                    { text: "Wear " },
-                    { text: itemName, color: ITEM_COLOR },
-                  ],
-                  enabled: true,
-                },
-              ]
-            : []),
-          {
-            id: "drop",
-            label: `Drop ${itemName}`,
-            styledLabel: [
-              { text: "Drop " },
-              { text: itemName, color: ITEM_COLOR },
-            ],
-            enabled: true,
-          },
-          {
-            id: "examine",
-            label: `Examine ${itemName}`,
-            styledLabel: [
-              { text: "Examine " },
-              { text: itemName, color: ITEM_COLOR },
-            ],
-            enabled: true,
-          },
-        ];
+        // 2. Use (ALWAYS present for ALL items - OSRS rule)
+        menuItems.push({
+          id: "use",
+          label: `Use ${itemName}`,
+          styledLabel: [
+            { text: "Use " },
+            { text: itemName, color: ITEM_COLOR },
+          ],
+          enabled: true,
+        });
+
+        // 3. Drop
+        menuItems.push({
+          id: "drop",
+          label: `Drop ${itemName}`,
+          styledLabel: [
+            { text: "Drop " },
+            { text: itemName, color: ITEM_COLOR },
+          ],
+          enabled: true,
+        });
+
+        // 4. Examine (always last before Cancel)
+        menuItems.push({
+          id: "examine",
+          label: `Examine ${itemName}`,
+          styledLabel: [
+            { text: "Examine " },
+            { text: itemName, color: ITEM_COLOR },
+          ],
+          enabled: true,
+        });
+
+        // Dispatch context menu event
         const evt = new CustomEvent("contextmenu", {
           detail: {
             target: {
@@ -418,7 +449,7 @@ function DraggableInventorySlot({
               name: itemName,
             },
             mousePosition: { x: e.clientX, y: e.clientY },
-            items,
+            items: menuItems,
           },
         });
         window.dispatchEvent(evt);
@@ -436,7 +467,7 @@ function DraggableInventorySlot({
             ? "rgba(180, 160, 100, 0.9)" // Gold highlight when dragging over
             : isEmpty
               ? "rgba(50, 45, 40, 0.6)"
-              : isNotedItem
+              : isItemNoted
                 ? "rgba(180, 160, 120, 0.7)" // Tan border for notes
                 : "rgba(70, 60, 50, 0.7)",
         borderWidth: isSourceItem ? "2px" : "1px",
@@ -445,7 +476,7 @@ function DraggableInventorySlot({
           ? "rgba(180, 160, 100, 0.25)" // Gold tint when dragging over
           : isEmpty
             ? "rgba(25, 22, 20, 0.85)" // Very dark for empty
-            : isNotedItem
+            : isItemNoted
               ? "linear-gradient(135deg, rgba(245, 235, 210, 0.95) 0%, rgba(225, 210, 175, 0.95) 100%)" // Parchment/paper for notes
               : "linear-gradient(180deg, rgba(55, 48, 42, 0.95) 0%, rgba(40, 35, 30, 0.95) 100%)", // Subtle gradient for items
         boxShadow: isSourceItem
@@ -454,7 +485,7 @@ function DraggableInventorySlot({
             ? "inset 0 0 8px rgba(180, 160, 100, 0.4), 0 0 4px rgba(180, 160, 100, 0.3)"
             : isEmpty
               ? "inset 0 1px 2px rgba(0, 0, 0, 0.4)"
-              : isNotedItem
+              : isItemNoted
                 ? "inset 0 1px 0 rgba(255, 255, 255, 0.5), inset 0 -1px 0 rgba(0, 0, 0, 0.1), 1px 1px 2px rgba(0, 0, 0, 0.2)" // Paper shadow
                 : "inset 0 1px 0 rgba(80, 70, 55, 0.3), inset 0 -1px 0 rgba(0, 0, 0, 0.2)",
         // OSRS-style cursor changes during targeting mode
@@ -477,10 +508,10 @@ function DraggableInventorySlot({
         <div
           className="flex items-center justify-center h-full transition-transform duration-150 group-hover:scale-105 text-sm md:text-base"
           style={{
-            color: isNotedItem
+            color: isItemNoted
               ? "rgba(80, 60, 40, 0.95)" // Dark brown for notes (on parchment)
               : "rgba(220, 200, 160, 0.95)", // Light gold for normal items
-            filter: isNotedItem
+            filter: isItemNoted
               ? "drop-shadow(0 1px 1px rgba(255, 255, 255, 0.3))"
               : "drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5))",
           }}
@@ -499,9 +530,9 @@ function DraggableInventorySlot({
             <div
               className="absolute top-0 left-0.5 font-bold leading-none"
               style={{
-                color: isNotedItem ? "#4a3520" : color, // Dark brown for notes
+                color: isItemNoted ? "#4a3520" : color, // Dark brown for notes
                 fontSize: "clamp(0.5rem, 1.2vw, 0.625rem)",
-                textShadow: isNotedItem
+                textShadow: isItemNoted
                   ? "0 0 2px rgba(255, 255, 255, 0.8), 1px 1px 1px rgba(255, 255, 255, 0.5)"
                   : "1px 1px 1px rgba(0, 0, 0, 0.9), -1px -1px 1px rgba(0, 0, 0, 0.5)",
               }}
