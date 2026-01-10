@@ -37,6 +37,7 @@ import {
   CONTEXT_MENU_COLORS,
   type PrimaryActionType,
 } from "@hyperscape/shared";
+import { dispatchInventoryAction } from "../systems/InventoryActionDispatcher";
 import type { ClientWorld, InventorySlotItem } from "../../types";
 
 /**
@@ -661,135 +662,15 @@ export function InventoryPanel({
       const slotIndex = parseInt(target.replace("inventory_slot_", ""), 10);
       if (Number.isNaN(slotIndex)) return;
       const it = slotItems[slotIndex];
-      if (!it) return;
-      // Handle "eat" action - consume food
-      if (ce.detail.actionId === "eat") {
-        const localPlayer = world?.getPlayer();
-        if (localPlayer) {
-          world?.emit(EventType.ITEM_ACTION_SELECTED, {
-            playerId: localPlayer.id,
-            actionId: "eat",
-            itemId: it.itemId,
-            slot: slotIndex,
-          });
-        }
-      }
+      if (!it || !world) return;
 
-      // Handle "drink" action - consume potion
-      if (ce.detail.actionId === "drink") {
-        const localPlayer = world?.getPlayer();
-        if (localPlayer) {
-          world?.emit(EventType.ITEM_ACTION_SELECTED, {
-            playerId: localPlayer.id,
-            actionId: "drink",
-            itemId: it.itemId,
-            slot: slotIndex,
-          });
-        }
-      }
-
-      // Handle "bury" action - bury bones for Prayer XP
-      if (ce.detail.actionId === "bury") {
-        world?.network?.send("buryBones", {
-          itemId: it.itemId,
-          slot: slotIndex,
-        });
-      }
-
-      // Handle "wield" action - equip weapons/shields
-      if (ce.detail.actionId === "wield") {
-        const localPlayer = world?.getPlayer();
-        if (localPlayer && world?.network?.send) {
-          world.network.send("equipItem", {
-            playerId: localPlayer.id,
-            itemId: it.itemId,
-            inventorySlot: slotIndex,
-          });
-        }
-      }
-
-      // Handle "wear" action - equip armor/accessories
-      if (ce.detail.actionId === "wear") {
-        const localPlayer = world?.getPlayer();
-        if (localPlayer && world?.network?.send) {
-          world.network.send("equipItem", {
-            playerId: localPlayer.id,
-            itemId: it.itemId,
-            inventorySlot: slotIndex,
-          });
-        }
-      }
-
-      // Handle "drop" action
-      if (ce.detail.actionId === "drop") {
-        if (world?.network?.dropItem) {
-          world.network.dropItem(it.itemId, slotIndex, it.quantity || 1);
-        } else if (world?.network?.send) {
-          world.network.send("dropItem", {
-            itemId: it.itemId,
-            slot: slotIndex,
-            quantity: it.quantity || 1,
-          });
-        }
-      }
-      if (ce.detail.actionId === "examine") {
-        const itemData = getItem(it.itemId);
-        const examineText = itemData?.examine || `It's a ${it.itemId}.`;
-        world?.emit(EventType.UI_TOAST, {
-          message: examineText,
-          type: "info",
-        });
-        // Also add to chat (OSRS-style game message)
-        if (world?.chat?.add) {
-          world.chat.add({
-            id: uuid(),
-            from: "",
-            body: examineText,
-            createdAt: new Date().toISOString(),
-            timestamp: Date.now(),
-          });
-        }
-      }
-      // OSRS-style "Use" action - enters targeting mode (client-side first)
-      // Actual network request is sent after target selection
-      if (ce.detail.actionId === "use") {
-        const localPlayer = world?.getPlayer();
-        if (localPlayer) {
-          console.log(
-            "[InventoryPanel] 🎯 Use clicked - entering targeting mode:",
-            {
-              itemId: it.itemId,
-              slot: slotIndex,
-            },
-          );
-          // Emit ITEM_ACTION_SELECTED to trigger InventoryInteractionSystem
-          // which calls the registered "use" action callback → startTargetingMode()
-          world?.emit(EventType.ITEM_ACTION_SELECTED, {
-            playerId: localPlayer.id,
-            actionId: "use",
-            itemId: it.itemId,
-            slot: slotIndex,
-          });
-        }
-      }
-
-      // Warn about unhandled actions (catches manifest typos or new action types)
-      const handledActions = new Set([
-        "eat",
-        "drink",
-        "bury",
-        "wield",
-        "wear",
-        "drop",
-        "examine",
-        "use",
-      ]);
-      if (!handledActions.has(ce.detail.actionId)) {
-        console.warn(
-          `[InventoryPanel] Unhandled inventory action: "${ce.detail.actionId}" for item "${it.itemId}". ` +
-            `Check inventoryActions in item manifest.`,
-        );
-      }
+      // Dispatch action through centralized handler
+      dispatchInventoryAction(ce.detail.actionId, {
+        world,
+        itemId: it.itemId,
+        slot: slotIndex,
+        quantity: it.quantity || 1,
+      });
     };
     window.addEventListener("contextmenu:select", onCtxSelect as EventListener);
     return () =>
@@ -1139,62 +1020,15 @@ export function InventoryPanel({
                   setTargetHover(null);
                 }}
                 onPrimaryAction={(clickedItem, slotIndex, actionType) => {
-                  // Handle left-click primary action based on item type
-                  const localPlayer = world?.getPlayer();
-                  if (!localPlayer) return;
+                  if (!world) return;
 
-                  switch (actionType) {
-                    case "eat":
-                      // Eat food - emit event for consumption system
-                      world?.emit(EventType.ITEM_ACTION_SELECTED, {
-                        playerId: localPlayer.id,
-                        actionId: "eat",
-                        itemId: clickedItem.itemId,
-                        slot: slotIndex,
-                      });
-                      break;
-
-                    case "drink":
-                      // Drink potion - emit event for consumption system
-                      world?.emit(EventType.ITEM_ACTION_SELECTED, {
-                        playerId: localPlayer.id,
-                        actionId: "drink",
-                        itemId: clickedItem.itemId,
-                        slot: slotIndex,
-                      });
-                      break;
-
-                    case "bury":
-                      // Bury bones - send to server for Prayer XP
-                      world?.network?.send("buryBones", {
-                        itemId: clickedItem.itemId,
-                        slot: slotIndex,
-                      });
-                      break;
-
-                    case "wield":
-                    case "wear":
-                      // Equip item - send to server
-                      if (world?.network?.send) {
-                        world.network.send("equipItem", {
-                          playerId: localPlayer.id,
-                          itemId: clickedItem.itemId,
-                          inventorySlot: slotIndex,
-                        });
-                      }
-                      break;
-
-                    case "use":
-                    default:
-                      // Enter Use targeting mode
-                      world?.emit(EventType.ITEM_ACTION_SELECTED, {
-                        playerId: localPlayer.id,
-                        actionId: "use",
-                        itemId: clickedItem.itemId,
-                        slot: slotIndex,
-                      });
-                      break;
-                  }
+                  // Dispatch through centralized handler
+                  dispatchInventoryAction(actionType, {
+                    world,
+                    itemId: clickedItem.itemId,
+                    slot: slotIndex,
+                    quantity: clickedItem.quantity || 1,
+                  });
                 }}
                 onShiftClick={(clickedItem, slotIndex) => {
                   if (world?.network?.dropItem) {
