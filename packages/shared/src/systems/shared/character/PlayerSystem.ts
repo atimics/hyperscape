@@ -68,6 +68,9 @@ import type { TerrainSystem } from "..";
 import { PlayerIdMapper } from "../../../utils/PlayerIdMapper";
 import type { DatabaseSystem } from "../../../types/systems/system-interfaces";
 import * as THREE from "three";
+import { EatDelayManager } from "./EatDelayManager";
+import { COMBAT_CONSTANTS } from "../../../constants/CombatConstants";
+import type { CombatSystem } from "../combat/CombatSystem";
 
 /**
  * PlayerSystem - Central Player Management
@@ -86,6 +89,9 @@ export class PlayerSystem extends SystemBase {
   private readonly AUTO_SAVE_INTERVAL = 30000; // 30 seconds auto-save
   private saveInterval?: NodeJS.Timeout;
   private _tempVec3 = new THREE.Vector3();
+
+  // Eat delay tracking (OSRS-accurate 3-tick cooldown)
+  private eatDelayManager = new EatDelayManager();
 
   // Player spawn tracking (merged from PlayerSpawnSystem)
   private spawnedPlayers = new Map<string, PlayerSpawnData>();
@@ -650,6 +656,9 @@ export class PlayerSystem extends SystemBase {
     this.playerAutoRetaliate.delete(data.playerId);
     this.autoRetaliateLastToggle.delete(data.playerId);
 
+    // Clean up eat cooldown (memory hygiene)
+    this.eatDelayManager.clearPlayer(data.playerId);
+
     // Unregister userId mapping
     PlayerIdMapper.unregister(data.playerId);
 
@@ -729,6 +738,9 @@ export class PlayerSystem extends SystemBase {
     player.alive = false;
     player.death.deathLocation = { ...player.position };
     player.death.respawnTime = Date.now() + this.RESPAWN_TIME;
+
+    // Clear eat cooldown on death (memory hygiene)
+    this.eatDelayManager.clearPlayer(data.playerId);
 
     // Emit ENTITY_DEATH for DeathSystem to handle (headstones, loot, respawn)
     // DeathSystem will handle the full death flow including respawn
@@ -926,13 +938,28 @@ export class PlayerSystem extends SystemBase {
     return false;
   }
 
+  /**
+   * Handle food consumption with OSRS-accurate timing
+   *
+   * Implements:
+   * - 3-tick (1.8s) eat delay between foods
+   * - Attack delay when eating during combat
+   * - OWASP input validation
+   * - OSRS-style chat message format
+   */
   private handleItemUsed(data: {
     playerId: string;
     itemId: string;
     slot: number;
     itemData: { id: string; name: string; type: string };
   }): void {
-    // Check if this is a consumable item
+    // === SECURITY: Input Validation (OWASP) ===
+    if (!data.playerId || typeof data.playerId !== "string") {
+      Logger.systemError("PlayerSystem", "Invalid playerId in handleItemUsed");
+      return;
+    }
+
+    // Only process consumables
     if (data.itemData.type !== "consumable" && data.itemData.type !== "food") {
       return;
     }
@@ -943,24 +970,80 @@ export class PlayerSystem extends SystemBase {
       return;
     }
 
-    // Apply healing
-    const healed = this.healPlayer(data.playerId, itemData.healAmount);
+    // === SECURITY: Bounds checking (OWASP) ===
+    const healAmount = Math.min(
+      Math.max(0, Math.floor(itemData.healAmount)),
+      COMBAT_CONSTANTS.MAX_HEAL_AMOUNT,
+    );
 
-    if (healed) {
-      // Emit healing event with source for tests
-      this.emitTypedEvent(EventType.PLAYER_HEALTH_UPDATED, {
-        playerId: data.playerId,
-        amount: itemData.healAmount,
-        source: "food",
-      });
-
-      // Show message to player
+    // === RATE LIMITING: Eat delay check (Anti-Cheat) ===
+    const currentTick = this.world.currentTick ?? 0;
+    if (!this.eatDelayManager.canEat(data.playerId, currentTick)) {
+      // Already eating - send rejection message
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId: data.playerId,
-        message: `You eat the ${itemData.name} and heal ${itemData.healAmount} HP.`,
-        type: "success" as const,
+        message: "You are already eating.",
+        type: "warning" as const,
       });
+      return;
     }
+
+    // Record this eat action
+    this.eatDelayManager.recordEat(data.playerId, currentTick);
+
+    // === CONSUME THE FOOD ===
+    // Remove the item from inventory AFTER all checks pass
+    // This ensures food isn't lost if eating is rejected (e.g., eat delay)
+    this.emitTypedEvent(EventType.INVENTORY_REMOVE_ITEM, {
+      playerId: data.playerId,
+      itemId: data.itemId,
+      quantity: 1,
+      slot: data.slot,
+    });
+
+    // Apply healing (may return false if already at full health)
+    // NOTE: healPlayer() emits PLAYER_HEALTH_UPDATED only if health changed
+    this.healPlayer(data.playerId, healAmount);
+
+    // OSRS Behavior: Message and attack delay ALWAYS apply when eating,
+    // even at full health. Food is consumed regardless.
+    // @see https://oldschool.runescape.wiki/w/Food
+
+    // OSRS-style message (lowercase item name, no heal amount shown)
+    this.emitTypedEvent(EventType.UI_MESSAGE, {
+      playerId: data.playerId,
+      message: `You eat the ${itemData.name.toLowerCase()}.`,
+      type: "success" as const,
+    });
+
+    // === COMBAT INTEGRATION: Apply attack delay if in combat ===
+    this.applyEatAttackDelay(data.playerId, currentTick);
+  }
+
+  /**
+   * Apply attack delay when eating during combat (OSRS-accurate)
+   *
+   * OSRS Rule: Foods only add to EXISTING attack delay.
+   * If weapon is ready to attack, eating does NOT add delay.
+   */
+  private applyEatAttackDelay(playerId: string, currentTick: number): void {
+    const combatSystem = this.world.getSystem("combat") as CombatSystem | null;
+    if (!combatSystem) return;
+
+    // Check if player is on attack cooldown
+    const isOnCooldown = combatSystem.isPlayerOnAttackCooldown?.(
+      playerId,
+      currentTick,
+    );
+
+    if (isOnCooldown) {
+      // Add eat delay to attack cooldown
+      combatSystem.addAttackDelay?.(
+        playerId,
+        COMBAT_CONSTANTS.EAT_ATTACK_DELAY_TICKS,
+      );
+    }
+    // If not on cooldown, do nothing (OSRS-accurate behavior)
   }
 
   async updatePlayerPosition(

@@ -46,12 +46,9 @@ export function dispatchInventoryAction(
   switch (action) {
     case "eat":
     case "drink":
-      world.emit(EventType.ITEM_ACTION_SELECTED, {
-        playerId: localPlayer.id,
-        actionId: action,
-        itemId,
-        slot,
-      });
+      // Send to server via network - server handles validation, consumption, and healing
+      // Server flow: useItem → INVENTORY_USE → InventorySystem → ITEM_USED → PlayerSystem
+      world.network?.send("useItem", { itemId, slot });
       return { success: true };
 
     case "bury":

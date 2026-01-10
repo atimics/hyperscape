@@ -26,6 +26,14 @@ export const COMBAT_CONSTANTS = {
   HEALTH_REGEN_INTERVAL_TICKS: 100,
   AFK_DISABLE_RETALIATE_TICKS: 2000,
 
+  // === Food Consumption (OSRS-accurate) ===
+  /** Ticks before player can eat again after eating (3 ticks = 1.8s) */
+  EAT_DELAY_TICKS: 3,
+  /** Ticks added to attack cooldown when eating during combat */
+  EAT_ATTACK_DELAY_TICKS: 3,
+  /** Maximum heal amount per food item (prevents exploit with modified manifests) */
+  MAX_HEAL_AMOUNT: 99,
+
   // === Hit Delay ===
   // Formula: MELEE=0, RANGED=1+floor((3+dist)/6), MAGIC=1+floor((1+dist)/3)
   HIT_DELAY: {
