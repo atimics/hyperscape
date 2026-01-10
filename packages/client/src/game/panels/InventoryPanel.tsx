@@ -443,6 +443,14 @@ function DraggableInventorySlot({
           });
         }
 
+        // OSRS-style: Cancel is always the last option
+        menuItems.push({
+          id: "cancel",
+          label: "Cancel",
+          styledLabel: [{ text: "Cancel" }],
+          enabled: true,
+        });
+
         // Dispatch context menu event
         const evt = new CustomEvent("contextmenu", {
           detail: {
