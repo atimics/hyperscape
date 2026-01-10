@@ -146,23 +146,6 @@ function usesWear(item: Item | null): boolean {
   return !usesWield(item);
 }
 
-/** Firemaking items - tinderbox and logs */
-function isFiremakingItem(item: Item | null): boolean {
-  if (!item) return false;
-  return (
-    item.id === "tinderbox" ||
-    item.id === "logs" ||
-    item.id.endsWith("_logs") ||
-    item.firemaking != null
-  );
-}
-
-/** Cooking items - raw food */
-function isCookingItem(item: Item | null): boolean {
-  if (!item) return false;
-  return item.id.startsWith("raw_") || item.cooking != null;
-}
-
 /** Bank notes - cannot be eaten/equipped, only Use/Drop/Examine */
 function isNotedItem(item: Item | null): boolean {
   if (!item) return false;
@@ -307,11 +290,11 @@ function DraggableInventorySlot({
     !isSourceItem && // Source item is not a valid target
     (targetingState?.validTargetIds.has(item.itemId) ?? false);
 
-  // BANK NOTE SYSTEM: Check if item is a bank note (ends with "_noted")
+  // BANK NOTE SYSTEM: Check if item is a bank note
   // Used for visual styling (parchment background) and context menu filtering
-  // Mirrors: @hyperscape/shared isNotedItemId() from NoteGenerator.ts
-  // Keep in sync with NOTE_SUFFIX = "_noted" constant
-  const isItemNoted = item?.itemId?.endsWith("_noted") ?? false;
+  // Uses isNotedItem() helper for consistency with context menu logic
+  const itemDataForNoteCheck = item ? getItem(item.itemId) : null;
+  const isItemNoted = isNotedItem(itemDataForNoteCheck);
 
   // Get icon for item
   const getItemIcon = (itemId: string) => {
@@ -902,6 +885,24 @@ export function InventoryPanel({
             slot: slotIndex,
           });
         }
+      }
+
+      // Warn about unhandled actions (catches manifest typos or new action types)
+      const handledActions = new Set([
+        "eat",
+        "drink",
+        "bury",
+        "wield",
+        "wear",
+        "drop",
+        "examine",
+        "use",
+      ]);
+      if (!handledActions.has(ce.detail.actionId)) {
+        console.warn(
+          `[InventoryPanel] Unhandled inventory action: "${ce.detail.actionId}" for item "${it.itemId}". ` +
+            `Check inventoryActions in item manifest.`,
+        );
       }
     };
     window.addEventListener("contextmenu:select", onCtxSelect as EventListener);
