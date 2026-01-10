@@ -587,6 +587,21 @@ export function InventoryPanel({
           });
         }
       }
+      // OSRS-style "Eat" action - consume food for healing
+      // Routes through ITEM_ACTION_SELECTED → InventoryInteractionSystem → INVENTORY_USE → healing
+      if (ce.detail.actionId === "eat") {
+        const localPlayer = world?.getPlayer();
+        if (localPlayer) {
+          // Emit ITEM_ACTION_SELECTED to trigger InventoryInteractionSystem
+          // which calls the registered "eat" action callback → INVENTORY_USE → healing
+          world?.emit(EventType.ITEM_ACTION_SELECTED, {
+            playerId: localPlayer.id,
+            actionId: "eat",
+            itemId: it.itemId,
+            slot: slotIndex,
+          });
+        }
+      }
     };
     window.addEventListener("contextmenu:select", onCtxSelect as EventListener);
     return () =>
