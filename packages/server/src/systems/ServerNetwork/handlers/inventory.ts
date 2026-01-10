@@ -35,6 +35,7 @@ import {
   getMoveRateLimiter,
   getDropRateLimiter,
   getEquipRateLimiter,
+  getConsumeRateLimiter,
 } from "../services/SlidingWindowRateLimiter";
 import { getIdempotencyService } from "../services/IdempotencyService";
 
@@ -416,8 +417,8 @@ export function handleUseItem(
     return;
   }
 
-  // Rate limit check (reuse equip limiter - similar action frequency)
-  if (!getEquipRateLimiter().check(playerEntity.id)) {
+  // Rate limit check (separate from equip to allow OSRS-style PvP gear+eat combos)
+  if (!getConsumeRateLimiter().check(playerEntity.id)) {
     return;
   }
 

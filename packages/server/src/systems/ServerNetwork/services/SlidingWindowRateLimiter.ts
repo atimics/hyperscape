@@ -180,6 +180,7 @@ let tileMovementLimiter: RateLimiter | null = null;
 let pathfindLimiter: RateLimiter | null = null;
 let combatLimiter: RateLimiter | null = null;
 let followLimiter: RateLimiter | null = null;
+let consumeLimiter: RateLimiter | null = null;
 
 /**
  * Get the pickup rate limiter (5/sec)
@@ -235,6 +236,22 @@ export function getEquipRateLimiter(): RateLimiter {
     });
   }
   return equipLimiter;
+}
+
+/**
+ * Get the consumable rate limiter (3/sec)
+ * Limits food/potion use requests - separate from equip to allow
+ * OSRS-style PvP where players gear switch AND eat in same tick
+ * Game logic already enforces 3-tick (1.8s) eat delay
+ */
+export function getConsumeRateLimiter(): RateLimiter {
+  if (!consumeLimiter) {
+    consumeLimiter = createRateLimiter({
+      maxPerSecond: 3,
+      name: "inventory-consume",
+    });
+  }
+  return consumeLimiter;
 }
 
 /**
@@ -306,6 +323,7 @@ export function destroyAllRateLimiters(): void {
   moveLimiter?.destroy();
   dropLimiter?.destroy();
   equipLimiter?.destroy();
+  consumeLimiter?.destroy();
   tileMovementLimiter?.destroy();
   pathfindLimiter?.destroy();
   combatLimiter?.destroy();
@@ -315,6 +333,7 @@ export function destroyAllRateLimiters(): void {
   moveLimiter = null;
   dropLimiter = null;
   equipLimiter = null;
+  consumeLimiter = null;
   tileMovementLimiter = null;
   pathfindLimiter = null;
   combatLimiter = null;
