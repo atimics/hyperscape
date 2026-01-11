@@ -83,6 +83,8 @@ export interface CurrentGoal {
   lockedBy?: "manual" | "autonomous";
   /** When the goal was locked */
   lockedAt?: number;
+  /** Original user message for multi-step user commands */
+  userMessage?: string;
 }
 
 export class AutonomousBehaviorManager {
@@ -237,6 +239,94 @@ export class AutonomousBehaviorManager {
     }
 
     logger.info(`[AutonomousBehavior] === Tick ${this.tickCount} ===`);
+
+    // Check for locked user command goal - continue executing it
+    if (this.currentGoal?.locked && this.currentGoal?.lockedBy === "manual") {
+      const goalDescription = this.currentGoal.description || "";
+      const originalUserMessage = this.currentGoal.userMessage || "";
+      logger.info(
+        `[AutonomousBehavior] 🔒 Locked user command goal: ${goalDescription}`,
+      );
+      logger.info(
+        `[AutonomousBehavior] 📝 Original user message: "${originalUserMessage}"`,
+      );
+
+      // Extract action name from goal description (format: "User command: ACTION_NAME - ...")
+      const actionMatch = goalDescription.match(/User command: (\w+)/);
+      if (actionMatch) {
+        const actionName = actionMatch[1];
+        logger.info(
+          `[AutonomousBehavior] Continuing user command: ${actionName}`,
+        );
+
+        // Import and execute the user's action
+        const { pickupItemAction, dropItemAction } = await import(
+          "../actions/inventory.js"
+        );
+        const { attackEntityAction } = await import("../actions/combat.js");
+        const { chopTreeAction } = await import("../actions/skills.js");
+        const { moveToAction } = await import("../actions/movement.js");
+
+        const actionMap: Record<string, Action> = {
+          PICKUP_ITEM: pickupItemAction,
+          DROP_ITEM: dropItemAction,
+          ATTACK_ENTITY: attackEntityAction,
+          CHOP_TREE: chopTreeAction,
+          MOVE_TO: moveToAction,
+        };
+
+        const userAction = actionMap[actionName];
+        if (userAction) {
+          // Create a message with the ORIGINAL user text so action handlers can match correctly
+          const userCommandMessage: Memory = {
+            id: generateUUID(),
+            entityId: this.runtime.agentId,
+            agentId: this.runtime.agentId,
+            roomId: this.runtime.agentId,
+            content: {
+              text: originalUserMessage, // Use original message for item/target matching!
+              source: "user_command_continuation",
+            },
+            createdAt: Date.now(),
+          };
+          const state = await this.runtime.composeState(userCommandMessage);
+
+          // Validate the action
+          const isValid = await userAction.validate(
+            this.runtime,
+            userCommandMessage,
+            state,
+          );
+
+          if (isValid) {
+            logger.info(
+              `[AutonomousBehavior] Executing user command action: ${actionName}`,
+            );
+            await this.executeAction(userAction, userCommandMessage, state);
+            return; // Don't do normal tick processing
+          } else {
+            // Check if goal was set recently - agent might still be walking to target
+            const goalAge = Date.now() - (this.currentGoal?.startedAt || 0);
+            const GRACE_PERIOD_MS = 60000; // 60 seconds grace period for multi-step actions
+
+            if (goalAge < GRACE_PERIOD_MS) {
+              logger.info(
+                `[AutonomousBehavior] User command action ${actionName} validation failed, but goal is only ${Math.round(goalAge / 1000)}s old - keeping goal (grace period)`,
+              );
+              // Skip this tick but don't clear the goal - agent might still be walking
+              return;
+            }
+
+            logger.info(
+              `[AutonomousBehavior] User command action ${actionName} no longer valid after ${Math.round(goalAge / 1000)}s, clearing goal`,
+            );
+            // Action is no longer valid (e.g., item picked up, target dead)
+            // Clear the goal so normal behavior can resume
+            this.clearGoal();
+          }
+        }
+      }
+    }
 
     // Step 2: Create internal "tick" message
     const tickMessage = this.createTickMessage();

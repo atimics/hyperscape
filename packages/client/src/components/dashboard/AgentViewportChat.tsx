@@ -11,12 +11,6 @@ interface Message {
   timestamp: Date;
 }
 
-interface ElizaOSResponse {
-  text?: string;
-  content?: string;
-  [key: string]: unknown;
-}
-
 interface AgentViewportChatProps {
   agent: Agent;
 }
@@ -34,6 +28,7 @@ export const AgentViewportChat: React.FC<AgentViewportChatProps> = ({
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isMountedRef = useRef(true);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Use Privy hook to get fresh access token (not stale localStorage token)
   const { getAccessToken, user } = usePrivy();
@@ -223,23 +218,34 @@ export const AgentViewportChat: React.FC<AgentViewportChatProps> = ({
       }
 
       const data = await response.json();
-      const responses = Array.isArray(data) ? data : [data];
 
-      responses.forEach((resp: ElizaOSResponse, index: number) => {
-        const agentMessage: Message = {
-          id: (Date.now() + index).toString(),
+      // Game server returns { success: true, message: "Message sent" }
+      // Agent's actual response will appear in the game chat (visible in iframe)
+      if (data.success) {
+        const confirmMessage: Message = {
+          id: Date.now().toString(),
           sender: "agent",
-          text: resp.text || resp.content || "No response",
+          text: "Message delivered. Opening game chat...",
           timestamp: new Date(),
         };
-        setMessages((prev) => [...prev, agentMessage]);
-      });
+        setMessages((prev) => [...prev, confirmMessage]);
+
+        // Tell the iframe to open the chat panel
+        if (iframeRef.current?.contentWindow) {
+          iframeRef.current.contentWindow.postMessage(
+            { type: "OPEN_CHAT" },
+            "*",
+          );
+        }
+      } else {
+        throw new Error(data.error || "Failed to deliver message");
+      }
     } catch (error) {
       console.error("Failed to send message:", error);
       const errorMessage: Message = {
         id: Date.now().toString(),
         sender: "agent",
-        text: "⚠️ Failed to send message to agent. Is ElizaOS running?",
+        text: `⚠️ ${error instanceof Error ? error.message : "Failed to send message"}`,
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, errorMessage]);
@@ -337,6 +343,7 @@ export const AgentViewportChat: React.FC<AgentViewportChatProps> = ({
     <div className="flex flex-col h-full bg-black relative">
       {/* 3D Game Viewport (Background) */}
       <iframe
+        ref={iframeRef}
         className="absolute inset-0 w-full h-full border-none bg-[#0b0a15]"
         src={`/?${iframeParams.toString()}`}
         allow="autoplay; fullscreen; microphone; camera"

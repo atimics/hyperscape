@@ -12,9 +12,11 @@
 import {
   Service,
   logger,
+  ModelType,
   type IAgentRuntime,
   type Memory,
   type Action,
+  type UUID,
 } from "@elizaos/core";
 import WebSocket from "ws";
 import { Packr, Unpackr } from "msgpackr";
@@ -182,6 +184,7 @@ export class HyperscapeService
     );
 
     // Try to get from agent settings if not in env
+    // First try runtime.getSetting (standard ElizaOS method)
     if (!service.authToken && runtime.agentId) {
       const settings = runtime.getSetting("HYPERSCAPE_AUTH_TOKEN");
       logger.info(
@@ -207,6 +210,33 @@ export class HyperscapeService
         logger.info(
           `[HyperscapeService] ✅ Character ID set: ${service.characterId}`,
         );
+      }
+    }
+
+    // Fallback: Try to access character.settings.secrets directly
+    // This handles cases where getSetting doesn't find nested secrets
+    const character = runtime.character as {
+      settings?: { secrets?: Record<string, string> };
+    };
+    if (character?.settings?.secrets) {
+      const secrets = character.settings.secrets;
+      logger.info(
+        `[HyperscapeService] 🔑 Checking character.settings.secrets directly...`,
+      );
+      if (!service.authToken && secrets.HYPERSCAPE_AUTH_TOKEN) {
+        service.authToken = secrets.HYPERSCAPE_AUTH_TOKEN;
+        logger.info(
+          `[HyperscapeService] ✅ Found authToken in character.settings.secrets`,
+        );
+      }
+      if (!service.characterId && secrets.HYPERSCAPE_CHARACTER_ID) {
+        service.characterId = secrets.HYPERSCAPE_CHARACTER_ID;
+        logger.info(
+          `[HyperscapeService] ✅ Found characterId in character.settings.secrets: ${service.characterId}`,
+        );
+      }
+      if (!service.privyUserId && secrets.HYPERSCAPE_PRIVY_USER_ID) {
+        service.privyUserId = secrets.HYPERSCAPE_PRIVY_USER_ID;
       }
     }
 
@@ -384,26 +414,81 @@ export class HyperscapeService
           createdAt: chatData.timestamp,
         };
 
-        // Import registered actions to find appropriate one
+        // Import all available actions for matching
         const { moveToAction, stopMovementAction } = await import(
           "../actions/movement.js"
         );
+        const {
+          pickupItemAction,
+          equipItemAction,
+          useItemAction,
+          dropItemAction,
+        } = await import("../actions/inventory.js");
+        const { attackEntityAction } = await import("../actions/combat.js");
+        const { chopTreeAction } = await import("../actions/skills.js");
+        const { exploreAction } = await import("../actions/autonomous.js");
 
-        // Determine which action to invoke based on message content
+        // All available actions with their trigger patterns
+        const availableActions: Array<{
+          action: Action;
+          patterns: RegExp[];
+        }> = [
+          {
+            action: stopMovementAction,
+            patterns: [/^(stop|halt|stay|cancel|abort)/i],
+          },
+          {
+            action: moveToAction,
+            patterns: [
+              /\[(-?\d+\.?\d*),\s*(-?\d+\.?\d*),\s*(-?\d+\.?\d*)\]/,
+              /^(go to|move to|walk to|run to)\s+/i,
+            ],
+          },
+          {
+            action: pickupItemAction,
+            patterns: [/\b(pick\s*up|pickup|grab|take|loot|get)\b/i],
+          },
+          {
+            action: equipItemAction,
+            patterns: [/\b(equip|wield|wear|put on)\b/i],
+          },
+          {
+            action: useItemAction,
+            patterns: [/\b(use|eat|drink|consume)\b/i],
+          },
+          {
+            action: dropItemAction,
+            patterns: [/\b(drop|discard|throw away)\b/i],
+          },
+          {
+            action: attackEntityAction,
+            patterns: [/\b(attack|fight|kill|hit|strike)\b/i],
+          },
+          {
+            action: chopTreeAction,
+            patterns: [/\b(chop|cut|woodcut)\b.*\b(tree|wood|log)\b/i],
+          },
+          {
+            action: exploreAction,
+            patterns: [/\b(explore|wander|look around|scout)\b/i],
+          },
+        ];
+
+        // Find matching action based on message content
         let actionToInvoke: Action | null = null;
+        const normalizedMessage = messageText.trim().toLowerCase();
 
-        // Check for stop commands
-        const stopPatterns = /^(stop|halt|stay|cancel|abort)/i;
-        if (stopPatterns.test(messageText.trim())) {
-          actionToInvoke = stopMovementAction;
-        }
-        // Check for movement commands (coordinates pattern)
-        else if (
-          messageText.match(
-            /\[(-?\d+\.?\d*),\s*(-?\d+\.?\d*),\s*(-?\d+\.?\d*)\]/,
-          )
-        ) {
-          actionToInvoke = moveToAction;
+        for (const { action, patterns } of availableActions) {
+          for (const pattern of patterns) {
+            if (pattern.test(normalizedMessage)) {
+              actionToInvoke = action;
+              logger.info(
+                `[HyperscapePlugin] 🎯 Matched action "${action.name}" from pattern`,
+              );
+              break;
+            }
+          }
+          if (actionToInvoke) break;
         }
 
         if (actionToInvoke) {
@@ -443,6 +528,26 @@ export class HyperscapeService
             `[HyperscapePlugin] 🎯 Executing ElizaOS action: ${actionToInvoke.name}`,
           );
 
+          // Set a temporary locked goal to prevent autonomous behavior from interfering
+          const behaviorManager = this.getBehaviorManager();
+          if (behaviorManager) {
+            const goalDescription = `User command: ${actionToInvoke.name} - "${messageText.substring(0, 50)}"`;
+            behaviorManager.setGoal({
+              type: "user_command" as "idle", // Cast to valid type, shows in dashboard
+              description: goalDescription,
+              target: 1,
+              progress: 0,
+              startedAt: Date.now(),
+              locked: true,
+              lockedBy: "manual",
+              lockedAt: Date.now(),
+              userMessage: messageText, // Store full message for multi-step actions
+            });
+            logger.info(
+              `[HyperscapePlugin] 🔒 Set locked goal for user command: ${actionToInvoke.name}`,
+            );
+          }
+
           // Execute action through ElizaOS handler with callback
           // HandlerCallback returns Memory[] so we return empty array
           const result = await actionToInvoke.handler(
@@ -464,24 +569,124 @@ export class HyperscapeService
               logger.info(
                 `[HyperscapePlugin] ✅ Action ${actionToInvoke.name} completed successfully`,
               );
+              // Check if action is still in progress (e.g., walking to target)
+              const resultText = (result as { text?: string }).text || "";
+              const isInProgress =
+                resultText.includes("Walking") ||
+                resultText.includes("Moving") ||
+                resultText.includes("remaining");
+
+              if (isInProgress) {
+                logger.info(
+                  `[HyperscapePlugin] 🚶 Action in progress, keeping goal locked`,
+                );
+                // Don't clear goal - action needs multiple ticks to complete
+              } else {
+                // Action fully completed - clear the goal
+                if (behaviorManager) {
+                  behaviorManager.clearGoal();
+                  logger.info(
+                    `[HyperscapePlugin] 🔓 Cleared locked goal after action completed`,
+                  );
+                }
+              }
             } else {
               logger.warn(
                 `[HyperscapePlugin] ⚠️ Action ${actionToInvoke.name} failed: ${(result as { error?: Error }).error?.message || "Unknown error"}`,
               );
+              // Clear goal on failure too
+              if (behaviorManager) {
+                behaviorManager.clearGoal();
+              }
             }
           }
           return;
         }
 
-        // No specific action matched - log for future AI integration
-        // In a full implementation, this would go through ElizaOS's AI
-        // to determine the appropriate action based on context
+        // No pattern matched - use ElizaOS LLM to select action
         logger.info(
-          `[HyperscapePlugin] 💭 No direct action matched for: "${messageText}"`,
+          `[HyperscapePlugin] 💭 No pattern match, using ElizaOS LLM for: "${messageText}"`,
         );
-        logger.info(
-          `[HyperscapePlugin] Future: Route through ElizaOS AI for intelligent action selection`,
-        );
+
+        // Compose state for LLM context
+        const state = await runtime.composeState(memory);
+
+        // Build prompt for action selection
+        const actionNames = availableActions
+          .map((a) => a.action.name)
+          .join(", ");
+        const actionPrompt = `You are an AI agent in a game. The user said: "${messageText}"
+
+Available actions: ${actionNames}
+
+Based on the user's message, which action should be taken?
+- If the user wants to pick up something, respond with: PICKUP_ITEM
+- If the user wants to attack, respond with: ATTACK_ENTITY
+- If the user wants to chop trees, respond with: CHOP_TREE
+- If the user wants to move somewhere, respond with: MOVE_TO
+- If the user wants to stop, respond with: STOP_MOVEMENT
+- If the user wants to explore, respond with: EXPLORE
+- If the user wants to equip something, respond with: EQUIP_ITEM
+- If the user wants to eat/drink/use something, respond with: USE_ITEM
+- If the user wants to drop something, respond with: DROP_ITEM
+- If none apply, respond with: NONE
+
+Respond with ONLY the action name, nothing else.`;
+
+        try {
+          const response = await runtime.useModel(ModelType.TEXT_SMALL, {
+            prompt: actionPrompt,
+            maxTokens: 50,
+            temperature: 0.3,
+          });
+
+          const selectedActionName = String(response).trim().toUpperCase();
+          logger.info(
+            `[HyperscapePlugin] 🤖 LLM selected action: ${selectedActionName}`,
+          );
+
+          if (selectedActionName && selectedActionName !== "NONE") {
+            const matchedAction = availableActions.find(
+              (a) => a.action.name === selectedActionName,
+            );
+
+            if (matchedAction) {
+              // Create response memory with action
+              const responseMemory: Memory = {
+                id: crypto.randomUUID() as UUID,
+                entityId: runtime.agentId,
+                agentId: runtime.agentId,
+                roomId: memory.roomId,
+                content: {
+                  text: `Executing ${selectedActionName}`,
+                  action: selectedActionName,
+                },
+                createdAt: Date.now(),
+              };
+
+              // Use ElizaOS processActions to execute
+              await runtime.processActions(
+                memory,
+                [responseMemory],
+                state,
+                async (response) => {
+                  logger.info(
+                    `[HyperscapePlugin] 📤 Action response: ${response.text}`,
+                  );
+                  return [];
+                },
+              );
+
+              logger.info(
+                `[HyperscapePlugin] ✅ ElizaOS processActions completed for ${selectedActionName}`,
+              );
+            }
+          }
+        } catch (llmError) {
+          logger.error(
+            `[HyperscapePlugin] LLM action selection failed: ${llmError}`,
+          );
+        }
       } catch (error) {
         logger.error(
           { error },
@@ -887,6 +1092,7 @@ export class HyperscapeService
   private getPacketName(id: number): string | null {
     // CRITICAL: This list MUST exactly match packages/shared/src/platform/shared/packets.ts
     // Any mismatch will cause packet IDs to be misinterpreted!
+    // Last synced: 2026-01-11 from packages/shared/src/platform/shared/packets.ts
     const packetNames = [
       "snapshot",
       "command",
@@ -905,6 +1111,7 @@ export class HyperscapeService
       "kick",
       "ping",
       "pong",
+      // Multiplayer movement
       "input",
       "inputAck",
       "correction",
@@ -912,49 +1119,106 @@ export class HyperscapeService
       "serverStateUpdate",
       "deltaUpdate",
       "compressedUpdate",
+      // Resource system packets
       "resourceSnapshot",
       "resourceSpawnPoints",
       "resourceSpawned",
       "resourceDepleted",
       "resourceRespawned",
+      "fishingSpotMoved",
+      "resourceInteract",
       "resourceGather",
       "gatheringComplete",
+      // Processing packets (firemaking/cooking)
+      "firemakingRequest",
+      "cookingRequest",
+      "cookingSourceInteract",
+      "fireCreated",
+      "fireExtinguished",
+      // Smelting/Smithing packets
+      "smeltingSourceInteract",
+      "smithingSourceInteract",
+      "processingSmelting",
+      "processingSmithing",
+      "smeltingInterfaceOpen",
+      "smithingInterfaceOpen",
+      // Combat packets
       "attackMob",
-      "changeAttackStyle", // ✅ ADDED - was missing!
+      "attackPlayer",
+      "followPlayer",
+      "changeAttackStyle",
+      "setAutoRetaliate",
+      "autoRetaliateChanged",
+      // Item pickup packets
       "pickupItem",
+      // Inventory action packets
       "dropItem",
+      "moveItem",
+      "useItem",
+      // Equipment packets
       "equipItem",
       "unequipItem",
+      // Inventory sync packets
       "inventoryUpdated",
-      "coinsUpdated", // ✅ CRITICAL: Must match server packets.ts order!
+      "coinsUpdated",
+      // Equipment sync packets
       "equipmentUpdated",
+      // Skills sync packets
       "skillsUpdated",
+      // XP drop visual feedback
+      "xpDrop",
+      // UI feedback packets
       "showToast",
+      // Death screen packets
       "deathScreen",
       "deathScreenClose",
       "requestRespawn",
+      // Death state packets
       "playerSetDead",
       "playerRespawned",
+      // Loot packets
       "corpseLoot",
-      "attackStyleChanged", // ✅ ADDED - was missing!
-      "attackStyleUpdate", // ✅ ADDED - was missing!
-      "combatDamageDealt", // ✅ ADDED - was missing!
-      "playerUpdated", // ✅ ADDED - was missing!
+      // Attack style packets
+      "attackStyleChanged",
+      "attackStyleUpdate",
+      // Combat visual feedback packets
+      "combatDamageDealt",
+      // Player state packets
+      "playerUpdated",
+      // Character selection packets
       "characterListRequest",
       "characterCreate",
       "characterList",
       "characterCreated",
       "characterSelected",
       "enterWorld",
-      "syncGoal", // Agent goal sync packet (for dashboard display)
-      "goalOverride", // Agent goal override packet (dashboard -> plugin)
+      // Agent goal sync packet
+      "syncGoal",
+      "goalOverride",
       // Bank packets
       "bankOpen",
       "bankState",
       "bankDeposit",
       "bankDepositAll",
       "bankWithdraw",
+      "bankDepositCoins",
+      "bankWithdrawCoins",
       "bankClose",
+      "bankMove",
+      // Bank tab packets
+      "bankCreateTab",
+      "bankDeleteTab",
+      "bankMoveToTab",
+      "bankSelectTab",
+      // Bank placeholder packets
+      "bankWithdrawPlaceholder",
+      "bankReleasePlaceholder",
+      "bankReleaseAllPlaceholders",
+      "bankToggleAlwaysPlaceholder",
+      // Bank equipment tab packets
+      "bankWithdrawToEquipment",
+      "bankDepositEquipment",
+      "bankDepositAllEquipment",
       // Store packets
       "storeOpen",
       "storeState",
@@ -969,10 +1233,16 @@ export class HyperscapeService
       "dialogueResponse",
       "dialogueEnd",
       "dialogueClose",
-      // Tile movement packets (RuneScape-style)
-      "entityTileUpdate", // Server -> Client: entity moved to new tile position
-      "tileMovementStart", // Server -> Client: movement path started
-      "tileMovementEnd", // Server -> Client: arrived at destination
+      // Tile movement packets
+      "entityTileUpdate",
+      "tileMovementStart",
+      "tileMovementEnd",
+      // System message packets
+      "systemMessage",
+      // Player loading state packets
+      "clientReady",
+      // World time sync packets
+      "worldTimeSync",
     ];
     return packetNames[id] || null;
   }
@@ -1841,6 +2111,7 @@ export class HyperscapeService
   private getPacketId(name: string): number | null {
     // CRITICAL: This list MUST exactly match packages/shared/src/platform/shared/packets.ts
     // Any mismatch will cause packet IDs to be misinterpreted!
+    // Last synced: 2026-01-09 from packages/shared/src/platform/shared/packets.ts
     const packetNames = [
       "snapshot",
       "command",
@@ -1859,6 +2130,7 @@ export class HyperscapeService
       "kick",
       "ping",
       "pong",
+      // Multiplayer movement
       "input",
       "inputAck",
       "correction",
@@ -1866,49 +2138,106 @@ export class HyperscapeService
       "serverStateUpdate",
       "deltaUpdate",
       "compressedUpdate",
+      // Resource system packets
       "resourceSnapshot",
       "resourceSpawnPoints",
       "resourceSpawned",
       "resourceDepleted",
       "resourceRespawned",
+      "fishingSpotMoved",
+      "resourceInteract",
       "resourceGather",
       "gatheringComplete",
+      // Processing packets (firemaking/cooking)
+      "firemakingRequest",
+      "cookingRequest",
+      "cookingSourceInteract",
+      "fireCreated",
+      "fireExtinguished",
+      // Smelting/Smithing packets (must match server order!)
+      "smeltingSourceInteract",
+      "smithingSourceInteract",
+      "processingSmelting",
+      "processingSmithing",
+      "smeltingInterfaceOpen",
+      "smithingInterfaceOpen",
+      // Combat packets
       "attackMob",
-      "changeAttackStyle", // ✅ ADDED - was missing!
+      "attackPlayer",
+      "followPlayer",
+      "changeAttackStyle",
+      "setAutoRetaliate",
+      "autoRetaliateChanged",
+      // Item pickup packets
       "pickupItem",
+      // Inventory action packets
       "dropItem",
+      "moveItem",
+      "useItem",
+      // Equipment packets
       "equipItem",
       "unequipItem",
+      // Inventory sync packets
       "inventoryUpdated",
-      "coinsUpdated", // ✅ CRITICAL: Must match server packets.ts order!
+      "coinsUpdated",
+      // Equipment sync packets
       "equipmentUpdated",
+      // Skills sync packets
       "skillsUpdated",
+      // XP drop visual feedback
+      "xpDrop",
+      // UI feedback packets
       "showToast",
+      // Death screen packets
       "deathScreen",
       "deathScreenClose",
       "requestRespawn",
+      // Death state packets
       "playerSetDead",
       "playerRespawned",
+      // Loot packets
       "corpseLoot",
-      "attackStyleChanged", // ✅ ADDED - was missing!
-      "attackStyleUpdate", // ✅ ADDED - was missing!
-      "combatDamageDealt", // ✅ ADDED - was missing!
-      "playerUpdated", // ✅ ADDED - was missing!
+      // Attack style packets
+      "attackStyleChanged",
+      "attackStyleUpdate",
+      // Combat visual feedback packets
+      "combatDamageDealt",
+      // Player state packets
+      "playerUpdated",
+      // Character selection packets
       "characterListRequest",
       "characterCreate",
       "characterList",
       "characterCreated",
       "characterSelected",
       "enterWorld",
-      "syncGoal", // Agent goal sync packet (for dashboard display)
-      "goalOverride", // Agent goal override packet (dashboard -> plugin)
+      // Agent goal sync packet
+      "syncGoal",
+      "goalOverride",
       // Bank packets
       "bankOpen",
       "bankState",
       "bankDeposit",
       "bankDepositAll",
       "bankWithdraw",
+      "bankDepositCoins",
+      "bankWithdrawCoins",
       "bankClose",
+      "bankMove",
+      // Bank tab packets
+      "bankCreateTab",
+      "bankDeleteTab",
+      "bankMoveToTab",
+      "bankSelectTab",
+      // Bank placeholder packets
+      "bankWithdrawPlaceholder",
+      "bankReleasePlaceholder",
+      "bankReleaseAllPlaceholders",
+      "bankToggleAlwaysPlaceholder",
+      // Bank equipment tab packets
+      "bankWithdrawToEquipment",
+      "bankDepositEquipment",
+      "bankDepositAllEquipment",
       // Store packets
       "storeOpen",
       "storeState",
@@ -1923,10 +2252,16 @@ export class HyperscapeService
       "dialogueResponse",
       "dialogueEnd",
       "dialogueClose",
-      // Tile movement packets (RuneScape-style)
-      "entityTileUpdate", // Server -> Client: entity moved to new tile position
-      "tileMovementStart", // Server -> Client: movement path started
-      "tileMovementEnd", // Server -> Client: arrived at destination
+      // Tile movement packets
+      "entityTileUpdate",
+      "tileMovementStart",
+      "tileMovementEnd",
+      // System message packets
+      "systemMessage",
+      // Player loading state packets
+      "clientReady",
+      // World time sync packets
+      "worldTimeSync",
     ];
     const index = packetNames.indexOf(name);
     return index >= 0 ? index : null;
@@ -1969,6 +2304,35 @@ export class HyperscapeService
    */
   async executeEquipItem(command: EquipItemCommand): Promise<void> {
     this.sendCommand("equipItem", command);
+  }
+
+  /**
+   * Execute pickup item command - picks up an item from the ground
+   */
+  async executePickupItem(itemId: string): Promise<void> {
+    // Server requires timestamp for anti-replay validation
+    this.sendCommand("pickupItem", { itemId, timestamp: Date.now() });
+  }
+
+  /**
+   * Execute drop item command - drops an item from inventory to the ground
+   * @param itemId - The item type ID
+   * @param quantity - How many to drop (for stackable items)
+   * @param slot - The specific inventory slot (for non-stackable items with same itemId)
+   */
+  async executeDropItem(
+    itemId: string,
+    quantity: number = 1,
+    slot?: number,
+  ): Promise<void> {
+    const payload: { itemId: string; quantity: number; slot?: number } = {
+      itemId,
+      quantity,
+    };
+    if (slot !== undefined) {
+      payload.slot = slot;
+    }
+    this.sendCommand("dropItem", payload);
   }
 
   /**
