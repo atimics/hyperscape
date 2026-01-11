@@ -2558,6 +2558,7 @@ export class ResourceSystem extends SystemBase {
 
   /**
    * Compute gathering cycle in ticks (OSRS-accurate, skill-specific).
+   * SERVER-SIDE: Rolls for dragon/crystal pickaxe bonus speed here to maintain determinism.
    * @see gathering/SuccessRateCalculator.ts for implementation
    */
   private computeCycleTicks(
@@ -2565,7 +2566,18 @@ export class ResourceSystem extends SystemBase {
     tuned: { levelRequired: number; baseCycleTicks: number },
     toolData: GatheringToolData | null,
   ): number {
-    return computeCycleTicksUtil(skill, tuned.baseCycleTicks, toolData);
+    // Roll for dragon/crystal pickaxe bonus speed server-side
+    // Dragon: 1/6 chance (0.167), Crystal: 1/4 chance (0.25)
+    const bonusRollTriggered =
+      toolData?.bonusTickChance !== undefined &&
+      Math.random() < toolData.bonusTickChance;
+
+    return computeCycleTicksUtil(
+      skill,
+      tuned.baseCycleTicks,
+      toolData,
+      bonusRollTriggered,
+    );
   }
 
   /**

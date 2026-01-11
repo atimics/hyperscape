@@ -103,6 +103,9 @@ export function computeSuccessRate(
 /**
  * Compute gathering cycle in ticks (OSRS-accurate, skill-specific).
  *
+ * This is a DETERMINISTIC (pure) function - no randomness.
+ * For dragon/crystal pickaxe bonus speed, the caller must roll and pass bonusRollTriggered.
+ *
  * OSRS MECHANICS:
  * - Woodcutting: Fixed 4 ticks, tool doesn't affect frequency
  * - Mining: Tool determines tick interval (8 bronze → 3 rune/dragon)
@@ -113,6 +116,7 @@ export function computeSuccessRate(
  * @param skill - The gathering skill (woodcutting, mining, fishing)
  * @param baseCycleTicks - Base cycle ticks from resource manifest
  * @param toolData - Tool data from tools.json manifest (may have rollTicks for mining)
+ * @param bonusRollTriggered - Whether the dragon/crystal pickaxe bonus speed triggered (caller rolls this server-side)
  * @returns Number of ticks between gathering attempts
  *
  * @see https://oldschool.runescape.wiki/w/Mining
@@ -122,6 +126,7 @@ export function computeCycleTicks(
   skill: string,
   baseCycleTicks: number,
   toolData: GatheringToolData | null,
+  bonusRollTriggered: boolean = false,
 ): number {
   const mechanics =
     GATHERING_CONSTANTS.SKILL_MECHANICS[
@@ -146,13 +151,9 @@ export function computeCycleTicks(
       // OSRS: Dragon/Crystal pickaxe have a chance for bonus speed
       // Dragon: 1/6 chance for 2 ticks (vs 3), avg 2.83
       // Crystal: 1/4 chance for 2 ticks (vs 3), avg 2.75
-      if (
-        toolData?.bonusTickChance !== undefined &&
-        toolData?.bonusRollTicks !== undefined
-      ) {
-        if (Math.random() < toolData.bonusTickChance) {
-          rollTicks = toolData.bonusRollTicks;
-        }
+      // The caller (server-side) rolls for this and passes bonusRollTriggered
+      if (bonusRollTriggered && toolData?.bonusRollTicks !== undefined) {
+        rollTicks = toolData.bonusRollTicks;
       }
 
       return Math.max(GATHERING_CONSTANTS.MINIMUM_CYCLE_TICKS, rollTicks);
