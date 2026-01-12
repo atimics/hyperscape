@@ -448,8 +448,10 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
 
       {/* Combat Level */}
       <div
-        className="bg-black/35 border rounded-md p-1 flex items-center justify-between text-[10px]"
+        className="bg-black/35 rounded-md p-1 flex items-center justify-between text-[10px]"
         style={{
+          borderWidth: "1px",
+          borderStyle: "solid",
           borderColor: "rgba(242, 208, 138, 0.3)",
           color: COLORS.ACCENT,
         }}
