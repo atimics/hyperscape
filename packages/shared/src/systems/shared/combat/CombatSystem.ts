@@ -183,9 +183,11 @@ export class CombatSystem extends SystemBase {
     }
 
     // Listen for auto-retaliate toggle to start combat if toggled ON while being attacked
+    // SERVER-ONLY: Combat state changes must happen on server, client receives via network sync
     this.subscribe(
       EventType.UI_AUTO_RETALIATE_CHANGED,
       (data: { playerId: string; enabled: boolean }) => {
+        if (!this.world.isServer) return; // Combat is server-authoritative
         if (data.enabled) {
           this.handleAutoRetaliateEnabled(data.playerId);
         }
@@ -194,9 +196,11 @@ export class CombatSystem extends SystemBase {
 
     // OSRS-accurate: Player clicked to move = cancel their attacking combat
     // In OSRS, clicking anywhere else cancels your current action including combat
+    // SERVER-ONLY: Combat state changes must happen on server
     this.subscribe(
       EventType.COMBAT_PLAYER_DISENGAGE,
       (data: { playerId: string }) => {
+        if (!this.world.isServer) return; // Combat is server-authoritative
         this.handlePlayerDisengage(data.playerId);
       },
     );
@@ -698,17 +702,10 @@ export class CombatSystem extends SystemBase {
     clearPendingAttacker(playerEntity);
 
     // Clear server face target since player now has a combat target
+    // Note: enterCombat() already handles rotation via rotateTowardsTarget()
     this.emitTypedEvent(EventType.COMBAT_CLEAR_FACE_TARGET, {
       playerId: playerId,
     });
-
-    // Face the target and start combat animation
-    this.rotationManager.rotateTowardsTarget(
-      playerId,
-      pendingAttacker,
-      "player",
-      attackerType, // Was hardcoded "mob" - now supports PvP
-    );
   }
 
   /**
