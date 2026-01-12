@@ -192,8 +192,10 @@ export function AccountPanel({ world }: AccountPanelProps) {
                   type="text"
                   value={tempName}
                   onChange={(e) => setTempName(e.target.value)}
-                  className="flex-1 text-[10px] py-1 px-1.5 bg-white/5 border rounded focus:outline-none"
+                  className="flex-1 text-[10px] py-1 px-1.5 bg-white/5 rounded focus:outline-none"
                   style={{
+                    borderWidth: "1px",
+                    borderStyle: "solid",
                     borderColor: "rgba(242, 208, 138, 0.3)",
                     color: COLORS.ACCENT,
                   }}

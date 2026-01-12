@@ -397,8 +397,12 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
       {/* Combat Stats */}
       <div className="grid grid-cols-3 gap-1">
         <div
-          className="bg-black/35 border rounded-md p-1 flex flex-col items-center justify-center"
-          style={{ borderColor: "rgba(242, 208, 138, 0.3)" }}
+          className="bg-black/35 rounded-md p-1 flex flex-col items-center justify-center"
+          style={{
+            borderWidth: "1px",
+            borderStyle: "solid",
+            borderColor: "rgba(242, 208, 138, 0.3)",
+          }}
         >
           <div className="text-[9px] text-gray-400">Attack</div>
           <div
@@ -409,8 +413,12 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
           </div>
         </div>
         <div
-          className="bg-black/35 border rounded-md p-1 flex flex-col items-center justify-center"
-          style={{ borderColor: "rgba(242, 208, 138, 0.3)" }}
+          className="bg-black/35 rounded-md p-1 flex flex-col items-center justify-center"
+          style={{
+            borderWidth: "1px",
+            borderStyle: "solid",
+            borderColor: "rgba(242, 208, 138, 0.3)",
+          }}
         >
           <div className="text-[9px] text-gray-400">Strength</div>
           <div
@@ -421,8 +429,12 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
           </div>
         </div>
         <div
-          className="bg-black/35 border rounded-md p-1 flex flex-col items-center justify-center"
-          style={{ borderColor: "rgba(242, 208, 138, 0.3)" }}
+          className="bg-black/35 rounded-md p-1 flex flex-col items-center justify-center"
+          style={{
+            borderWidth: "1px",
+            borderStyle: "solid",
+            borderColor: "rgba(242, 208, 138, 0.3)",
+          }}
         >
           <div className="text-[9px] text-gray-400">Defense</div>
           <div

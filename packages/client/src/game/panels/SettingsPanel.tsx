@@ -118,8 +118,12 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
     <div className="flex flex-col h-full overflow-hidden">
       {/* Tab Navigation */}
       <div
-        className="flex gap-0.5 mb-1 p-0.5 bg-black/30 rounded border"
-        style={{ borderColor: "rgba(242, 208, 138, 0.2)" }}
+        className="flex gap-0.5 mb-1 p-0.5 bg-black/30 rounded"
+        style={{
+          borderWidth: "1px",
+          borderStyle: "solid",
+          borderColor: "rgba(242, 208, 138, 0.2)",
+        }}
       >
         <button
           onClick={() => setActiveTab("visuals")}
@@ -129,6 +133,8 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
               activeTab === "visuals"
                 ? "rgba(242, 208, 138, 0.2)"
                 : "transparent",
+            borderWidth: "1px",
+            borderStyle: "solid",
             borderColor:
               activeTab === "visuals"
                 ? "rgba(242, 208, 138, 0.4)"
@@ -137,7 +143,6 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
               activeTab === "visuals"
                 ? COLORS.ACCENT
                 : "rgba(242, 208, 138, 0.6)",
-            border: "1px solid",
           }}
         >
           ✨ Visual
@@ -150,6 +155,8 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
               activeTab === "interface"
                 ? "rgba(242, 208, 138, 0.2)"
                 : "transparent",
+            borderWidth: "1px",
+            borderStyle: "solid",
             borderColor:
               activeTab === "interface"
                 ? "rgba(242, 208, 138, 0.4)"
@@ -158,7 +165,6 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
               activeTab === "interface"
                 ? COLORS.ACCENT
                 : "rgba(242, 208, 138, 0.6)",
-            border: "1px solid",
           }}
         >
           🎮 UI
@@ -171,6 +177,8 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
               activeTab === "audio"
                 ? "rgba(242, 208, 138, 0.2)"
                 : "transparent",
+            borderWidth: "1px",
+            borderStyle: "solid",
             borderColor:
               activeTab === "audio"
                 ? "rgba(242, 208, 138, 0.4)"
@@ -179,7 +187,6 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
               activeTab === "audio"
                 ? COLORS.ACCENT
                 : "rgba(242, 208, 138, 0.6)",
-            border: "1px solid",
           }}
         >
           🔊 Audio
@@ -192,6 +199,8 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
               activeTab === "backend"
                 ? "rgba(242, 208, 138, 0.2)"
                 : "transparent",
+            borderWidth: "1px",
+            borderStyle: "solid",
             borderColor:
               activeTab === "backend"
                 ? "rgba(242, 208, 138, 0.4)"
@@ -200,7 +209,6 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
               activeTab === "backend"
                 ? COLORS.ACCENT
                 : "rgba(242, 208, 138, 0.6)",
-            border: "1px solid",
           }}
         >
           ⚙️ Backend
@@ -215,8 +223,12 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
             <>
               {/* Visual Quality Settings */}
               <div
-                className="bg-gradient-to-br from-black/40 to-black/25 border rounded p-1"
-                style={{ borderColor: "rgba(242, 208, 138, 0.25)" }}
+                className="bg-gradient-to-br from-black/40 to-black/25 rounded p-1"
+                style={{
+                  borderWidth: "1px",
+                  borderStyle: "solid",
+                  borderColor: "rgba(242, 208, 138, 0.25)",
+                }}
               >
                 <div className="flex items-center gap-0.5 mb-1">
                   <span className="text-[10px]">✨</span>
@@ -402,8 +414,12 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
 
               {/* Color Grading Card */}
               <div
-                className="bg-gradient-to-br from-black/40 to-black/25 border rounded p-1"
-                style={{ borderColor: "rgba(242, 208, 138, 0.25)" }}
+                className="bg-gradient-to-br from-black/40 to-black/25 rounded p-1"
+                style={{
+                  borderWidth: "1px",
+                  borderStyle: "solid",
+                  borderColor: "rgba(242, 208, 138, 0.25)",
+                }}
               >
                 <div className="flex items-center gap-0.5 mb-1">
                   <span className="text-[10px]">🎬</span>
@@ -513,8 +529,12 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
             <>
               {/* Character Name Card */}
               <div
-                className="bg-gradient-to-br from-black/40 to-black/25 border rounded p-1"
-                style={{ borderColor: "rgba(242, 208, 138, 0.25)" }}
+                className="bg-gradient-to-br from-black/40 to-black/25 rounded p-1"
+                style={{
+                  borderWidth: "1px",
+                  borderStyle: "solid",
+                  borderColor: "rgba(242, 208, 138, 0.25)",
+                }}
               >
                 <div className="flex items-center gap-0.5 mb-1">
                   <span className="text-[10px]">⚔️</span>
@@ -555,8 +575,10 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
                       type="text"
                       value={tempName}
                       onChange={(e) => setTempName(e.target.value)}
-                      className="w-full text-[10px] py-1 px-1.5 bg-white/5 border rounded focus:outline-none focus:ring-1"
+                      className="w-full text-[10px] py-1 px-1.5 bg-white/5 rounded focus:outline-none focus:ring-1"
                       style={{
+                        borderWidth: "1px",
+                        borderStyle: "solid",
                         borderColor: "rgba(242, 208, 138, 0.3)",
                         color: COLORS.ACCENT,
                       }}
@@ -604,8 +626,12 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
 
               {/* Interface Settings Card */}
               <div
-                className="bg-gradient-to-br from-black/40 to-black/25 border rounded p-1"
-                style={{ borderColor: "rgba(242, 208, 138, 0.25)" }}
+                className="bg-gradient-to-br from-black/40 to-black/25 rounded p-1"
+                style={{
+                  borderWidth: "1px",
+                  borderStyle: "solid",
+                  borderColor: "rgba(242, 208, 138, 0.25)",
+                }}
               >
                 <div className="flex items-center gap-0.5 mb-1">
                   <span className="text-[10px]">🎮</span>
@@ -792,8 +818,12 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
             <>
               {/* Audio Settings Card */}
               <div
-                className="bg-gradient-to-br from-black/40 to-black/25 border rounded p-1"
-                style={{ borderColor: "rgba(242, 208, 138, 0.25)" }}
+                className="bg-gradient-to-br from-black/40 to-black/25 rounded p-1"
+                style={{
+                  borderWidth: "1px",
+                  borderStyle: "solid",
+                  borderColor: "rgba(242, 208, 138, 0.25)",
+                }}
               >
                 <div className="flex items-center gap-0.5 mb-1">
                   <span className="text-[10px]">🔊</span>
@@ -935,8 +965,10 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
             <>
               {/* Renderer Status Card */}
               <div
-                className="relative bg-gradient-to-br from-black/50 to-black/30 border rounded p-1.5 overflow-hidden"
+                className="relative bg-gradient-to-br from-black/50 to-black/30 rounded p-1.5 overflow-hidden"
                 style={{
+                  borderWidth: "1px",
+                  borderStyle: "solid",
                   borderColor: world.graphics?.isWebGPU
                     ? "rgba(34, 197, 94, 0.4)"
                     : "rgba(96, 165, 250, 0.4)",
