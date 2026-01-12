@@ -11,10 +11,11 @@ on:
 
 jobs:
   claude-review:
+    # Skip if PR author is a bot to prevent loops
+    if: github.actor != 'github-actions[bot]'
     # Optional: Filter by PR author
     # if: |
     #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
     #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
     runs-on: ubuntu-latest
     permissions:
@@ -24,7 +25,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
 
@@ -33,27 +34,8 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: |
-            Review pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
-
-            First, gather the PR information:
-            1. Run `gh pr view ${{ github.event.pull_request.number }}` to get PR details
-            2. Run `gh pr diff ${{ github.event.pull_request.number }}` to see the code changes
-
-            Then review the changes and provide feedback on:
-            - Code quality and best practices
-            - Potential bugs or issues
-            - Performance considerations
-            - Security concerns
-            - Test coverage
-
-            Use the repository's CLAUDE.md for guidance on style and conventions if it exists.
-            Be constructive and helpful in your feedback.
-
-            If you encounter any issues (PR too large to review fully, merge conflicts, unclear context), explain the limitation in your comment.
-
-            Once your review is complete, use `gh pr comment ${{ github.event.pull_request.number }} --body "YOUR_REVIEW"` to post your feedback.
-
-          # Use Claude Opus 4.5 for better code review quality
-          # Restrict Bash to only gh CLI commands for security
-          claude_args: '--model claude-opus-4-5-20251101 --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"'
+          plugins: 'code-review@claude-code-plugins'
+          prompt: '/code-review --comment'
+          claude_args: |
+            --model claude-opus-4-5-20251101
+            --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"
