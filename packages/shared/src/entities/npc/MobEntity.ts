@@ -1724,12 +1724,12 @@ export class MobEntity extends CombatantEntity {
       if (emoteUrl.includes("combat") || emoteUrl.includes("punching")) {
         // Match server-side timing from CombatAnimationManager.setCombatEmote():
         // Hold combat pose until 1 tick before next attack (minimum 2 ticks)
-        // Formula: Math.max(2, attackSpeedTicks - 1) ticks, where 1 tick = 600ms
+        // Formula: Math.max(2, attackSpeedTicks - 1) ticks * TICK_DURATION_MS
         const protectionTicks = Math.max(
           2,
           (this.config.attackSpeedTicks || 4) - 1,
         );
-        const protectionMs = protectionTicks * 600;
+        const protectionMs = protectionTicks * TICK_DURATION_MS;
         this._manualEmoteOverrideUntil = Date.now() + protectionMs;
       } else if (emoteUrl.includes("death")) {
         this._manualEmoteOverrideUntil = Date.now() + 4500; // 4500ms for full death animation (4.5 seconds)
