@@ -1690,6 +1690,28 @@ export class MobEntity extends CombatantEntity {
   }
 
   /**
+   * Check if an emote URL is a priority emote (combat/death) that should override protection.
+   * Priority emotes can interrupt the manual override protection period.
+   */
+  private isPriorityEmote(emoteUrl: string | null): boolean {
+    if (!emoteUrl) return false;
+    return (
+      emoteUrl.includes("combat") ||
+      emoteUrl.includes("punching") ||
+      emoteUrl.includes("death")
+    );
+  }
+
+  /**
+   * Check if an emote URL is a combat emote (for attack animation timing).
+   * Combat emotes use attackSpeedTicks for their protection duration.
+   */
+  private isCombatEmote(emoteUrl: string | null): boolean {
+    if (!emoteUrl) return false;
+    return emoteUrl.includes("combat") || emoteUrl.includes("punching");
+  }
+
+  /**
    * Apply a server emote to this mob (used by modify() and pending emote handling)
    * Requires _avatarInstance to be loaded.
    */
@@ -1707,15 +1729,12 @@ export class MobEntity extends CombatantEntity {
       ? serverEmote
       : this._emoteMap[serverEmote] || Emotes.IDLE;
 
-    // Check if this is a "priority" emote (combat, death) that should override protection
-    const isPriorityEmote =
-      emoteUrl.includes("combat") ||
-      emoteUrl.includes("punching") ||
-      emoteUrl.includes("death");
-
     // If manual override is active and this is NOT a priority emote, ignore it
     // This prevents idle/walk emotes from overwriting combat animations
-    if (!isPriorityEmote && Date.now() < this._manualEmoteOverrideUntil) {
+    if (
+      !this.isPriorityEmote(emoteUrl) &&
+      Date.now() < this._manualEmoteOverrideUntil
+    ) {
       return;
     }
 
@@ -1724,7 +1743,7 @@ export class MobEntity extends CombatantEntity {
       this._avatarInstance.setEmote(emoteUrl);
 
       // Set override durations for one-shot animations
-      if (emoteUrl.includes("combat") || emoteUrl.includes("punching")) {
+      if (this.isCombatEmote(emoteUrl)) {
         // Match server-side timing from CombatAnimationManager.setCombatEmote():
         // Hold combat pose until 1 tick before next attack (minimum 2 ticks)
         // Formula: Math.max(2, attackSpeedTicks - 1) ticks * TICK_DURATION_MS
