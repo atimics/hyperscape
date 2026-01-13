@@ -248,8 +248,8 @@ export class MobEntity extends CombatantEntity {
     death: Emotes.DEATH,
   };
 
-  /** Duration of death animation in milliseconds (4.5 seconds) */
-  private readonly DEATH_ANIMATION_DURATION_MS = 4500;
+  /** Duration of death animation in ticks (7 ticks = 4200ms at 600ms/tick) */
+  private readonly DEATH_ANIMATION_TICKS = 7;
 
   /**
    * Find an unoccupied tile for spawning using spiral search
@@ -563,7 +563,7 @@ export class MobEntity extends CombatantEntity {
     // Death State Manager
     this.deathManager = new DeathStateManager({
       respawnTime: this.config.respawnTime,
-      deathAnimationDuration: 4500, // 4.5 seconds
+      deathAnimationDuration: this.DEATH_ANIMATION_TICKS * TICK_DURATION_MS,
       spawnPoint: this.config.spawnPoint,
     });
 
@@ -1736,7 +1736,7 @@ export class MobEntity extends CombatantEntity {
         this._manualEmoteOverrideUntil = Date.now() + protectionMs;
       } else if (emoteUrl.includes("death")) {
         this._manualEmoteOverrideUntil =
-          Date.now() + this.DEATH_ANIMATION_DURATION_MS;
+          Date.now() + this.DEATH_ANIMATION_TICKS * TICK_DURATION_MS;
       } else if (emoteUrl.includes("idle")) {
         this._manualEmoteOverrideUntil = 0; // Clear override when reset to idle
       }
@@ -1869,8 +1869,8 @@ export class MobEntity extends CombatantEntity {
       const currentTime = Date.now();
       const timeSinceDeath = currentTime - this.clientDeathStartTime;
 
-      // Hide mesh and VRM after death animation finishes (4.5 seconds = 4500ms)
-      if (timeSinceDeath >= 4500) {
+      // Hide mesh and VRM after death animation finishes
+      if (timeSinceDeath >= this.DEATH_ANIMATION_TICKS * TICK_DURATION_MS) {
         // Hide the mesh
         if (this.mesh && this.mesh.visible) {
           this.mesh.visible = false;
@@ -2758,15 +2758,14 @@ export class MobEntity extends CombatantEntity {
       const deathManagerDead = this.deathManager.isCurrentlyDead();
 
       if (newState !== MobAIState.DEAD && deathManagerDead) {
-        // Check if death animation has finished (4.5 seconds)
-        const deathAnimationDuration = 4500;
-
         // CRITICAL: If clientDeathStartTime is null, death just happened but
         // clientUpdate() hasn't run yet to set the timestamp. DON'T reset in this case!
         if (this.clientDeathStartTime) {
           const timeSinceDeath = Date.now() - this.clientDeathStartTime;
+          const deathAnimationDurationMs =
+            this.DEATH_ANIMATION_TICKS * TICK_DURATION_MS;
 
-          if (timeSinceDeath >= deathAnimationDuration) {
+          if (timeSinceDeath >= deathAnimationDurationMs) {
             // Death animation is complete, safe to reset
             this.clientDeathStartTime = null;
             this.deathManager.reset();
