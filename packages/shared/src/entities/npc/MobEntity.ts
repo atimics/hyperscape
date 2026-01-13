@@ -1740,25 +1740,11 @@ export class MobEntity extends CombatantEntity {
   }
 
   /**
-   * Switch animation based on AI state
+   * Switch animation based on AI state (GLB mobs only)
+   * Note: VRM mobs handle emotes directly in clientUpdate(), not here.
+   * This method is only called for GLB-based mobs from the GLB path in clientUpdate().
    */
   private updateAnimation(): void {
-    // VRM path: Use emote-based animation
-    if (this._avatarInstance) {
-      // Skip AI-based emote updates if manual override is active (for one-shot attack animations)
-      // This prevents combat/death emotes from being immediately overwritten by AI state
-      if (Date.now() < this._manualEmoteOverrideUntil) {
-        return; // Combat/death animation still playing, don't override
-      }
-
-      const targetEmote = this.getEmoteForAIState(this.config.aiState);
-      if (this._currentEmote !== targetEmote) {
-        this._currentEmote = targetEmote;
-        this._avatarInstance.setEmote(targetEmote);
-      }
-      return;
-    }
-
     // GLB path: Use mixer-based animation
     const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
     const clips = (
