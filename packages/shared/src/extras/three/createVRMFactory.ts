@@ -513,15 +513,6 @@ export function createVRMFactory(
     };
     let currentEmote: EmoteData | null;
     const setEmote = (url) => {
-      // Debug: Log emote changes for combat animations
-      if (
-        url?.includes("punching") ||
-        currentEmote?.url?.includes("punching")
-      ) {
-        console.log(
-          `[VRM setEmote] ${currentEmote?.url || "null"} -> ${url || "null"}`,
-        );
-      }
       if (currentEmote?.url === url) {
         return;
       }
@@ -588,12 +579,6 @@ export function createVRMFactory(
             action.timeScale = speed;
             newEmote.action = action;
             newEmote.loading = false;
-            // Debug: Log animation clip duration for combat animations
-            if (url?.includes("punching")) {
-              console.log(
-                `[VRM] Punching animation loaded: duration=${clip.duration.toFixed(2)}s, currentEmote matches=${currentEmote === newEmote}`,
-              );
-            }
             // if its still this emote, play it!
             if (currentEmote === newEmote) {
               action.clampWhenFinished = !loop;
@@ -609,10 +594,6 @@ export function createVRMFactory(
                 _deathAnimationActive = true;
                 _deathUpdateLogCount = 0;
               }
-            } else if (url?.includes("punching")) {
-              console.log(
-                `[VRM] Punching animation NOT played - currentEmote changed to: ${currentEmote?.url}`,
-              );
             }
           })
           .catch((err) => {

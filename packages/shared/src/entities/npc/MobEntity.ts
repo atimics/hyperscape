@@ -826,9 +826,6 @@ export class MobEntity extends CombatantEntity {
 
     // Check for pending emote that arrived before VRM loaded
     if (this._pendingServerEmote) {
-      console.log(
-        `[MobEntity] ${this.config.mobType} applying pending emote: "${this._pendingServerEmote}"`,
-      );
       // Apply the pending emote using the same logic as modify()
       this.applyServerEmote(this._pendingServerEmote);
       this._pendingServerEmote = null;
@@ -1716,9 +1713,6 @@ export class MobEntity extends CombatantEntity {
     // If manual override is active and this is NOT a priority emote, ignore it
     // This prevents idle/walk emotes from overwriting combat animations
     if (!isPriorityEmote && Date.now() < this._manualEmoteOverrideUntil) {
-      console.log(
-        `[MobEntity] ${this.config.mobType} ignoring "${serverEmote}" - combat animation still playing`,
-      );
       return;
     }
 
@@ -1737,9 +1731,6 @@ export class MobEntity extends CombatantEntity {
         );
         const protectionMs = protectionTicks * 600;
         this._manualEmoteOverrideUntil = Date.now() + protectionMs;
-        console.log(
-          `[MobEntity] Combat emote set for ${this.config.mobType}: protection=${protectionMs}ms, attackSpeedTicks=${this.config.attackSpeedTicks}`,
-        );
       } else if (emoteUrl.includes("death")) {
         this._manualEmoteOverrideUntil = Date.now() + 4500; // 4500ms for full death animation (4.5 seconds)
       } else if (emoteUrl.includes("idle")) {
@@ -1925,12 +1916,6 @@ export class MobEntity extends CombatantEntity {
           // Switch animation based on AI state (walk when patrolling/chasing, idle otherwise)
           const targetEmote = this.getEmoteForAIState(this.config.aiState);
           if (this._currentEmote !== targetEmote) {
-            // Debug: Log when combat emote is being reset
-            if (this._currentEmote?.includes("punching")) {
-              console.log(
-                `[MobEntity] Resetting ${this.config.mobType} from combat to ${targetEmote.includes("idle") ? "idle" : "other"}, override expired`,
-              );
-            }
             this._currentEmote = targetEmote;
             this._avatarInstance.setEmote(targetEmote);
           }
@@ -2716,9 +2701,6 @@ export class MobEntity extends CombatantEntity {
 
     // Only broadcast server-forced emotes
     if (this._serverEmote) {
-      console.log(
-        `[MobEntity] toNetworkData including emote: ${this.config.mobType} -> "${this._serverEmote}"`,
-      );
       networkData.e = this._serverEmote;
       this._serverEmote = null;
     }
@@ -2736,9 +2718,6 @@ export class MobEntity extends CombatantEntity {
    * This will be broadcast once, then cleared automatically
    */
   setServerEmote(emote: string): void {
-    console.log(
-      `[MobEntity] setServerEmote called: ${this.config.mobType} -> "${emote}"`,
-    );
     this._serverEmote = emote;
     this.markNetworkDirty();
   }
@@ -2867,16 +2846,9 @@ export class MobEntity extends CombatantEntity {
     // Handle emote from server (like PlayerRemote does)
     if ("e" in data && data.e !== undefined) {
       const serverEmote = data.e as string;
-      // Debug: Log received emote
-      console.log(
-        `[MobEntity] ${this.config.mobType} received emote: "${serverEmote}", hasAvatar=${!!this._avatarInstance}`,
-      );
 
       // If avatar not loaded yet, store as pending - will be applied when VRM loads
       if (!this._avatarInstance) {
-        console.log(
-          `[MobEntity] ${this.config.mobType} avatar not ready, queuing emote: "${serverEmote}"`,
-        );
         this._pendingServerEmote = serverEmote;
       } else {
         // Avatar ready - apply emote immediately
