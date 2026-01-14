@@ -73,7 +73,7 @@ import { createNode } from "../../extras/three/createNode";
 import { Layers } from "../../physics/Layers";
 import { Emotes } from "../../data/playerEmotes";
 import THREE from "../../extras/three/three";
-import { Nametag, UI, UIText, UIView } from "../../nodes";
+import { UI, UIText, UIView } from "../../nodes";
 import type {
   HealthBars as HealthBarsSystem,
   HealthBarHandle,
@@ -341,7 +341,6 @@ const _m3 = new THREE.Matrix4();
 // Pre-allocated temps for update/lateUpdate to avoid per-frame allocations
 const _combatQuat = new THREE.Quaternion();
 const _combatAxis = new THREE.Vector3(0, 1, 0);
-const _nametagMatrix = new THREE.Matrix4();
 const _healthBarMatrix = new THREE.Matrix4();
 
 // Removed unused interface: PlayerState
@@ -538,7 +537,6 @@ export class PlayerLocal extends Entity implements HotReloadable {
   lastSendAt: number = 0;
   base: THREE.Group | undefined = undefined;
   aura: THREE.Group | null = null;
-  nametag: Nametag | null = null;
   private _healthBarHandle: HealthBarHandle | null = null; // Separate health bar (HealthBars system)
   private _healthBarVisibleUntil: number = 0; // Timestamp when health bar should hide (fallback timer)
   bubble: UI | null = null;
@@ -826,10 +824,10 @@ export class PlayerLocal extends Entity implements HotReloadable {
 
   /**
    * Override initializeVisuals to skip UIRenderer-based UI elements
-   * PlayerLocal uses its own Nametag node system instead
+   * PlayerLocal uses HealthBars system for health bars
    */
   protected initializeVisuals(): void {
-    // Skip UIRenderer - we use Nametag nodes instead
+    // Skip UIRenderer - we use HealthBars system
     // Do not call super.initializeVisuals()
   }
 
@@ -1180,22 +1178,9 @@ export class PlayerLocal extends Entity implements HotReloadable {
       throw new Error("Failed to create aura node for PlayerLocal");
     }
 
-    // Create nametag for name display only (no health - that's now in HealthBars system)
-    this.nametag = createNode("nametag", {
-      label: "", // Empty label for local player (no name shown)
-      active: true,
-    }) as Nametag;
-    if (!this.nametag) {
-      throw new Error("Failed to create nametag node for PlayerLocal");
-    }
-    // Set world context for nametag (needed for mounting to Nametags system)
-    this.nametag.ctx = this.world;
-    // Mount the nametag to register with Nametags system
-    if (this.nametag.mount) {
-      this.nametag.mount();
-    }
+    // Nametags disabled - OSRS pattern: names shown in right-click menu only
 
-    // Register with HealthBars system (separate from nametags)
+    // Register with HealthBars system
     const healthbars = this.world.systems.find(
       (s) =>
         (s as { systemName?: string }).systemName === "healthbars" ||
@@ -1257,7 +1242,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
       this.aura.add(bubbleInstance);
     }
 
-    // Add aura to base for nametag/bubble positioning
+    // Add aura to base for bubble positioning
     if (this.base) {
       this.base.add(this.aura);
     }
@@ -1488,13 +1473,11 @@ export class PlayerLocal extends Entity implements HotReloadable {
       instance.disableRateCheck();
     }
 
-    // Set up nametag and bubble positioning
+    // Set up bubble positioning
     const headHeight = this._avatar!.getHeadToHeight!()!;
     const safeHeadHeight = headHeight ?? 1.8;
-    // Position nametag at Y=2.0 like mob health bars (not at head height!)
-    // Bubble still goes at head height for chat
+    // Bubble goes at head height for chat
     this.bubble!.position.y = safeHeadHeight + 0.2;
-    // Nametag is always active to show health bar in combat (set at initialization)
 
     // Set camera height
     const avatarHeight = (this._avatar as AvatarNode).height ?? 1.5;
@@ -2202,15 +2185,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
           this.aura.position.setFromMatrixPosition(matrix);
         }
       }
-      // Update nametag position above head using pre-allocated matrix
-      if (this.nametag && this.nametag.handle && this.base) {
-        // Position at fixed Y offset from player base
-        _nametagMatrix.copy(this.base.matrixWorld);
-        _nametagMatrix.elements[13] += 2.2; // Nametag slightly higher (above health bar)
-        this.nametag.handle.move(_nametagMatrix);
-      }
-
-      // Update health bar position (separate from nametag, slightly lower) using pre-allocated matrix
+      // Update health bar position using pre-allocated matrix
       if (this._healthBarHandle && this.base) {
         _healthBarMatrix.copy(this.base.matrixWorld);
         _healthBarMatrix.elements[13] += 2.0; // Health bar at Y=2.0
@@ -2315,8 +2290,6 @@ export class PlayerLocal extends Entity implements HotReloadable {
   }
 
   chat(msg: string): void {
-    // Keep nametag active to show health bar in combat (RuneScape pattern)
-    // Nametag has empty label, so only health bar shows (no overlap with chat bubble)
     this.bubbleText!.value = msg;
     this.bubble!.active = true;
     setTimeout(() => {
@@ -2330,9 +2303,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
   }
 
   onNetworkData(data: Partial<NetworkData>): void {
-    if (data.name && this.nametag) {
-      this.nametag.label = (data.name as string) || "";
-    }
+    // Name stored in this.data.name - shown in right-click menu (OSRS pattern)
     // Health bar is NOT updated here - visual updates ONLY via handleHealthChange()
     // to prevent stale snapshot data from overwriting event-driven values
   }
@@ -2649,11 +2620,6 @@ export class PlayerLocal extends Entity implements HotReloadable {
         this.aura.parent.remove(this.aura);
       }
       this.aura = null;
-    }
-
-    if (this.nametag) {
-      this.nametag.deactivate();
-      this.nametag = null;
     }
 
     // Clean up health bar handle (HealthBars system)
