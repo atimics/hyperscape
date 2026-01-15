@@ -130,6 +130,20 @@ export class BankEntity extends InteractableEntity {
     super.destroy(local);
   }
 
+  /**
+   * Return tiles occupied by this station for OSRS-style interaction checking.
+   * Uses the same tiles registered for collision.
+   */
+  protected override getOccupiedTiles(): TileCoord[] {
+    // Return collision tiles if available, otherwise fall back to single tile
+    if (this.collisionTiles.length > 0) {
+      return this.collisionTiles;
+    }
+    // Fallback for client-side (collision tiles only registered on server)
+    const pos = this.getPosition();
+    return [worldToTile(pos.x, pos.z)];
+  }
+
   protected async createMesh(): Promise<void> {
     // Don't create mesh on server
     if (this.world.isServer) {

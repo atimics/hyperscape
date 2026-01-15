@@ -239,7 +239,10 @@ export class StationDataProvider {
         footprint = entry.footprint;
       } else if (entry.model && this.hasBoundsData) {
         // Auto-calculate from model bounds
-        footprint = this.calculateFootprint(entry.model, entry.modelScale);
+        footprint = this.calculateFootprint(
+          entry.model,
+          entry.modelScale ?? 1.0,
+        );
       } else {
         // Default fallback
         footprint = { width: 1, depth: 1 };
@@ -278,7 +281,7 @@ export class StationDataProvider {
       return { width: 1, depth: 1 };
     }
 
-    // Apply scale to raw dimensions
+    // Apply scale to raw dimensions to get actual visual footprint
     const scaledWidth = bounds.dimensions.x * modelScale;
     const scaledDepth = bounds.dimensions.z * modelScale;
 
