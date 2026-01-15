@@ -25,7 +25,8 @@ export type InteractableEntityType =
   | "fire"
   | "range"
   | "furnace"
-  | "anvil";
+  | "anvil"
+  | "terrain";
 
 /**
  * Footprint specification for multi-tile entities (stations, large resources)
