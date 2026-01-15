@@ -46,8 +46,8 @@ import {
   MAX_BANK_SLOTS,
 } from "./utils";
 
-// Import coin handlers for the special case redirects
-import { handleBankDepositCoins, handleBankWithdrawCoins } from "./coins";
+// Import coin handler for bank withdraw redirect (coins go to money pouch, RS3-style)
+import { handleBankWithdrawCoins } from "./coins";
 
 /**
  * Handle bank open request
@@ -143,11 +143,9 @@ export async function handleBankDeposit(
   },
   world: World,
 ): Promise<void> {
-  // SPECIAL CASE: Coins should come from money pouch (CoinPouchSystem), not inventory
-  // This handles clicking on coins in inventory while bank is open
-  if (data.itemId === "coins") {
-    return handleBankDepositCoins(socket, { amount: data.quantity }, world);
-  }
+  // NOTE: Coins are handled as regular stackable inventory items here.
+  // This allows physical coins in inventory to be deposited to bank.
+  // For depositing from money pouch, use bankDepositCoins packet instead.
 
   // Step 1: Common validation (player, rate limit, distance, db)
   const baseResult = validateTransactionRequest(

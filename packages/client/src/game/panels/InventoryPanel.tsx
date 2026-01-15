@@ -39,6 +39,8 @@ import {
 } from "@hyperscape/shared";
 import { dispatchInventoryAction } from "../systems/InventoryActionDispatcher";
 import type { ClientWorld, InventorySlotItem } from "../../types";
+import { CoinAmountModal } from "./BankPanel/components/modals/CoinAmountModal";
+import { CoinPouch } from "./inventory";
 
 /**
  * Maximum inventory slots (OSRS-style: 28 slots)
@@ -753,6 +755,17 @@ export function InventoryPanel({
   // Track if context menu is open (suppress hover tooltips while open)
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
 
+  // Coin withdrawal modal state (for withdrawing from money pouch to inventory)
+  const [coinModal, setCoinModal] = useState<{
+    visible: boolean;
+    action: "withdraw";
+    maxAmount: number;
+  }>({
+    visible: false,
+    action: "withdraw",
+    maxAmount: 0,
+  });
+
   // Track pending move for rollback detection
   // If server update arrives and doesn't match our optimistic state, we know it was rejected
   const pendingMoveRef = useRef<PendingMove | null>(null);
@@ -1128,6 +1141,29 @@ export function InventoryPanel({
     setIsContextMenuOpen(true);
   }, []);
 
+  // Coin pouch withdrawal modal handlers
+  const openCoinModal = useCallback(() => {
+    if (coins > 0) {
+      setCoinModal({ visible: true, action: "withdraw", maxAmount: coins });
+    }
+  }, [coins]);
+
+  const closeCoinModal = useCallback(() => {
+    setCoinModal((prev) => ({ ...prev, visible: false }));
+  }, []);
+
+  const handleCoinWithdraw = useCallback(
+    (amount: number) => {
+      if (!world?.network?.send) return;
+      world.network.send("coinPouchWithdraw", {
+        amount,
+        timestamp: Date.now(), // Replay attack protection
+      });
+      closeCoinModal();
+    },
+    [world, closeCoinModal],
+  );
+
   const handleInvalidTargetClick = useCallback(() => {
     // OSRS: "Nothing interesting happens." when using item on invalid target
     const message = "Nothing interesting happens.";
@@ -1191,191 +1227,175 @@ export function InventoryPanel({
     : null;
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={pointerWithin}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-    >
-      <div className="flex flex-col h-full overflow-hidden gap-1">
-        {/* OSRS-style "Use X → Y" tooltip - rendered via portal to avoid transform issues */}
-        {targetingState.active &&
-          targetHover &&
-          targetingState.sourceItem &&
-          createPortal(
-            <div
-              className="pointer-events-none px-2 py-1 text-sm font-medium whitespace-nowrap"
-              style={{
-                position: "fixed",
-                left: targetHover.position.x + 16,
-                top: targetHover.position.y + 16,
-                zIndex: 99999,
-                background: "rgba(0, 0, 0, 0.85)",
-                border: "1px solid rgba(180, 160, 100, 0.8)",
-                borderRadius: "2px",
-                color: "rgba(255, 200, 100, 0.95)",
-                textShadow: "1px 1px 0 #000",
-                boxShadow: "2px 2px 4px rgba(0, 0, 0, 0.5)",
-              }}
-            >
-              Use{" "}
-              {targetingState.sourceItem.name || targetingState.sourceItem.id} →{" "}
-              {targetHover.targetName}
-            </div>,
-            document.body,
-          )}
+    <>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={pointerWithin}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
+        <div className="flex flex-col h-full overflow-hidden gap-1">
+          {/* OSRS-style "Use X → Y" tooltip - rendered via portal to avoid transform issues */}
+          {targetingState.active &&
+            targetHover &&
+            targetingState.sourceItem &&
+            createPortal(
+              <div
+                className="pointer-events-none px-2 py-1 text-sm font-medium whitespace-nowrap"
+                style={{
+                  position: "fixed",
+                  left: targetHover.position.x + 16,
+                  top: targetHover.position.y + 16,
+                  zIndex: 99999,
+                  background: "rgba(0, 0, 0, 0.85)",
+                  border: "1px solid rgba(180, 160, 100, 0.8)",
+                  borderRadius: "2px",
+                  color: "rgba(255, 200, 100, 0.95)",
+                  textShadow: "1px 1px 0 #000",
+                  boxShadow: "2px 2px 4px rgba(0, 0, 0, 0.5)",
+                }}
+              >
+                Use{" "}
+                {targetingState.sourceItem.name || targetingState.sourceItem.id}{" "}
+                → {targetHover.targetName}
+              </div>,
+              document.body,
+            )}
 
-        {/* RS3-style item hover tooltip - rendered via portal */}
-        {!targetingState.active &&
-          itemHover &&
-          renderItemHoverTooltip(itemHover)}
+          {/* RS3-style item hover tooltip - rendered via portal */}
+          {!targetingState.active &&
+            itemHover &&
+            renderItemHoverTooltip(itemHover)}
 
-        {/* Inventory Grid - 7 columns × 4 rows with square slots */}
-        <div
-          className="flex-1 border rounded p-1 overflow-hidden"
-          style={{
-            background:
-              "linear-gradient(180deg, rgba(35, 30, 28, 0.98) 0%, rgba(25, 22, 20, 0.98) 100%)",
-            borderColor: "rgba(80, 70, 55, 0.6)",
-            boxShadow:
-              "inset 0 2px 8px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.3)",
-          }}
-        >
+          {/* Inventory Grid - 7 columns × 4 rows with square slots */}
           <div
-            className="grid grid-cols-7 gap-[3px] h-full"
-            style={{ gridTemplateRows: "repeat(4, 1fr)" }}
-          >
-            {slotItems.map((item, index) => (
-              <DraggableInventorySlot
-                key={index}
-                item={item}
-                index={index}
-                targetingState={targetingState}
-                onTargetClick={handleTargetClick}
-                onTargetHover={handleTargetHover}
-                onTargetHoverEnd={handleTargetHoverEnd}
-                onInvalidTargetClick={handleInvalidTargetClick}
-                onPrimaryAction={handlePrimaryAction}
-                onShiftClick={handleShiftClick}
-                onItemHoverStart={handleItemHoverStart}
-                onItemHoverMove={handleItemHoverMove}
-                onItemHoverEnd={handleItemHoverEnd}
-                onContextMenuOpen={handleContextMenuOpen}
-              />
-            ))}
-          </div>
-        </div>
-
-        {/* RS3-style Coins/Money Pouch */}
-        <div
-          className="border rounded flex items-center justify-between py-1 px-2"
-          style={{
-            background:
-              "linear-gradient(180deg, rgba(45, 40, 35, 0.95) 0%, rgba(30, 25, 22, 0.98) 100%)",
-            borderColor: "rgba(120, 100, 60, 0.5)",
-            boxShadow:
-              "inset 0 1px 0 rgba(150, 130, 80, 0.2), 0 1px 2px rgba(0, 0, 0, 0.3)",
-          }}
-        >
-          <div className="flex items-center gap-1.5">
-            <span className="text-base">💰</span>
-            <span
-              className="font-medium text-xs"
-              style={{ color: "rgba(210, 190, 130, 0.9)" }}
-            >
-              Coins
-            </span>
-          </div>
-          <span
-            className="font-bold text-xs"
+            className="flex-1 border rounded p-1 overflow-hidden"
             style={{
-              color: "#fbbf24",
-              textShadow: "0 1px 2px rgba(0, 0, 0, 0.8)",
+              background:
+                "linear-gradient(180deg, rgba(35, 30, 28, 0.98) 0%, rgba(25, 22, 20, 0.98) 100%)",
+              borderColor: "rgba(80, 70, 55, 0.6)",
+              boxShadow:
+                "inset 0 2px 8px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.3)",
             }}
           >
-            {coins.toLocaleString()}
-          </span>
-        </div>
+            <div
+              className="grid grid-cols-7 gap-[3px] h-full"
+              style={{ gridTemplateRows: "repeat(4, 1fr)" }}
+            >
+              {slotItems.map((item, index) => (
+                <DraggableInventorySlot
+                  key={index}
+                  item={item}
+                  index={index}
+                  targetingState={targetingState}
+                  onTargetClick={handleTargetClick}
+                  onTargetHover={handleTargetHover}
+                  onTargetHoverEnd={handleTargetHoverEnd}
+                  onInvalidTargetClick={handleInvalidTargetClick}
+                  onPrimaryAction={handlePrimaryAction}
+                  onShiftClick={handleShiftClick}
+                  onItemHoverStart={handleItemHoverStart}
+                  onItemHoverMove={handleItemHoverMove}
+                  onItemHoverEnd={handleItemHoverEnd}
+                  onContextMenuOpen={handleContextMenuOpen}
+                />
+              ))}
+            </div>
+          </div>
 
-        <DragOverlay dropAnimation={null} modifiers={[snapCenterToCursor]}>
-          {activeItem
-            ? (() => {
-                // Get icon for drag overlay
-                const getOverlayIcon = (itemId: string) => {
-                  if (
-                    itemId.includes("sword") ||
-                    itemId.includes("dagger") ||
-                    itemId.includes("scimitar")
-                  )
-                    return "⚔️";
-                  if (itemId.includes("shield") || itemId.includes("defender"))
-                    return "🛡️";
-                  if (
-                    itemId.includes("helmet") ||
-                    itemId.includes("helm") ||
-                    itemId.includes("hat")
-                  )
-                    return "⛑️";
-                  if (itemId.includes("boots") || itemId.includes("boot"))
-                    return "👢";
-                  if (
-                    itemId.includes("fish") ||
-                    itemId.includes("lobster") ||
-                    itemId.includes("shark")
-                  )
-                    return "🐟";
-                  if (itemId.includes("log") || itemId.includes("wood"))
-                    return "🪵";
-                  if (itemId.includes("ore") || itemId.includes("bar"))
-                    return "⛏️";
-                  if (itemId.includes("coin")) return "💰";
-                  if (itemId.includes("potion") || itemId.includes("vial"))
-                    return "🧪";
-                  if (itemId.includes("axe")) return "🪓";
-                  return itemId.substring(0, 2).toUpperCase();
-                };
-                const qtyDisplay =
-                  activeItem.quantity > 1
-                    ? formatQuantity(activeItem.quantity)
-                    : null;
-                return (
-                  <div
-                    className="border rounded flex items-center justify-center aspect-square relative"
-                    style={{
-                      width: dragSlotSize ?? 40, // Use captured slot size, fallback to 40px
-                      height: dragSlotSize ?? 40,
-                      borderColor: "rgba(242, 208, 138, 0.6)",
-                      background:
-                        "linear-gradient(135deg, rgba(242, 208, 138, 0.2) 0%, rgba(242, 208, 138, 0.1) 100%)",
-                      fontSize: dragSlotSize
-                        ? `${dragSlotSize * 0.4}px`
-                        : "1rem", // Scale icon with slot
-                      color: COLORS.ACCENT,
-                      boxShadow: "0 4px 12px rgba(0, 0, 0, 0.5)",
-                    }}
-                  >
-                    {getOverlayIcon(activeItem.itemId)}
-                    {qtyDisplay && (
-                      <div
-                        className="absolute bottom-0.5 right-0.5 font-bold rounded px-0.5 py-0.5 leading-none"
-                        style={{
-                          background: "rgba(0, 0, 0, 0.8)",
-                          color: qtyDisplay.color,
-                          fontSize: dragSlotSize
-                            ? `${dragSlotSize * 0.18}px`
-                            : "0.4rem", // Scale with slot
-                          textShadow: "1px 1px 1px rgba(0, 0, 0, 0.8)",
-                        }}
-                      >
-                        {qtyDisplay.text}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()
-            : null}
-        </DragOverlay>
-      </div>
-    </DndContext>
+          {/* RS3-style Coins/Money Pouch - Extracted component */}
+          <CoinPouch coins={coins} onWithdrawClick={openCoinModal} />
+
+          <DragOverlay dropAnimation={null} modifiers={[snapCenterToCursor]}>
+            {activeItem
+              ? (() => {
+                  // Get icon for drag overlay
+                  const getOverlayIcon = (itemId: string) => {
+                    if (
+                      itemId.includes("sword") ||
+                      itemId.includes("dagger") ||
+                      itemId.includes("scimitar")
+                    )
+                      return "⚔️";
+                    if (
+                      itemId.includes("shield") ||
+                      itemId.includes("defender")
+                    )
+                      return "🛡️";
+                    if (
+                      itemId.includes("helmet") ||
+                      itemId.includes("helm") ||
+                      itemId.includes("hat")
+                    )
+                      return "⛑️";
+                    if (itemId.includes("boots") || itemId.includes("boot"))
+                      return "👢";
+                    if (
+                      itemId.includes("fish") ||
+                      itemId.includes("lobster") ||
+                      itemId.includes("shark")
+                    )
+                      return "🐟";
+                    if (itemId.includes("log") || itemId.includes("wood"))
+                      return "🪵";
+                    if (itemId.includes("ore") || itemId.includes("bar"))
+                      return "⛏️";
+                    if (itemId.includes("coin")) return "💰";
+                    if (itemId.includes("potion") || itemId.includes("vial"))
+                      return "🧪";
+                    if (itemId.includes("axe")) return "🪓";
+                    return itemId.substring(0, 2).toUpperCase();
+                  };
+                  const qtyDisplay =
+                    activeItem.quantity > 1
+                      ? formatQuantity(activeItem.quantity)
+                      : null;
+                  return (
+                    <div
+                      className="border rounded flex items-center justify-center aspect-square relative"
+                      style={{
+                        width: dragSlotSize ?? 40, // Use captured slot size, fallback to 40px
+                        height: dragSlotSize ?? 40,
+                        borderColor: "rgba(242, 208, 138, 0.6)",
+                        background:
+                          "linear-gradient(135deg, rgba(242, 208, 138, 0.2) 0%, rgba(242, 208, 138, 0.1) 100%)",
+                        fontSize: dragSlotSize
+                          ? `${dragSlotSize * 0.4}px`
+                          : "1rem", // Scale icon with slot
+                        color: COLORS.ACCENT,
+                        boxShadow: "0 4px 12px rgba(0, 0, 0, 0.5)",
+                      }}
+                    >
+                      {getOverlayIcon(activeItem.itemId)}
+                      {qtyDisplay && (
+                        <div
+                          className="absolute bottom-0.5 right-0.5 font-bold rounded px-0.5 py-0.5 leading-none"
+                          style={{
+                            background: "rgba(0, 0, 0, 0.8)",
+                            color: qtyDisplay.color,
+                            fontSize: dragSlotSize
+                              ? `${dragSlotSize * 0.18}px`
+                              : "0.4rem", // Scale with slot
+                            textShadow: "1px 1px 1px rgba(0, 0, 0, 0.8)",
+                          }}
+                        >
+                          {qtyDisplay.text}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()
+              : null}
+          </DragOverlay>
+        </div>
+      </DndContext>
+
+      {/* Coin Withdrawal Modal */}
+      <CoinAmountModal
+        modal={coinModal}
+        onConfirm={handleCoinWithdraw}
+        onClose={closeCoinModal}
+      />
+    </>
   );
 }

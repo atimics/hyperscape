@@ -143,6 +143,7 @@ const names = [
   'dropItem',
   'moveItem',
   'useItem',
+  'coinPouchWithdraw',
   // Equipment packets
   'equipItem',
   'unequipItem',
