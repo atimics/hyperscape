@@ -25,8 +25,13 @@ export type InteractableEntityType =
   | "fire"
   | "range"
   | "furnace"
-  | "anvil"
-  | "terrain";
+  | "anvil";
+
+/**
+ * Target types for context menus (includes entities + special cases like terrain)
+ * Used only in UI/menu code - not for entity systems
+ */
+export type ContextMenuTargetType = InteractableEntityType | "terrain";
 
 /**
  * Footprint specification for multi-tile entities (stations, large resources)
