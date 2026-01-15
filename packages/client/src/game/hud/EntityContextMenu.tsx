@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import type { World, LabelSegment } from "@hyperscape/shared";
 
 export interface ContextMenuAction {
@@ -73,6 +73,10 @@ export function EntityContextMenu({ world: _world }: EntityContextMenuProps) {
     target: null,
     actions: [],
   });
+
+  // Ref to track menu visibility for event dispatch (avoids memory leak in state setter)
+  const menuVisibleRef = useRef(false);
+  menuVisibleRef.current = menu.visible;
 
   useEffect(() => {
     // Listen for context menu requests from any system
@@ -151,6 +155,10 @@ export function EntityContextMenu({ world: _world }: EntityContextMenuProps) {
         return;
       }
 
+      // Dispatch close event before state update (using ref to avoid memory leak)
+      if (menuVisibleRef.current) {
+        window.dispatchEvent(new CustomEvent("contextmenu:close"));
+      }
       setMenu((prev) => ({ ...prev, visible: false }));
     };
 
