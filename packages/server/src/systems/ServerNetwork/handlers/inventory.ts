@@ -29,7 +29,12 @@ import {
   isValidItemId,
   isValidInventorySlot,
   validateRequestTimestamp,
+  isValidQuantity,
+  wouldOverflow,
 } from "../services/InputValidation";
+import { sql } from "drizzle-orm";
+import * as schema from "../../../database/schema";
+import { getDatabase } from "./common/helpers";
 import {
   getPickupRateLimiter,
   getMoveRateLimiter,
@@ -584,4 +589,212 @@ export function handleMoveItem(
     { fromSlot: payload.fromSlot, toSlot: payload.toSlot },
     true,
   );
+}
+
+// ============================================================================
+// COIN POUCH WITHDRAWAL
+// ============================================================================
+
+/**
+ * Rate limiter for coin pouch operations
+ * Simple timestamp-based limiter (100ms between operations)
+ */
+const coinPouchRateLimiter = new Map<string, number>();
+function checkCoinPouchRateLimit(playerId: string): boolean {
+  const now = Date.now();
+  const last = coinPouchRateLimiter.get(playerId) || 0;
+  if (now - last < 100) return false; // 100ms between operations
+  coinPouchRateLimiter.set(playerId, now);
+  return true;
+}
+
+/**
+ * Handle coin pouch withdrawal to inventory
+ *
+ * Moves coins from the protected money pouch (characters.coins)
+ * to physical "coins" item in inventory. This makes coins
+ * droppable/tradeable but uses an inventory slot.
+ *
+ * Security:
+ * - Rate limited to 10/sec
+ * - Input validation (positive integer, max 2.1B)
+ * - Atomic database transaction with row locking
+ * - Overflow protection
+ *
+ * @param socket - Client socket with player entity
+ * @param data - Withdrawal request with amount
+ * @param world - Game world instance
+ */
+export async function handleCoinPouchWithdraw(
+  socket: ServerSocket,
+  data: unknown,
+  world: World,
+): Promise<void> {
+  // Step 1: Player validation
+  const playerEntity = socket.player;
+  if (!playerEntity) {
+    console.warn("[Inventory] handleCoinPouchWithdraw: no player entity");
+    return;
+  }
+
+  const playerId = playerEntity.id;
+
+  // Step 2: Rate limit
+  if (!checkCoinPouchRateLimit(playerId)) {
+    return;
+  }
+
+  // Step 3: Payload validation
+  if (!data || typeof data !== "object") {
+    console.warn("[Inventory] handleCoinPouchWithdraw: invalid payload");
+    return;
+  }
+
+  const payload = data as { amount?: unknown };
+  if (!isValidQuantity(payload.amount)) {
+    sendInventoryError(socket, "coinPouchWithdraw", "Invalid amount");
+    return;
+  }
+
+  const amount = payload.amount as number;
+
+  // Step 4: Database transaction
+  const db = getDatabase(world);
+  if (!db) {
+    console.error("[Inventory] handleCoinPouchWithdraw: database unavailable");
+    return;
+  }
+
+  try {
+    await db.drizzle.transaction(async (tx) => {
+      // Lock character row first (consistent lock order)
+      const charResult = await tx.execute(
+        sql`SELECT coins FROM characters WHERE id = ${playerId} FOR UPDATE`,
+      );
+      const charRow = charResult.rows[0] as { coins: number } | undefined;
+      if (!charRow) {
+        throw new Error("PLAYER_NOT_FOUND");
+      }
+
+      const currentPouch = charRow.coins ?? 0;
+      if (currentPouch < amount) {
+        throw new Error("INSUFFICIENT_COINS");
+      }
+
+      // Check inventory for existing coins stack
+      const invResult = await tx.execute(
+        sql`SELECT "slotIndex", quantity FROM inventory
+            WHERE "playerId" = ${playerId} AND "itemId" = 'coins'
+            FOR UPDATE`,
+      );
+      const existingStack = invResult.rows[0] as
+        | { slotIndex: number; quantity: number }
+        | undefined;
+
+      if (existingStack) {
+        // Add to existing stack (check overflow)
+        if (wouldOverflow(existingStack.quantity, amount)) {
+          throw new Error("STACK_OVERFLOW");
+        }
+        await tx.execute(
+          sql`UPDATE inventory
+              SET quantity = quantity + ${amount}
+              WHERE "playerId" = ${playerId} AND "itemId" = 'coins'`,
+        );
+      } else {
+        // Find empty slot
+        const slotsResult = await tx.execute(
+          sql`SELECT "slotIndex" FROM inventory
+              WHERE "playerId" = ${playerId} AND "slotIndex" >= 0`,
+        );
+        const usedSlots = new Set(
+          (slotsResult.rows as { slotIndex: number }[]).map((r) => r.slotIndex),
+        );
+
+        let emptySlot = -1;
+        for (let i = 0; i < INPUT_LIMITS.MAX_INVENTORY_SLOTS; i++) {
+          if (!usedSlots.has(i)) {
+            emptySlot = i;
+            break;
+          }
+        }
+
+        if (emptySlot === -1) {
+          throw new Error("INVENTORY_FULL");
+        }
+
+        // Insert new coins stack
+        await tx.insert(schema.inventory).values({
+          playerId,
+          itemId: "coins",
+          quantity: amount,
+          slotIndex: emptySlot,
+        });
+      }
+
+      // Deduct from pouch
+      await tx.execute(
+        sql`UPDATE characters SET coins = coins - ${amount} WHERE id = ${playerId}`,
+      );
+    });
+
+    // Step 5: Sync in-memory systems
+    // Get updated coin balance
+    const updatedCoins = await db.drizzle.execute(
+      sql`SELECT coins FROM characters WHERE id = ${playerId}`,
+    );
+    const newCoinBalance =
+      (updatedCoins.rows[0] as { coins: number } | undefined)?.coins ?? 0;
+
+    // Update CoinPouchSystem
+    world.emit(EventType.INVENTORY_UPDATE_COINS, {
+      playerId,
+      coins: newCoinBalance,
+    });
+
+    // Reload and sync inventory
+    const inventorySystem = world.getSystem("inventory") as {
+      reloadFromDatabase?: (playerId: string) => Promise<void>;
+      emitInventoryUpdate?: (playerId: string) => void;
+    } | null;
+    if (
+      inventorySystem?.reloadFromDatabase &&
+      inventorySystem?.emitInventoryUpdate
+    ) {
+      await inventorySystem.reloadFromDatabase(playerId);
+      inventorySystem.emitInventoryUpdate(playerId);
+    }
+
+    // Step 6: Success feedback
+    socket.send("showToast", {
+      message: `Withdrew ${amount.toLocaleString()} coins to inventory`,
+      type: "success",
+    });
+
+    // Audit log for large withdrawals
+    if (amount >= 1000000) {
+      auditLog("COIN_POUCH_WITHDRAW", playerId, { amount }, true);
+    }
+  } catch (error) {
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+
+    const userMessages: Record<string, string> = {
+      INSUFFICIENT_COINS: "Not enough coins in pouch",
+      INVENTORY_FULL: "Your inventory is full",
+      STACK_OVERFLOW: "Cannot stack that many coins",
+      PLAYER_NOT_FOUND: "Character not found",
+    };
+
+    sendInventoryError(
+      socket,
+      "coinPouchWithdraw",
+      userMessages[errorMessage] || "Failed to withdraw coins",
+    );
+
+    // Log unexpected errors
+    if (!userMessages[errorMessage]) {
+      console.error("[Inventory] handleCoinPouchWithdraw error:", error);
+    }
+  }
 }

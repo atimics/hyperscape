@@ -96,6 +96,7 @@ import {
   handleUseItem,
   handleUnequipItem,
   handleMoveItem,
+  handleCoinPouchWithdraw,
 } from "./handlers/inventory";
 import { handleResourceGather } from "./handlers/resources";
 import {
@@ -1293,6 +1294,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     this.handlers["onMoveItem"] = (socket, data) =>
       handleMoveItem(socket, data, this.world);
+
+    this.handlers["onCoinPouchWithdraw"] = (socket, data) =>
+      handleCoinPouchWithdraw(socket, data as { amount: number }, this.world);
 
     // Death/respawn handlers
     this.handlers["onRequestRespawn"] = (socket, _data) => {
