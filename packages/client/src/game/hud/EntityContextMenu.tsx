@@ -55,7 +55,8 @@ export interface ContextMenuState {
       | "bank"
       | "store"
       | "headstone"
-      | "player";
+      | "player"
+      | "terrain";
     name: string;
   } | null;
   actions: ContextMenuAction[];
@@ -88,9 +89,10 @@ export function EntityContextMenu({ world: _world }: EntityContextMenuProps) {
             | "bank"
             | "store"
             | "headstone"
-            | "player";
+            | "player"
+            | "terrain";
           name: string;
-          position?: { x: number; y: number; z: number };
+          position?: { x: number; y: number; z: number } | null;
           [key: string]: unknown;
         };
         mousePosition: { x: number; y: number };
