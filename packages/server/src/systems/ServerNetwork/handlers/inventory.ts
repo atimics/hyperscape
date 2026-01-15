@@ -604,13 +604,14 @@ export function handleMoveItem(
  * droppable/tradeable but uses an inventory slot.
  *
  * Security:
- * - Rate limited to 10/sec
+ * - Rate limited to 10/sec (SlidingWindowRateLimiter with auto-cleanup)
+ * - Timestamp validation (prevents replay attacks)
  * - Input validation (positive integer, max 2.1B)
  * - Atomic database transaction with row locking
  * - Overflow protection
  *
  * @param socket - Client socket with player entity
- * @param data - Withdrawal request with amount
+ * @param data - Withdrawal request with amount and timestamp
  * @param world - Game world instance
  */
 export async function handleCoinPouchWithdraw(
@@ -638,7 +639,24 @@ export async function handleCoinPouchWithdraw(
     return;
   }
 
-  const payload = data as { amount?: unknown };
+  const payload = data as { amount?: unknown; timestamp?: unknown };
+
+  // Step 3a: Timestamp validation (prevents replay attacks)
+  const timestampResult = validateRequestTimestamp(payload.timestamp);
+  if (!timestampResult.valid) {
+    console.warn(
+      `[Inventory] handleCoinPouchWithdraw: ${timestampResult.reason} for player ${playerId}`,
+    );
+    auditLog(
+      "COIN_POUCH_REPLAY_ATTEMPT",
+      playerId,
+      { timestamp: payload.timestamp, reason: timestampResult.reason },
+      false,
+    );
+    return;
+  }
+
+  // Step 3b: Amount validation
   if (!isValidQuantity(payload.amount)) {
     sendInventoryError(socket, "coinPouchWithdraw", "Invalid amount");
     return;

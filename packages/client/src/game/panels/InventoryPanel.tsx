@@ -1154,7 +1154,10 @@ export function InventoryPanel({
   const handleCoinWithdraw = useCallback(
     (amount: number) => {
       if (!world?.network?.send) return;
-      world.network.send("coinPouchWithdraw", { amount });
+      world.network.send("coinPouchWithdraw", {
+        amount,
+        timestamp: Date.now(), // Replay attack protection
+      });
       closeCoinModal();
     },
     [world, closeCoinModal],
