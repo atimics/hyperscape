@@ -597,6 +597,29 @@ export function handleMoveItem(
 // ============================================================================
 
 /**
+ * Payload structure for coin pouch withdrawal requests
+ */
+interface CoinPouchWithdrawPayload {
+  amount: number;
+  timestamp: number;
+}
+
+/**
+ * Type guard for coin pouch withdrawal payload
+ * Validates structure before processing (defense in depth)
+ */
+function isCoinPouchWithdrawPayload(
+  data: unknown,
+): data is CoinPouchWithdrawPayload {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "amount" in data &&
+    "timestamp" in data
+  );
+}
+
+/**
  * Handle coin pouch withdrawal to inventory
  *
  * Moves coins from the protected money pouch (characters.coins)
@@ -633,16 +656,16 @@ export async function handleCoinPouchWithdraw(
     return;
   }
 
-  // Step 3: Payload validation
-  if (!data || typeof data !== "object") {
-    console.warn("[Inventory] handleCoinPouchWithdraw: invalid payload");
+  // Step 3: Payload structure validation (type guard)
+  if (!isCoinPouchWithdrawPayload(data)) {
+    console.warn(
+      "[Inventory] handleCoinPouchWithdraw: invalid payload structure",
+    );
     return;
   }
 
-  const payload = data as { amount?: unknown; timestamp?: unknown };
-
   // Step 3a: Timestamp validation (prevents replay attacks)
-  const timestampResult = validateRequestTimestamp(payload.timestamp);
+  const timestampResult = validateRequestTimestamp(data.timestamp);
   if (!timestampResult.valid) {
     console.warn(
       `[Inventory] handleCoinPouchWithdraw: ${timestampResult.reason} for player ${playerId}`,
@@ -650,19 +673,19 @@ export async function handleCoinPouchWithdraw(
     auditLog(
       "COIN_POUCH_REPLAY_ATTEMPT",
       playerId,
-      { timestamp: payload.timestamp, reason: timestampResult.reason },
+      { timestamp: data.timestamp, reason: timestampResult.reason },
       false,
     );
     return;
   }
 
-  // Step 3b: Amount validation
-  if (!isValidQuantity(payload.amount)) {
+  // Step 3b: Amount validation (semantic validation after structure check)
+  if (!isValidQuantity(data.amount)) {
     sendInventoryError(socket, "coinPouchWithdraw", "Invalid amount");
     return;
   }
 
-  const amount = payload.amount as number;
+  const amount = data.amount;
 
   // Step 4: Database transaction
   const db = getDatabase(world);

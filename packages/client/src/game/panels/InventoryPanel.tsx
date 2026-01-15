@@ -40,6 +40,7 @@ import {
 import { dispatchInventoryAction } from "../systems/InventoryActionDispatcher";
 import type { ClientWorld, InventorySlotItem } from "../../types";
 import { CoinAmountModal } from "./BankPanel/components/modals/CoinAmountModal";
+import { CoinPouch } from "./inventory";
 
 /**
  * Maximum inventory slots (OSRS-style: 28 slots)
@@ -1302,47 +1303,8 @@ export function InventoryPanel({
             </div>
           </div>
 
-          {/* RS3-style Coins/Money Pouch - Click or press Enter to withdraw */}
-          <div
-            role="button"
-            tabIndex={0}
-            className="border rounded flex items-center justify-between py-1 px-2 cursor-pointer hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-yellow-500/50 transition-all"
-            style={{
-              background:
-                "linear-gradient(180deg, rgba(45, 40, 35, 0.95) 0%, rgba(30, 25, 22, 0.98) 100%)",
-              borderColor: "rgba(120, 100, 60, 0.5)",
-              boxShadow:
-                "inset 0 1px 0 rgba(150, 130, 80, 0.2), 0 1px 2px rgba(0, 0, 0, 0.3)",
-            }}
-            onClick={openCoinModal}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                openCoinModal();
-              }
-            }}
-            aria-label={`Money pouch: ${coins.toLocaleString()} coins. Press Enter to withdraw.`}
-            title="Click to withdraw coins to inventory"
-          >
-            <div className="flex items-center gap-1.5">
-              <span className="text-base">💰</span>
-              <span
-                className="font-medium text-xs"
-                style={{ color: "rgba(210, 190, 130, 0.9)" }}
-              >
-                Coins
-              </span>
-            </div>
-            <span
-              className="font-bold text-xs"
-              style={{
-                color: "#fbbf24",
-                textShadow: "0 1px 2px rgba(0, 0, 0, 0.8)",
-              }}
-            >
-              {coins.toLocaleString()}
-            </span>
-          </div>
+          {/* RS3-style Coins/Money Pouch - Extracted component */}
+          <CoinPouch coins={coins} onWithdrawClick={openCoinModal} />
 
           <DragOverlay dropAnimation={null} modifiers={[snapCenterToCursor]}>
             {activeItem
