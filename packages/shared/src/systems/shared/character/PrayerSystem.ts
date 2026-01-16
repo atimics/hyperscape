@@ -42,6 +42,21 @@ import {
   getPlayerPrayerLevel,
   getPlayerPrayerBonus,
   type PlayerWithPrayerStats,
+  // Typed event payloads
+  type PlayerRegisteredPayload,
+  type PlayerCleanupPayload,
+  type PrayerToggleEventPayload,
+  type AltarPrayPayload,
+  // Type guards for validation
+  isPlayerRegisteredPayload,
+  isPlayerCleanupPayload,
+  isPrayerToggleEventPayload,
+  isAltarPrayPayload,
+  // Bounds checking
+  clampPrayerLevel,
+  clampPrayerPoints,
+  isValidRestoreAmount,
+  MAX_PRAYER_POINTS,
 } from "../../../types/game/prayer-types";
 
 /**
@@ -67,8 +82,7 @@ const DRAIN_INTERVAL_MS = GAME_TICK_MS;
 /** Default starting prayer points */
 const DEFAULT_PRAYER_POINTS = 1;
 
-/** Maximum prayer points a player can have at level 99 */
-const MAX_PRAYER_POINTS = 99;
+// MAX_PRAYER_POINTS imported from prayer-types.ts
 
 /** Base drain resistance constant (OSRS formula) */
 const BASE_DRAIN_RESISTANCE = 60;
@@ -154,28 +168,104 @@ export class PrayerSystem extends SystemBase {
   // EVENT HANDLERS (stored for cleanup)
   // ============================================================================
 
-  /** Handler for PLAYER_REGISTERED events */
-  private readonly onPlayerRegistered = async (event: unknown) => {
-    const data = event as { playerId: string };
-    await this.initializePlayerPrayer(data.playerId);
+  /**
+   * Handler for PLAYER_REGISTERED events
+   * Validates payload before processing to prevent type-related bugs.
+   */
+  private readonly onPlayerRegistered = async (
+    event: unknown,
+  ): Promise<void> => {
+    if (!isPlayerRegisteredPayload(event)) {
+      Logger.systemError(
+        "PrayerSystem",
+        "Invalid PLAYER_REGISTERED payload",
+        new Error(`Invalid payload: ${JSON.stringify(event)}`),
+      );
+      return;
+    }
+    await this.initializePlayerPrayer(event.playerId);
   };
 
-  /** Handler for PLAYER_CLEANUP events */
-  private readonly onPlayerCleanup = (event: unknown) => {
-    const data = event as { playerId: string };
-    this.cleanupPlayerPrayer(data.playerId);
+  /**
+   * Handler for PLAYER_CLEANUP events
+   * Validates payload before processing.
+   */
+  private readonly onPlayerCleanup = (event: unknown): void => {
+    if (!isPlayerCleanupPayload(event)) {
+      Logger.systemError(
+        "PrayerSystem",
+        "Invalid PLAYER_CLEANUP payload",
+        new Error(`Invalid payload: ${JSON.stringify(event)}`),
+      );
+      return;
+    }
+    this.cleanupPlayerPrayer(event.playerId);
   };
 
-  /** Handler for PRAYER_TOGGLE events */
-  private readonly onPrayerToggle = (event: unknown) => {
-    const data = event as { playerId: string; prayerId: string };
-    this.handlePrayerToggle(data.playerId, data.prayerId);
+  /**
+   * Handler for PRAYER_TOGGLE events
+   * Validates payload including prayer ID format before processing.
+   */
+  private readonly onPrayerToggle = (event: unknown): void => {
+    if (!isPrayerToggleEventPayload(event)) {
+      Logger.systemError(
+        "PrayerSystem",
+        "Invalid PRAYER_TOGGLE payload",
+        new Error(`Invalid payload: ${JSON.stringify(event)}`),
+      );
+      return;
+    }
+    this.handlePrayerToggle(event.playerId, event.prayerId);
   };
 
-  /** Handler for ALTAR_PRAY events */
-  private readonly onAltarPray = (event: unknown) => {
-    const data = event as { playerId: string; altarId: string };
-    this.handleAltarPray(data.playerId, data.altarId);
+  /**
+   * Handler for ALTAR_PRAY events
+   * Validates payload including altar ID before processing.
+   */
+  private readonly onAltarPray = (event: unknown): void => {
+    if (!isAltarPrayPayload(event)) {
+      Logger.systemError(
+        "PrayerSystem",
+        "Invalid ALTAR_PRAY payload",
+        new Error(`Invalid payload: ${JSON.stringify(event)}`),
+      );
+      return;
+    }
+    this.handleAltarPray(event.playerId, event.altarId);
+  };
+
+  /**
+   * Handler for PRAYER_DEACTIVATED events from handlers (deactivate all request)
+   * Handles the special "*" prayerId marker for deactivating all prayers.
+   */
+  private readonly onPrayerDeactivated = (event: unknown): void => {
+    if (!event || typeof event !== "object") return;
+
+    const payload = event as {
+      playerId?: string;
+      prayerId?: string;
+      reason?: string;
+    };
+
+    // Only handle deactivate-all requests (prayerId === "*")
+    // Regular deactivations are handled internally, not via this event
+    if (payload.prayerId !== "*") return;
+
+    if (
+      !payload.playerId ||
+      typeof payload.playerId !== "string" ||
+      payload.playerId.length === 0
+    ) {
+      Logger.systemError(
+        "PrayerSystem",
+        "Invalid PRAYER_DEACTIVATED payload for deactivate-all",
+        new Error(`Invalid payload: ${JSON.stringify(event)}`),
+      );
+      return;
+    }
+
+    // Deactivate all prayers for this player
+    this.deactivateAllPrayers(payload.playerId);
   };
 
   // ============================================================================
@@ -215,15 +305,21 @@ export class PrayerSystem extends SystemBase {
     this.world.on(EventType.PLAYER_CLEANUP, this.onPlayerCleanup);
     this.world.on(EventType.PRAYER_TOGGLE, this.onPrayerToggle);
     this.world.on(EventType.ALTAR_PRAY, this.onAltarPray);
+    // Listen for deactivate-all requests (prayerId === "*")
+    this.world.on(EventType.PRAYER_DEACTIVATED, this.onPrayerDeactivated);
 
     Logger.system("PrayerSystem", "Initialized");
   }
 
+  /**
+   * Start the prayer system - begins drain processing and auto-save on server
+   */
   start(): void {
     // Start drain processing on server only
     if (this.world.isServer) {
       this.startDrainProcessing();
       this.startAutoSave();
+      Logger.system("PrayerSystem", "Started drain processing and auto-save");
     }
   }
 
@@ -258,34 +354,52 @@ export class PrayerSystem extends SystemBase {
       let activePrayers: string[] = [];
 
       if (db) {
-        const playerRow = await db.getPlayerAsync(playerId);
-        if (playerRow) {
-          // Load prayer level to calculate max points
-          const prayerLevel =
-            (playerRow as { prayerLevel?: number }).prayerLevel ?? 1;
-          maxPoints = prayerLevel;
+        try {
+          const playerRow = await db.getPlayerAsync(playerId);
+          if (playerRow) {
+            // Load prayer level to calculate max points (with bounds checking)
+            const rawPrayerLevel = (playerRow as { prayerLevel?: number })
+              .prayerLevel;
+            maxPoints = clampPrayerLevel(rawPrayerLevel ?? 1);
 
-          // Load current points (default to max if not set)
-          points =
-            (playerRow as { prayerPoints?: number }).prayerPoints ?? maxPoints;
+            // Load current points (with bounds checking, default to max if not set)
+            const rawPoints = (playerRow as { prayerPoints?: number })
+              .prayerPoints;
+            points = clampPrayerPoints(rawPoints ?? maxPoints, maxPoints);
 
-          // Load active prayers from JSON
-          const activePrayersJson = (playerRow as { activePrayers?: string })
-            .activePrayers;
-          if (activePrayersJson) {
-            try {
-              const parsed = JSON.parse(activePrayersJson);
-              if (Array.isArray(parsed)) {
-                // Validate each prayer ID
-                activePrayers = parsed.filter(
-                  (id) => typeof id === "string" && isValidPrayerId(id),
+            // Load active prayers from JSON
+            const activePrayersJson = (playerRow as { activePrayers?: string })
+              .activePrayers;
+            if (activePrayersJson) {
+              try {
+                const parsed: unknown = JSON.parse(activePrayersJson);
+                if (Array.isArray(parsed)) {
+                  // Validate each prayer ID (security + data integrity)
+                  activePrayers = parsed.filter(
+                    (id): id is string =>
+                      typeof id === "string" && isValidPrayerId(id),
+                  );
+                }
+              } catch (parseError) {
+                // Log corrupted data for debugging, start with no active prayers
+                Logger.systemError(
+                  "PrayerSystem",
+                  `Corrupted activePrayers JSON for ${playerId}`,
+                  parseError instanceof Error
+                    ? parseError
+                    : new Error(String(parseError)),
                 );
+                activePrayers = [];
               }
-            } catch {
-              // Invalid JSON, start with no active prayers
-              activePrayers = [];
             }
           }
+        } catch (dbError) {
+          // Log database error but continue with defaults
+          Logger.systemError(
+            "PrayerSystem",
+            `Database error loading prayer state for ${playerId}`,
+            dbError instanceof Error ? dbError : new Error(String(dbError)),
+          );
         }
       }
 
@@ -767,8 +881,21 @@ export class PrayerSystem extends SystemBase {
 
   /**
    * Restore prayer points (e.g., from altar, potion)
+   *
+   * @param playerId - Player to restore points for
+   * @param amount - Amount to restore (must be positive finite number)
    */
   restorePrayerPoints(playerId: string, amount: number): void {
+    // Input validation
+    if (!isValidRestoreAmount(amount)) {
+      Logger.systemError(
+        "PrayerSystem",
+        `Invalid restore amount: ${amount} for ${playerId}`,
+        new Error(`Invalid restore amount: ${amount}`),
+      );
+      return;
+    }
+
     const playerIdKey = toPlayerID(playerId);
     if (!playerIdKey) return;
 
@@ -776,7 +903,8 @@ export class PrayerSystem extends SystemBase {
     if (!state) return;
 
     const oldPoints = state.points;
-    state.points = Math.min(state.points + amount, state.maxPoints);
+    // Use clampPrayerPoints for bounds safety
+    state.points = clampPrayerPoints(state.points + amount, state.maxPoints);
     state.dirty = true;
 
     if (getDisplayPoints(oldPoints) !== getDisplayPoints(state.points)) {
@@ -794,6 +922,9 @@ export class PrayerSystem extends SystemBase {
 
   /**
    * Set max prayer points (called when prayer level changes)
+   *
+   * @param playerId - Player to set max points for
+   * @param maxPoints - New maximum (clamped to [1, 99])
    */
   setMaxPrayerPoints(playerId: string, maxPoints: number): void {
     const playerIdKey = toPlayerID(playerId);
@@ -802,7 +933,15 @@ export class PrayerSystem extends SystemBase {
     const state = this.playerStates.get(playerIdKey);
     if (!state) return;
 
-    state.maxPoints = Math.max(1, Math.min(maxPoints, MAX_PRAYER_POINTS));
+    // Use clampPrayerLevel for bounds safety (max points = prayer level)
+    const newMaxPoints = clampPrayerLevel(maxPoints);
+    state.maxPoints = newMaxPoints;
+
+    // Cap current points to new max if needed
+    if (state.points > newMaxPoints) {
+      state.points = newMaxPoints;
+    }
+
     state.dirty = true;
 
     this.emitPrayerStateSync(playerId, state);
@@ -962,6 +1101,7 @@ export class PrayerSystem extends SystemBase {
 
   /**
    * Persist prayer state immediately
+   * Includes validation and error handling for database operations.
    */
   private persistPrayerImmediate(playerId: string): void {
     const playerIdKey = toPlayerID(playerId);
@@ -971,16 +1111,44 @@ export class PrayerSystem extends SystemBase {
     if (!state || !state.dirty) return;
 
     const db = this.getDatabase();
-    if (!db) return;
+    if (!db) {
+      Logger.systemError(
+        "PrayerSystem",
+        `Cannot persist prayer state - database unavailable for ${playerId}`,
+        new Error("Database unavailable"),
+      );
+      return;
+    }
 
-    // Persist to database
-    db.savePlayer(playerId, {
-      prayerPoints: getDisplayPoints(state.points),
-      prayerMaxPoints: state.maxPoints,
-      activePrayers: JSON.stringify(Array.from(state.active)),
-    } as Record<string, unknown>);
+    // Validate data before persisting (prevent NaN/undefined from corrupting DB)
+    const pointsToSave = getDisplayPoints(state.points);
+    const maxPointsToSave = state.maxPoints;
 
-    state.dirty = false;
+    if (!Number.isFinite(pointsToSave) || !Number.isFinite(maxPointsToSave)) {
+      Logger.systemError(
+        "PrayerSystem",
+        `Invalid prayer state data for ${playerId}: points=${pointsToSave}, max=${maxPointsToSave}`,
+        new Error("Invalid prayer state data"),
+      );
+      return;
+    }
+
+    try {
+      // Persist to database with validated data
+      db.savePlayer(playerId, {
+        prayerPoints: pointsToSave,
+        prayerMaxPoints: maxPointsToSave,
+        activePrayers: JSON.stringify(Array.from(state.active)),
+      } as Record<string, unknown>);
+
+      state.dirty = false;
+    } catch (error) {
+      Logger.systemError(
+        "PrayerSystem",
+        `Failed to persist prayer state for ${playerId}`,
+        error instanceof Error ? error : new Error(String(error)),
+      );
+    }
   }
 
   /**
@@ -1013,9 +1181,13 @@ export class PrayerSystem extends SystemBase {
 
   /**
    * Get player entity for bonus lookups
+   * Returns typed player entity or undefined if not found.
    */
-  private getPlayerEntity(playerId: string): unknown {
-    return this.world.entities.get(playerId);
+  private getPlayerEntity(playerId: string): PlayerWithPrayerStats | undefined {
+    const entity = this.world.entities.get(playerId);
+    if (!entity) return undefined;
+    // Entity has stats/skills properties that match PlayerWithPrayerStats interface
+    return entity as PlayerWithPrayerStats;
   }
 
   /**
@@ -1054,6 +1226,7 @@ export class PrayerSystem extends SystemBase {
     this.world.off(EventType.PLAYER_CLEANUP, this.onPlayerCleanup);
     this.world.off(EventType.PRAYER_TOGGLE, this.onPrayerToggle);
     this.world.off(EventType.ALTAR_PRAY, this.onAltarPray);
+    this.world.off(EventType.PRAYER_DEACTIVATED, this.onPrayerDeactivated);
 
     // Clear intervals
     if (this.drainInterval) {

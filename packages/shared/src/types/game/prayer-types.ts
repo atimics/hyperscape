@@ -185,3 +185,149 @@ export function getPlayerPrayerXp(
   if (!player) return 0;
   return player.stats?.prayer?.xp ?? player.skills?.prayer?.xp ?? 0;
 }
+
+// === Internal Event Payloads (for PrayerSystem event handlers) ===
+
+/**
+ * Payload for PLAYER_REGISTERED event
+ */
+export interface PlayerRegisteredPayload {
+  readonly playerId: string;
+}
+
+/**
+ * Payload for PLAYER_CLEANUP event
+ */
+export interface PlayerCleanupPayload {
+  readonly playerId: string;
+}
+
+/**
+ * Payload for PRAYER_TOGGLE event (internal, from handler to system)
+ */
+export interface PrayerToggleEventPayload {
+  readonly playerId: string;
+  readonly prayerId: string;
+}
+
+/**
+ * Payload for ALTAR_PRAY event
+ */
+export interface AltarPrayPayload {
+  readonly playerId: string;
+  readonly altarId: string;
+}
+
+/**
+ * Payload for PRAYER_DEACTIVATED event
+ */
+export interface PrayerDeactivatedPayload {
+  readonly playerId: string;
+  readonly prayerId: string;
+  readonly reason: "conflict" | "depleted" | "manual" | "deactivate_all";
+}
+
+/**
+ * Payload for PRAYER_POINTS_CHANGED event
+ */
+export interface PrayerPointsChangedPayload {
+  readonly playerId: string;
+  readonly points: number;
+  readonly maxPoints: number;
+}
+
+// === Type Guards for Event Payloads ===
+
+/**
+ * Validates PlayerRegisteredPayload
+ */
+export function isPlayerRegisteredPayload(
+  data: unknown,
+): data is PlayerRegisteredPayload {
+  if (!data || typeof data !== "object") return false;
+  const payload = data as Record<string, unknown>;
+  return typeof payload.playerId === "string" && payload.playerId.length > 0;
+}
+
+/**
+ * Validates PlayerCleanupPayload
+ */
+export function isPlayerCleanupPayload(
+  data: unknown,
+): data is PlayerCleanupPayload {
+  if (!data || typeof data !== "object") return false;
+  const payload = data as Record<string, unknown>;
+  return typeof payload.playerId === "string" && payload.playerId.length > 0;
+}
+
+/**
+ * Validates PrayerToggleEventPayload
+ */
+export function isPrayerToggleEventPayload(
+  data: unknown,
+): data is PrayerToggleEventPayload {
+  if (!data || typeof data !== "object") return false;
+  const payload = data as Record<string, unknown>;
+  return (
+    typeof payload.playerId === "string" &&
+    payload.playerId.length > 0 &&
+    isValidPrayerId(payload.prayerId)
+  );
+}
+
+/**
+ * Validates AltarPrayPayload
+ */
+export function isAltarPrayPayload(data: unknown): data is AltarPrayPayload {
+  if (!data || typeof data !== "object") return false;
+  const payload = data as Record<string, unknown>;
+  return (
+    typeof payload.playerId === "string" &&
+    payload.playerId.length > 0 &&
+    typeof payload.altarId === "string" &&
+    payload.altarId.length > 0
+  );
+}
+
+// === Bounds Checking Helpers ===
+
+/** Minimum prayer level */
+export const MIN_PRAYER_LEVEL = 1;
+
+/** Maximum prayer level */
+export const MAX_PRAYER_LEVEL = 99;
+
+/** Maximum prayer points (equals max level) */
+export const MAX_PRAYER_POINTS = 99;
+
+/**
+ * Clamp prayer level to valid range [1, 99]
+ */
+export function clampPrayerLevel(level: number): number {
+  if (!Number.isFinite(level)) return MIN_PRAYER_LEVEL;
+  return Math.max(
+    MIN_PRAYER_LEVEL,
+    Math.min(MAX_PRAYER_LEVEL, Math.floor(level)),
+  );
+}
+
+/**
+ * Clamp prayer points to valid range [0, max]
+ */
+export function clampPrayerPoints(points: number, maxPoints: number): number {
+  if (!Number.isFinite(points)) return 0;
+  if (!Number.isFinite(maxPoints)) maxPoints = MAX_PRAYER_POINTS;
+  return Math.max(0, Math.min(maxPoints, points));
+}
+
+/**
+ * Validate a number is a valid positive amount for restoration
+ */
+export function isValidRestoreAmount(amount: unknown): amount is number {
+  return (
+    typeof amount === "number" &&
+    Number.isFinite(amount) &&
+    amount > 0 &&
+    amount <= MAX_PRAYER_POINTS
+  );
+}
