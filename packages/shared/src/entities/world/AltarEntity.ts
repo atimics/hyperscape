@@ -176,11 +176,9 @@ export class AltarEntity extends InteractableEntity {
     // Create a purple box for the altar (1 tile size, altar-like proportions)
     const boxHeight = 0.8;
     const geometry = new THREE.BoxGeometry(0.9, boxHeight, 0.9);
-    // Use MeshStandardMaterial for proper lighting
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x8b008b, // Dark magenta/purple
-      roughness: 0.4,
-      metalness: 0.6,
+    // Use MeshBasicMaterial so color shows regardless of lighting
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x9932cc, // Bright purple (DarkOrchid)
     });
 
     const mesh = new THREE.Mesh(geometry, material);
