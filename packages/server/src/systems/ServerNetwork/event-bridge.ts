@@ -88,6 +88,7 @@ export class EventBridge {
     this.setupResourceEvents();
     this.setupInventoryEvents();
     this.setupSkillEvents();
+    this.setupPrayerEvents();
     this.setupUIEvents();
     this.setupCombatEvents();
     this.setupPlayerEvents();
@@ -306,6 +307,59 @@ export class EventBridge {
       });
     } catch (_err) {
       console.error("[EventBridge] Error setting up skill events:", _err);
+    }
+  }
+
+  /**
+   * Setup prayer event listeners
+   *
+   * Routes prayer state changes to specific players.
+   *
+   * @private
+   */
+  private setupPrayerEvents(): void {
+    try {
+      // Forward prayer state sync to clients
+      this.world.on(EventType.PRAYER_STATE_SYNC, (payload: unknown) => {
+        const data = payload as {
+          playerId?: string;
+          points?: number;
+          maxPoints?: number;
+          active?: string[];
+        };
+
+        if (!data?.playerId) return;
+
+        // Send prayer state to the specific player
+        this.broadcast.sendToPlayer(data.playerId, "prayerStateSync", {
+          playerId: data.playerId,
+          points: data.points ?? 0,
+          maxPoints: data.maxPoints ?? 1,
+          active: data.active ?? [],
+        });
+      });
+
+      // Forward prayer toggled events for visual feedback
+      this.world.on(EventType.PRAYER_TOGGLED, (payload: unknown) => {
+        const data = payload as {
+          playerId?: string;
+          prayerId?: string;
+          active?: boolean;
+          points?: number;
+        };
+
+        if (!data?.playerId) return;
+
+        // Send toggle confirmation to the player
+        this.broadcast.sendToPlayer(data.playerId, "prayerToggled", {
+          playerId: data.playerId,
+          prayerId: data.prayerId,
+          active: data.active,
+          points: data.points,
+        });
+      });
+    } catch (_err) {
+      console.error("[EventBridge] Error setting up prayer events:", _err);
     }
   }
 

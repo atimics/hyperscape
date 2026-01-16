@@ -389,6 +389,13 @@ export function isPlayer(obj: unknown): obj is Player {
   );
 }
 
+// Prayer state for UI
+export interface PlayerPrayerState {
+  points: number;
+  maxPoints: number;
+  activePrayers: string[];
+}
+
 // Player stats interface for UI
 export interface PlayerStats {
   level: number;
@@ -397,6 +404,7 @@ export interface PlayerStats {
   combatLevel: number;
   equipment: PlayerEquipmentItems;
   inCombat: boolean;
+  prayer?: PlayerPrayerState;
 }
 
 // Attack style state
