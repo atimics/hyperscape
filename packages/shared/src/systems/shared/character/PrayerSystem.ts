@@ -76,6 +76,15 @@ const BASE_DRAIN_RESISTANCE = 60;
 /** Prayer bonus multiplier for drain resistance (OSRS formula) */
 const PRAYER_BONUS_MULTIPLIER = 2;
 
+/**
+ * Get display-friendly prayer points (uses ceil so fractional points show as next higher number)
+ * This prevents the UI from showing 0 when there's still 0.98 points remaining.
+ * Only shows 0 when truly depleted.
+ */
+function getDisplayPoints(points: number): number {
+  return points <= 0 ? 0 : Math.ceil(points);
+}
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -376,7 +385,7 @@ export class PrayerSystem extends SystemBase {
     // Emit points changed event (use world.emit for EventBridge routing)
     this.world.emit(EventType.PRAYER_POINTS_CHANGED, {
       playerId,
-      points: Math.floor(state.points),
+      points: getDisplayPoints(state.points),
       maxPoints: state.maxPoints,
     });
 
@@ -395,7 +404,7 @@ export class PrayerSystem extends SystemBase {
 
     Logger.system(
       "PrayerSystem",
-      `${playerId} recharged prayer at altar: ${Math.floor(oldPoints)} -> ${maxPoints}`,
+      `${playerId} recharged prayer at altar: ${getDisplayPoints(oldPoints)} -> ${maxPoints}`,
     );
   }
 
@@ -529,7 +538,7 @@ export class PrayerSystem extends SystemBase {
       playerId,
       prayerId: prayer.id,
       active: true,
-      points: Math.floor(state.points),
+      points: getDisplayPoints(state.points),
     });
 
     // Emit state sync
@@ -557,7 +566,7 @@ export class PrayerSystem extends SystemBase {
       playerId,
       prayerId,
       active: false,
-      points: Math.floor(state.points),
+      points: getDisplayPoints(state.points),
     });
 
     // Emit state sync
@@ -702,10 +711,10 @@ export class PrayerSystem extends SystemBase {
       }
 
       // Emit points changed if whole number changed (use world.emit for EventBridge routing)
-      if (Math.floor(oldPoints) !== Math.floor(state.points)) {
+      if (getDisplayPoints(oldPoints) !== getDisplayPoints(state.points)) {
         this.world.emit(EventType.PRAYER_POINTS_CHANGED, {
           playerId,
-          points: Math.floor(state.points),
+          points: getDisplayPoints(state.points),
           maxPoints: state.maxPoints,
         });
       }
@@ -724,7 +733,7 @@ export class PrayerSystem extends SystemBase {
     if (!playerIdKey) return 0;
 
     const state = this.playerStates.get(playerIdKey);
-    return state ? Math.floor(state.points) : 0;
+    return state ? getDisplayPoints(state.points) : 0;
   }
 
   /**
@@ -752,11 +761,11 @@ export class PrayerSystem extends SystemBase {
     state.points = Math.min(state.points + amount, state.maxPoints);
     state.dirty = true;
 
-    if (Math.floor(oldPoints) !== Math.floor(state.points)) {
+    if (getDisplayPoints(oldPoints) !== getDisplayPoints(state.points)) {
       // Use world.emit for EventBridge routing
       this.world.emit(EventType.PRAYER_POINTS_CHANGED, {
         playerId,
-        points: Math.floor(state.points),
+        points: getDisplayPoints(state.points),
         maxPoints: state.maxPoints,
       });
 
@@ -902,7 +911,7 @@ export class PrayerSystem extends SystemBase {
       playerId,
       level: state.maxPoints, // Prayer level = max points
       xp: 0, // XP managed by SkillsSystem
-      points: Math.floor(state.points),
+      points: getDisplayPoints(state.points),
       maxPoints: state.maxPoints,
       active: Array.from(state.active),
     });
@@ -948,7 +957,7 @@ export class PrayerSystem extends SystemBase {
 
     // Persist to database
     db.savePlayer(playerId, {
-      prayerPoints: Math.floor(state.points),
+      prayerPoints: getDisplayPoints(state.points),
       prayerMaxPoints: state.maxPoints,
       activePrayers: JSON.stringify(Array.from(state.active)),
     } as Record<string, unknown>);
@@ -1011,7 +1020,7 @@ export class PrayerSystem extends SystemBase {
     return {
       level: state.maxPoints,
       xp: 0,
-      points: Math.floor(state.points),
+      points: getDisplayPoints(state.points),
       maxPoints: state.maxPoints,
       active: Array.from(state.active),
     };
