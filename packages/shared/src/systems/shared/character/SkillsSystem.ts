@@ -44,7 +44,7 @@ import {
 import { COMBAT_CONSTANTS } from "../../../constants/CombatConstants";
 
 /** Skill name constants for type-safe skill references */
-const Skill = {
+export const Skill = {
   ATTACK: "attack" as keyof Skills,
   STRENGTH: "strength" as keyof Skills,
   DEFENSE: "defense" as keyof Skills,
@@ -590,8 +590,19 @@ export class SkillsSystem extends SystemBase {
       stats.health.current = Math.floor(Math.min(stats.health.current, newMax));
     }
 
-    // Special handling for Prayer level up - skipping for MVP
-    // Prayer is not in our current Skill enum
+    // Special handling for Prayer level up
+    // Prayer level = max prayer points (OSRS-accurate)
+    if (skill === Skill.PRAYER) {
+      const prayerSystem = this.world.getSystem("prayer") as unknown as {
+        setMaxPrayerPoints?: (id: string, max: number) => void;
+        restorePrayerPoints?: (id: string, amount: number) => void;
+      } | null;
+      if (prayerSystem?.setMaxPrayerPoints) {
+        prayerSystem.setMaxPrayerPoints(entity.id, newLevel);
+        // Also restore prayer points to new max (OSRS behavior on level-up)
+        prayerSystem.restorePrayerPoints?.(entity.id, newLevel);
+      }
+    }
 
     this.emitTypedEvent(EventType.SKILLS_LEVEL_UP, {
       entityId: entity.id,
