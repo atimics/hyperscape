@@ -142,6 +142,34 @@ export class PrayerSystem extends SystemBase {
   private readonly AUTO_SAVE_INTERVAL = 30000; // 30 seconds
 
   // ============================================================================
+  // EVENT HANDLERS (stored for cleanup)
+  // ============================================================================
+
+  /** Handler for PLAYER_REGISTERED events */
+  private readonly onPlayerRegistered = async (event: unknown) => {
+    const data = event as { playerId: string };
+    await this.initializePlayerPrayer(data.playerId);
+  };
+
+  /** Handler for PLAYER_CLEANUP events */
+  private readonly onPlayerCleanup = (event: unknown) => {
+    const data = event as { playerId: string };
+    this.cleanupPlayerPrayer(data.playerId);
+  };
+
+  /** Handler for PRAYER_TOGGLE events */
+  private readonly onPrayerToggle = (event: unknown) => {
+    const data = event as { playerId: string; prayerId: string };
+    this.handlePrayerToggle(data.playerId, data.prayerId);
+  };
+
+  /** Handler for ALTAR_PRAY events */
+  private readonly onAltarPray = (event: unknown) => {
+    const data = event as { playerId: string; altarId: string };
+    this.handleAltarPray(data.playerId, data.altarId);
+  };
+
+  // ============================================================================
   // PRE-ALLOCATED BUFFERS (Memory optimization)
   // ============================================================================
 
@@ -172,33 +200,12 @@ export class PrayerSystem extends SystemBase {
       prayerDataProvider.initialize();
     }
 
-    // Subscribe to player lifecycle events
-    this.subscribe(
-      EventType.PLAYER_REGISTERED,
-      async (data: { playerId: string }) => {
-        await this.initializePlayerPrayer(data.playerId);
-      },
-    );
-
-    this.subscribe(EventType.PLAYER_CLEANUP, (data: { playerId: string }) => {
-      this.cleanupPlayerPrayer(data.playerId);
-    });
-
-    // Subscribe to prayer toggle events
-    this.subscribe<{ playerId: string; prayerId: string }>(
-      EventType.PRAYER_TOGGLE,
-      (data) => {
-        this.handlePrayerToggle(data.playerId, data.prayerId);
-      },
-    );
-
-    // Subscribe to altar pray events (recharge prayer points)
-    this.subscribe<{ playerId: string; altarId: string }>(
-      EventType.ALTAR_PRAY,
-      (data) => {
-        this.handleAltarPray(data.playerId, data.altarId);
-      },
-    );
+    // Subscribe via world.on() for events from handlers/other systems
+    // (handlers use world.emit which is EventEmitter3, not $eventBus)
+    this.world.on(EventType.PLAYER_REGISTERED, this.onPlayerRegistered);
+    this.world.on(EventType.PLAYER_CLEANUP, this.onPlayerCleanup);
+    this.world.on(EventType.PRAYER_TOGGLE, this.onPrayerToggle);
+    this.world.on(EventType.ALTAR_PRAY, this.onAltarPray);
 
     Logger.system("PrayerSystem", "Initialized");
   }
@@ -353,7 +360,8 @@ export class PrayerSystem extends SystemBase {
 
     // Check if already at max
     if (oldPoints >= maxPoints) {
-      this.emitTypedEvent(EventType.UI_TOAST, {
+      // Use world.emit for EventBridge to route to client
+      this.world.emit(EventType.UI_TOAST, {
         playerId,
         message: "Your prayer is already fully recharged.",
         type: "info",
@@ -365,8 +373,8 @@ export class PrayerSystem extends SystemBase {
     state.points = maxPoints;
     state.dirty = true;
 
-    // Emit points changed event
-    this.emitTypedEvent(EventType.PRAYER_POINTS_CHANGED, {
+    // Emit points changed event (use world.emit for EventBridge routing)
+    this.world.emit(EventType.PRAYER_POINTS_CHANGED, {
       playerId,
       points: Math.floor(state.points),
       maxPoints: state.maxPoints,
@@ -378,8 +386,8 @@ export class PrayerSystem extends SystemBase {
     // Schedule persistence
     this.schedulePersist(playerId);
 
-    // Show success message
-    this.emitTypedEvent(EventType.UI_TOAST, {
+    // Show success message (use world.emit for EventBridge routing)
+    this.world.emit(EventType.UI_TOAST, {
       playerId,
       message: "You recharge your prayer points.",
       type: "success",
@@ -412,8 +420,8 @@ export class PrayerSystem extends SystemBase {
     const result = this.togglePrayer(playerId, prayerId);
 
     if (!result.success) {
-      // Emit failure toast
-      this.emitTypedEvent(EventType.UI_TOAST, {
+      // Emit failure toast (use world.emit for EventBridge routing)
+      this.world.emit(EventType.UI_TOAST, {
         playerId,
         message: result.reason || "Cannot toggle prayer",
         type: "error",
@@ -504,8 +512,8 @@ export class PrayerSystem extends SystemBase {
       state.active.delete(conflictId);
       deactivated.push(conflictId);
 
-      // Emit deactivation event
-      this.emitTypedEvent(EventType.PRAYER_DEACTIVATED, {
+      // Emit deactivation event (use world.emit for EventBridge routing)
+      this.world.emit(EventType.PRAYER_DEACTIVATED, {
         playerId,
         prayerId: conflictId,
         reason: "conflict",
@@ -516,8 +524,8 @@ export class PrayerSystem extends SystemBase {
     state.active.add(prayer.id);
     state.dirty = true;
 
-    // Emit toggled event
-    this.emitTypedEvent(EventType.PRAYER_TOGGLED, {
+    // Emit toggled event (use world.emit for EventBridge routing to client)
+    this.world.emit(EventType.PRAYER_TOGGLED, {
       playerId,
       prayerId: prayer.id,
       active: true,
@@ -544,8 +552,8 @@ export class PrayerSystem extends SystemBase {
     state.active.delete(prayerId);
     state.dirty = true;
 
-    // Emit toggled event
-    this.emitTypedEvent(EventType.PRAYER_TOGGLED, {
+    // Emit toggled event (use world.emit for EventBridge routing to client)
+    this.world.emit(EventType.PRAYER_TOGGLED, {
       playerId,
       prayerId,
       active: false,
@@ -581,9 +589,9 @@ export class PrayerSystem extends SystemBase {
     state.active.clear();
     state.dirty = true;
 
-    // Emit events for each
+    // Emit events for each (use world.emit for EventBridge routing)
     for (const prayerId of this.deactivateBuffer) {
-      this.emitTypedEvent(EventType.PRAYER_DEACTIVATED, {
+      this.world.emit(EventType.PRAYER_DEACTIVATED, {
         playerId,
         prayerId,
         reason: "deactivate_all",
@@ -685,17 +693,17 @@ export class PrayerSystem extends SystemBase {
         // Deactivate all prayers
         this.deactivateAllPrayers(playerId);
 
-        // Emit points depleted notification
-        this.emitTypedEvent(EventType.UI_TOAST, {
+        // Emit points depleted notification (use world.emit for EventBridge routing)
+        this.world.emit(EventType.UI_TOAST, {
           playerId,
           message: "You have run out of prayer points.",
           type: "warning",
         });
       }
 
-      // Emit points changed if whole number changed
+      // Emit points changed if whole number changed (use world.emit for EventBridge routing)
       if (Math.floor(oldPoints) !== Math.floor(state.points)) {
-        this.emitTypedEvent(EventType.PRAYER_POINTS_CHANGED, {
+        this.world.emit(EventType.PRAYER_POINTS_CHANGED, {
           playerId,
           points: Math.floor(state.points),
           maxPoints: state.maxPoints,
@@ -745,7 +753,8 @@ export class PrayerSystem extends SystemBase {
     state.dirty = true;
 
     if (Math.floor(oldPoints) !== Math.floor(state.points)) {
-      this.emitTypedEvent(EventType.PRAYER_POINTS_CHANGED, {
+      // Use world.emit for EventBridge routing
+      this.world.emit(EventType.PRAYER_POINTS_CHANGED, {
         playerId,
         points: Math.floor(state.points),
         maxPoints: state.maxPoints,
@@ -888,7 +897,8 @@ export class PrayerSystem extends SystemBase {
     playerId: string,
     state: PlayerPrayerState,
   ): void {
-    this.emitTypedEvent(EventType.PRAYER_STATE_SYNC, {
+    // Use world.emit for EventBridge to route to client
+    this.world.emit(EventType.PRAYER_STATE_SYNC, {
       playerId,
       level: state.maxPoints, // Prayer level = max points
       xp: 0, // XP managed by SkillsSystem
@@ -1012,6 +1022,12 @@ export class PrayerSystem extends SystemBase {
   // ==========================================================================
 
   override destroy(): void {
+    // Unsubscribe from world events
+    this.world.off(EventType.PLAYER_REGISTERED, this.onPlayerRegistered);
+    this.world.off(EventType.PLAYER_CLEANUP, this.onPlayerCleanup);
+    this.world.off(EventType.PRAYER_TOGGLE, this.onPrayerToggle);
+    this.world.off(EventType.ALTAR_PRAY, this.onAltarPray);
+
     // Clear intervals
     if (this.drainInterval) {
       clearInterval(this.drainInterval);

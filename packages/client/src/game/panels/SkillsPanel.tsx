@@ -293,7 +293,7 @@ export function SkillsPanel({ world, stats }: SkillsPanelProps) {
   const [activePrayers, setActivePrayers] = useState<Set<string>>(new Set());
 
   // Get local player ID
-  const localPlayer = world?.entities?.local;
+  const localPlayer = world?.getPlayer?.();
   const playerId = localPlayer?.id;
 
   // Listen for prayer state updates from server
