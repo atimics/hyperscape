@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { CombatStateService, CombatData } from "../CombatStateService";
 import { createEntityID } from "../../../../utils/IdentifierUtils";
 import { WeaponType } from "../../../../types/game/item-types";
+import { COMBAT_CONSTANTS } from "../../../../constants/CombatConstants";
 import type { World } from "../../../../core/World";
 
 interface MockPlayer {
@@ -166,8 +167,10 @@ describe("CombatStateService", () => {
       );
 
       const data = stateService.getCombatData("player1");
-      // Combat timeout is 17 ticks (COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS)
-      expect(data?.combatEndTick).toBe(currentTick + 17);
+      // Combat timeout uses COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS
+      expect(data?.combatEndTick).toBe(
+        currentTick + COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS,
+      );
     });
 
     it("sets inCombat to true", () => {
@@ -356,14 +359,18 @@ describe("CombatStateService", () => {
         4,
       );
 
-      // Original combatEndTick: 100 + 17 = 117
-      expect(stateService.getCombatData("player1")?.combatEndTick).toBe(117);
+      // Original combatEndTick: 100 + COMBAT_TIMEOUT_TICKS
+      expect(stateService.getCombatData("player1")?.combatEndTick).toBe(
+        100 + COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS,
+      );
 
       // Extend from tick 105
       stateService.extendCombatTimer(attackerId, 105);
 
-      // New combatEndTick: 105 + 17 = 122
-      expect(stateService.getCombatData("player1")?.combatEndTick).toBe(122);
+      // New combatEndTick: 105 + COMBAT_TIMEOUT_TICKS
+      expect(stateService.getCombatData("player1")?.combatEndTick).toBe(
+        105 + COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS,
+      );
     });
 
     it("does nothing for entity not in combat", () => {

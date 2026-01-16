@@ -237,9 +237,10 @@ describe("CombatSystem Performance", () => {
       console.log(`Heap growth over 150 ticks: ${heapGrowthKB.toFixed(2)}KB`);
 
       // Should not grow excessively for 150 ticks with 100 combats
-      // Note: V8 heap measurement is non-deterministic; threshold allows for GC variance
-      // The getAllCombatStates() method is allocation-free in steady state,
-      // but microbenchmarks can show higher readings due to V8 internals
+      // Observed values: local ~50-200KB, CI ~500-2500KB (varies with GC timing)
+      // Threshold of 5000KB catches real memory leaks while allowing CI variance
+      // Note: V8 heap measurement is non-deterministic; getAllCombatStates() is
+      // allocation-free in steady state but microbenchmarks show higher readings
       expect(heapGrowthKB).toBeLessThan(5000);
     });
   });
