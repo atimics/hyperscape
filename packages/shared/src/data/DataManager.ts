@@ -49,6 +49,7 @@ import {
   type StationsManifest,
   type ModelBoundsManifest,
 } from "./StationDataProvider";
+import { prayerDataProvider, type PrayersManifest } from "./PrayerDataProvider";
 
 // Define constants from JSON data
 const STARTING_ITEMS: Array<{ id: string }> = []; // Stub - data removed
@@ -847,6 +848,18 @@ export class DataManager {
     // This is necessary in case it was already lazy-initialized before manifests loaded
     processingDataProvider.rebuild();
 
+    // Load prayer manifest
+    try {
+      const prayersRes = await fetch(`${baseUrl}/prayers.json`);
+      const prayersManifest = (await prayersRes.json()) as PrayersManifest;
+      prayerDataProvider.loadPrayers(prayersManifest);
+      prayerDataProvider.rebuild();
+    } catch {
+      console.warn(
+        "[DataManager] prayers.json not found, prayer system will be unavailable",
+      );
+    }
+
     // Load model bounds manifest (for automatic footprint calculation)
     // Must load BEFORE stations.json so footprints can be auto-calculated
     try {
@@ -928,6 +941,19 @@ export class DataManager {
     } catch {
       console.warn(
         "[DataManager] recipes/smithing.json not found, falling back to embedded item data",
+      );
+    }
+
+    // Load prayer manifest
+    try {
+      const prayersPath = path.join(manifestsDir, "prayers.json");
+      const prayersData = await fs.readFile(prayersPath, "utf-8");
+      const prayersManifest = JSON.parse(prayersData) as PrayersManifest;
+      prayerDataProvider.loadPrayers(prayersManifest);
+      prayerDataProvider.rebuild();
+    } catch {
+      console.warn(
+        "[DataManager] prayers.json not found, prayer system will be unavailable",
       );
     }
 
