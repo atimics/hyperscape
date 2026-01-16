@@ -429,10 +429,19 @@ export class PrayerSystem extends SystemBase {
     const result = this.togglePrayer(playerId, prayerId);
 
     if (!result.success) {
-      // Emit failure toast (use world.emit for EventBridge routing)
+      const errorMessage = result.reason || "Cannot toggle prayer";
+
+      // Emit to chat (system message)
+      this.world.emit(EventType.UI_MESSAGE, {
+        playerId,
+        message: errorMessage,
+        type: "system",
+      });
+
+      // Also emit toast for visual feedback
       this.world.emit(EventType.UI_TOAST, {
         playerId,
-        message: result.reason || "Cannot toggle prayer",
+        message: errorMessage,
         type: "error",
       });
     }
@@ -702,10 +711,19 @@ export class PrayerSystem extends SystemBase {
         // Deactivate all prayers
         this.deactivateAllPrayers(playerId);
 
-        // Emit points depleted notification (use world.emit for EventBridge routing)
+        const depletedMessage = "You have run out of prayer points.";
+
+        // Emit to chat (system message)
+        this.world.emit(EventType.UI_MESSAGE, {
+          playerId,
+          message: depletedMessage,
+          type: "system",
+        });
+
+        // Also emit toast for visual feedback
         this.world.emit(EventType.UI_TOAST, {
           playerId,
-          message: "You have run out of prayer points.",
+          message: depletedMessage,
           type: "warning",
         });
       }
