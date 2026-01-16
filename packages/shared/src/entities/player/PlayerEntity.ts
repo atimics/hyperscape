@@ -195,7 +195,7 @@ export class PlayerEntity extends CombatantEntity {
           ranged: playerData.skills.ranged,
           magic: { level: 1, xp: 0 },
           constitution: playerData.skills.constitution,
-          prayer: { level: 1, xp: 0, points: 1, maxPoints: 1 },
+          prayer: playerData.skills.prayer || { level: 1, xp: 0 },
           woodcutting: playerData.skills.woodcutting,
           mining: playerData.skills.mining,
           fishing: playerData.skills.fishing,

@@ -276,8 +276,11 @@ export class EventBridge {
           data.playerId,
           data.skill,
         );
-        const newLevel = skillData?.level ?? 1;
-        const newXp = skillData?.xp ?? 0;
+        // Safely get values, handling NaN (which passes ?? but fails Number.isFinite)
+        const rawLevel = skillData?.level;
+        const rawXp = skillData?.xp;
+        const newLevel = Number.isFinite(rawLevel) ? rawLevel : 1;
+        const newXp = Number.isFinite(rawXp) ? rawXp : 0;
 
         // Send XP drop to the player for visual feedback
         this.broadcast.sendToPlayer(data.playerId, "xpDrop", {
@@ -288,14 +291,18 @@ export class EventBridge {
           position: { x: position.x, y: position.y, z: position.z },
         });
 
-        // Persist skill XP to database
+        // Persist skill XP to database (only if values are valid)
         const dbSystem = this.world.getSystem("database") as {
           savePlayer?: (
             playerId: string,
             data: Record<string, unknown>,
           ) => void;
         };
-        if (dbSystem?.savePlayer) {
+        if (
+          dbSystem?.savePlayer &&
+          Number.isFinite(newXp) &&
+          Number.isFinite(newLevel)
+        ) {
           // Map skill name to database column names
           const skillLevelKey = `${data.skill}Level`;
           const skillXpKey = `${data.skill}Xp`;

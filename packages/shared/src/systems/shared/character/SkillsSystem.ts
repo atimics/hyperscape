@@ -190,10 +190,15 @@ export class SkillsSystem extends SystemBase {
     // Apply XP modifiers (e.g., from equipment, prayers, etc.)
     const modifiedAmount = this.calculateModifiedXP(entity, skill, amount);
 
-    // Check XP cap
-    const oldXP = skillData.xp;
+    // Check XP cap - ensure oldXP is a valid number (handles undefined/NaN)
+    const oldXP = Number.isFinite(skillData.xp) ? skillData.xp : 0;
     const newXP = Math.min(oldXP + modifiedAmount, SkillsSystem.MAX_XP);
     const actualGain = newXP - oldXP;
+
+    // Initialize skill xp if it was invalid
+    if (!Number.isFinite(skillData.xp)) {
+      skillData.xp = 0;
+    }
 
     if (actualGain <= 0) return;
 
