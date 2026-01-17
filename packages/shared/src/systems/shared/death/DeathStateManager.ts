@@ -9,6 +9,9 @@
  * Database persistence prevents item duplication on server restart/crash.
  * If server restarts mid-death, the death lock in DB prevents re-spawning items.
  *
+ * P0-004: Database-first write order (write DB before memory)
+ * P0-005: Server startup death recovery (recoverUnfinishedDeaths in init)
+ *
  * NOTE: This is just for tracking - gravestone/ground items are regular
  * world entities that persist via the entity system (like RuneScape).
  */
@@ -19,36 +22,49 @@ import type {
   ZoneType,
   TransactionContext,
 } from "../../../types/death";
+import type { InventoryItem } from "../../../types/core/core";
 import type { EntityManager } from "..";
+import { EventType } from "../../../types/events";
+
+/**
+ * P0-003: Death item data for crash recovery
+ */
+interface DeathItemData {
+  itemId: string;
+  quantity: number;
+}
+
+/**
+ * P0-003: Full death lock data including crash recovery fields
+ */
+interface DeathLockData {
+  playerId: string;
+  gravestoneId: string | null;
+  groundItemIds: string[];
+  position: { x: number; y: number; z: number };
+  timestamp: number;
+  zoneType: string;
+  itemCount: number;
+  items: DeathItemData[];
+  killedBy: string;
+  recovered: boolean;
+}
 
 // Type for DatabaseSystem (only available on server)
 type DatabaseSystem = {
   saveDeathLockAsync: (
-    data: {
-      playerId: string;
-      gravestoneId: string | null;
-      groundItemIds: string[];
-      position: { x: number; y: number; z: number };
-      timestamp: number;
-      zoneType: string;
-      itemCount: number;
-    },
+    data: DeathLockData,
     tx?: TransactionContext,
   ) => Promise<void>;
-  getDeathLockAsync: (playerId: string) => Promise<{
-    playerId: string;
-    gravestoneId: string | null;
-    groundItemIds: string[];
-    position: { x: number; y: number; z: number };
-    timestamp: number;
-    zoneType: string;
-    itemCount: number;
-  } | null>;
+  getDeathLockAsync: (playerId: string) => Promise<DeathLockData | null>;
   deleteDeathLockAsync: (playerId: string) => Promise<void>;
   updateGroundItemsAsync: (
     playerId: string,
     groundItemIds: string[],
   ) => Promise<void>;
+  // P0-005: Crash recovery methods
+  getUnrecoveredDeathsAsync: () => Promise<DeathLockData[]>;
+  markDeathRecoveredAsync: (playerId: string) => Promise<void>;
 };
 
 export class DeathStateManager {
@@ -62,6 +78,7 @@ export class DeathStateManager {
 
   /**
    * Initialize - get entity manager and database system references
+   * P0-005: Also recovers unfinished deaths from previous server session
    */
   async init(): Promise<void> {
     this.entityManager = this.world.getSystem(
@@ -77,6 +94,10 @@ export class DeathStateManager {
         console.log(
           "[DeathStateManager] ✓ Initialized with database persistence (server)",
         );
+
+        // P0-005: CRITICAL - Recover unfinished deaths from previous server session
+        // This prevents item loss when server crashes during death handling
+        await this.recoverUnfinishedDeaths();
       } else {
         console.warn(
           "[DeathStateManager] ⚠️ DatabaseSystem not available - running without persistence!",
@@ -88,8 +109,132 @@ export class DeathStateManager {
   }
 
   /**
+   * P0-005: Recover unfinished deaths from database after server restart
+   *
+   * CRITICAL: Prevents item loss when server crashes during death handling.
+   *
+   * Recovery logic:
+   * 1. Query all player_deaths where recovered = false
+   * 2. For each death, check if gravestone/ground items still exist
+   * 3. If not, emit DEATH_RECOVERED event to recreate them
+   * 4. Mark death as recovered in database
+   */
+  private async recoverUnfinishedDeaths(): Promise<void> {
+    if (!this.databaseSystem) return;
+
+    console.log(
+      "[DeathStateManager] Checking for unfinished deaths to recover...",
+    );
+
+    try {
+      const unrecoveredDeaths =
+        await this.databaseSystem.getUnrecoveredDeathsAsync();
+
+      if (unrecoveredDeaths.length === 0) {
+        console.log("[DeathStateManager] No unfinished deaths to recover");
+        return;
+      }
+
+      console.log(
+        `[DeathStateManager] Found ${unrecoveredDeaths.length} unfinished deaths to recover`,
+      );
+
+      for (const death of unrecoveredDeaths) {
+        await this.recoverSingleDeath(death);
+      }
+
+      console.log(
+        `[DeathStateManager] Recovery complete: ${unrecoveredDeaths.length} deaths processed`,
+      );
+    } catch (error) {
+      console.error("[DeathStateManager] Death recovery failed:", error);
+      // Don't throw - server should start even if recovery fails
+      // Items may be lost but server remains functional
+    }
+  }
+
+  /**
+   * P0-005: Recover a single unfinished death
+   *
+   * Checks if entities still exist, recreates if necessary, marks as recovered.
+   */
+  private async recoverSingleDeath(death: DeathLockData): Promise<void> {
+    const {
+      playerId,
+      gravestoneId,
+      groundItemIds,
+      position,
+      zoneType,
+      items,
+      killedBy,
+    } = death;
+
+    console.log(
+      `[DeathStateManager] Recovering death for ${playerId}: ${items.length} items, zone: ${zoneType}`,
+    );
+
+    // Check if gravestone still exists
+    let gravestoneExists = false;
+    if (gravestoneId && this.entityManager) {
+      const entity = this.world.entities?.get(gravestoneId);
+      gravestoneExists = !!entity;
+    }
+
+    // Check if ground items still exist
+    const existingGroundItems = groundItemIds.filter((id) => {
+      return !!this.world.entities?.get(id);
+    });
+
+    // If items are already recovered (entities exist), just restore memory state
+    if (gravestoneExists || existingGroundItems.length > 0) {
+      console.log(
+        `[DeathStateManager] Death for ${playerId} partially recovered - entities exist`,
+      );
+
+      // Restore to in-memory cache
+      this.activeDeaths.set(playerId, {
+        playerId,
+        gravestoneId: gravestoneExists ? gravestoneId! : undefined,
+        groundItemIds: existingGroundItems,
+        position,
+        timestamp: Date.now(),
+        zoneType: zoneType as ZoneType,
+        itemCount: items.length,
+      });
+    } else if (items.length > 0) {
+      // Items were stored but entities don't exist - recreate them
+      console.log(
+        `[DeathStateManager] Recreating items for ${playerId} death recovery`,
+      );
+
+      // Convert stored items back to InventoryItem format
+      const inventoryItems: InventoryItem[] = items.map((item, index) => ({
+        id: `recovery_${playerId}_${Date.now()}_${index}`,
+        itemId: item.itemId,
+        quantity: item.quantity,
+        slot: -1,
+        metadata: null,
+      }));
+
+      // Emit DEATH_RECOVERED event - handlers will recreate gravestone/ground items
+      this.world.emit(EventType.DEATH_RECOVERED, {
+        playerId,
+        position,
+        items: inventoryItems,
+        killedBy,
+        zoneType: zoneType as ZoneType,
+      });
+    }
+
+    // Mark death as recovered in database
+    await this.databaseSystem!.markDeathRecoveredAsync(playerId);
+
+    console.log(`[DeathStateManager] ✓ Death recovered for ${playerId}`);
+  }
+
+  /**
    * Track a player death (for cleanup purposes)
-   * Stores in memory AND database (server only) for crash recovery
+   * P0-004: Database-first write order - stores in database BEFORE memory
    *
    * @param playerId - The player who died
    * @param options - Death lock options (gravestone ID, ground items, position, etc.)
@@ -103,6 +248,9 @@ export class DeathStateManager {
       position: { x: number; y: number; z: number };
       zoneType: ZoneType;
       itemCount: number;
+      // P0-003: Crash recovery fields
+      items?: Array<{ itemId: string; quantity: number }>;
+      killedBy?: string;
     },
     tx?: TransactionContext,
   ): Promise<void> {
@@ -114,21 +262,11 @@ export class DeathStateManager {
       return;
     }
 
-    const deathData: DeathLock = {
-      playerId,
-      gravestoneId: options.gravestoneId,
-      groundItemIds: options.groundItemIds,
-      position: options.position,
-      timestamp: Date.now(),
-      zoneType: options.zoneType,
-      itemCount: options.itemCount,
-    };
+    const timestamp = Date.now();
 
-    // Always store in-memory cache
-    this.activeDeaths.set(playerId, deathData);
-
-    // Persist to database (server only) - CRITICAL for preventing item duplication!
-    if (this.world.isServer && this.databaseSystem) {
+    // P0-004: CRITICAL - Write to DATABASE FIRST before memory!
+    // This prevents item loss if server crashes after memory update but before DB write.
+    if (this.databaseSystem) {
       try {
         await this.databaseSystem.saveDeathLockAsync(
           {
@@ -136,9 +274,13 @@ export class DeathStateManager {
             gravestoneId: options.gravestoneId || null,
             groundItemIds: options.groundItemIds || [],
             position: options.position,
-            timestamp: deathData.timestamp,
+            timestamp,
             zoneType: options.zoneType,
             itemCount: options.itemCount,
+            // P0-003: Crash recovery fields
+            items: options.items || [],
+            killedBy: options.killedBy || "unknown",
+            recovered: false, // New deaths are not yet recovered
           },
           tx, // Pass transaction context if provided
         );
@@ -154,9 +296,25 @@ export class DeathStateManager {
         if (tx) {
           throw error;
         }
-        // If not in transaction, continue anyway - in-memory tracking still works
+        // P0-004: If DB write fails and not in transaction, still update memory
+        // but log warning that crash recovery won't work
+        console.warn(
+          `[DeathStateManager] ⚠️ Death lock for ${playerId} only in memory - crash recovery won't work!`,
+        );
       }
     }
+
+    // P0-004: Update memory AFTER successful database write (or if no DB system)
+    const deathData: DeathLock = {
+      playerId,
+      gravestoneId: options.gravestoneId,
+      groundItemIds: options.groundItemIds,
+      position: options.position,
+      timestamp,
+      zoneType: options.zoneType,
+      itemCount: options.itemCount,
+    };
+    this.activeDeaths.set(playerId, deathData);
 
     console.log(
       `[DeathStateManager] ✓ Tracking death for ${playerId}: ${options.itemCount} items, zone: ${options.zoneType}`,

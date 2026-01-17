@@ -491,6 +491,7 @@ export class PlayerDeathSystem extends SystemBase {
               zoneType,
             });
 
+            // P0-003: Include items and killedBy for crash recovery
             await this.deathStateManager.createDeathLock(
               playerId,
               {
@@ -498,6 +499,11 @@ export class PlayerDeathSystem extends SystemBase {
                 position: deathPosition,
                 zoneType: ZoneType.SAFE_AREA,
                 itemCount: itemsToDrop.length,
+                items: itemsToDrop.map((item) => ({
+                  itemId: item.itemId,
+                  quantity: item.quantity,
+                })),
+                killedBy,
               },
               tx,
             );

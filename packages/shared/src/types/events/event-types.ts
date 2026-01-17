@@ -432,6 +432,8 @@ export enum EventType {
   ENTITY_CREATE_HEADSTONE = "entity:create_headstone",
   ENTITY_REMOVE = "entity:remove",
   WORLD_CREATE_GROUND_ITEM = "world:create_ground_item",
+  // P0-005: Crash recovery - emitted when server recreates death items on startup
+  DEATH_RECOVERED = "death:recovered",
 
   // AI Navigation System
   AI_NAVIGATION_REQUEST = "ai:navigation:request",

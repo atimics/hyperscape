@@ -101,6 +101,7 @@ export class WildernessDeathHandler {
     // DS-C04: Wrap death lock creation in try-catch to clean up ground items on failure
     try {
       // Create death lock in database (with transaction if provided)
+      // P0-003: Include items and killedBy for crash recovery
       await this.deathStateManager.createDeathLock(
         playerId,
         {
@@ -108,6 +109,11 @@ export class WildernessDeathHandler {
           position: position,
           zoneType: zoneType,
           itemCount: items.length,
+          items: items.map((item) => ({
+            itemId: item.itemId,
+            quantity: item.quantity,
+          })),
+          killedBy,
         },
         tx, // Pass transaction context
       );
