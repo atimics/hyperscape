@@ -189,22 +189,21 @@ function LootWindowContent({
     setShowCloseConfirm(false);
   }, []);
 
-  // Listen for server updates to the gravestone entity
-  // This keeps the loot window in sync when items are removed
+  // Sync gravestone state with server using events + reduced polling fallback
   useEffect(() => {
-    const updateInterval = setInterval(() => {
-      if (!visible || !corpseId) return;
+    if (!visible || !corpseId) return;
 
-      // Get the gravestone entity from the world
+    // Helper to check entity state and sync items
+    const syncEntityState = (): boolean => {
       const gravestoneEntity = world.entities?.get(corpseId);
 
-      // If gravestone entity no longer exists (despawned), close window immediately
+      // If gravestone entity no longer exists (despawned), close window
       if (!gravestoneEntity) {
         console.log(
           "[LootWindow] Gravestone despawned, closing window immediately...",
         );
         onClose();
-        return;
+        return false;
       }
 
       // Check if entity has lootItems in its data
@@ -223,13 +222,10 @@ function LootWindowContent({
         const serverItems: InventoryItem[] =
           entityData?.lootItems || entityWithLoot.lootItems || [];
 
-        // Only update if items actually changed - compare by reference first, then by length/content
+        // Only update if items actually changed
         setItems((prevItems) => {
-          // Quick reference equality check
           if (prevItems === serverItems) return prevItems;
-          // Length check
           if (prevItems.length !== serverItems.length) return serverItems;
-          // Deep equality check - compare item IDs and quantities
           for (let i = 0; i < prevItems.length; i++) {
             if (
               prevItems[i].itemId !== serverItems[i].itemId ||
@@ -238,7 +234,6 @@ function LootWindowContent({
               return serverItems;
             }
           }
-          // Items are the same, return previous reference to avoid re-render
           return prevItems;
         });
       }
@@ -256,10 +251,44 @@ function LootWindowContent({
         setTimeout(() => {
           onClose();
         }, 500);
+        return false;
       }
-    }, 100); // Check every 100ms for updates
 
-    return () => clearInterval(updateInterval);
+      return true;
+    };
+
+    // Initial sync on mount
+    if (!syncEntityState()) return;
+
+    // Event handler for entity updates (includes gravestone state changes)
+    const handleEntityUpdate = (data: { id?: string; entityId?: string }) => {
+      const entityId = data.id || data.entityId;
+      if (entityId === corpseId) {
+        syncEntityState();
+      }
+    };
+
+    // Event handler for gravestone expiration
+    const handleHeadstoneExpired = (data: { gravestoneId?: string }) => {
+      if (data.gravestoneId === corpseId) {
+        console.log("[LootWindow] Headstone expired event received");
+        onClose();
+      }
+    };
+
+    // Subscribe to entity update events
+    world.on(EventType.ENTITY_UPDATED, handleEntityUpdate);
+    world.on(EventType.DEATH_HEADSTONE_EXPIRED, handleHeadstoneExpired);
+
+    // Reduced polling as fallback (1s instead of 100ms = 10x less CPU)
+    // This catches edge cases where events might be missed
+    const fallbackInterval = setInterval(syncEntityState, 1000);
+
+    return () => {
+      world.off(EventType.ENTITY_UPDATED, handleEntityUpdate);
+      world.off(EventType.DEATH_HEADSTONE_EXPIRED, handleHeadstoneExpired);
+      clearInterval(fallbackInterval);
+    };
   }, [visible, corpseId, world, items.length, onClose]);
 
   const handleTakeItem = (item: InventoryItem, index: number) => {

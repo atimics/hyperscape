@@ -378,7 +378,30 @@ export class HeadstoneEntity extends InteractableEntity {
       return;
     }
 
-    // Step 5: Add to player inventory (safe now, space already checked)
+    // Step 4.5: DEFENSIVE re-check inventory space (closes race window)
+    // Between initial check and now, player may have picked up other items
+    const stillHasSpace = this.checkInventorySpace(
+      playerId,
+      itemId,
+      quantityToLoot,
+    );
+    if (!stillHasSpace) {
+      // Rollback: put item back in gravestone
+      this.lootItems.push({
+        id: item.id,
+        itemId: item.itemId,
+        quantity: quantityToLoot,
+        slot: item.slot,
+        metadata: item.metadata,
+      });
+      this.emitLootResult(playerId, transactionId, false, "INVENTORY_FULL");
+      console.log(
+        `[HeadstoneEntity] Race condition detected: inventory full after remove, rolled back ${itemId}`,
+      );
+      return;
+    }
+
+    // Step 5: Add to player inventory (safe now, space double-checked)
     this.world.emit(EventType.INVENTORY_ITEM_ADDED, {
       playerId,
       item: {
@@ -538,7 +561,23 @@ export class HeadstoneEntity extends InteractableEntity {
     }
 
     // Actually remove items and add to inventory
+    // Track successfully looted items for accurate reporting
+    const successfullyLooted: Array<{ itemId: string; quantity: number }> = [];
+
     for (const item of itemsToRemove) {
+      // Defensive: re-check space before each item (closes race window)
+      const stillHasSpace = this.checkInventorySpace(
+        playerId,
+        item.itemId,
+        item.quantity,
+      );
+      if (!stillHasSpace) {
+        console.log(
+          `[HeadstoneEntity] Loot all stopped: inventory full at ${item.itemId}`,
+        );
+        break; // Stop looting, remaining items stay in gravestone
+      }
+
       const removed = this.removeItem(item.itemId, item.quantity);
       if (removed) {
         this.world.emit(EventType.INVENTORY_ITEM_ADDED, {
@@ -551,8 +590,13 @@ export class HeadstoneEntity extends InteractableEntity {
             metadata: null,
           },
         });
+        successfullyLooted.push(item);
       }
     }
+
+    // Update itemsLooted to reflect what was actually looted
+    itemsLooted.length = 0;
+    itemsLooted.push(...successfullyLooted);
 
     // Emit success with count of items looted
     this.emitLootResult(

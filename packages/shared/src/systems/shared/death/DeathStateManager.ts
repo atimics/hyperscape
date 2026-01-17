@@ -441,6 +441,7 @@ export class DeathStateManager {
     }
 
     // P0-004: Update memory AFTER successful database write (or if no DB system)
+    // Include crash recovery fields for proper item tracking
     const deathData: DeathLock = {
       playerId,
       gravestoneId: options.gravestoneId,
@@ -449,6 +450,10 @@ export class DeathStateManager {
       timestamp,
       zoneType: options.zoneType,
       itemCount: options.itemCount,
+      // Crash recovery fields - track items for database sync
+      items: options.items,
+      killedBy: options.killedBy,
+      recovered: false,
     };
     this.activeDeaths.set(playerId, deathData);
 
@@ -579,16 +584,39 @@ export class DeathStateManager {
   /**
    * Handle item looted from gravestone/ground
    * Updates in-memory AND database (server only)
+   *
+   * @param playerId - The player whose items are being looted
+   * @param itemId - The item ID that was looted (item manifest ID, not entity ID)
+   * @param quantity - How many were looted (default 1)
    */
-  async onItemLooted(playerId: string, itemId: string): Promise<void> {
+  async onItemLooted(
+    playerId: string,
+    itemId: string,
+    quantity: number = 1,
+  ): Promise<void> {
     const deathData = this.activeDeaths.get(playerId);
     if (!deathData) return;
 
-    // Remove item from ground item list
+    // Remove item from ground item list (entity IDs)
     if (deathData.groundItemIds) {
       const index = deathData.groundItemIds.indexOf(itemId);
       if (index !== -1) {
         deathData.groundItemIds.splice(index, 1);
+      }
+    }
+
+    // Remove item from items array (crash recovery tracking)
+    if (deathData.items) {
+      const itemIndex = deathData.items.findIndex((i) => i.itemId === itemId);
+      if (itemIndex !== -1) {
+        const item = deathData.items[itemIndex];
+        if (item.quantity <= quantity) {
+          // Remove entire item
+          deathData.items.splice(itemIndex, 1);
+        } else {
+          // Reduce quantity
+          item.quantity -= quantity;
+        }
       }
     }
 
@@ -616,7 +644,7 @@ export class DeathStateManager {
             timestamp: deathData.timestamp,
             zoneType: deathData.zoneType,
             itemCount: deathData.itemCount,
-            // P0-003: Preserve crash recovery fields
+            // Crash recovery: now properly synced with in-memory items array
             items: deathData.items || [],
             killedBy: deathData.killedBy || "unknown",
             recovered: deathData.recovered || false,
