@@ -1214,12 +1214,24 @@ export class CombatSystem extends SystemBase {
   }
 
   /**
-   * Handle entity death - combat times out naturally after 8 ticks (4.8s)
-   * so health bars stay visible briefly after death
+   * Handle entity death - immediately clear ALL combat states involving the dead entity
+   *
+   * CRITICAL FIX: Previously only cleared the dead entity's state, leaving attackers
+   * with stale targetIds pointing to the dead (soon respawned) entity. This caused:
+   * - Players chasing dead players to spawn point
+   * - Mobs following dead players
+   * - Combat resuming immediately after respawn
+   *
+   * Now we:
+   * 1. Clear the dead entity's combat state
+   * 2. Notify mob attackers via onTargetDied() so they can return to patrol
+   * 3. Clear ALL attacker combat states targeting this entity
+   * 4. Clean up attack cooldowns for all involved parties
    */
   private handleEntityDied(entityId: string, entityType: string): void {
     const typedEntityId = createEntityID(entityId);
 
+    // Record death event for analytics
     const deathEventType =
       entityType === "player"
         ? GameEventType.DEATH_PLAYER
@@ -1230,24 +1242,24 @@ export class CombatSystem extends SystemBase {
       killedBy: combatState ? String(combatState.targetId) : "unknown",
     });
 
-    // Simply remove the dead entity's combat state - they're no longer in combat
-    // But DON'T call endCombat() for attackers - let their combat timer expire naturally
+    // 1. Remove the dead entity's own combat state
     this.stateService.removeCombatState(typedEntityId);
 
-    // Also clear the dead entity's attack cooldown so they can attack immediately after respawn
+    // 2. Clear the dead entity's attack cooldown so they can attack immediately after respawn
     this.nextAttackTicks.delete(typedEntityId);
 
-    // Clear any scheduled emote resets for the dead entity
+    // 3. Clear any scheduled emote resets for the dead entity
     this.animationManager.cancelEmoteReset(entityId);
 
-    // Find all attackers targeting this dead entity
-    // Their combat will naturally timeout after 4.8 seconds (8 ticks) since they got the last hit
+    // 4. BEFORE clearing attacker states, notify mob attackers so they can return to patrol
+    //    and clear attack cooldowns so attackers can target someone else immediately
     const combatStatesMap = this.stateService.getCombatStatesMap();
     for (const [attackerId, state] of combatStatesMap) {
       if (String(state.targetId) === entityId) {
-        // Allow attacker to target someone else immediately
+        // Clear attacker's cooldown so they can engage new targets immediately
         this.nextAttackTicks.delete(attackerId);
 
+        // Notify mob attackers so they can return to patrol/spawn
         if (state.attackerType === "mob") {
           const mobEntity = this.world.entities.get(String(attackerId));
           if (
@@ -1260,16 +1272,21 @@ export class CombatSystem extends SystemBase {
       }
     }
 
-    // Clear face target for players who had this as pending attacker
+    // 5. CRITICAL: Clear ALL attacker combat states targeting this dead entity
+    //    This prevents attackers from continuing to chase/fight the respawned entity
+    const clearedAttackers = this.stateService.clearStatesTargeting(entityId);
+    if (clearedAttackers.length > 0) {
+      this.logDebug(
+        `Cleared ${clearedAttackers.length} attacker states targeting dead ${entityType} ${entityId}`,
+      );
+    }
+
+    // 6. Clear face target for players who had this as pending attacker
     if (entityType === "mob") {
-      // Check all players to see if they had this mob as their pending attacker
       for (const player of this.world.entities.players.values()) {
-        // Use type guards for safe property access
         const pendingAttacker = getPendingAttacker(player);
         if (pendingAttacker === entityId) {
-          // Clear the pending attacker state using type guard helper
           clearPendingAttacker(player);
-          // Tell client to stop facing this entity
           this.emitTypedEvent(EventType.COMBAT_CLEAR_FACE_TARGET, {
             playerId: player.id,
           });
@@ -1277,7 +1294,7 @@ export class CombatSystem extends SystemBase {
       }
     }
 
-    // Reset dead entity's emote if they were mid-animation
+    // 7. Reset dead entity's emote if they were mid-animation
     this.animationManager.resetEmote(entityId, entityType as "player" | "mob");
   }
 
