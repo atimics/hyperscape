@@ -327,7 +327,17 @@ export class ItemEntity extends InteractableEntity {
     const despawnTime =
       this.getProperty("spawnTime", this.world.getTime()) + 10 * 60 * 1000;
     if (this.world.getTime() > despawnTime) {
-      this.destroy();
+      // DS-C11: Use EntityManager.destroyEntity for proper network notification
+      // Direct this.destroy() skips the entityRemoved packet to clients
+      const entityManager = this.world.getSystem("entity-manager") as {
+        destroyEntity?: (id: string) => void;
+      } | null;
+      if (entityManager?.destroyEntity) {
+        entityManager.destroyEntity(this.id);
+      } else {
+        // Fallback if EntityManager not available
+        this.destroy();
+      }
     }
   }
 

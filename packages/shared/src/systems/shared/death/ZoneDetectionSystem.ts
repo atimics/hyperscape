@@ -101,10 +101,12 @@ export class ZoneDetectionSystem extends SystemBase {
     for (const area of Object.values(ALL_WORLD_AREAS) as WorldArea[]) {
       if (area.bounds) {
         const { minX, maxX, minZ, maxZ } = area.bounds;
+        // DS-C08: Use exclusive left boundary to prevent position matching multiple zones
+        // A position exactly on the boundary belongs to the zone on the RIGHT (higher values)
         if (
-          position.x >= minX &&
+          position.x > minX &&
           position.x <= maxX &&
-          position.z >= minZ &&
+          position.z > minZ &&
           position.z <= maxZ
         ) {
           // Found matching area

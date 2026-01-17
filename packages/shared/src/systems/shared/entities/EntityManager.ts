@@ -506,24 +506,7 @@ export class EntityManager extends SystemBase {
     this.world.entities.set(config.id, entity);
 
     // Broadcast entityAdded to all clients (server-only)
-    if (this.world.isServer) {
-      const network = this.world.network as {
-        send?: (method: string, data: unknown, excludeId?: string) => void;
-      };
-      if (network?.send) {
-        network.send("entityAdded", entity.serialize());
-      }
-    }
-
-    // Emit spawn event using world.emit to avoid type mismatch
-    this.emitTypedEvent(EventType.ENTITY_SPAWNED, {
-      entityId: config.id,
-      entityType: config.type,
-      position: config.position,
-      entityData: entity.getNetworkData(),
-    });
-
-    // CRITICAL FIX: Broadcast new entity to all connected clients
+    // DS-C10: Single broadcast point to prevent duplicate packets
     if (this.world.isServer) {
       const network = this.world.network;
       if (network && typeof network.send === "function") {
@@ -537,6 +520,14 @@ export class EntityManager extends SystemBase {
         }
       }
     }
+
+    // Emit spawn event using world.emit to avoid type mismatch
+    this.emitTypedEvent(EventType.ENTITY_SPAWNED, {
+      entityId: config.id,
+      entityType: config.type,
+      position: config.position,
+      entityData: entity.getNetworkData(),
+    });
 
     return entity;
   }

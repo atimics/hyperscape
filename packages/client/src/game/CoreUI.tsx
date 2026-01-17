@@ -349,7 +349,13 @@ function DeathScreen({
   data: { message: string; killedBy: string; respawnTime: number };
   world: ClientWorld;
 }) {
+  // DS-C07: Track respawn state to prevent button spam
+  const [isRespawning, setIsRespawning] = useState(false);
+
   const handleRespawn = () => {
+    // Prevent multiple clicks
+    if (isRespawning) return;
+
     // Send respawn request to server via network
     const network = world.network as {
       send?: (packet: string, data: unknown) => void;
@@ -365,12 +371,17 @@ function DeathScreen({
       return;
     }
 
+    // Disable button immediately to prevent spam
+    setIsRespawning(true);
+
     try {
       network.send("requestRespawn", {
         playerId: world.entities?.player?.id,
       });
     } catch (err) {
       console.error("[DeathScreen] Error sending packet:", err);
+      // Re-enable button on error so user can retry
+      setIsRespawning(false);
     }
   };
 
@@ -391,9 +402,14 @@ function DeathScreen({
         <div className="flex flex-col items-center gap-4 mt-4">
           <button
             onClick={handleRespawn}
-            className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white text-lg font-bold rounded-lg transition-colors cursor-pointer border-2 border-blue-400"
+            disabled={isRespawning}
+            className={`px-8 py-3 text-white text-lg font-bold rounded-lg transition-colors border-2 ${
+              isRespawning
+                ? "bg-gray-600 border-gray-500 cursor-not-allowed opacity-60"
+                : "bg-blue-600 hover:bg-blue-700 border-blue-400 cursor-pointer"
+            }`}
           >
-            Click here to respawn
+            {isRespawning ? "Respawning..." : "Click here to respawn"}
           </button>
           <div className="text-sm text-gray-400 text-center max-w-sm">
             Your items have been dropped at your death location. You have 5
