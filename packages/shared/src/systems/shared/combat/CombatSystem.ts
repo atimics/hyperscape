@@ -1776,6 +1776,10 @@ export class CombatSystem extends SystemBase {
   /**
    * OSRS-style: Check if player is in range of target, emit follow event if not
    * Called EVERY tick to ensure continuous pursuit of moving targets
+   *
+   * CRITICAL: This method must NOT extend combat timeout for invalid targets.
+   * Invalid targets include: dead entities, entities that no longer exist,
+   * or (for PvP) targets that are now in a safe zone.
    */
   private checkRangeAndFollow(
     combatState: CombatData,
@@ -1798,12 +1802,41 @@ export class CombatSystem extends SystemBase {
       combatState.targetType,
     );
 
+    // Don't process if either entity is missing - let combat timeout naturally
     if (!attacker || !target) return;
+
+    // Don't extend combat for dead attackers - their state should be cleaned up
+    if (!this.entityResolver.isAlive(attacker, combatState.attackerType)) {
+      return;
+    }
 
     // Don't follow dead targets - let combat timeout naturally
     // This prevents player getting stuck after killing a mob
     if (!this.entityResolver.isAlive(target, combatState.targetType)) {
       return;
+    }
+
+    // PvP zone check: Don't extend combat if we're no longer in a PvP zone
+    // This prevents combat from persisting after respawning in safe zone
+    if (
+      combatState.attackerType === "player" &&
+      combatState.targetType === "player"
+    ) {
+      const zoneSystem =
+        this.world.getSystem<ZoneDetectionSystem>("zone-detection");
+      if (zoneSystem) {
+        const attackerPos = getEntityPosition(attacker);
+        if (
+          attackerPos &&
+          !zoneSystem.isPvPEnabled({ x: attackerPos.x, z: attackerPos.z })
+        ) {
+          // Attacker is in safe zone - end combat instead of extending
+          this.logDebug(
+            `PvP combat timeout: ${attackerId} left PvP zone while chasing ${targetId}`,
+          );
+          return; // Don't extend timeout - let combat expire
+        }
+      }
     }
 
     const attackerPos = getEntityPosition(attacker);
