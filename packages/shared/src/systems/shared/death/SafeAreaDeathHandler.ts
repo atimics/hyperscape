@@ -120,7 +120,7 @@ export class SafeAreaDeathHandler {
     );
 
     // Track gravestone for tick-based expiration (500 ticks = 5 minutes)
-    const currentTick = this.world.currentTick;
+    const currentTick = this.world.currentTick ?? 0;
     const expirationTick = currentTick + COMBAT_CONSTANTS.GRAVESTONE_TICKS;
 
     this.gravestones.set(gravestoneId, {
@@ -235,7 +235,12 @@ export class SafeAreaDeathHandler {
 
     // Process expired gravestones
     for (const gravestoneData of expiredGravestones) {
-      this.handleGravestoneExpire(gravestoneData, currentTick);
+      this.handleGravestoneExpire(gravestoneData, currentTick).catch((err) => {
+        console.error(
+          `[SafeAreaDeathHandler] Gravestone expiration failed for ${gravestoneData.gravestoneId}:`,
+          err,
+        );
+      });
     }
   }
 

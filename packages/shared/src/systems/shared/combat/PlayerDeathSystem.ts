@@ -1188,6 +1188,7 @@ export class PlayerDeathSystem extends SystemBase {
     const playerId = data.id;
     this.clearDeathLocation(playerId);
     this.playerPositions.delete(playerId);
+    this.lastDeathTime.delete(playerId);
   }
 
   private handleHeadstoneExpired(data: {

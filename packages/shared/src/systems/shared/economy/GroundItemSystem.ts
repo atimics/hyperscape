@@ -169,7 +169,7 @@ export class GroundItemSystem extends SystemBase {
       return "";
     }
 
-    const currentTick = this.world.currentTick;
+    const currentTick = this.world.currentTick ?? 0;
 
     // OSRS: Untradeable items ALWAYS despawn in 3 min, tradeable uses caller's time
     // This overrides caller's despawnTime for untradeable items (OSRS-accurate behavior)

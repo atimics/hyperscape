@@ -344,7 +344,7 @@ export class CombatSystem extends SystemBase {
    */
   private handleMeleeAttack(data: MeleeAttackData): void {
     const { attackerId, targetId, attackerType } = data;
-    const currentTick = this.world.currentTick;
+    const currentTick = this.world.currentTick ?? 0;
 
     if (!this.entityIdValidator.isValid(attackerId)) {
       const sanitized = this.entityIdValidator.sanitizeForLogging(attackerId);
@@ -917,7 +917,7 @@ export class CombatSystem extends SystemBase {
     targetId: EntityID,
     attackerSpeedTicks?: number,
   ): void {
-    const currentTick = this.world.currentTick;
+    const currentTick = this.world.currentTick ?? 0;
 
     // Detect entity types (don't assume attacker is always player!)
     const attackerEntity = this.world.entities.get(String(attackerId));
@@ -2206,7 +2206,7 @@ export class CombatSystem extends SystemBase {
   private buildGameStateInfo(): GameStateInfo {
     const combatStatesMap = this.stateService.getCombatStatesMap();
     return {
-      currentTick: this.world.currentTick,
+      currentTick: this.world.currentTick ?? 0,
       playerCount: this.world.entities.players.size,
       activeCombats: combatStatesMap.size,
     };
@@ -2285,7 +2285,7 @@ export class CombatSystem extends SystemBase {
   ): void {
     if (!this.eventRecordingEnabled) return;
 
-    const tick = this.world.currentTick;
+    const tick = this.world.currentTick ?? 0;
     const stateInfo = this.buildGameStateInfo();
 
     // Include snapshot data periodically (every 100 ticks)

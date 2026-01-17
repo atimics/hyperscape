@@ -917,7 +917,7 @@ export class InventorySystem extends SystemBase {
       const groundItems =
         this.world.getSystem<GroundItemSystem>("ground-items");
       if (groundItems) {
-        const currentTick = this.world.currentTick;
+        const currentTick = this.world.currentTick ?? 0;
         if (!groundItems.canPickup(data.entityId, data.playerId, currentTick)) {
           this.emitTypedEvent(EventType.UI_TOAST, {
             playerId: data.playerId,
