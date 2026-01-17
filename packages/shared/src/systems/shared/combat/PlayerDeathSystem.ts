@@ -38,11 +38,16 @@ function sanitizeKilledBy(killedBy: unknown): string {
     return "unknown";
   }
   // Remove control characters and limit length
-  const sanitized = killedBy
-    .replace(/[\x00-\x1F\x7F]/g, "") // Remove control characters
-    .replace(/[<>'"&]/g, "") // Remove potentially dangerous characters
-    .trim()
-    .substring(0, 64); // Limit to 64 characters
+  // Using character class ranges instead of hex escapes to avoid eslint no-control-regex
+  let sanitized = "";
+  for (const char of killedBy) {
+    const code = char.charCodeAt(0);
+    // Skip control characters (0x00-0x1F and 0x7F) and dangerous HTML characters
+    if (code >= 32 && code !== 127 && !"<>'\"&".includes(char)) {
+      sanitized += char;
+    }
+  }
+  sanitized = sanitized.trim().substring(0, 64); // Limit to 64 characters
   return sanitized || "unknown";
 }
 

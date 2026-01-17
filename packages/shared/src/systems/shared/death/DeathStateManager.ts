@@ -27,6 +27,19 @@ import type { EntityManager } from "..";
 import { EventType } from "../../../types/events";
 
 /**
+ * P3-009: Debug logging flag for death state manager
+ * Set to true to enable verbose logging during development
+ */
+const DEBUG_DEATH_STATE = false;
+
+/** P3-009: Conditional debug logging */
+function debugLog(message: string, ...args: unknown[]): void {
+  if (DEBUG_DEATH_STATE) {
+    console.log(message, ...args);
+  }
+}
+
+/**
  * P0-003: Death item data for crash recovery
  */
 interface DeathItemData {
