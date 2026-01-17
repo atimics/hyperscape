@@ -351,10 +351,54 @@ function DeathScreen({
 }) {
   // DS-C07: Track respawn state to prevent button spam
   const [isRespawning, setIsRespawning] = useState(false);
+  // DS-H12: Track if respawn request timed out
+  const [respawnTimedOut, setRespawnTimedOut] = useState(false);
+  // DS-H13: Death countdown timer - seconds until items despawn
+  const [countdown, setCountdown] = useState<number>(
+    Math.max(0, Math.floor((data.respawnTime - Date.now()) / 1000)),
+  );
+
+  // DS-H12: Timeout handler - re-enable button if server doesn't respond
+  const RESPAWN_TIMEOUT_MS = 10000; // 10 seconds
+
+  useEffect(() => {
+    if (!isRespawning) return;
+
+    const timeoutId = setTimeout(() => {
+      console.warn("[DeathScreen] Respawn request timed out after 10 seconds");
+      setIsRespawning(false);
+      setRespawnTimedOut(true);
+    }, RESPAWN_TIMEOUT_MS);
+
+    return () => clearTimeout(timeoutId);
+  }, [isRespawning]);
+
+  // DS-H13: Update countdown every second
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      const remaining = Math.max(
+        0,
+        Math.floor((data.respawnTime - Date.now()) / 1000),
+      );
+      setCountdown(remaining);
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [data.respawnTime]);
+
+  // DS-H13: Format countdown as mm:ss
+  const formatCountdown = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
 
   const handleRespawn = () => {
     // Prevent multiple clicks
     if (isRespawning) return;
+
+    // Clear timeout state on retry
+    setRespawnTimedOut(false);
 
     // Send respawn request to server via network
     const network = world.network as {
@@ -411,9 +455,28 @@ function DeathScreen({
           >
             {isRespawning ? "Respawning..." : "Click here to respawn"}
           </button>
-          <div className="text-sm text-gray-400 text-center max-w-sm">
-            Your items have been dropped at your death location. You have 5
-            minutes to retrieve them before they despawn!
+          {respawnTimedOut && (
+            <div className="text-sm text-yellow-400 text-center max-w-sm">
+              Respawn request timed out. Please try again.
+            </div>
+          )}
+          {/* DS-H13: Death countdown timer */}
+          <div className="text-sm text-center max-w-sm">
+            {countdown > 0 ? (
+              <>
+                <span className="text-gray-400">
+                  Your items have been dropped at your death location.
+                </span>
+                <br />
+                <span
+                  className={`font-bold ${countdown <= 60 ? "text-red-400" : "text-yellow-400"}`}
+                >
+                  Time remaining: {formatCountdown(countdown)}
+                </span>
+              </>
+            ) : (
+              <span className="text-red-400">Your items have despawned!</span>
+            )}
           </div>
         </div>
       </div>

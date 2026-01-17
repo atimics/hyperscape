@@ -80,6 +80,10 @@ export class HeadstoneEntity extends InteractableEntity {
   private lootProtectionUntil: number = 0; // Timestamp when loot protection expires
   private protectedFor?: string; // Player ID who has loot protection (killer in PvP)
 
+  // P1-003: Rate limiting for loot requests
+  private lootRateLimiter = new Map<string, number>(); // playerId → last request timestamp
+  private readonly LOOT_RATE_LIMIT_MS = 100; // 100ms between requests per player
+
   constructor(world: World, config: HeadstoneEntityConfig) {
     // Convert HeadstoneEntityConfig to InteractableConfig format
     const interactableConfig: InteractableConfig = {
@@ -194,6 +198,7 @@ export class HeadstoneEntity extends InteractableEntity {
 
   /**
    * P0-002: Handle loot request with transaction ID for shadow state support
+   * P1-003: Includes rate limiting to prevent spam
    */
   private handleLootRequest(data: {
     playerId: string;
@@ -212,6 +217,18 @@ export class HeadstoneEntity extends InteractableEntity {
 
     // P0-002: Generate transactionId if client didn't provide one (backwards compat)
     const transactionId = data.transactionId || generateTransactionId();
+
+    // P1-003: Rate limiting - prevent loot spam
+    const now = Date.now();
+    const lastRequest = this.lootRateLimiter.get(data.playerId) || 0;
+    if (now - lastRequest < this.LOOT_RATE_LIMIT_MS) {
+      console.log(
+        `[HeadstoneEntity] Rate limited loot request from ${data.playerId}`,
+      );
+      this.emitLootResult(data.playerId, transactionId, false, "RATE_LIMITED");
+      return;
+    }
+    this.lootRateLimiter.set(data.playerId, now);
 
     // Queue loot operation to ensure atomicity
     // Only ONE loot operation can execute at a time (prevents duplication)

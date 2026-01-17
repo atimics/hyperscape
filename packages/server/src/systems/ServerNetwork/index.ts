@@ -1309,6 +1309,18 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onRequestRespawn"] = (socket, _data) => {
       const playerEntity = socket.player;
       if (playerEntity) {
+        // DS-H10: Validate player is actually dead before allowing respawn
+        // This prevents clients from sending fake respawn requests
+        const healthComponent = playerEntity.data?.properties?.healthComponent;
+        const isDead = healthComponent?.isDead === true;
+
+        if (!isDead) {
+          console.warn(
+            `[ServerNetwork] Rejected respawn request from ${playerEntity.id} - player is not dead`,
+          );
+          return;
+        }
+
         console.log(
           `[ServerNetwork] Received respawn request from player ${playerEntity.id}`,
         );
