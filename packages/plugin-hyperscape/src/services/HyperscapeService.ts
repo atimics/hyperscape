@@ -39,6 +39,10 @@ import type {
 import { AutonomousBehaviorManager } from "../managers/autonomous-behavior-manager.js";
 import { registerEventHandlers } from "../events/handlers.js";
 import { getAvailableGoals } from "../providers/goalProvider.js";
+import {
+  resolveLocation,
+  parseLocationFromMessage,
+} from "../utils/location-resolver.js";
 
 // msgpackr instances for binary packet encoding/decoding
 const packr = new Packr({ structuredClone: true });
@@ -477,6 +481,73 @@ export class HyperscapeService
         // Find matching action based on message content
         let actionToInvoke: Action | null = null;
         const normalizedMessage = messageText.trim().toLowerCase();
+
+        // Special handling: Check if this is a "go to <location>" command
+        // If so, resolve the location name to coordinates before pattern matching
+        const locationQuery = parseLocationFromMessage(messageText);
+        if (locationQuery) {
+          const playerEntity = this.getPlayerEntity();
+          const nearbyEntities = this.getNearbyEntities();
+
+          // Get player position for distance calculation
+          let playerPos: [number, number, number] | undefined;
+          if (playerEntity?.position) {
+            const pos = playerEntity.position;
+            if (Array.isArray(pos) && pos.length >= 3) {
+              playerPos = [pos[0], pos[1], pos[2]];
+            } else if (typeof pos === "object" && "x" in pos) {
+              const p = pos as unknown as { x: number; y: number; z: number };
+              playerPos = [p.x, p.y, p.z];
+            }
+          }
+
+          const resolvedLocation = resolveLocation(
+            locationQuery,
+            nearbyEntities,
+            playerPos,
+          );
+
+          if (resolvedLocation) {
+            logger.info(
+              `[HyperscapePlugin] 📍 Resolved "${locationQuery}" to ${resolvedLocation.name} at [${resolvedLocation.position.join(", ")}] (${resolvedLocation.distance?.toFixed(1)}m away)`,
+            );
+
+            // Execute movement directly to the resolved location
+            const behaviorManager = this.getBehaviorManager();
+            if (behaviorManager) {
+              const goalDescription = `User command: MOVE_TO - "go to ${resolvedLocation.name}"`;
+              behaviorManager.setGoal({
+                type: "user_command" as "idle",
+                description: goalDescription,
+                target: 1,
+                progress: 0,
+                startedAt: Date.now(),
+                locked: true,
+                lockedBy: "manual",
+                lockedAt: Date.now(),
+                userMessage: messageText,
+              });
+              logger.info(
+                `[HyperscapePlugin] 🔒 Set locked goal for navigation to ${resolvedLocation.name}`,
+              );
+            }
+
+            // Execute the move
+            await this.executeMove({
+              target: resolvedLocation.position,
+              runMode: normalizedMessage.includes("run"),
+            });
+
+            logger.info(
+              `[HyperscapePlugin] 🚶 Moving to ${resolvedLocation.name} at [${resolvedLocation.position.join(", ")}]`,
+            );
+            return;
+          } else {
+            logger.info(
+              `[HyperscapePlugin] ❓ Could not resolve location "${locationQuery}" - falling back to LLM`,
+            );
+          }
+        }
 
         for (const { action, patterns } of availableActions) {
           for (const pattern of patterns) {
@@ -1092,7 +1163,7 @@ Respond with ONLY the action name, nothing else.`;
   private getPacketName(id: number): string | null {
     // CRITICAL: This list MUST exactly match packages/shared/src/platform/shared/packets.ts
     // Any mismatch will cause packet IDs to be misinterpreted!
-    // Last synced: 2026-01-11 from packages/shared/src/platform/shared/packets.ts
+    // Last synced: 2026-01-17 from packages/shared/src/platform/shared/packets.ts
     const packetNames = [
       "snapshot",
       "command",
@@ -1155,6 +1226,7 @@ Respond with ONLY the action name, nothing else.`;
       "dropItem",
       "moveItem",
       "useItem",
+      "coinPouchWithdraw",
       // Equipment packets
       "equipItem",
       "unequipItem",
@@ -1243,6 +1315,13 @@ Respond with ONLY the action name, nothing else.`;
       "clientReady",
       // World time sync packets
       "worldTimeSync",
+      // Prayer system packets
+      "prayerToggle",
+      "prayerDeactivateAll",
+      "altarPray",
+      "prayerStateSync",
+      "prayerToggled",
+      "prayerPointsChanged",
     ];
     return packetNames[id] || null;
   }
@@ -2111,7 +2190,7 @@ Respond with ONLY the action name, nothing else.`;
   private getPacketId(name: string): number | null {
     // CRITICAL: This list MUST exactly match packages/shared/src/platform/shared/packets.ts
     // Any mismatch will cause packet IDs to be misinterpreted!
-    // Last synced: 2026-01-09 from packages/shared/src/platform/shared/packets.ts
+    // Last synced: 2026-01-17 from packages/shared/src/platform/shared/packets.ts
     const packetNames = [
       "snapshot",
       "command",
@@ -2174,6 +2253,7 @@ Respond with ONLY the action name, nothing else.`;
       "dropItem",
       "moveItem",
       "useItem",
+      "coinPouchWithdraw",
       // Equipment packets
       "equipItem",
       "unequipItem",
@@ -2262,6 +2342,13 @@ Respond with ONLY the action name, nothing else.`;
       "clientReady",
       // World time sync packets
       "worldTimeSync",
+      // Prayer system packets
+      "prayerToggle",
+      "prayerDeactivateAll",
+      "altarPray",
+      "prayerStateSync",
+      "prayerToggled",
+      "prayerPointsChanged",
     ];
     const index = packetNames.indexOf(name);
     return index >= 0 ? index : null;
@@ -2384,6 +2471,8 @@ Respond with ONLY the action name, nothing else.`;
     const payload = data as {
       goalId?: string;
       unlock?: boolean;
+      stop?: boolean;
+      resume?: boolean;
       source?: string;
     };
 
@@ -2391,6 +2480,37 @@ Respond with ONLY the action name, nothing else.`;
     if (payload?.unlock) {
       logger.info("[HyperscapeService] 🔓 Goal unlock received from dashboard");
       this.unlockGoal();
+      return;
+    }
+
+    // Handle stop command - pause goals (prevent auto-setting new ones)
+    if (payload?.stop) {
+      logger.info("[HyperscapeService] ⏹️ Goal stop received from dashboard");
+      const behaviorManager = this.getBehaviorManager();
+      if (behaviorManager) {
+        behaviorManager.pauseGoals();
+      }
+      // Also cancel any current movement immediately
+      const player = this.getPlayerEntity();
+      if (player?.position) {
+        logger.info("[HyperscapeService] ⏹️ Cancelling current movement");
+        // Send cancel flag to properly clear the movement path on the server
+        this.executeMove({
+          target: player.position,
+          runMode: false,
+          cancel: true,
+        });
+      }
+      return;
+    }
+
+    // Handle resume command - resume autonomous goal selection
+    if (payload?.resume) {
+      logger.info("[HyperscapeService] ▶️ Goal resume received from dashboard");
+      const behaviorManager = this.getBehaviorManager();
+      if (behaviorManager) {
+        behaviorManager.resumeGoals();
+      }
       return;
     }
 

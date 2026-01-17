@@ -100,6 +100,9 @@ export class AutonomousBehaviorManager {
   /** Current goal - persists between ticks */
   private currentGoal: CurrentGoal | null = null;
 
+  /** If true, the user explicitly paused goals - don't auto-set new ones */
+  private goalPaused: boolean = false;
+
   constructor(runtime: IAgentRuntime, config?: AutonomousBehaviorConfig) {
     this.runtime = runtime;
     this.tickInterval = Math.max(
@@ -484,7 +487,7 @@ export class AutonomousBehaviorManager {
       logger.info(`[AutonomousBehavior] LLM response: ${responseText.trim()}`);
 
       // Parse the selected action from response
-      const selectedActionName = this.parseActionFromResponse(
+      let selectedActionName = this.parseActionFromResponse(
         responseText,
         availableActions,
       );
@@ -494,6 +497,14 @@ export class AutonomousBehaviorManager {
           "[AutonomousBehavior] Could not parse action from LLM response, defaulting to EXPLORE",
         );
         return exploreAction;
+      }
+
+      // If goals are paused by user, block SET_GOAL and force IDLE
+      if (this.goalPaused && selectedActionName === "SET_GOAL") {
+        logger.info(
+          "[AutonomousBehavior] Blocked SET_GOAL because goals are paused by user - forcing IDLE",
+        );
+        selectedActionName = "IDLE";
       }
 
       // Find the action object
@@ -647,7 +658,13 @@ export class AutonomousBehaviorManager {
     const nearbyEntities = this.service?.getNearbyEntities() || [];
 
     if (!goal) {
-      priorityAction = "SET_GOAL";
+      // If goals are paused (user clicked stop), don't auto-set a new goal
+      if (this.goalPaused) {
+        priorityAction = "IDLE";
+        lines.push("  ** GOALS PAUSED ** - Waiting for user to set a new goal");
+      } else {
+        priorityAction = "SET_GOAL";
+      }
     } else if (goal.type === "combat_training") {
       // Check for nearby mobs - flexible detection
       const mobs = nearbyEntities.filter((entity) => {
@@ -1066,8 +1083,14 @@ export class AutonomousBehaviorManager {
    */
   setGoal(goal: CurrentGoal): void {
     this.currentGoal = goal;
+    // Only clear paused state for autonomous goals (not locked/user commands)
+    // If it's a locked goal (user command while paused), keep paused state
+    // so agent returns to idle after command completes
+    if (!goal.locked) {
+      this.goalPaused = false;
+    }
     logger.info(
-      `[AutonomousBehavior] Goal set: ${goal.description} (target: ${goal.target})`,
+      `[AutonomousBehavior] Goal set: ${goal.description} (target: ${goal.target})${goal.locked ? " [locked]" : ""}`,
     );
     // Sync to server for dashboard display
     this.service?.syncGoalToServer();
@@ -1081,6 +1104,33 @@ export class AutonomousBehaviorManager {
     logger.info("[AutonomousBehavior] Goal cleared");
     // Sync to server for dashboard display
     this.service?.syncGoalToServer();
+  }
+
+  /**
+   * Pause goal selection (user explicitly stopped the goal via dashboard)
+   * This prevents the agent from auto-setting a new goal until resumed
+   */
+  pauseGoals(): void {
+    this.currentGoal = null;
+    this.goalPaused = true;
+    logger.info("[AutonomousBehavior] Goals paused by user");
+    // Sync to server for dashboard display
+    this.service?.syncGoalToServer();
+  }
+
+  /**
+   * Resume goal selection (called when user sets a new goal or sends a command)
+   */
+  resumeGoals(): void {
+    this.goalPaused = false;
+    logger.info("[AutonomousBehavior] Goals resumed");
+  }
+
+  /**
+   * Check if goals are paused
+   */
+  isGoalsPaused(): boolean {
+    return this.goalPaused;
   }
 
   /**

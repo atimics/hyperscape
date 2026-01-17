@@ -48,6 +48,12 @@ export const setGoalAction: Action = {
     const behaviorManager = service.getBehaviorManager();
     const currentGoal = behaviorManager?.getGoal();
 
+    // Don't set a goal if user has paused goals (clicked stop button)
+    if (behaviorManager?.isGoalsPaused?.()) {
+      logger.debug("[SET_GOAL] Validation failed: goals are paused by user");
+      return false;
+    }
+
     // Don't override locked goals (manually set from dashboard)
     if (currentGoal?.locked) {
       logger.debug(

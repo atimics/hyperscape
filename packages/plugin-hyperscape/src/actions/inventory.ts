@@ -596,24 +596,62 @@ export const pickupItemAction: Action = {
         .filter((t) => t.distance !== null)
         .sort((a, b) => (a.distance ?? 999) - (b.distance ?? 999));
 
-      // Try to find item matching the user's description
-      // Check if the message contains the item name (not the other way around)
-      let targetItem = itemsWithDistance.find((item) => {
+      // Try to find item matching the user's description using a scoring system
+      // Higher score = better match. We prioritize items that match more words from the user's request
+      const scoreItem = (item: { entity: Entity }) => {
         const itemName = item.entity.name.toLowerCase();
-        // Check if message contains the item name
-        if (content.includes(itemName)) return true;
-        // Also check individual words from item name (e.g., "hatchet" from "Bronze Hatchet")
         const itemWords = itemName.split(/\s+/);
-        return itemWords.some(
-          (word) => word.length > 3 && content.includes(word),
-        );
+        const contentWords = content.split(/\s+/).filter((w) => w.length > 2);
+
+        // Perfect match - item name is exactly in the content
+        if (content.includes(itemName)) return 100;
+
+        // Score based on how many item words are in the content
+        let score = 0;
+        for (const itemWord of itemWords) {
+          if (itemWord.length <= 3) continue; // Skip short words like "of", "the"
+          // Check if content contains this word
+          if (content.includes(itemWord)) {
+            score += 10; // Each matching word adds 10 points
+          }
+          // Also check if any content word matches (exact word match)
+          for (const contentWord of contentWords) {
+            if (contentWord === itemWord) {
+              score += 5; // Exact word match bonus
+            }
+          }
+        }
+
+        return score;
+      };
+
+      // Score all items and find the best match
+      const scoredItems = itemsWithDistance.map((item) => ({
+        ...item,
+        score: scoreItem(item),
+      }));
+
+      // Sort by score (highest first), then by distance (nearest first)
+      scoredItems.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return (a.distance ?? 999) - (b.distance ?? 999);
       });
 
+      // Get the best matching item (score > 0 means at least one word matched)
+      let targetItem = scoredItems.find((item) => item.score > 0);
+
       // If no match by name, pick the nearest item
-      if (!targetItem && itemsWithDistance.length > 0) {
-        targetItem = itemsWithDistance[0];
+      if (!targetItem && scoredItems.length > 0) {
+        targetItem = scoredItems[0];
         logger.info(
           `[PICKUP_ITEM] No item matching in "${content}", picking nearest: ${targetItem.entity.name}`,
+        );
+      }
+
+      // Log the matching for debugging
+      if (targetItem && targetItem.score > 0) {
+        logger.info(
+          `[PICKUP_ITEM] Best match: "${targetItem.entity.name}" (score=${targetItem.score}) for request "${content}"`,
         );
       }
 

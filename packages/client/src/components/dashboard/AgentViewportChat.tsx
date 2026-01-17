@@ -1,8 +1,9 @@
 import { GAME_API_URL } from "@/lib/api-config";
 import { usePrivy } from "@privy-io/react-auth";
-import { Bot, Mic, Paperclip, Send } from "lucide-react";
+import { Bot, Mic, Send } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
 import { Agent } from "../../screens/DashboardScreen";
+import { QuickActionMenu } from "./QuickActionMenu";
 
 interface Message {
   id: string;
@@ -421,9 +422,59 @@ export const AgentViewportChat: React.FC<AgentViewportChatProps> = ({
       <div className="absolute bottom-4 left-4 right-4 z-10 pointer-events-auto">
         <div className="max-w-3xl mx-auto">
           <div className="relative flex items-end gap-2 bg-black/60 backdrop-blur-md border border-[#8b4513]/50 rounded-xl p-2 focus-within:border-[#f2d08a]/50 transition-colors shadow-2xl">
-            <button className="p-2 text-[#f2d08a]/40 hover:text-[#f2d08a] transition-colors rounded-lg hover:bg-[#f2d08a]/5">
-              <Paperclip size={20} />
-            </button>
+            <QuickActionMenu
+              agentId={agent.id}
+              authToken={authToken}
+              onCommandSend={(command) => {
+                setInputValue(command);
+                // Auto-send the command
+                setTimeout(async () => {
+                  const userMessage: Message = {
+                    id: Date.now().toString(),
+                    sender: "user",
+                    text: command,
+                    timestamp: new Date(),
+                  };
+                  setMessages((prev) => [...prev, userMessage]);
+                  setIsTyping(true);
+                  try {
+                    const response = await fetch(
+                      `${GAME_API_URL}/api/agents/${agent.id}/message`,
+                      {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/json",
+                          Authorization: `Bearer ${authToken}`,
+                        },
+                        body: JSON.stringify({ content: command }),
+                      },
+                    );
+                    const data = await response.json();
+                    if (data.success) {
+                      const confirmMessage: Message = {
+                        id: Date.now().toString(),
+                        sender: "agent",
+                        text: "Command sent to agent",
+                        timestamp: new Date(),
+                      };
+                      setMessages((prev) => [...prev, confirmMessage]);
+                      // Open chat in iframe
+                      if (iframeRef.current?.contentWindow) {
+                        iframeRef.current.contentWindow.postMessage(
+                          { type: "OPEN_CHAT" },
+                          "*",
+                        );
+                      }
+                    }
+                  } catch (err) {
+                    console.error("Failed to send command:", err);
+                  } finally {
+                    setIsTyping(false);
+                    setInputValue("");
+                  }
+                }, 0);
+              }}
+            />
 
             <textarea
               value={inputValue}
