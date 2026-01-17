@@ -8,8 +8,8 @@ import type {
 import { EventType, generateTransactionId, getItem } from "@hyperscape/shared";
 import { ErrorBoundary } from "../../lib/ErrorBoundary";
 
-// P0-006: Timeout for pending loot transactions (5 seconds)
-const LOOT_TRANSACTION_TIMEOUT_MS = 5000;
+// P0-006: Timeout for pending loot transactions (3 seconds for better UX)
+const LOOT_TRANSACTION_TIMEOUT_MS = 3000;
 
 interface LootWindowProps {
   visible: boolean;

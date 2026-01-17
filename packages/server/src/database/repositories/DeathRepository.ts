@@ -24,6 +24,20 @@ import { BaseRepository } from "./BaseRepository";
 import * as schema from "../schema";
 
 /**
+ * Safely parse JSON with fallback value on error
+ * Prevents server crash on corrupted database data
+ */
+function safeJsonParse<T>(json: string | null, fallback: T): T {
+  if (!json) return fallback;
+  try {
+    return JSON.parse(json) as T;
+  } catch (error) {
+    console.error(`[DeathRepository] Failed to parse JSON: ${json}`, error);
+    return fallback;
+  }
+}
+
+/**
  * Item data for crash recovery
  */
 export interface DeathItemData {
@@ -145,8 +159,11 @@ export class DeathRepository extends BaseRepository {
     return {
       playerId: row.playerId,
       gravestoneId: row.gravestoneId,
-      groundItemIds: JSON.parse(row.groundItemIds || "[]"),
-      position: JSON.parse(row.position),
+      groundItemIds: safeJsonParse<string[]>(row.groundItemIds, []),
+      position: safeJsonParse<{ x: number; y: number; z: number }>(
+        row.position,
+        { x: 0, y: 0, z: 0 },
+      ),
       timestamp: row.timestamp,
       zoneType: row.zoneType,
       itemCount: row.itemCount,
@@ -201,8 +218,11 @@ export class DeathRepository extends BaseRepository {
     return results.map((row) => ({
       playerId: row.playerId,
       gravestoneId: row.gravestoneId,
-      groundItemIds: JSON.parse(row.groundItemIds || "[]"),
-      position: JSON.parse(row.position),
+      groundItemIds: safeJsonParse<string[]>(row.groundItemIds, []),
+      position: safeJsonParse<{ x: number; y: number; z: number }>(
+        row.position,
+        { x: 0, y: 0, z: 0 },
+      ),
       timestamp: row.timestamp,
       zoneType: row.zoneType,
       itemCount: row.itemCount,
@@ -262,8 +282,11 @@ export class DeathRepository extends BaseRepository {
     return results.map((row) => ({
       playerId: row.playerId,
       gravestoneId: row.gravestoneId,
-      groundItemIds: JSON.parse(row.groundItemIds || "[]"),
-      position: JSON.parse(row.position),
+      groundItemIds: safeJsonParse<string[]>(row.groundItemIds, []),
+      position: safeJsonParse<{ x: number; y: number; z: number }>(
+        row.position,
+        { x: 0, y: 0, z: 0 },
+      ),
       timestamp: row.timestamp,
       zoneType: row.zoneType,
       itemCount: row.itemCount,
