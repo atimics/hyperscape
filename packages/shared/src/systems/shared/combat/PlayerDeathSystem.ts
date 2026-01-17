@@ -584,7 +584,12 @@ export class PlayerDeathSystem extends SystemBase {
           }
         }
 
-        this.initiateRespawn(playerId);
+        this.initiateRespawn(playerId).catch((err) => {
+          console.error(
+            `[PlayerDeathSystem] Respawn failed for ${playerId}:`,
+            err,
+          );
+        });
       }, DEATH_ANIMATION_DURATION);
 
       this.respawnTimers.set(playerId, respawnTimer);
@@ -741,7 +746,7 @@ export class PlayerDeathSystem extends SystemBase {
     }
   }
 
-  private initiateRespawn(playerId: string): void {
+  private async initiateRespawn(playerId: string): Promise<void> {
     this.respawnTimers.delete(playerId);
 
     const deathData = this.deathLocations.get(playerId);
@@ -755,7 +760,12 @@ export class PlayerDeathSystem extends SystemBase {
       COMBAT_CONSTANTS.DEATH.DEFAULT_RESPAWN_POSITION;
     const DEATH_RESPAWN_TOWN = COMBAT_CONSTANTS.DEATH.DEFAULT_RESPAWN_TOWN;
 
-    this.respawnPlayer(playerId, DEATH_RESPAWN_POSITION, DEATH_RESPAWN_TOWN);
+    // CRITICAL: Must await to ensure death lock is cleared before next death
+    await this.respawnPlayer(
+      playerId,
+      DEATH_RESPAWN_POSITION,
+      DEATH_RESPAWN_TOWN,
+    );
 
     const gravestoneData = this.pendingGravestones.get(playerId);
     if (gravestoneData && gravestoneData.items.length > 0) {
@@ -769,11 +779,11 @@ export class PlayerDeathSystem extends SystemBase {
     }
   }
 
-  private respawnPlayer(
+  private async respawnPlayer(
     playerId: string,
     spawnPosition: { x: number; y: number; z: number },
     townName: string,
-  ): void {
+  ): Promise<void> {
     const playerEntity = this.world.entities?.get?.(playerId);
     if (playerEntity) {
       if ("setHealth" in playerEntity && "getMaxHealth" in playerEntity) {
@@ -894,7 +904,11 @@ export class PlayerDeathSystem extends SystemBase {
     });
 
     // Clear death lock after successful respawn
-    this.deathStateManager.clearDeathLock(playerId);
+    // CRITICAL: Must await to ensure DB is cleared before next death can occur
+    await this.deathStateManager.clearDeathLock(playerId);
+
+    // Clear death cooldown so player can die again immediately after respawn
+    this.lastDeathTime.delete(playerId);
   }
 
   private async spawnGravestoneAfterRespawn(
@@ -1013,7 +1027,12 @@ export class PlayerDeathSystem extends SystemBase {
     if (timer) {
       clearTimeout(timer);
       this.respawnTimers.delete(data.playerId);
-      this.initiateRespawn(data.playerId);
+      this.initiateRespawn(data.playerId).catch((err) => {
+        console.error(
+          `[PlayerDeathSystem] Respawn request failed for ${data.playerId}:`,
+          err,
+        );
+      });
     }
   }
 
@@ -1057,7 +1076,12 @@ export class PlayerDeathSystem extends SystemBase {
       // Immediately trigger respawn (RuneScape-style - no waiting, no screen)
       // Very short delay, then auto-respawn (just enough for world to load)
       setTimeout(() => {
-        this.initiateRespawn(playerId);
+        this.initiateRespawn(playerId).catch((err) => {
+          console.error(
+            `[PlayerDeathSystem] Reconnect respawn failed for ${playerId}:`,
+            err,
+          );
+        });
       }, ticksToMs(COMBAT_CONSTANTS.DEATH.RECONNECT_RESPAWN_DELAY_TICKS));
 
       // Block inventory load until respawn
@@ -1304,7 +1328,12 @@ export class PlayerDeathSystem extends SystemBase {
         }
 
         // Initiate respawn for this player
-        this.initiateRespawn(playerId);
+        this.initiateRespawn(playerId).catch((err) => {
+          console.error(
+            `[PlayerDeathSystem] Tick-based respawn failed for ${playerId}:`,
+            err,
+          );
+        });
       }
     }
   }

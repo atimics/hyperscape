@@ -70,7 +70,6 @@ import {
   handleCharacterSelected,
   handleEnterWorld,
 } from "./character-selection";
-import { MovementManager } from "./movement";
 import { TileMovementManager } from "./tile-movement";
 import { MobTileMovementManager } from "./mob-tile-movement";
 import { ActionQueue } from "./action-queue";
@@ -208,7 +207,6 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   static characterSockets: Map<string, ServerSocket> = new Map();
 
   /** Modular managers */
-  private movementManager!: MovementManager;
   private tileMovementManager!: TileMovementManager;
   private mobTileMovementManager!: MobTileMovementManager;
   private pendingAttackManager!: PendingAttackManager;
@@ -284,12 +282,6 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   private initializeManagers(): void {
     // Broadcast manager (needed by many others)
     this.broadcastManager = new BroadcastManager(this.sockets);
-
-    // Legacy movement manager (for compatibility)
-    this.movementManager = new MovementManager(
-      this.world,
-      this.broadcastManager.sendToAll.bind(this.broadcastManager),
-    );
 
     // Tick system for RuneScape-style 600ms ticks
     this.tickSystem = new TickSystem();
@@ -1694,9 +1686,6 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   override update(dt: number): void {
     // Validate player positions periodically
     this.positionValidator.update(dt);
-
-    // Delegate movement updates to MovementManager
-    this.movementManager.update(dt);
 
     // Broadcast world time periodically for day/night cycle sync
     this.worldTimeSyncAccumulator += dt;

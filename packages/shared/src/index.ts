@@ -132,6 +132,9 @@ export { PlayerMigration } from "./types/core/core";
 // Export enums (these are values, not types)
 export { WeaponType, EquipmentSlotName } from "./types/core/core";
 
+// Export DeathState enum for death/respawn system
+export { DeathState } from "./types/entities/entities";
+
 // Export db helpers and type guards for server usage
 export { dbHelpers, isDatabaseInstance } from "./types/network/database";
 
