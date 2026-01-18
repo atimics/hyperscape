@@ -28,6 +28,7 @@ import type {
 import { INPUT } from "../constants";
 import { stationDataProvider } from "../../../../data/StationDataProvider";
 import { resolveFootprint } from "../../../../types/game/resource-processing-types";
+import { MobAIState } from "../../../../types/entities/entities";
 
 // === PRE-ALLOCATED OBJECTS (zero allocations in hot paths) ===
 const _raycaster = new THREE.Raycaster();
@@ -216,8 +217,12 @@ export class RaycastService {
         if (entityId) {
           const entity = this.world.entities.get(entityId);
           // Skip destroyed entities - they may still be in scene during async cleanup
-          // This is defense-in-depth for the dead mob / item drop overlap issue
           if (entity && !entity.destroyed) {
+            // Skip dead mobs to allow clicking items underneath (Issue #562)
+            if (this.isDeadMob(entity, userData)) {
+              break; // Skip dead mob and check next intersection (item underneath)
+            }
+
             // Get entity world position using pre-allocated vector
             obj.getWorldPosition(_worldPos);
 
@@ -470,5 +475,45 @@ export class RaycastService {
       width: resolved.x,
       depth: resolved.z,
     };
+  }
+
+  /**
+   * Check if entity is a dead mob that should be skipped during raycasting.
+   *
+   * Dead mobs keep their raycast hitbox in the scene but shouldn't block
+   * interaction with items dropped at their location. This allows players
+   * to click through dead mobs to pick up loot.
+   *
+   * @param entity - The entity to check
+   * @param userData - Object3D userData containing type information
+   * @returns true if entity is a dead mob that should be skipped
+   *
+   * @see Issue #562: Dead mob blocks picking up items until it respawns
+   */
+  private isDeadMob(
+    entity: { type?: string },
+    userData: { type?: string },
+  ): boolean {
+    const entityType = entity.type || userData.type;
+    if (entityType !== "mob") {
+      return false;
+    }
+
+    // Type guard: check if entity has mob config properties
+    const mobEntity = entity as {
+      config?: { aiState?: MobAIState; currentHealth?: number };
+    };
+
+    if (!mobEntity.config) {
+      return false;
+    }
+
+    const { aiState, currentHealth } = mobEntity.config;
+
+    // Mob is dead if aiState is DEAD or health is 0 or below
+    return (
+      aiState === MobAIState.DEAD ||
+      (currentHealth !== undefined && currentHealth <= 0)
+    );
   }
 }
