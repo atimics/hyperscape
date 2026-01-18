@@ -19,6 +19,12 @@ import { EventType } from "./event-types";
 export interface PlayerJoinedPayload {
   playerId: string;
   player: PlayerLocal;
+  /** Equipment data loaded from database during login (optional for backwards compatibility) */
+  equipment?: Array<{
+    slotType: string;
+    itemId: string | null;
+    quantity: number;
+  }>;
 }
 
 export interface PlayerEnterPayload {
