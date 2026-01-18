@@ -29,7 +29,9 @@ import { getEntityPosition } from "../../../utils/game/EntityPositionUtils";
 
 /**
  * Sanitize killedBy string to prevent injection attacks
- * - Removes special characters that could cause issues in logs or UI
+ * - Normalizes Unicode to prevent homograph attacks (Cyrillic 'а' vs Latin 'a')
+ * - Removes zero-width characters and BiDi overrides that could manipulate display
+ * - Removes control characters and dangerous HTML characters
  * - Limits length to prevent buffer overflow attacks
  * - Defaults to "unknown" for invalid inputs
  */
@@ -37,16 +39,31 @@ function sanitizeKilledBy(killedBy: unknown): string {
   if (typeof killedBy !== "string" || !killedBy) {
     return "unknown";
   }
-  // Remove control characters and limit length
-  // Using character class ranges instead of hex escapes to avoid eslint no-control-regex
+
+  // Normalize Unicode to NFKC form to prevent homograph attacks
+  let normalized = killedBy.normalize("NFKC");
+
+  // Build sanitized string character by character
   let sanitized = "";
-  for (const char of killedBy) {
+  for (const char of normalized) {
     const code = char.charCodeAt(0);
-    // Skip control characters (0x00-0x1F and 0x7F) and dangerous HTML characters
-    if (code >= 32 && code !== 127 && !"<>'\"&".includes(char)) {
-      sanitized += char;
-    }
+
+    // Skip zero-width characters (U+200B-U+200D, U+FEFF)
+    if (code >= 0x200b && code <= 0x200d) continue;
+    if (code === 0xfeff) continue;
+
+    // Skip BiDi override characters (U+202A-U+202E)
+    if (code >= 0x202a && code <= 0x202e) continue;
+
+    // Skip control characters (0x00-0x1F and 0x7F)
+    if (code < 32 || code === 127) continue;
+
+    // Skip dangerous HTML characters
+    if ("<>'\"&".includes(char)) continue;
+
+    sanitized += char;
   }
+
   sanitized = sanitized.trim().substring(0, 64); // Limit to 64 characters
   return sanitized || "unknown";
 }
@@ -757,12 +774,11 @@ export class PlayerDeathSystem extends SystemBase {
         // Use safe addition to prevent integer overflow
         const currentTick = this.tickSystem?.getCurrentTick() ?? 0;
         const animationTicks = COMBAT_CONSTANTS.DEATH.ANIMATION_TICKS;
-        // Cap at MAX_SAFE_INTEGER to prevent overflow issues during serialization
-        const MAX_SAFE_TICK = Number.MAX_SAFE_INTEGER - animationTicks;
+        // Cap at 32-bit max to prevent overflow during serialization (MessagePack, etc.)
+        const MAX_TICK = 2147483647; // 2^31-1, safe for 32-bit serialization
+        const MAX_SAFE_TICK = MAX_TICK - animationTicks;
         typedPlayerEntity.data.respawnTick =
-          currentTick > MAX_SAFE_TICK
-            ? Number.MAX_SAFE_INTEGER
-            : currentTick + animationTicks;
+          currentTick > MAX_SAFE_TICK ? MAX_TICK : currentTick + animationTicks;
       }
 
       if ("markNetworkDirty" in playerEntity) {
