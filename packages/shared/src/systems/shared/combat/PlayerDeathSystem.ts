@@ -28,7 +28,7 @@ import type { InventorySystem } from "../character/InventorySystem";
 import { getEntityPosition } from "../../../utils/game/EntityPositionUtils";
 
 /**
- * P2-014: Sanitize killedBy string to prevent injection attacks
+ * Sanitize killedBy string to prevent injection attacks
  * - Removes special characters that could cause issues in logs or UI
  * - Limits length to prevent buffer overflow attacks
  * - Defaults to "unknown" for invalid inputs
@@ -52,7 +52,7 @@ function sanitizeKilledBy(killedBy: unknown): string {
 }
 
 /**
- * P2-017: Position validation constants
+ * Position validation constants
  */
 const POSITION_VALIDATION = {
   WORLD_BOUNDS: 10000, // Max 10km from origin
@@ -61,14 +61,14 @@ const POSITION_VALIDATION = {
 } as const;
 
 /**
- * P2-017: Check if a number is valid for position use
+ * Check if a number is valid for position use
  */
 function isValidPositionNumber(n: number): boolean {
   return Number.isFinite(n) && !Number.isNaN(n);
 }
 
 /**
- * P2-017: Validate and clamp a position to world bounds
+ * Validate and clamp a position to world bounds
  * @param position - Position to validate
  * @returns Validated and clamped position, or null if completely invalid
  */
@@ -106,7 +106,7 @@ function validatePosition(position: {
 }
 
 /**
- * P2-017: Check if position is within world bounds without clamping
+ * Check if position is within world bounds without clamping
  */
 function isPositionInBounds(position: {
   x: number;
@@ -134,7 +134,7 @@ interface DatabaseSystemLike {
 interface EquipmentSystemLike {
   getPlayerEquipment: (playerId: string) => EquipmentData | null;
   clearEquipmentImmediate?: (playerId: string) => Promise<void>;
-  // DS-C01: Atomic clear-and-return for death system
+  // Atomic clear-and-return for death system
   clearEquipmentAndReturn?: (
     playerId: string,
     tx?: TransactionContext,
@@ -391,7 +391,7 @@ export class PlayerDeathSystem extends SystemBase {
       clearTimeout(timer);
     }
 
-    // P2-020: Clean up all Maps to prevent memory leaks
+    // Clean up all Maps to prevent memory leaks
     this.respawnTimers.clear();
     this.deathLocations.clear();
     this.playerPositions.clear();
@@ -488,7 +488,7 @@ export class PlayerDeathSystem extends SystemBase {
     deathPosition: { x: number; y: number; z: number },
     killedByRaw: string,
   ): Promise<void> {
-    // P2-014: Sanitize killedBy input to prevent injection attacks
+    // Sanitize killedBy input to prevent injection attacks
     const killedBy = sanitizeKilledBy(killedByRaw);
     // Server-only - prevent client from triggering death events
     if (!this.world.isServer) {
@@ -498,7 +498,7 @@ export class PlayerDeathSystem extends SystemBase {
       return;
     }
 
-    // P1-013 + P2-017: Validate death position using extracted helper
+    // Validate death position using extracted helper
     let validatedPosition = validatePosition(deathPosition);
 
     if (!validatedPosition) {
@@ -518,7 +518,7 @@ export class PlayerDeathSystem extends SystemBase {
       }
     }
 
-    // P2-017: Check bounds and log warning if clamped
+    // Check bounds and log warning if clamped
     if (!isPositionInBounds(deathPosition)) {
       console.warn(
         `[PlayerDeathSystem] Death position out of bounds for ${playerId}: (${deathPosition.x}, ${deathPosition.y}, ${deathPosition.z}) - clamped`,
@@ -528,7 +528,7 @@ export class PlayerDeathSystem extends SystemBase {
     // Use validated position from here on
     deathPosition = validatedPosition;
 
-    // P2-007: Cache Date.now() to avoid multiple system calls
+    // Cache Date.now() to avoid multiple system calls
     const now = Date.now();
 
     const lastDeath = this.lastDeathTime.get(playerId) || 0;
@@ -548,10 +548,10 @@ export class PlayerDeathSystem extends SystemBase {
       await this.deathStateManager.clearDeathLock(playerId);
     }
 
-    // Update last death time (P2-007: use cached timestamp)
+    // Update last death time (use cached timestamp)
     this.lastDeathTime.set(playerId, now);
 
-    // DS-C07: Set death state IMMEDIATELY to block any incoming loot/pickup requests
+    // Set death state IMMEDIATELY to block any incoming loot/pickup requests
     // This must happen BEFORE the transaction to prevent race conditions where
     // items are looted between inventory snapshot and clear
     const playerEntity = this.world.entities?.get?.(playerId);
@@ -565,7 +565,7 @@ export class PlayerDeathSystem extends SystemBase {
       }
     }
 
-    // DS-C07: Emit PLAYER_SET_DEAD immediately so client can block loot window
+    // Emit PLAYER_SET_DEAD immediately so client can block loot window
     // This must happen BEFORE the transaction so the client knows to reject clicks
     this.emitTypedEvent(EventType.PLAYER_SET_DEAD, {
       playerId,
@@ -614,7 +614,7 @@ export class PlayerDeathSystem extends SystemBase {
               metadata: null,
             })) || [];
 
-          // DS-C01: Use atomic clearEquipmentAndReturn to prevent race condition
+          // Use atomic clearEquipmentAndReturn to prevent race condition
           // This atomically reads AND clears equipment in one operation,
           // preventing item duplication if server crashes between read and clear.
           let equipmentItems: InventoryItem[] = [];
@@ -657,7 +657,7 @@ export class PlayerDeathSystem extends SystemBase {
               zoneType,
             });
 
-            // P0-003: Include items and killedBy for crash recovery
+            // Include items and killedBy for crash recovery
             await this.deathStateManager.createDeathLock(
               playerId,
               {
@@ -687,7 +687,7 @@ export class PlayerDeathSystem extends SystemBase {
           // Clear inventory (equipment already cleared atomically above)
           await inventorySystem.clearInventoryImmediate(playerId);
 
-          // DS-C01: Only call old clearEquipmentImmediate if atomic method wasn't used
+          // Only call old clearEquipmentImmediate if atomic method wasn't used
           if (
             equipmentSystem &&
             !equipmentSystem.clearEquipmentAndReturn &&
@@ -754,7 +754,7 @@ export class PlayerDeathSystem extends SystemBase {
         ];
 
         // Calculate respawn tick using tick system
-        // P1-004: Use safe addition to prevent integer overflow
+        // Use safe addition to prevent integer overflow
         const currentTick = this.tickSystem?.getCurrentTick() ?? 0;
         const animationTicks = COMBAT_CONSTANTS.DEATH.ANIMATION_TICKS;
         // Cap at MAX_SAFE_INTEGER to prevent overflow issues during serialization

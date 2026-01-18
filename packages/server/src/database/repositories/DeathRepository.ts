@@ -56,7 +56,7 @@ export interface DeathLockData {
   timestamp: number;
   zoneType: string; // "safe_area" | "wilderness" | "pvp_zone"
   itemCount: number;
-  // P0-003: Crash recovery fields
+  // Crash recovery fields
   items: DeathItemData[]; // Actual item data for recovery
   killedBy: string; // What killed the player
   recovered: boolean; // Whether death was processed during crash recovery
@@ -103,7 +103,7 @@ export class DeathRepository extends BaseRepository {
         timestamp: data.timestamp,
         zoneType: data.zoneType,
         itemCount: data.itemCount,
-        // P0-003: Crash recovery fields
+        // Crash recovery fields
         items: data.items,
         killedBy: data.killedBy,
         recovered: data.recovered,
@@ -119,7 +119,7 @@ export class DeathRepository extends BaseRepository {
           timestamp: data.timestamp,
           zoneType: data.zoneType,
           itemCount: data.itemCount,
-          // P0-003: Crash recovery fields
+          // Crash recovery fields
           items: data.items,
           killedBy: data.killedBy,
           recovered: data.recovered,
@@ -167,7 +167,7 @@ export class DeathRepository extends BaseRepository {
       timestamp: row.timestamp,
       zoneType: row.zoneType,
       itemCount: row.itemCount,
-      // P0-003: Crash recovery fields
+      // Crash recovery fields
       items: (row.items as DeathItemData[]) || [],
       killedBy: row.killedBy,
       recovered: row.recovered,
@@ -226,7 +226,7 @@ export class DeathRepository extends BaseRepository {
       timestamp: row.timestamp,
       zoneType: row.zoneType,
       itemCount: row.itemCount,
-      // P0-003: Crash recovery fields
+      // Crash recovery fields
       items: (row.items as DeathItemData[]) || [],
       killedBy: row.killedBy,
       recovered: row.recovered,
@@ -263,7 +263,7 @@ export class DeathRepository extends BaseRepository {
   }
 
   /**
-   * P0-003: Get all unrecovered deaths for crash recovery
+   * Get all unrecovered deaths for crash recovery
    *
    * Called during server startup to find deaths that weren't properly
    * processed (server crashed during death sequence). These need to have
@@ -297,7 +297,7 @@ export class DeathRepository extends BaseRepository {
   }
 
   /**
-   * P0-003: Mark a death as recovered after crash recovery processing
+   * Mark a death as recovered after crash recovery processing
    *
    * Called after successfully recreating gravestones/ground items during
    * server startup recovery. This prevents duplicate recovery on subsequent restarts.
@@ -321,7 +321,7 @@ export class DeathRepository extends BaseRepository {
   }
 
   /**
-   * P0-005: Atomic death lock acquisition (check-and-create)
+   * Atomic death lock acquisition (check-and-create)
    *
    * Atomically checks if a player already has a death lock and creates one if not.
    * This prevents race conditions where a player could die multiple times simultaneously.

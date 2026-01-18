@@ -27,7 +27,7 @@ const ALPHABET =
 export const uuid = customAlphabet(ALPHABET, 10);
 
 /**
- * P0-002: Generate unique transaction ID for loot operations
+ * Generate unique transaction ID for loot operations
  *
  * Used for tracking loot requests between client and server.
  * Enables shadow state confirmation/rollback on client.

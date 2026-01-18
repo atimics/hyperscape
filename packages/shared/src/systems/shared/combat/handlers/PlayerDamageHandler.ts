@@ -71,7 +71,7 @@ export class PlayerDamageHandler implements DamageHandler {
 
     const targetIdStr = String(targetId);
 
-    // DS-H09: Validate attacker exists before applying damage
+    // Validate attacker exists before applying damage
     // This prevents spoofed damage from non-existent attackers
     const attacker = this.world.entities.get(String(attackerId));
     if (!attacker) {

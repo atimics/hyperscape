@@ -334,7 +334,7 @@ export class InventorySystem extends SystemBase {
       return false;
     }
 
-    // DS-C07: Block item adds during death state (prevents race condition)
+    // Block item adds during death state (prevents race condition)
     // When a player dies, items picked up between inventory snapshot and clear
     // would persist after respawn. Block all adds while player is dying/dead.
     if (this.isPlayerInDeathState(data.playerId)) {
@@ -1634,7 +1634,7 @@ export class InventorySystem extends SystemBase {
   }
 
   /**
-   * DS-C07: Check if player is in death state (DYING or DEAD).
+   * Check if player is in death state (DYING or DEAD).
    *
    * Used to block item additions during death processing, which prevents
    * a race condition where items picked up between inventory snapshot

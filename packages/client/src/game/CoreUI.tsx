@@ -349,16 +349,16 @@ function DeathScreen({
   data: { message: string; killedBy: string; respawnTime: number };
   world: ClientWorld;
 }) {
-  // DS-C07: Track respawn state to prevent button spam
+  // Track respawn state to prevent button spam
   const [isRespawning, setIsRespawning] = useState(false);
-  // DS-H12: Track if respawn request timed out
+  // Track if respawn request timed out
   const [respawnTimedOut, setRespawnTimedOut] = useState(false);
-  // DS-H13: Death countdown timer - seconds until items despawn
+  // Death countdown timer - seconds until items despawn
   const [countdown, setCountdown] = useState<number>(
     Math.max(0, Math.floor((data.respawnTime - Date.now()) / 1000)),
   );
 
-  // DS-H12: Timeout handler - re-enable button if server doesn't respond
+  // Timeout handler - re-enable button if server doesn't respond
   const RESPAWN_TIMEOUT_MS = 10000; // 10 seconds
 
   useEffect(() => {
@@ -373,7 +373,7 @@ function DeathScreen({
     return () => clearTimeout(timeoutId);
   }, [isRespawning]);
 
-  // DS-H13: Update countdown every second
+  // Update countdown every second
   useEffect(() => {
     const intervalId = setInterval(() => {
       const remaining = Math.max(
@@ -386,7 +386,7 @@ function DeathScreen({
     return () => clearInterval(intervalId);
   }, [data.respawnTime]);
 
-  // DS-H13: Format countdown as mm:ss
+  // Format countdown as mm:ss
   const formatCountdown = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -460,7 +460,7 @@ function DeathScreen({
               Respawn request timed out. Please try again.
             </div>
           )}
-          {/* DS-H13: Death countdown timer */}
+          {/* Death countdown timer */}
           <div className="text-sm text-center max-w-sm">
             {countdown > 0 ? (
               <>

@@ -135,7 +135,7 @@ export { WeaponType, EquipmentSlotName } from "./types/core/core";
 // Export DeathState enum for death/respawn system
 export { DeathState } from "./types/entities/entities";
 
-// Export death/loot types for shadow state and transaction tracking (P0-002, P0-006)
+// Export death/loot types for shadow state and transaction tracking
 export type {
   LootResult,
   LootFailureReason,

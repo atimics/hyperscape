@@ -72,7 +72,7 @@ export class WildernessDeathHandler {
       return;
     }
 
-    // DS-C03/DS-C04: Spawn ground items with transaction-aware error handling
+    // Spawn ground items with transaction-aware error handling
     // Uses ms values for GroundItemOptions, internally converted to ticks by GroundItemSystem
     // If throwOnFailure is true, batch spawn will auto-rollback on any failure
     const groundItemIds = await this.groundItemManager.spawnGroundItems(
@@ -85,7 +85,7 @@ export class WildernessDeathHandler {
         scatter: true,
         scatterRadius: 3.0, // Wider scatter in wilderness
       },
-      !!tx, // DS-C03: throwOnFailure=true when in transaction
+      !!tx, // throwOnFailure=true when in transaction
     );
 
     if (groundItemIds.length === 0) {
@@ -98,10 +98,10 @@ export class WildernessDeathHandler {
       return;
     }
 
-    // DS-C04: Wrap death lock creation in try-catch to clean up ground items on failure
+    // Wrap death lock creation in try-catch to clean up ground items on failure
     try {
       // Create death lock in database (with transaction if provided)
-      // P0-003: Include items and killedBy for crash recovery
+      // Include items and killedBy for crash recovery
       await this.deathStateManager.createDeathLock(
         playerId,
         {
@@ -122,7 +122,7 @@ export class WildernessDeathHandler {
         `[WildernessDeathHandler] Spawned ${groundItemIds.length} ground items for ${playerId} in ${zoneType}`,
       );
     } catch (error) {
-      // DS-C04: Death lock creation failed - rollback spawned ground items
+      // Death lock creation failed - rollback spawned ground items
       console.error(
         `[WildernessDeathHandler] Death lock creation failed for ${playerId}, rolling back ${groundItemIds.length} ground items`,
       );

@@ -58,7 +58,7 @@ import type {
 } from "../../database/repositories/DeathRepository";
 
 /**
- * P1-001: Transaction isolation levels for database operations
+ * Transaction isolation levels for database operations
  *
  * - 'read committed' (default): Prevents dirty reads
  * - 'repeatable read': Prevents dirty reads and non-repeatable reads
@@ -240,7 +240,7 @@ export class DatabaseSystem extends SystemBase {
    * CRITICAL FOR SECURITY: Prevents partial database states that can lead to
    * item duplication or item loss (e.g., inventory cleared but gravestone not spawned).
    *
-   * P1-001: Added isolationLevel option for stricter transaction guarantees.
+   * Added isolationLevel option for stricter transaction guarantees.
    * Use 'serializable' for death processing to prevent race conditions.
    *
    * @param callback - Async function that receives transaction context
@@ -274,7 +274,7 @@ export class DatabaseSystem extends SystemBase {
       );
     }
 
-    // P1-001: Use specified isolation level, or default to 'read committed'
+    // Use specified isolation level, or default to 'read committed'
     return this.db.transaction(callback, {
       isolationLevel: options?.isolationLevel ?? "read committed",
     });
@@ -737,7 +737,7 @@ export class DatabaseSystem extends SystemBase {
    *
    * CRITICAL FOR SECURITY: Prevents item duplication on server restart!
    *
-   * P0-003: Now includes items array for crash recovery.
+   * Now includes items array for crash recovery.
    *
    * @param data - Death lock data including items for recovery
    * @param tx - Optional transaction context for atomic operations
@@ -758,7 +758,7 @@ export class DatabaseSystem extends SystemBase {
    * Delegates to DeathRepository
    *
    * Returns null if no active death lock exists (player is alive).
-   * P0-003: Now includes items, killedBy, recovered fields.
+   * Now includes items, killedBy, recovered fields.
    */
   async getDeathLockAsync(playerId: string): Promise<DeathLockData | null> {
     if (!this.deathRepository) {
@@ -787,7 +787,7 @@ export class DatabaseSystem extends SystemBase {
    * Delegates to DeathRepository
    *
    * Used for server restart recovery to restore gravestones/ground items.
-   * P0-003: Now includes items, killedBy, recovered fields.
+   * Now includes items, killedBy, recovered fields.
    */
   async getAllActiveDeathsAsync(): Promise<DeathLockData[]> {
     if (!this.deathRepository) {
@@ -815,7 +815,7 @@ export class DatabaseSystem extends SystemBase {
   }
 
   /**
-   * P0-003: Get all unrecovered deaths for crash recovery
+   * Get all unrecovered deaths for crash recovery
    * Delegates to DeathRepository
    *
    * Called during server startup to find deaths that need their
@@ -834,7 +834,7 @@ export class DatabaseSystem extends SystemBase {
   }
 
   /**
-   * P0-003: Mark a death as recovered after crash recovery processing
+   * Mark a death as recovered after crash recovery processing
    * Delegates to DeathRepository
    *
    * Called after successfully recreating gravestones/ground items.
@@ -850,7 +850,7 @@ export class DatabaseSystem extends SystemBase {
   }
 
   /**
-   * P0-005: Atomically acquire a death lock (check-and-create)
+   * Atomically acquire a death lock (check-and-create)
    * Delegates to DeathRepository
    *
    * Prevents race conditions where a player could die multiple times.

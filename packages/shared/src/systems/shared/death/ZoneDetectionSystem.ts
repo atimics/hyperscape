@@ -20,10 +20,10 @@ import type { WorldArea } from "../../../types/core/core";
 export class ZoneDetectionSystem extends SystemBase {
   // Cache zone lookups (key: "x,z", value: ZoneProperties)
   private zoneCache = new Map<string, ZoneProperties>();
-  // DS-C09: Reduced from 10 to 2 to prevent boundary misclassification
+  // Reduced from 10 to 2 to prevent boundary misclassification
   // Smaller grid = more cache misses but correct results near boundaries
   private readonly CACHE_GRID_SIZE = 2;
-  // DS-C09: Track zone boundaries for cache invalidation near edges
+  // Track zone boundaries for cache invalidation near edges
   private zoneBoundaries: Array<{
     minX: number;
     maxX: number;
@@ -43,14 +43,14 @@ export class ZoneDetectionSystem extends SystemBase {
   }
 
   async init(): Promise<void> {
-    // DS-C09: Build zone boundaries list for cache invalidation
+    // Build zone boundaries list for cache invalidation
     this.buildBoundariesList();
     // Pre-warm cache for known areas
     this.prewarmCache();
   }
 
   /**
-   * DS-C09: Build list of zone boundaries for cache proximity checking
+   * Build list of zone boundaries for cache proximity checking
    */
   private buildBoundariesList(): void {
     this.zoneBoundaries = [];
@@ -72,7 +72,7 @@ export class ZoneDetectionSystem extends SystemBase {
   }
 
   /**
-   * DS-C09: Check if position is near any zone boundary
+   * Check if position is near any zone boundary
    * If so, we should skip caching to avoid misclassification
    */
   private isNearBoundary(x: number, z: number): boolean {
@@ -135,10 +135,10 @@ export class ZoneDetectionSystem extends SystemBase {
 
   /**
    * Get complete zone properties (cached)
-   * DS-C09: Skip caching near zone boundaries to prevent misclassification
+   * Skip caching near zone boundaries to prevent misclassification
    */
   getZoneProperties(position: { x: number; z: number }): ZoneProperties {
-    // DS-C09: Don't cache near boundaries to prevent misclassification
+    // Don't cache near boundaries to prevent misclassification
     const nearBoundary = this.isNearBoundary(position.x, position.z);
 
     if (!nearBoundary) {
@@ -173,7 +173,7 @@ export class ZoneDetectionSystem extends SystemBase {
     for (const area of Object.values(ALL_WORLD_AREAS) as WorldArea[]) {
       if (area.bounds) {
         const { minX, maxX, minZ, maxZ } = area.bounds;
-        // DS-C08: Use exclusive left boundary to prevent position matching multiple zones
+        // Use exclusive left boundary to prevent position matching multiple zones
         // A position exactly on the boundary belongs to the zone on the RIGHT (higher values)
         if (
           position.x > minX &&
@@ -238,7 +238,7 @@ export class ZoneDetectionSystem extends SystemBase {
       };
     }
 
-    // DS-H15: Default unknown areas to UNKNOWN type (treated as wilderness for death mechanics)
+    // Default unknown areas to UNKNOWN type (treated as wilderness for death mechanics)
     // This is the conservative approach for death system - prevents exploits in undefined areas
     // Items will drop on death, incentivizing proper zone definition
     return {

@@ -5,15 +5,11 @@
  * - In-memory cache for fast access (client & server)
  * - Database persistence for durability (server only)
  *
- * CRITICAL FOR SECURITY:
  * Database persistence prevents item duplication on server restart/crash.
  * If server restarts mid-death, the death lock in DB prevents re-spawning items.
  *
- * P0-004: Database-first write order (write DB before memory)
- * P0-005: Server startup death recovery (recoverUnfinishedDeaths in init)
- *
  * NOTE: This is just for tracking - gravestone/ground items are regular
- * world entities that persist via the entity system (like RuneScape).
+ * world entities that persist via the entity system.
  */
 
 import type { World } from "../../../core/World";
@@ -26,32 +22,19 @@ import type { InventoryItem } from "../../../types/core/core";
 import type { EntityManager } from "..";
 import { EventType } from "../../../types/events";
 
-/**
- * P3-009: Debug logging flag for death state manager
- * Set to true to enable verbose logging during development
- */
 const DEBUG_DEATH_STATE = false;
 
-/** P3-009: Conditional debug logging */
 function debugLog(message: string, ...args: unknown[]): void {
   if (DEBUG_DEATH_STATE) {
     console.log(message, ...args);
   }
 }
 
-/**
- * P0-003: Death item data for crash recovery
- */
 interface DeathItemData {
   itemId: string;
   quantity: number;
 }
 
-/**
- * P0-003: Full death lock data including crash recovery fields
- * Note: Uses `undefined` instead of `null` for optional fields to match DeathLock interface
- * Note: zoneType uses ZoneType enum to match DeathLock interface
- */
 interface DeathLockData {
   playerId: string;
   gravestoneId: string | undefined;
@@ -77,10 +60,8 @@ type DatabaseSystem = {
     playerId: string,
     groundItemIds: string[],
   ) => Promise<void>;
-  // P0-005: Crash recovery methods
   getUnrecoveredDeathsAsync: () => Promise<DeathLockData[]>;
   markDeathRecoveredAsync: (playerId: string) => Promise<void>;
-  // DS-C06: Atomic death lock acquisition (prevents race conditions)
   acquireDeathLockAsync: (
     data: DeathLockData,
     tx?: TransactionContext,
@@ -90,13 +71,11 @@ type DatabaseSystem = {
 /**
  * DeathStateManager - Manages player death state with dual persistence
  *
- * P2-016: Comprehensive JSDoc documentation for public API
- *
  * Key responsibilities:
  * - Track active player deaths in-memory for fast access
  * - Persist death locks to database for crash recovery (server only)
- * - Recover unfinished deaths after server restart (P0-005)
- * - Prevent duplicate death processing (DS-H02)
+ * - Recover unfinished deaths after server restart
+ * - Prevent duplicate death processing
  *
  * @example
  * ```typescript
@@ -125,7 +104,6 @@ export class DeathStateManager {
   /** In-memory cache for fast death lock lookups (both client and server) */
   private activeDeaths = new Map<string, DeathLock>();
 
-  /** P1-010: Handler reference for cleanup on destroy */
   private readonly handlePlayerUnregistered = (event: unknown): void => {
     // Type guard: validate payload structure
     if (!event || typeof event !== "object" || !("id" in event)) {
@@ -164,7 +142,6 @@ export class DeathStateManager {
           "[DeathStateManager] ⚠️ DatabaseSystem not available - running without persistence!",
         );
       }
-      // P1-010: Subscribe to player disconnect for death lock cleanup
       this.world.on(
         EventType.PLAYER_UNREGISTERED,
         this.handlePlayerUnregistered,
@@ -175,26 +152,20 @@ export class DeathStateManager {
   }
 
   /**
-   * Start - called after all systems are initialized
-   * P0-005: Recovers unfinished deaths from previous server session
-   *
-   * This is separate from init() because DatabaseSystem must complete its init()
-   * before we can query for unrecovered deaths. By deferring to start(), we ensure
-   * all system init() calls have completed.
+   * Start - called after all systems are initialized.
+   * Recovers unfinished deaths from previous server session.
    */
   async start(): Promise<void> {
     console.log(
       `[DeathStateManager] start() called - isServer: ${this.world.isServer}, hasDB: ${!!this.databaseSystem}`,
     );
     if (this.world.isServer && this.databaseSystem) {
-      // P0-005: CRITICAL - Recover unfinished deaths from previous server session
-      // This prevents item loss when server crashes during death handling
       await this.recoverUnfinishedDeaths();
     }
   }
 
   /**
-   * P1-010: Clean up death lock when player disconnects
+   * Clean up death lock from memory when player disconnects.
    *
    * When a player disconnects mid-death, we keep the death lock in the database
    * but clear it from memory. This allows:
@@ -215,12 +186,12 @@ export class DeathStateManager {
     this.activeDeaths.delete(playerId);
 
     console.log(
-      `[DeathStateManager] P1-010: Cleared death lock from memory for disconnected player ${playerId} (preserved in database for reconnect)`,
+      `[DeathStateManager] Cleared death lock from memory for disconnected player ${playerId} (preserved in database for reconnect)`,
     );
   }
 
   /**
-   * P0-005: Recover unfinished deaths from database after server restart
+   * Recover unfinished deaths from database after server restart
    *
    * CRITICAL: Prevents item loss when server crashes during death handling.
    *
@@ -271,7 +242,7 @@ export class DeathStateManager {
   }
 
   /**
-   * P0-005: Recover a single unfinished death
+   * Recover a single unfinished death
    *
    * Checks if entities still exist, recreates if necessary, marks as recovered.
    */
@@ -380,8 +351,8 @@ export class DeathStateManager {
 
   /**
    * Track a player death (for cleanup purposes)
-   * P0-004: Database-first write order - stores in database BEFORE memory
-   * DS-C06: Uses atomic acquisition to prevent race conditions
+   * Database-first write order - stores in database BEFORE memory
+   * Uses atomic acquisition to prevent race conditions
    *
    * @param playerId - The player who died
    * @param options - Death lock options (gravestone ID, ground items, position, etc.)
@@ -396,7 +367,7 @@ export class DeathStateManager {
       position: { x: number; y: number; z: number };
       zoneType: ZoneType;
       itemCount: number;
-      // P0-003: Crash recovery fields
+      // Crash recovery fields
       items?: Array<{ itemId: string; quantity: number }>;
       killedBy?: string;
     },
@@ -410,7 +381,7 @@ export class DeathStateManager {
       return false;
     }
 
-    // DS-H02: Fast path - check memory first to avoid DB round-trip
+    // Fast path - check memory first to avoid DB round-trip
     if (this.activeDeaths.has(playerId)) {
       console.warn(
         `[DeathStateManager] Death lock already exists in memory for ${playerId} - rejecting duplicate`,
@@ -428,13 +399,13 @@ export class DeathStateManager {
       timestamp,
       zoneType: options.zoneType,
       itemCount: options.itemCount,
-      // P0-003: Crash recovery fields
+      // Crash recovery fields
       items: options.items || [],
       killedBy: options.killedBy || "unknown",
       recovered: false, // New deaths are not yet recovered
     };
 
-    // DS-C06: Use ATOMIC acquisition to prevent race conditions
+    // Use ATOMIC acquisition to prevent race conditions
     // This uses INSERT ... ON CONFLICT DO NOTHING with RETURNING
     // If another request already inserted a death lock, this returns false
     if (this.databaseSystem) {
@@ -470,7 +441,7 @@ export class DeathStateManager {
         if (tx) {
           throw error;
         }
-        // P0-004: If DB write fails and not in transaction, still update memory
+        // If DB write fails and not in transaction, still update memory
         // but log warning that crash recovery won't work
         console.warn(
           `[DeathStateManager] ⚠️ Death lock for ${playerId} only in memory - crash recovery won't work!`,
@@ -478,7 +449,7 @@ export class DeathStateManager {
       }
     }
 
-    // P0-004: Update memory AFTER successful database write (or if no DB system)
+    // Update memory AFTER successful database write (or if no DB system)
     // Include crash recovery fields for proper item tracking
     const deathData: DeathLock = {
       playerId,
@@ -742,10 +713,10 @@ export class DeathStateManager {
 
   /**
    * Clean up event listeners and clear memory
-   * P1-010: Unsubscribe from player disconnect events
+   * Unsubscribe from player disconnect events
    */
   destroy(): void {
-    // P1-010: Unsubscribe from player disconnect events
+    // Unsubscribe from player disconnect events
     this.world.off(
       EventType.PLAYER_UNREGISTERED,
       this.handlePlayerUnregistered,

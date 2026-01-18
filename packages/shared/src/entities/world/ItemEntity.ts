@@ -323,7 +323,7 @@ export class ItemEntity extends InteractableEntity {
   }
 
   private checkDespawn(): void {
-    // DS-H05: Skip native despawn for items managed by GroundItemSystem
+    // Skip native despawn for items managed by GroundItemSystem
     // GroundItemSystem uses tick-based despawn which is more accurate (OSRS-style)
     // Only run native despawn for world spawn items (from ItemSpawnerSystem)
     if (this.id.startsWith("ground_item_")) {
@@ -336,7 +336,7 @@ export class ItemEntity extends InteractableEntity {
     const despawnTime =
       this.getProperty("spawnTime", this.world.getTime()) + 10 * 60 * 1000;
     if (this.world.getTime() > despawnTime) {
-      // DS-C11: Use EntityManager.destroyEntity for proper network notification
+      // Use EntityManager.destroyEntity for proper network notification
       // Direct this.destroy() skips the entityRemoved packet to clients
       const entityManager = this.world.getSystem("entity-manager") as {
         destroyEntity?: (id: string) => void;

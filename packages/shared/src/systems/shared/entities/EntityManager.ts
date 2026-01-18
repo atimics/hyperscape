@@ -506,7 +506,7 @@ export class EntityManager extends SystemBase {
     this.world.entities.set(config.id, entity);
 
     // Broadcast entityAdded to all clients (server-only)
-    // DS-C10: Single broadcast point to prevent duplicate packets
+    // Single broadcast point to prevent duplicate packets
     if (this.world.isServer) {
       const network = this.world.network;
       if (network && typeof network.send === "function") {
@@ -565,7 +565,7 @@ export class EntityManager extends SystemBase {
         }
       }
 
-      // DS-H18: Emit destroy event BEFORE removing entity from tracking
+      // Emit destroy event BEFORE removing entity from tracking
       // This allows event handlers to still look up the entity if needed
       this.emitTypedEvent(EventType.ENTITY_DEATH, {
         entityId,

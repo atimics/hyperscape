@@ -385,7 +385,7 @@ export class Entity implements IEntity {
     // Initialize common components
     this.initializeRPGComponents();
 
-    // DS-H16: Removed duplicate entityAdded broadcast
+    // Removed duplicate entityAdded broadcast
     // EntityManager.spawnEntity() is the single source of truth for entity broadcasts
     // This prevents duplicate packets when entities are spawned via EntityManager
   }

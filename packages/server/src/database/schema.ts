@@ -728,7 +728,7 @@ export const playerDeaths = pgTable(
     timestamp: bigint("timestamp", { mode: "number" }).notNull(),
     zoneType: text("zoneType").notNull(), // "safe_area" | "wilderness" | "pvp_zone"
     itemCount: integer("itemCount").default(0).notNull(),
-    // P0-003: Crash recovery columns
+    // Crash recovery columns
     items: jsonb("items")
       .default(sql`'[]'::jsonb`)
       .notNull(), // Array of {itemId, quantity} for recovery

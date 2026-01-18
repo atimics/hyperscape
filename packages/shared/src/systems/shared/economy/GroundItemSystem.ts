@@ -50,14 +50,14 @@ export class GroundItemSystem extends SystemBase {
   private readonly _expiredItemsBuffer: string[] = [];
 
   /**
-   * DS-C05: Pickup locks to prevent concurrent pickup race condition
+   * Pickup locks to prevent concurrent pickup race condition
    * Key: entityId, Value: playerId who is currently picking up
    * Lock is held for the duration of the pickup operation
    */
   private pickupLocks = new Map<string, string>();
 
   /**
-   * DS-C05: Pickup lock timeout (5 seconds) to prevent stuck locks
+   * Pickup lock timeout (5 seconds) to prevent stuck locks
    * If a pickup doesn't complete within this time, the lock is auto-released
    */
   private pickupLockTimestamps = new Map<string, number>();
@@ -373,7 +373,7 @@ export class GroundItemSystem extends SystemBase {
   /**
    * Spawn multiple ground items at a position (batch operation)
    *
-   * DS-C03: Implements atomic batch spawn with rollback on failure.
+   * Implements atomic batch spawn with rollback on failure.
    * If ANY item fails to spawn, ALL previously spawned items are cleaned up
    * and an empty array is returned (or error thrown if throwOnFailure is true).
    *
@@ -427,14 +427,14 @@ export class GroundItemSystem extends SystemBase {
       if (entityId) {
         entityIds.push(entityId);
       } else {
-        // DS-C03: Track failure for rollback
+        // Track failure for rollback
         failedIndex = i;
         failedItem = item;
         break; // Stop spawning on first failure
       }
     }
 
-    // DS-C03: Rollback all spawned items if ANY spawn failed
+    // Rollback all spawned items if ANY spawn failed
     if (failedIndex >= 0) {
       console.error(
         `[GroundItemSystem] Batch spawn failed at index ${failedIndex} (${failedItem?.itemId}). Rolling back ${entityIds.length} spawned items.`,
@@ -445,7 +445,7 @@ export class GroundItemSystem extends SystemBase {
         this.removeGroundItem(entityId);
       }
 
-      // DS-C04: Throw error for transaction rollback if requested
+      // Throw error for transaction rollback if requested
       if (throwOnFailure) {
         throw new Error(
           `Failed to spawn ground item ${failedItem?.itemId} at index ${failedIndex}`,
@@ -463,7 +463,7 @@ export class GroundItemSystem extends SystemBase {
   }
 
   /**
-   * DS-C04: Rollback spawned ground items (for transaction failure cleanup)
+   * Rollback spawned ground items (for transaction failure cleanup)
    *
    * Removes all ground items with the given IDs. Call this if a transaction
    * fails after ground items were already spawned.
@@ -537,7 +537,7 @@ export class GroundItemSystem extends SystemBase {
    * Handles both tracked items (spawned via GroundItemSystem) and untracked items
    */
   removeGroundItem(itemId: string): boolean {
-    // DS-C05: Clear any pickup lock on this item
+    // Clear any pickup lock on this item
     this.pickupLocks.delete(itemId);
     this.pickupLockTimestamps.delete(itemId);
 
@@ -634,8 +634,8 @@ export class GroundItemSystem extends SystemBase {
    * - Private phase (0-100 ticks): Only dropper/killer sees item
    * - Public phase (100-200 ticks): Everyone sees item
    *
-   * NOTE: Currently used for validation. Full visual filtering requires
-   * network layer changes (see GROUND_ITEM_IMPLEMENTATION_PLAN.md Phase 5).
+   * NOTE: Currently used for server-side validation only. Full visual filtering
+   * on the client would require network layer changes to filter items per-player.
    */
   isVisibleTo(itemId: string, playerId: string, currentTick: number): boolean {
     const itemData = this.groundItems.get(itemId);
@@ -660,7 +660,7 @@ export class GroundItemSystem extends SystemBase {
    * since they have no loot protection to enforce.
    *
    * NOTE: This only checks loot protection. Use tryAcquirePickupLock() to also
-   * prevent concurrent pickup race conditions (DS-C05).
+   * prevent concurrent pickup race conditions.
    */
   canPickup(itemId: string, playerId: string, currentTick: number): boolean {
     const itemData = this.groundItems.get(itemId);
@@ -680,7 +680,7 @@ export class GroundItemSystem extends SystemBase {
   }
 
   /**
-   * DS-C05: Try to acquire a pickup lock for an item
+   * Try to acquire a pickup lock for an item
    *
    * This prevents the concurrent pickup race condition where two players
    * both check canPickup() → true and then both pick up the same item.
@@ -726,7 +726,7 @@ export class GroundItemSystem extends SystemBase {
   }
 
   /**
-   * DS-C05: Release a pickup lock
+   * Release a pickup lock
    *
    * Call this after pickup completes (success or failure) to allow
    * other players to attempt pickup.
@@ -748,7 +748,7 @@ export class GroundItemSystem extends SystemBase {
   }
 
   /**
-   * DS-C05: Check if an item is currently locked for pickup by another player
+   * Check if an item is currently locked for pickup by another player
    */
   isPickupLocked(itemId: string, playerId: string): boolean {
     const existingLock = this.pickupLocks.get(itemId);
@@ -756,7 +756,7 @@ export class GroundItemSystem extends SystemBase {
   }
 
   /**
-   * DS-C05: Clean up stale pickup locks (timed out)
+   * Clean up stale pickup locks (timed out)
    */
   private cleanupStaleLocks(): void {
     const now = Date.now();
@@ -806,7 +806,7 @@ export class GroundItemSystem extends SystemBase {
     this.groundItems.clear();
     this.groundItemPiles.clear();
 
-    // DS-C05: Clear all pickup locks
+    // Clear all pickup locks
     this.pickupLocks.clear();
     this.pickupLockTimestamps.clear();
 

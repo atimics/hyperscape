@@ -88,7 +88,7 @@ export {
 // Export ID generation utilities (for transaction tracking, etc.)
 export { generateTransactionId } from "./utils/IdGenerator";
 
-// Export death/loot types for shadow state and transaction tracking (P0-002, P0-006)
+// Export death/loot types for shadow state and transaction tracking
 export type {
   LootResult,
   LootFailureReason,

@@ -78,7 +78,7 @@ export interface DeathLock {
   timestamp: number;
   zoneType: ZoneType;
   itemCount: number;
-  // P0-003: Crash recovery fields (optional for backwards compatibility)
+  // Crash recovery fields (optional for backwards compatibility)
   items?: DeathItemData[]; // Actual item data for recovery
   killedBy?: string; // What killed the player
   recovered?: boolean; // Whether death was processed during crash recovery
@@ -146,7 +146,7 @@ export interface ReconnectValidation {
 }
 
 // =============================================================================
-// P0-002: LOOT RESULT TYPES (Shadow State Support)
+// LOOT RESULT TYPES (Shadow State Support)
 // =============================================================================
 
 /**
@@ -159,7 +159,7 @@ export type LootFailureReason =
   | "GRAVESTONE_GONE" // Gravestone despawned
   | "RATE_LIMITED" // Too many requests
   | "INVALID_REQUEST" // Malformed request
-  | "PLAYER_DYING"; // DS-C07: Player is dying/dead, cannot loot
+  | "PLAYER_DYING"; // Player is dying/dead, cannot loot
 
 /**
  * Loot operation result - sent from server to client
@@ -195,7 +195,7 @@ export interface PendingLootTransaction {
 }
 
 // =============================================================================
-// P0-007: AUDIT LOGGING TYPES
+// AUDIT LOGGING TYPES
 // =============================================================================
 
 /**

@@ -72,8 +72,7 @@ import { generateTransactionId } from "../../utils/IdGenerator";
 import { DeathState } from "../../types/entities";
 
 /**
- * P2-022: Type guard for HeadstoneEntityConfig validation
- * Ensures config has required headstoneData properties before use
+ * Type guard to validate HeadstoneEntityConfig has required properties
  */
 function isValidHeadstoneConfig(
   config: unknown,
@@ -95,7 +94,6 @@ export class HeadstoneEntity extends InteractableEntity {
   private lootRequestHandler?: (data: unknown) => void;
   private lootAllRequestHandler?: (data: unknown) => void;
 
-  // P2-004: Cache headstoneData reference to avoid deep property chains
   private get headstoneData() {
     return this.config.headstoneData;
   }
@@ -105,9 +103,9 @@ export class HeadstoneEntity extends InteractableEntity {
   private lootProtectionUntil: number = 0; // Timestamp when loot protection expires
   private protectedFor?: string; // Player ID who has loot protection (killer in PvP)
 
-  // P1-003: Rate limiting for loot requests
-  private lootRateLimiter = new Map<string, number>(); // playerId → last request timestamp
-  private readonly LOOT_RATE_LIMIT_MS = 100; // 100ms between requests per player
+  // Rate limiting to prevent loot spam
+  private lootRateLimiter = new Map<string, number>();
+  private readonly LOOT_RATE_LIMIT_MS = 100;
 
   constructor(world: World, config: HeadstoneEntityConfig) {
     // Convert HeadstoneEntityConfig to InteractableConfig format
@@ -140,7 +138,7 @@ export class HeadstoneEntity extends InteractableEntity {
         itemId: string;
         quantity: number;
         slot?: number;
-        transactionId?: string; // P0-002: Client-provided transaction ID
+        transactionId?: string;
       };
       if (lootData.corpseId === this.id) {
         this.handleLootRequest(lootData);
@@ -185,14 +183,8 @@ export class HeadstoneEntity extends InteractableEntity {
   }
 
   /**
-   * DS-C07: Check if player is in death state (DYING or DEAD).
-   *
-   * Used to block looting during death animation, which prevents
-   * a race condition where items looted during death would be lost
-   * (removed from gravestone but not added to inventory).
-   *
-   * @param playerId - The player ID to check
-   * @returns true if player is currently dying or dead
+   * Check if player is currently dying or dead.
+   * Blocks looting during death animation to prevent item loss from race conditions.
    */
   private isPlayerInDeathState(playerId: string): boolean {
     // Check player entity's death state (single source of truth)
@@ -263,8 +255,7 @@ export class HeadstoneEntity extends InteractableEntity {
   }
 
   /**
-   * P0-002: Handle loot request with transaction ID for shadow state support
-   * P1-003: Includes rate limiting to prevent spam
+   * Handle a loot request from a player. Rate-limited and queued for atomicity.
    */
   private handleLootRequest(data: {
     playerId: string;
@@ -281,10 +272,9 @@ export class HeadstoneEntity extends InteractableEntity {
       return;
     }
 
-    // P0-002: Generate transactionId if client didn't provide one (backwards compat)
     const transactionId = data.transactionId || generateTransactionId();
 
-    // P1-003: Rate limiting - prevent loot spam
+    // Rate limiting
     const now = Date.now();
     const lastRequest = this.lootRateLimiter.get(data.playerId) || 0;
     if (now - lastRequest < this.LOOT_RATE_LIMIT_MS) {
@@ -302,7 +292,6 @@ export class HeadstoneEntity extends InteractableEntity {
       .then(() => this.processLootRequest({ ...data, transactionId }))
       .catch((error) => {
         console.error(`[HeadstoneEntity] Loot request failed:`, error);
-        // P0-002: Even on error, send rejection so client can rollback
         this.emitLootResult(
           data.playerId,
           transactionId,
@@ -313,9 +302,7 @@ export class HeadstoneEntity extends InteractableEntity {
   }
 
   /**
-   * Process loot request atomically
-   * P0-002: Emits LOOT_RESULT events for shadow state confirmation
-   * Queued to prevent concurrent access and item duplication
+   * Process a loot request atomically. Queued to prevent concurrent access.
    */
   private async processLootRequest(data: {
     playerId: string;
@@ -362,8 +349,7 @@ export class HeadstoneEntity extends InteractableEntity {
       return;
     }
 
-    // DS-C07: Check if player is dying/dead BEFORE removing item
-    // This prevents item loss when looting during death animation
+    // Block looting during death animation to prevent item loss
     if (this.isPlayerInDeathState(playerId)) {
       this.emitLootResult(playerId, transactionId, false, "PLAYER_DYING");
       return;
@@ -413,7 +399,6 @@ export class HeadstoneEntity extends InteractableEntity {
       },
     });
 
-    // P0-002: Emit success result for shadow state confirmation
     this.emitLootResult(
       playerId,
       transactionId,
@@ -423,8 +408,6 @@ export class HeadstoneEntity extends InteractableEntity {
       quantityToLoot,
     );
 
-    // P0-007: Audit log for successful loot
-    // P2-004: Use cached headstoneData getter
     this.world.emit(EventType.AUDIT_LOG, {
       action: "LOOT_SUCCESS",
       playerId: this.headstoneData.playerId, // Owner of gravestone
@@ -495,8 +478,7 @@ export class HeadstoneEntity extends InteractableEntity {
       return;
     }
 
-    // DS-C07: Check if player is dying/dead BEFORE processing loot
-    // This prevents item loss when looting during death animation
+    // Block looting during death animation
     if (this.isPlayerInDeathState(playerId)) {
       this.emitLootResult(playerId, transactionId, false, "PLAYER_DYING");
       return;
@@ -626,7 +608,7 @@ export class HeadstoneEntity extends InteractableEntity {
   }
 
   /**
-   * P0-002: Emit loot result to client for shadow state resolution
+   * Send loot result to client for UI feedback and state resolution
    */
   private emitLootResult(
     playerId: string,
@@ -657,8 +639,6 @@ export class HeadstoneEntity extends InteractableEntity {
     // Also emit event for any listeners
     this.world.emit(EventType.LOOT_RESULT, { playerId, ...result });
 
-    // P0-007: Audit log for failed loot attempts
-    // P2-004: Use cached headstoneData getter
     if (!success) {
       this.world.emit(EventType.AUDIT_LOG, {
         action: "LOOT_FAILED",
@@ -697,8 +677,6 @@ export class HeadstoneEntity extends InteractableEntity {
     mesh.receiveShadow = true;
     this.mesh = mesh;
 
-    // Set up userData
-    // P2-004: Use cached headstoneData getter
     const hd = this.headstoneData;
     mesh.userData = {
       type: "corpse",
@@ -730,9 +708,6 @@ export class HeadstoneEntity extends InteractableEntity {
   private createNameLabel(): void {
     if (!this.mesh || this.world.isServer) return;
 
-    // Name stored in userData for right-click menu display (OSRS pattern)
-    // Overhead nametags removed for accuracy
-    // P2-004: Use cached headstoneData getter
     if (this.mesh.userData) {
       const playerName = this.headstoneData.playerName;
       this.mesh.userData.showLabel = true;
@@ -793,7 +768,6 @@ export class HeadstoneEntity extends InteractableEntity {
     }
 
     // If no items left, mark for despawn
-    // P2-004: Use cached headstoneData getter
     if (this.lootItems.length === 0) {
       this.world.emit(EventType.CORPSE_EMPTY, {
         corpseId: this.id,
@@ -837,16 +811,14 @@ export class HeadstoneEntity extends InteractableEntity {
    */
   getNetworkData(): Record<string, unknown> {
     const baseData = super.getNetworkData();
-    // P2-004: Use cached headstoneData getter
     const hd = this.headstoneData;
     return {
       ...baseData,
       lootItemCount: this.lootItems.length,
-      lootItems: this.lootItems, // CRITICAL: Send actual items to client for LootWindow
+      lootItems: this.lootItems,
       despawnTime: hd.despawnTime,
       playerId: hd.playerId,
       deathMessage: hd.deathMessage,
-      // P1-020: Sync loot protection timer to client
       lootProtectionUntil: this.lootProtectionUntil,
       protectedFor: this.protectedFor,
     };
@@ -858,7 +830,6 @@ export class HeadstoneEntity extends InteractableEntity {
    */
   serialize(): EntityData {
     const baseData = super.serialize();
-    // P2-004: Use cached headstoneData getter for cleaner code
     const hd = this.headstoneData;
     return {
       ...baseData,
@@ -868,16 +839,14 @@ export class HeadstoneEntity extends InteractableEntity {
         deathTime: hd.deathTime,
         deathMessage: hd.deathMessage,
         position: hd.position,
-        items: this.lootItems, // CRITICAL: Include actual loot items for client
+        items: this.lootItems,
         itemCount: this.lootItems.length,
         despawnTime: hd.despawnTime,
-        // P1-020: Sync loot protection timer to client
         lootProtectionUntil: this.lootProtectionUntil,
         protectedFor: this.protectedFor,
       },
-      lootItems: this.lootItems, // Also include at root level for easy access
+      lootItems: this.lootItems,
       lootItemCount: this.lootItems.length,
-      // P1-020: Also at root level for easy access
       lootProtectionUntil: this.lootProtectionUntil,
       protectedFor: this.protectedFor,
     } as unknown as EntityData;
@@ -886,10 +855,6 @@ export class HeadstoneEntity extends InteractableEntity {
   protected serverUpdate(deltaTime: number): void {
     super.serverUpdate(deltaTime);
 
-    // Check if corpse should despawn
-    // P2-004: Use cached headstoneData getter
-    // DS-C08: Use Date.now() for comparison since despawnTime is set using Date.now()
-    // (world.getTime() returns seconds since world start, not epoch time)
     if (Date.now() > this.headstoneData.despawnTime) {
       this.world.entities.remove(this.id);
     }
@@ -906,7 +871,6 @@ export class HeadstoneEntity extends InteractableEntity {
   }
 
   public destroy(): void {
-    // Clean up event listeners (P2-028: Prevents memory leak)
     if (this.lootRequestHandler) {
       this.world.off(EventType.CORPSE_LOOT_REQUEST, this.lootRequestHandler);
       this.lootRequestHandler = undefined;
@@ -918,7 +882,6 @@ export class HeadstoneEntity extends InteractableEntity {
       );
       this.lootAllRequestHandler = undefined;
     }
-    // P2-028: Clean up rate limiter map to prevent memory leak
     this.lootRateLimiter.clear();
     super.destroy();
   }

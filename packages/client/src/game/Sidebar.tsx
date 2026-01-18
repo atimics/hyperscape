@@ -67,7 +67,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
     lootItems: InventoryItem[];
   } | null>(null);
 
-  // DS-C07: Track if local player is dead/dying to block loot window
+  // Track if local player is dead/dying to block loot window
   const [isPlayerDead, setIsPlayerDead] = useState(false);
   const isPlayerDeadRef = useRef(false);
 
@@ -433,7 +433,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
         position: { x: number; y: number; z: number };
       };
 
-      // DS-C07: Don't open loot window if player is dying/dead
+      // Don't open loot window if player is dying/dead
       if (isPlayerDeadRef.current) {
         return;
       }
@@ -463,7 +463,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
       });
     };
 
-    // DS-C07: Close loot window when player dies and track death state
+    // Close loot window when player dies and track death state
     // This prevents looting from spawn point after death
     const onPlayerDeath = (raw: unknown) => {
       const data = raw as { playerId: string; isDead: boolean };

@@ -443,7 +443,7 @@ export class EquipmentSystem extends SystemBase {
   }
 
   /**
-   * DS-C02: Save equipment to database with optional transaction context
+   * Save equipment to database with optional transaction context
    *
    * @param playerId - The player ID
    * @param _tx - Optional transaction context for atomic operations (reserved for future use)
@@ -575,7 +575,7 @@ export class EquipmentSystem extends SystemBase {
   }
 
   /**
-   * DS-C01: Atomically clear all equipment and return the items
+   * Atomically clear all equipment and return the items
    *
    * CRITICAL FOR DEATH SYSTEM SECURITY:
    * This method atomically reads AND clears equipment in one operation,
@@ -659,7 +659,7 @@ export class EquipmentSystem extends SystemBase {
       },
     });
 
-    // DS-C02: Save with transaction context for atomicity
+    // Save with transaction context for atomicity
     await this.saveEquipmentToDatabase(playerId, tx);
 
     return clearedItems;

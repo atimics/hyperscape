@@ -8,7 +8,7 @@ import type {
 import { EventType, generateTransactionId, getItem } from "@hyperscape/shared";
 import { ErrorBoundary } from "../../lib/ErrorBoundary";
 
-// P0-006: Timeout for pending loot transactions (3 seconds for better UX)
+// Timeout for pending loot transactions (3 seconds for better UX)
 const LOOT_TRANSACTION_TIMEOUT_MS = 3000;
 
 interface LootWindowProps {
@@ -21,7 +21,7 @@ interface LootWindowProps {
 }
 
 /**
- * P2-018: Internal LootWindow component (wrapped with ErrorBoundary below)
+ * Internal LootWindow component (wrapped with ErrorBoundary below)
  */
 function LootWindowContent({
   visible,
@@ -33,10 +33,10 @@ function LootWindowContent({
 }: LootWindowProps) {
   const [items, setItems] = useState<InventoryItem[]>(lootItems);
 
-  // P1-011: Close confirmation state
+  // Close confirmation state
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
 
-  // P0-006: Shadow state - track pending loot transactions for rollback
+  // Shadow state - track pending loot transactions for rollback
   const [pendingTransactions, setPendingTransactions] = useState<
     Map<string, PendingLootTransaction>
   >(new Map());
@@ -49,7 +49,7 @@ function LootWindowContent({
     setItems(lootItems);
   }, [lootItems, corpseId]);
 
-  // P0-006: Rollback a failed/timed-out transaction
+  // Rollback a failed/timed-out transaction
   const rollbackTransaction = useCallback((transactionId: string) => {
     setPendingTransactions((prev) => {
       const transaction = prev.get(transactionId);
@@ -85,7 +85,7 @@ function LootWindowContent({
     }
   }, []);
 
-  // P0-006: Handle loot result events from server
+  // Handle loot result events from server
   useEffect(() => {
     if (!world.network) return;
 
@@ -162,7 +162,7 @@ function LootWindowContent({
     };
   }, [world, rollbackTransaction]);
 
-  // P0-006: Cleanup timeouts on unmount
+  // Cleanup timeouts on unmount
   useEffect(() => {
     return () => {
       // Clear all pending timeouts
@@ -171,7 +171,7 @@ function LootWindowContent({
     };
   }, []);
 
-  // P1-011: Handle close with confirmation if items remain
+  // Handle close with confirmation if items remain
   const handleCloseClick = useCallback(() => {
     if (items.length > 0) {
       setShowCloseConfirm(true);
@@ -295,10 +295,10 @@ function LootWindowContent({
     const localPlayer = world.getPlayer();
     if (!localPlayer) return;
 
-    // P0-006: Generate transaction ID for shadow state tracking
+    // Generate transaction ID for shadow state tracking
     const transactionId = generateTransactionId();
 
-    // P0-006: Track pending transaction for potential rollback
+    // Track pending transaction for potential rollback
     const pendingTransaction: PendingLootTransaction = {
       transactionId,
       itemId: item.itemId,
@@ -314,7 +314,7 @@ function LootWindowContent({
       return newPending;
     });
 
-    // P0-006: Set timeout for transaction (auto-rollback if no response)
+    // Set timeout for transaction (auto-rollback if no response)
     const timeout = setTimeout(() => {
       console.warn(`[LootWindow] Transaction timed out: ${transactionId}`);
       rollbackTransaction(transactionId);
@@ -336,7 +336,7 @@ function LootWindowContent({
           itemId: item.itemId,
           quantity: item.quantity,
           slot: index,
-          transactionId, // P0-006: Include transaction ID for confirmation
+          transactionId, // Include transaction ID for confirmation
         },
       });
     } else {
@@ -499,7 +499,7 @@ function LootWindowContent({
         </p>
       </div>
 
-      {/* P1-011: Close Confirmation Dialog */}
+      {/* Close Confirmation Dialog */}
       {showCloseConfirm && (
         <div className="absolute inset-0 bg-black/80 flex items-center justify-center rounded-lg z-10">
           <div className="bg-gray-800 border border-yellow-600 rounded-lg p-4 max-w-xs text-center">
@@ -532,7 +532,7 @@ function LootWindowContent({
 }
 
 /**
- * P2-018: LootWindow wrapped with ErrorBoundary for resilience
+ * LootWindow wrapped with ErrorBoundary for resilience
  *
  * If the loot window crashes due to data issues, this prevents
  * the entire game UI from failing. Shows a fallback with close button.

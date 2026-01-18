@@ -63,7 +63,7 @@ export function handleEntityEvent(
       : incoming.payload
   ) as unknown;
   if (!name) return;
-  // P0-001: ALWAYS override playerId with socket.player.id to prevent spoofing
+  // ALWAYS override playerId with socket.player.id to prevent spoofing
   // Previously only added if missing, allowing clients to spoof other player IDs
   const enriched = (() => {
     const payloadObj = payload as Record<string, unknown>;

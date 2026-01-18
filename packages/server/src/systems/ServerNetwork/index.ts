@@ -229,7 +229,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   private worldTimeSyncAccumulator = 0;
   private readonly WORLD_TIME_SYNC_INTERVAL = 5; // seconds
 
-  // === Phase 5.1: Rate Limiting for Processing Requests ===
+  // Rate Limiting for Processing Requests
   /** Rate limiter for processing requests (playerId -> lastRequestTime) */
   private readonly processingRateLimiter = new Map<string, number>();
   /** Minimum time between processing requests (500ms) */
@@ -249,7 +249,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Initialize managers will happen in init() after world.db is set
   }
 
-  // === Phase 5.1: Rate Limiting Helper ===
+  // Rate Limiting Helper
 
   /**
    * Check if a player can make a processing request (rate limiting).
@@ -394,7 +394,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Pending cook manager - server-authoritative tracking of "walk to fire and cook" actions
     // Uses same approach as PendingGatherManager: movePlayerToward with meleeRange=1 for cardinal-only
-    // Phase 4.2: FireRegistry is now injected via constructor (DIP)
+    // FireRegistry is now injected via constructor (DIP)
     const processingSystem = this.world.getSystem("processing") as unknown as {
       getActiveFires: () => Map<
         string,
@@ -712,7 +712,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     );
     this.interactionSessionManager.initialize(this.tickSystem);
 
-    // Store session manager on world so handlers can access it (Phase 6: single source of truth)
+    // Store session manager on world so handlers can access it (single source of truth)
     // This replaces the previous pattern of storing entity IDs on socket properties
     (
       this.world as { interactionSessionManager?: InteractionSessionManager }
@@ -859,7 +859,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const player = socket.player;
       if (!player) return;
 
-      // Phase 5.1: Rate limiting
+      // Rate limiting
       if (!this.canProcessRequest(player.id)) {
         return;
       }
@@ -879,7 +879,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      // Phase 5.2: Validate inventory slot bounds (OSRS inventory is 28 slots: 0-27)
+      // Validate inventory slot bounds (OSRS inventory is 28 slots: 0-27)
       if (
         payload.logsSlot < 0 ||
         payload.logsSlot > 27 ||
@@ -909,7 +909,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const player = socket.player;
       if (!player) return;
 
-      // Phase 5.1: Rate limiting
+      // Rate limiting
       if (!this.canProcessRequest(player.id)) {
         return;
       }
@@ -929,7 +929,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      // Phase 5.2: Validate inventory slot bounds (OSRS inventory is 28 slots: 0-27)
+      // Validate inventory slot bounds (OSRS inventory is 28 slots: 0-27)
       // Note: -1 is allowed as it means "find first cookable item"
       if (payload.rawFoodSlot < -1 || payload.rawFoodSlot > 27) {
         console.warn(
@@ -1309,7 +1309,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onRequestRespawn"] = (socket, _data) => {
       const playerEntity = socket.player;
       if (playerEntity) {
-        // DS-H10: Validate player is actually dead before allowing respawn
+        // Validate player is actually dead before allowing respawn
         // This prevents clients from sending fake respawn requests
         const healthComponent = playerEntity.data?.properties?.healthComponent;
         const isDead = healthComponent?.isDead === true;
@@ -1524,7 +1524,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         this.world,
       );
 
-    // Bank tab handlers (Phase 2)
+    // Bank tab handlers
     this.handlers["onBankCreateTab"] = (socket, data) =>
       handleBankCreateTab(
         socket,
@@ -1542,7 +1542,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         this.world,
       );
 
-    // Bank placeholder handlers (Phase 3 - RS3 style: qty=0 in bank_storage)
+    // Bank placeholder handlers (RS3 style: qty=0 in bank_storage)
     this.handlers["onBankWithdrawPlaceholder"] = (socket, data) =>
       handleBankWithdrawPlaceholder(
         socket,
