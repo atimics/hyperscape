@@ -216,8 +216,12 @@ export class RaycastService {
         if (entityId) {
           const entity = this.world.entities.get(entityId);
           // Skip destroyed entities - they may still be in scene during async cleanup
-          // This is defense-in-depth for the dead mob / item drop overlap issue
           if (entity && !entity.destroyed) {
+            // Skip dead mobs to allow clicking items underneath (Issue #562)
+            if (this.isDeadMob(entity, userData)) {
+              break; // Exit while loop, continue to next intersection
+            }
+
             // Get entity world position using pre-allocated vector
             obj.getWorldPosition(_worldPos);
 
@@ -470,5 +474,45 @@ export class RaycastService {
       width: resolved.x,
       depth: resolved.z,
     };
+  }
+
+  /**
+   * Check if entity is a dead mob that should be skipped during raycasting.
+   *
+   * Dead mobs keep their raycast hitbox in the scene but shouldn't block
+   * interaction with items dropped at their location. This allows players
+   * to click through dead mobs to pick up loot.
+   *
+   * @param entity - The entity to check
+   * @param userData - Object3D userData containing type information
+   * @returns true if entity is a dead mob that should be skipped
+   *
+   * @see Issue #562: Dead mob blocks picking up items until it respawns
+   */
+  private isDeadMob(
+    entity: { type?: string },
+    userData: { type?: string },
+  ): boolean {
+    const entityType = entity.type || userData.type;
+    if (entityType !== "mob") {
+      return false;
+    }
+
+    // Check mob config for death state
+    const mobConfig = (
+      entity as unknown as {
+        config?: { aiState?: string; currentHealth?: number };
+      }
+    ).config;
+
+    if (!mobConfig) {
+      return false;
+    }
+
+    // Mob is dead if aiState is "dead" or health is 0 or below
+    return (
+      mobConfig.aiState === "dead" ||
+      (mobConfig.currentHealth !== undefined && mobConfig.currentHealth <= 0)
+    );
   }
 }
