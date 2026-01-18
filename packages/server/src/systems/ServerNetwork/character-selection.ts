@@ -739,11 +739,13 @@ export async function handleEnterWorld(
     // CRITICAL: Load equipment from DB BEFORE emitting PLAYER_JOINED
     // This ensures EquipmentSystem receives the data via event payload (single source of truth)
     // and eliminates the race condition where two systems query the DB independently
-    let equipmentRows: Array<{
-      slotType: string;
-      itemId: string | null;
-      quantity: number;
-    }> = [];
+    let equipmentRows:
+      | Array<{
+          slotType: string;
+          itemId: string | null;
+          quantity: number;
+        }>
+      | undefined;
     try {
       const dbSys = world.getSystem?.("database") as
         | DatabaseSystemOperations
@@ -754,10 +756,13 @@ export async function handleEnterWorld(
         : [];
     } catch (err) {
       console.error("[CharacterSelection] ❌ Failed to load equipment:", err);
+      // Leave equipmentRows undefined to trigger DB fallback in EquipmentSystem
+      equipmentRows = undefined;
     }
 
     // Emit PLAYER_JOINED with equipment data in payload
     // EquipmentSystem will use this data instead of querying DB again
+    // If equipmentRows is undefined (load failed), EquipmentSystem falls back to DB query
     world.emit(EventType.PLAYER_JOINED, {
       playerId: socket.player.data.id as string,
       player:
@@ -861,7 +866,8 @@ export async function handleEnterWorld(
       } catch {}
 
       // Send equipment to client (using already-loaded data)
-      if (equipmentRows.length > 0) {
+      // Always send, even if empty, so client UI initializes correctly
+      if (equipmentRows) {
         const equipmentData: Record<string, unknown> = {};
         for (const row of equipmentRows) {
           if (row.itemId && row.slotType) {
@@ -880,6 +886,7 @@ export async function handleEnterWorld(
           equipment: equipmentData,
         });
       }
+      // If equipmentRows is undefined (load failed), EquipmentSystem will send after DB fallback
     } catch (_err) {}
   }
 }

@@ -510,11 +510,13 @@ export class EquipmentSystem extends SystemBase {
     // Recalculate stats after loading equipment
     this.recalculateStats(playerId);
 
-    // CRITICAL: Do NOT send to client here - character-selection already sends
-    // equipmentUpdated via sendToFn. This eliminates duplicate network traffic
-    // and prevents race conditions where this message arrives before character data.
+    // CRITICAL: Do NOT send equipmentUpdated here
+    // character-selection.ts already sends it (lines 882-885)
+    // Sending again would cause duplicate network traffic and potential race conditions
 
-    // Emit PLAYER_EQUIPMENT_CHANGED for each slot to update visuals
+    // Emit PLAYER_EQUIPMENT_CHANGED for each slot to update server-side systems
+    // (visual attachment, combat calculations, etc.)
+    // Client receives equipment via equipmentUpdated network message from character-selection
     for (const slotName of EQUIPMENT_SLOT_NAMES) {
       const slot = equipment[slotName] as EquipmentSlot | null;
       const itemId = slot?.itemId ? slot.itemId.toString() : null;
