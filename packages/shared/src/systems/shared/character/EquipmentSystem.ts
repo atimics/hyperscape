@@ -10,7 +10,7 @@
  */
 
 import THREE from "../../../extras/three/three";
-import { EventType } from "../../../types/events";
+import { EventType, type EquipmentSyncData } from "../../../types/events";
 import { dataManager } from "../../../data/DataManager";
 import type { InventorySystem } from "./InventorySystem";
 import { EQUIPMENT_SLOT_NAMES } from "../../../constants/EquipmentConstants";
@@ -171,11 +171,28 @@ export class EquipmentSystem extends SystemBase {
       const typedData = data as { playerId: string };
       this.initializePlayerEquipment({ id: typedData.playerId });
     });
-    // CRITICAL: Must await database load to prevent race condition
-    // where client receives empty equipment before DB load completes
+    // CRITICAL: Equipment is now passed via event payload from character-selection
+    // This eliminates the race condition where two systems query DB independently
     this.subscribe(EventType.PLAYER_JOINED, async (data) => {
-      const typedData = data as { playerId: string };
-      await this.loadEquipmentFromDatabase(typedData.playerId);
+      const typedData = data as {
+        playerId: string;
+        equipment?: EquipmentSyncData[];
+      };
+
+      // Use equipment from payload (single source of truth from character-selection)
+      if (typedData.equipment && typedData.equipment.length > 0) {
+        await this.loadEquipmentFromPayload(
+          typedData.playerId,
+          typedData.equipment,
+        );
+      } else if (typedData.equipment) {
+        // Empty array = new player or cleared equipment, no need to query DB
+        // Just ensure slot visuals are cleared
+        this.emitEmptyEquipmentEvents(typedData.playerId);
+      } else {
+        // Backwards compatibility: no equipment in payload, fall back to DB query
+        await this.loadEquipmentFromDatabase(typedData.playerId);
+      }
     });
     this.subscribe(EventType.PLAYER_RESPAWNED, async (data) => {
       const typedData = data as { playerId: string };
@@ -439,6 +456,86 @@ export class EquipmentSystem extends SystemBase {
           itemId: null, // No equipment - clear visuals
         });
       }
+    }
+  }
+
+  /**
+   * Load equipment from event payload data (single source of truth pattern)
+   *
+   * Called when PLAYER_JOINED event includes equipment data from character-selection.
+   * This eliminates the race condition where EquipmentSystem and character-selection
+   * both query the database independently, potentially causing stale data.
+   *
+   * @param playerId - The player ID
+   * @param equipmentData - Equipment data from event payload
+   */
+  private async loadEquipmentFromPayload(
+    playerId: string,
+    equipmentData: EquipmentSyncData[],
+  ): Promise<void> {
+    const equipment = this.playerEquipment.get(playerId);
+    if (!equipment) {
+      return;
+    }
+
+    // Load equipped items from payload data
+    for (const dbItem of equipmentData) {
+      if (!dbItem.itemId) continue; // Skip null items
+
+      const itemData = this.getItemData(dbItem.itemId);
+      if (itemData && dbItem.slotType) {
+        const slot = equipment[dbItem.slotType as keyof PlayerEquipment];
+        // Strong type assumption - slot is EquipmentSlot if it exists
+        if (
+          slot &&
+          slot !== equipment.playerId &&
+          slot !== equipment.totalStats
+        ) {
+          const equipSlot = slot as EquipmentSlot;
+          // Keep itemId as STRING (matches database format)
+          equipSlot.itemId = dbItem.itemId;
+          equipSlot.item = itemData;
+        }
+      }
+    }
+
+    // Recalculate stats after loading equipment
+    this.recalculateStats(playerId);
+
+    // CRITICAL: Do NOT send equipmentUpdated here
+    // character-selection.ts already sends it (lines 882-885)
+    // Sending again would cause duplicate network traffic and potential race conditions
+
+    // Emit PLAYER_EQUIPMENT_CHANGED for each slot to update server-side systems
+    // (visual attachment, combat calculations, etc.)
+    // Client receives equipment via equipmentUpdated network message from character-selection
+    for (const slotName of EQUIPMENT_SLOT_NAMES) {
+      const slot = equipment[slotName] as EquipmentSlot | null;
+      const itemId = slot?.itemId ? slot.itemId.toString() : null;
+      this.emitTypedEvent(EventType.PLAYER_EQUIPMENT_CHANGED, {
+        playerId: playerId,
+        slot: slotName as EquipmentSlotName,
+        itemId: itemId,
+      });
+    }
+  }
+
+  /**
+   * Emit empty equipment events for a player with no equipment
+   *
+   * Called when PLAYER_JOINED payload contains an empty equipment array,
+   * indicating a new player or a player whose equipment was cleared.
+   *
+   * @param playerId - The player ID
+   */
+  private emitEmptyEquipmentEvents(playerId: string): void {
+    // Emit PLAYER_EQUIPMENT_CHANGED for each slot with null (clear visuals)
+    for (const slotName of EQUIPMENT_SLOT_NAMES) {
+      this.emitTypedEvent(EventType.PLAYER_EQUIPMENT_CHANGED, {
+        playerId: playerId,
+        slot: slotName as EquipmentSlotName,
+        itemId: null,
+      });
     }
   }
 

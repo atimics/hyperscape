@@ -23,6 +23,7 @@ import {
   TerrainSystem,
   Entity,
   World,
+  type EquipmentSyncData,
 } from "@hyperscape/shared";
 
 /**
@@ -736,11 +737,34 @@ export async function handleEnterWorld(
   }, 30000);
 
   if (socket.player) {
+    // CRITICAL: Load equipment from DB BEFORE emitting PLAYER_JOINED
+    // This ensures EquipmentSystem receives the data via event payload (single source of truth)
+    // and eliminates the race condition where two systems query the DB independently
+    let equipmentRows: EquipmentSyncData[] | undefined;
+    try {
+      const dbSys = world.getSystem?.("database") as
+        | DatabaseSystemOperations
+        | undefined;
+      const persistenceId = characterId || socket.player.id;
+      equipmentRows = dbSys?.getPlayerEquipmentAsync
+        ? await dbSys.getPlayerEquipmentAsync(persistenceId)
+        : [];
+    } catch (err) {
+      console.error("[CharacterSelection] ❌ Failed to load equipment:", err);
+      // Leave equipmentRows undefined to trigger DB fallback in EquipmentSystem
+      equipmentRows = undefined;
+    }
+
+    // Emit PLAYER_JOINED with equipment data in payload
+    // EquipmentSystem will use this data instead of querying DB again
+    // If equipmentRows is undefined (load failed), EquipmentSystem falls back to DB query
     world.emit(EventType.PLAYER_JOINED, {
       playerId: socket.player.data.id as string,
       player:
         socket.player as unknown as import("@hyperscape/shared").PlayerLocal,
+      equipment: equipmentRows,
     });
+
     try {
       // Send to everyone else
       sendFn("entityAdded", socket.player.serialize(), socket.id);
@@ -836,40 +860,28 @@ export async function handleEnterWorld(
         });
       } catch {}
 
-      // CRITICAL: Send equipment snapshot immediately from persistence to avoid races
-      // Load equipment BEFORE PLAYER_JOINED event fires to prevent bronze sword bug
-      try {
-        const dbSys = world.getSystem?.("database") as
-          | DatabaseSystemOperations
-          | undefined;
-        const persistenceId = characterId || socket.player.id;
-        const equipmentRows = dbSys?.getPlayerEquipmentAsync
-          ? await dbSys.getPlayerEquipmentAsync(persistenceId)
-          : [];
-
-        if (equipmentRows.length > 0) {
-          const equipmentData: Record<string, unknown> = {};
-          for (const row of equipmentRows) {
-            if (row.itemId && row.slotType) {
-              const itemDef = getItem(String(row.itemId));
-              if (itemDef) {
-                equipmentData[row.slotType] = {
-                  item: itemDef,
-                  itemId: String(row.itemId),
-                };
-              }
+      // Send equipment to client (using already-loaded data)
+      // Always send, even if empty, so client UI initializes correctly
+      if (equipmentRows) {
+        const equipmentData: Record<string, unknown> = {};
+        for (const row of equipmentRows) {
+          if (row.itemId && row.slotType) {
+            const itemDef = getItem(String(row.itemId));
+            if (itemDef) {
+              equipmentData[row.slotType] = {
+                item: itemDef,
+                itemId: String(row.itemId),
+              };
             }
           }
-
-          // Send equipment to client immediately
-          sendToFn(socket.id, "equipmentUpdated", {
-            playerId: socket.player.id,
-            equipment: equipmentData,
-          });
         }
-      } catch (err) {
-        console.error("[CharacterSelection] ❌ Failed to load equipment:", err);
+
+        sendToFn(socket.id, "equipmentUpdated", {
+          playerId: socket.player.id,
+          equipment: equipmentData,
+        });
       }
+      // If equipmentRows is undefined (load failed), EquipmentSystem will send after DB fallback
     } catch (_err) {}
   }
 }
