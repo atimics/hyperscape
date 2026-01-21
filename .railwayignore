@@ -1,0 +1,35 @@
+# Railway ignore file - exclude large directories for faster uploads
+node_modules/
+.git/
+*.log
+dist/
+build/
+coverage/
+.next/
+.nuxt/
+.cache/
+tmp/
+.turbo/
+
+# Large asset directories (served from CDN)
+packages/server/world/assets/
+packages/client/public/assets/
+
+# Test files
+test-results/
+playwright-report/
+
+# Development files
+*.local
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
