@@ -784,6 +784,7 @@ export async function handleEnterWorld(
       player:
         socket.player as unknown as import("@hyperscape/shared").PlayerLocal,
       equipment: equipmentRows,
+      isLoadTestBot,
     });
 
     try {

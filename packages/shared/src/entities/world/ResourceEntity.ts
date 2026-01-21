@@ -558,6 +558,9 @@ export class ResourceEntity extends InteractableEntity {
     rippleSpeed: number;
     rippleCount: number;
   }): void {
+    // Skip animation in headless environments (Node.js)
+    if (typeof requestAnimationFrame === "undefined") return;
+
     const startTime = Date.now();
     const cycleDuration = 2000 / variant.rippleSpeed; // ms per cycle
 

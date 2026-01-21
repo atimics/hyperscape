@@ -1027,19 +1027,21 @@ export class ProcessingSystem extends SystemBase {
     // Set layer 1 for raycasting (entities are on layer 1, matching other entities)
     fireMesh.layers.set(1);
 
-    // Add flickering animation with proper cleanup
+    // Add flickering animation with proper cleanup (browser only)
     let animationFrameId: number | null = null;
 
-    const animate = () => {
-      if (fire.isActive && fire.mesh) {
-        fireMaterial.opacity = 0.6 + Math.sin(Date.now() * 0.01) * 0.2;
-        animationFrameId = requestAnimationFrame(animate);
-      } else {
-        // Animation stopped - null out reference
-        animationFrameId = null;
-      }
-    };
-    animate();
+    if (typeof requestAnimationFrame !== "undefined") {
+      const animate = () => {
+        if (fire.isActive && fire.mesh) {
+          fireMaterial.opacity = 0.6 + Math.sin(Date.now() * 0.01) * 0.2;
+          animationFrameId = requestAnimationFrame(animate);
+        } else {
+          // Animation stopped - null out reference
+          animationFrameId = null;
+        }
+      };
+      animate();
+    }
 
     // Store cancel function on fire object for cleanup in extinguishFire()
     (fire as { cancelAnimation?: () => void }).cancelAnimation = () => {
