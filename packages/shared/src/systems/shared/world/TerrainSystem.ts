@@ -9,7 +9,7 @@ import THREE, {
   vertexColor,
   Fn,
 } from "../../../extras/three/three";
-import { System } from "..";
+import { System } from "../infrastructure/System";
 import { EventType } from "../../../types/events";
 import { NoiseGenerator } from "../../../utils/NoiseGenerator";
 import { InstancedMeshManager } from "../../../utils/rendering/InstancedMeshManager";

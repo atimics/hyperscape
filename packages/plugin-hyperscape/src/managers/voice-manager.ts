@@ -11,7 +11,8 @@ import {
   createUniqueUuid,
   logger,
 } from "@elizaos/core";
-import { HyperscapeService } from "../service";
+import type { HyperscapeService } from "../service";
+import { HYPERSCAPE_SERVICE_NAME } from "../constants";
 import { convertToAudioBuffer } from "../utils";
 
 // Local implementation of getWavHeader
@@ -335,8 +336,6 @@ export class VoiceManager {
   }
 
   private getService() {
-    return this.runtime.getService<HyperscapeService>(
-      HyperscapeService.serviceName,
-    );
+    return this.runtime.getService<HyperscapeService>(HYPERSCAPE_SERVICE_NAME);
   }
 }

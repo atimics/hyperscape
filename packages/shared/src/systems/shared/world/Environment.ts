@@ -1,7 +1,7 @@
 import THREE, { CSMShadowNode } from "../../../extras/three/three";
 
 import { Node as NodeClass } from "../../../nodes/Node";
-import { System } from "..";
+import { System } from "../infrastructure/System";
 
 import { SkySystem } from "..";
 import type {

@@ -11,7 +11,8 @@ import type {
   Component,
   HyperscapeActionDescriptor,
 } from "../types/core-types";
-import { HyperscapeService } from "../service";
+import type { HyperscapeService } from "../service";
+import { HYPERSCAPE_SERVICE_NAME } from "../constants";
 import { World, Entity } from "../types/core-types";
 
 // HyperscapeActionDescriptor is now imported from core-types
@@ -83,7 +84,7 @@ export class DynamicActionLoader {
 
       validate: async (runtime: IAgentRuntime): Promise<boolean> => {
         const service = runtime.getService<HyperscapeService>(
-          HyperscapeService.serviceName,
+          HYPERSCAPE_SERVICE_NAME,
         );
         return !!service && service.isConnected() && !!service.getWorld();
       },
@@ -138,7 +139,7 @@ export class DynamicActionLoader {
       logger.info(`[DynamicAction] Executing ${descriptor.name}`);
 
       const service = runtime.getService<HyperscapeService>(
-        HyperscapeService.serviceName,
+        HYPERSCAPE_SERVICE_NAME,
       )!;
       const world = service.getWorld()!;
 

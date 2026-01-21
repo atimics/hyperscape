@@ -160,11 +160,8 @@ export type Player = import("@hyperscape/shared").Player & {
   modify?: (data: { name?: string; [key: string]: unknown }) => void;
 };
 
-// Export plugin-specific interfaces from core-interfaces
-export type {
-  HyperscapeAction,
-  HyperscapeProvider,
-} from "./core-interfaces.js";
+// Note: HyperscapeAction and HyperscapeProvider are in core-interfaces.ts
+// Import them directly from there to avoid circular dependencies
 
 // Position type (alias for Vector3 for backwards compatibility)
 export type Position = Vector3;

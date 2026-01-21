@@ -1,6 +1,6 @@
 import React from "react";
 import { Save, RefreshCw, Trash2, Key, Eye, EyeOff } from "lucide-react";
-import { Agent } from "../../screens/DashboardScreen";
+import type { Agent } from "./types";
 import { ELIZAOS_API } from "@/lib/api-config";
 
 interface AgentSettingsProps {

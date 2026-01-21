@@ -3,8 +3,8 @@ import { Player, ClientNetwork } from "@hyperscape/shared";
 import { promises as fsPromises } from "fs";
 import path from "path";
 import { NETWORK_CONFIG } from "../config/constants";
-import { EMOTES_LIST } from "../constants";
-import { HyperscapeService } from "../service";
+import { EMOTES_LIST, HYPERSCAPE_SERVICE_NAME } from "../constants";
+import type { HyperscapeService } from "../service";
 import { getModuleDirectory, hashFileBuffer } from "../utils";
 // Unused imports removed per linter
 const _playerEmotes: Record<string, unknown> = {};
@@ -161,8 +161,6 @@ export class EmoteManager {
   }
 
   private getService() {
-    return this.runtime.getService<HyperscapeService>(
-      HyperscapeService.serviceName,
-    );
+    return this.runtime.getService<HyperscapeService>(HYPERSCAPE_SERVICE_NAME);
   }
 }

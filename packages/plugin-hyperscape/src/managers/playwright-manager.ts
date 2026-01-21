@@ -3,7 +3,8 @@ import { THREE, Player } from "@hyperscape/shared";
 import fs, { promises as fsPromises } from "fs";
 import path from "path";
 import { chromium, Browser, Page, PageScreenshotOptions } from "playwright";
-import { HyperscapeService } from "../service";
+import type { HyperscapeService } from "../service";
+import { HYPERSCAPE_SERVICE_NAME } from "../constants";
 import { getModuleDirectory, resolveUrl } from "../utils";
 
 interface AvatarLike {
@@ -480,8 +481,6 @@ export class PlaywrightManager {
   }
 
   private getService() {
-    return this.runtime.getService<HyperscapeService>(
-      HyperscapeService.serviceName,
-    );
+    return this.runtime.getService<HyperscapeService>(HYPERSCAPE_SERVICE_NAME);
   }
 }

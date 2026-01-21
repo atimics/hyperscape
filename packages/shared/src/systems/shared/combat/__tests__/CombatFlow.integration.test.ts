@@ -560,13 +560,16 @@ describe("CombatFlow Integration", () => {
         targetType: "mob",
       });
 
-      // Process until mob dies
-      while (!mob.isDead()) {
+      // Process until mob dies (with safety limit)
+      let iterations = 0;
+      const maxIterations = 100;
+      while (!mob.isDead() && iterations < maxIterations) {
         world.advanceTicks(1);
         combatSystem.processCombatTick(world.currentTick);
+        iterations++;
       }
 
-      // Mob is dead, but combat state might linger briefly
+      // Mob should be dead within reasonable time
       expect(mob.isDead()).toBe(true);
 
       // After timeout, combat should end

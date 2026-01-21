@@ -1,6 +1,6 @@
 import React from "react";
 import { ExternalLink } from "lucide-react";
-import { AgentPanel } from "../../screens/DashboardScreen";
+import type { AgentPanel } from "./types";
 import { ELIZAOS_URL } from "@/lib/api-config";
 
 interface AgentDynamicPanelProps {

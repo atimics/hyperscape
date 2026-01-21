@@ -117,10 +117,9 @@
     "@types/three": "0.180.0",
     "@pixiv/three-vrm": "3.4.3",
     "jws": "^3.2.3",
-    "@elizaos/core": "^1.7.0",
+    "@elizaos/core": "^2.0.0-alpha.1",
     "@elizaos/plugin-sql": "^1.7.0",
     "@elizaos/server": "^1.7.0",
-    "@elizaos/plugin-bootstrap": "^1.7.0",
     "@elizaos/cli": "^1.7.0"
   },
   "packageManager": "bun@1.1.38",

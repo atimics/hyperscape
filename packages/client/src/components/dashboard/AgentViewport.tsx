@@ -1,6 +1,6 @@
 import { GAME_API_URL } from "@/lib/api-config";
 import React, { useState, useEffect, useRef } from "react";
-import { Agent } from "../../screens/DashboardScreen";
+import type { Agent } from "./types";
 import { usePrivy } from "@privy-io/react-auth";
 
 interface AgentViewportProps {

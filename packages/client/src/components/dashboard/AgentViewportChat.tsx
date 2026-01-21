@@ -2,7 +2,7 @@ import { GAME_API_URL } from "@/lib/api-config";
 import { usePrivy } from "@privy-io/react-auth";
 import { Bot, Mic, Send } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
-import { Agent } from "../../screens/DashboardScreen";
+import type { Agent } from "./types";
 import { QuickActionMenu } from "./QuickActionMenu";
 
 interface Message {
