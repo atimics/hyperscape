@@ -362,6 +362,7 @@ export function registerCharacterRoutes(
                 firemaking: { level: 1, xp: 0 },
                 cooking: { level: 1, xp: 0 },
                 smithing: { level: 1, xp: 0 },
+                agility: { level: 1, xp: 0 },
               },
             });
           }

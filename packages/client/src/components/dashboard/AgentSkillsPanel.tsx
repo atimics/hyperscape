@@ -61,6 +61,7 @@ interface AgentSkills {
   fishing?: SkillData;
   firemaking?: SkillData;
   cooking?: SkillData;
+  agility?: SkillData;
 }
 
 interface AgentSkillsPanelProps {
@@ -79,6 +80,7 @@ const SKILL_CONFIG = [
   { key: "fishing", label: "Fishing", icon: "🎣" },
   { key: "firemaking", label: "Fire", icon: "🔥" },
   { key: "cooking", label: "Cooking", icon: "🍳" },
+  { key: "agility", label: "Agility", icon: "🏃" },
 ] as const;
 
 // XP calculation for progress bar
@@ -266,6 +268,7 @@ export const AgentSkillsPanel: React.FC<AgentSkillsPanelProps> = ({
             fishing: { level: 1, xp: 0 },
             firemaking: { level: 1, xp: 0 },
             cooking: { level: 1, xp: 0 },
+            agility: { level: 1, xp: 0 },
           });
           return;
         }
@@ -310,6 +313,7 @@ export const AgentSkillsPanel: React.FC<AgentSkillsPanelProps> = ({
           fishing: { level: 1, xp: 0 },
           firemaking: { level: 1, xp: 0 },
           cooking: { level: 1, xp: 0 },
+          agility: { level: 1, xp: 0 },
         });
       }
     }

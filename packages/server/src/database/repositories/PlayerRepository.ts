@@ -124,6 +124,9 @@ export class PlayerRepository extends BaseRepository {
     if (data.smithingLevel !== undefined) {
       updateData.smithingLevel = data.smithingLevel;
     }
+    if (data.agilityLevel !== undefined) {
+      updateData.agilityLevel = data.agilityLevel;
+    }
     // XP fields
     if (data.attackXp !== undefined) {
       updateData.attackXp = data.attackXp;
@@ -157,6 +160,9 @@ export class PlayerRepository extends BaseRepository {
     }
     if (data.smithingXp !== undefined) {
       updateData.smithingXp = data.smithingXp;
+    }
+    if (data.agilityXp !== undefined) {
+      updateData.agilityXp = data.agilityXp;
     }
     if (data.health !== undefined) {
       updateData.health = data.health;
