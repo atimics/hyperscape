@@ -947,6 +947,11 @@ export interface EventMap {
   [EventType.QUEST_STARTED]: QuestStartedPayload;
   [EventType.QUEST_PROGRESSED]: QuestProgressedPayload;
   [EventType.QUEST_COMPLETED]: QuestCompletedPayload;
+
+  // XP Lamp Events
+  [EventType.XP_LAMP_USE_REQUEST]: XpLampUseRequestPayload;
+  [EventType.XP_LAMP_SKILL_SELECTED]: XpLampSkillSelectedPayload;
+  [EventType.XP_LAMP_APPLIED]: XpLampAppliedPayload;
 }
 
 /**
@@ -1004,6 +1009,40 @@ export interface QuestCompletedPayload {
     items: Array<{ itemId: string; quantity: number }>;
     xp: Record<string, number>;
   };
+}
+
+// =========================================================================
+// XP LAMP EVENT PAYLOADS
+// =========================================================================
+
+/**
+ * XP lamp use request payload - player wants to use an XP lamp
+ */
+export interface XpLampUseRequestPayload {
+  playerId: string;
+  itemId: string;
+  slot: number;
+  xpAmount: number;
+}
+
+/**
+ * XP lamp skill selected payload - player selected a skill for XP
+ */
+export interface XpLampSkillSelectedPayload {
+  playerId: string;
+  itemId: string;
+  slot: number;
+  skillId: string;
+  xpAmount: number;
+}
+
+/**
+ * XP lamp applied payload - server confirms XP was applied
+ */
+export interface XpLampAppliedPayload {
+  playerId: string;
+  skillId: string;
+  xpAmount: number;
 }
 
 // Generic event base type

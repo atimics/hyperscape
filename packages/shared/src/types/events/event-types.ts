@@ -273,6 +273,11 @@ export enum EventType {
   QUEST_PROGRESSED = "quest:progressed",
   QUEST_COMPLETED = "quest:completed",
 
+  // XP Lamp System
+  XP_LAMP_USE_REQUEST = "xp_lamp:use_request",
+  XP_LAMP_SKILL_SELECTED = "xp_lamp:skill_selected",
+  XP_LAMP_APPLIED = "xp_lamp:applied",
+
   // Mob NPCs
   MOB_NPC_SPAWNED = "mob_npc:spawned",
   MOB_NPC_SPAWN_REQUEST = "mob_npc:spawn_request",

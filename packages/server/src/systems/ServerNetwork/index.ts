@@ -96,6 +96,7 @@ import {
   handleUnequipItem,
   handleMoveItem,
   handleCoinPouchWithdraw,
+  handleXpLampUse,
 } from "./handlers/inventory";
 import {
   handlePrayerToggle,
@@ -1302,6 +1303,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     this.handlers["onCoinPouchWithdraw"] = (socket, data) =>
       handleCoinPouchWithdraw(socket, data as { amount: number }, this.world);
+
+    this.handlers["onXpLampUse"] = (socket, data) =>
+      handleXpLampUse(socket, data, this.world);
 
     // Prayer handlers
     this.handlers["onPrayerToggle"] = (socket, data) =>

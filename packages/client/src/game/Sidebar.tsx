@@ -27,6 +27,7 @@ import { StorePanel } from "./panels/StorePanel";
 import { DialoguePanel } from "./panels/DialoguePanel";
 import { SmeltingPanel } from "./panels/SmeltingPanel";
 import { SmithingPanel } from "./panels/SmithingPanel";
+import { SkillSelectModal } from "./panels/SkillSelectModal";
 
 type InventorySlotViewItem = Pick<
   InventorySlotItem,
@@ -141,6 +142,14 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
       xp: number;
       category: string;
     }>;
+  } | null>(null);
+
+  // XP Lamp skill selection modal state
+  const [xpLampData, setXpLampData] = useState<{
+    visible: boolean;
+    itemId: string;
+    slot: number;
+    xpAmount: number;
   } | null>(null);
 
   // Update chat context whenever windows open/close
@@ -490,6 +499,23 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
     world.on(EventType.CORPSE_CLICK, onCorpseClick);
     world.on(EventType.PLAYER_SET_DEAD, onPlayerDeath);
 
+    // XP Lamp skill selection modal
+    const onXpLampUseRequest = (raw: unknown) => {
+      const data = raw as {
+        playerId: string;
+        itemId: string;
+        slot: number;
+        xpAmount: number;
+      };
+      setXpLampData({
+        visible: true,
+        itemId: data.itemId,
+        slot: data.slot,
+        xpAmount: data.xpAmount,
+      });
+    };
+    world.on(EventType.XP_LAMP_USE_REQUEST, onXpLampUseRequest);
+
     const requestInitial = () => {
       // For spectator/embedded mode, use characterId from config
       let lp = world.entities?.player?.id;
@@ -568,6 +594,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
       world.off(EventType.SKILLS_UPDATED, onSkillsUpdate);
       world.off(EventType.CORPSE_CLICK, onCorpseClick);
       world.off(EventType.PLAYER_SET_DEAD, onPlayerDeath);
+      world.off(EventType.XP_LAMP_USE_REQUEST, onXpLampUseRequest);
     };
   }, []);
 
@@ -930,6 +957,19 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
             availableRecipes={smithingData.availableRecipes}
             world={world}
             onClose={() => setSmithingData(null)}
+          />
+        )}
+
+        {/* XP Lamp Skill Selection Modal */}
+        {xpLampData?.visible && (
+          <SkillSelectModal
+            visible={xpLampData.visible}
+            world={world}
+            stats={playerStats}
+            xpAmount={xpLampData.xpAmount}
+            itemId={xpLampData.itemId}
+            slot={xpLampData.slot}
+            onClose={() => setXpLampData(null)}
           />
         )}
       </div>
