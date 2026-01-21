@@ -942,6 +942,11 @@ export interface EventMap {
   [EventType.SMITHING_START]: SmithingStartPayload;
   [EventType.SMITHING_COMPLETE]: SmithingCompletePayload;
   [EventType.PROCESSING_SMITHING_REQUEST]: ProcessingSmithingRequestPayload;
+
+  // Quest Events
+  [EventType.QUEST_STARTED]: QuestStartedPayload;
+  [EventType.QUEST_PROGRESSED]: QuestProgressedPayload;
+  [EventType.QUEST_COMPLETED]: QuestCompletedPayload;
 }
 
 /**
@@ -961,6 +966,44 @@ export interface TypedEventEmitter {
     event: K,
     listener: (data: EventMap[K]) => void,
   ): void;
+}
+
+// =========================================================================
+// QUEST EVENT PAYLOADS
+// =========================================================================
+
+/**
+ * Quest started payload
+ */
+export interface QuestStartedPayload {
+  playerId: string;
+  questId: string;
+  questName: string;
+}
+
+/**
+ * Quest progressed payload
+ */
+export interface QuestProgressedPayload {
+  playerId: string;
+  questId: string;
+  stage: string;
+  progress: Record<string, number>;
+  description: string;
+}
+
+/**
+ * Quest completed payload
+ */
+export interface QuestCompletedPayload {
+  playerId: string;
+  questId: string;
+  questName: string;
+  rewards: {
+    questPoints: number;
+    items: Array<{ itemId: string; quantity: number }>;
+    xp: Record<string, number>;
+  };
 }
 
 // Generic event base type

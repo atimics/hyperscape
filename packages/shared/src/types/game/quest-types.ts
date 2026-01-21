@@ -138,34 +138,34 @@ export interface StageProgress {
   [key: string]: number;
 }
 
-/** Player's progress on a specific quest */
+/** Player's progress on a specific quest (mutable for system use) */
 export interface QuestProgress {
   /** Player/character ID */
-  readonly playerId: string;
+  playerId: string;
   /** Quest identifier */
-  readonly questId: string;
+  questId: string;
   /** Current status */
-  readonly status: QuestStatus;
+  status: QuestStatus;
   /** Current stage ID */
-  readonly currentStage: string;
+  currentStage: string;
   /** Progress within current stage */
-  readonly stageProgress: StageProgress;
+  stageProgress: StageProgress;
   /** When quest was started (Unix ms) */
-  readonly startedAt?: number;
+  startedAt?: number;
   /** When quest was completed (Unix ms) */
-  readonly completedAt?: number;
+  completedAt?: number;
 }
 
-/** Complete quest state for a player */
+/** Complete quest state for a player (mutable for system use) */
 export interface PlayerQuestState {
   /** Player/character ID */
-  readonly playerId: string;
+  playerId: string;
   /** Total quest points earned */
-  readonly questPoints: number;
+  questPoints: number;
   /** Active quests mapped by quest ID */
-  readonly activeQuests: Map<string, QuestProgress>;
+  activeQuests: Map<string, QuestProgress>;
   /** Set of completed quest IDs */
-  readonly completedQuests: Set<string>;
+  completedQuests: Set<string>;
 }
 
 // === Manifest Types ===

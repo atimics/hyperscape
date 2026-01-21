@@ -313,12 +313,55 @@ export class DialogueSystem extends SystemBase {
         });
         break;
 
-      case "startQuest":
-        // Future: implement quest system integration
-        this.logger.info(
-          `TODO: Start quest ${params[0]} for player ${playerId}`,
-        );
+      case "startQuest": {
+        const questId = params[0];
+        if (!questId) {
+          this.logger.warn("startQuest effect missing quest ID");
+          break;
+        }
+        // Get QuestSystem and start the quest
+        const questSystem = this.world.getSystem("quest") as {
+          startQuest?: (playerId: string, questId: string) => Promise<boolean>;
+        };
+        if (questSystem?.startQuest) {
+          questSystem.startQuest(playerId, questId).catch((err) => {
+            this.logger.error(`Failed to start quest ${questId}:`, err);
+          });
+        } else {
+          this.logger.warn("QuestSystem not available for startQuest effect");
+        }
         break;
+      }
+
+      case "completeQuest": {
+        const questIdToComplete = params[0];
+        if (!questIdToComplete) {
+          this.logger.warn("completeQuest effect missing quest ID");
+          break;
+        }
+        // Get QuestSystem and complete the quest
+        const questSystemForComplete = this.world.getSystem("quest") as {
+          completeQuest?: (
+            playerId: string,
+            questId: string,
+          ) => Promise<boolean>;
+        };
+        if (questSystemForComplete?.completeQuest) {
+          questSystemForComplete
+            .completeQuest(playerId, questIdToComplete)
+            .catch((err) => {
+              this.logger.error(
+                `Failed to complete quest ${questIdToComplete}:`,
+                err,
+              );
+            });
+        } else {
+          this.logger.warn(
+            "QuestSystem not available for completeQuest effect",
+          );
+        }
+        break;
+      }
 
       default:
         this.logger.warn(`Unknown dialogue effect: ${effectName}`);
