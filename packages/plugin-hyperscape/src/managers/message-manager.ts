@@ -96,15 +96,7 @@ export class MessageManager {
       createdAt: new Date(msg.createdAt).getTime(),
       metadata: {
         type: "message",
-        hyperscape: {
-          username: msg.username,
-          name: msg.username,
-          worldId: service.currentWorldId!,
-        },
-        username: msg.username,
-        avatar: msg.avatar,
-        userId: msg.userId,
-      },
+      } as Record<string, unknown>,
     };
 
     // Compose state for response generation
@@ -171,8 +163,7 @@ Generate a natural chat response that fits the conversation flow.
       createdAt: Date.now(),
       metadata: {
         type: "message",
-        inReplyTo: memory.id,
-      },
+      } as Record<string, unknown>,
     };
 
     // Save both original message and response to memory

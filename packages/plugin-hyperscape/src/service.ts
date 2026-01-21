@@ -543,7 +543,7 @@ Hyperscape world integration service that enables agents to:
             const appearance = this.world?.entities.player?.data.appearance;
             if (appearance) {
               appearanceComponent.data = {
-                appearance,
+                appearance: appearance as string,
               };
             }
           } else {
@@ -551,7 +551,7 @@ Hyperscape world integration service that enables agents to:
             if (appearance) {
               const newComponent: Partial<ElizaComponent> = {
                 type: "appearance",
-                data: { appearance },
+                data: { appearance: appearance as string },
               };
               entity.components.push(newComponent as ElizaComponent);
             }
@@ -566,10 +566,11 @@ Hyperscape world integration service that enables agents to:
         // Also attempt to change name on first appearance
         if (!this.hasChangedName) {
           const character = this.runtime.character;
-          await this.changeName(character.name);
+          const characterName = character.name || "Unknown";
+          await this.changeName(characterName);
           this.hasChangedName = true;
           console.info(
-            `[Name Polling] Initial name successfully set to "${character.name}".`,
+            `[Name Polling] Initial name successfully set to "${characterName}".`,
           );
         }
 

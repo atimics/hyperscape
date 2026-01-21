@@ -872,11 +872,8 @@ export class AutonomousBehaviorManager {
                   source: "autonomous_behavior",
                 },
                 metadata: {
-                  type: "autonomous_action",
-                  actionName: action.name,
-                  timestamp: Date.now(),
-                  tags: ["hyperscape", "autonomous", action.name.toLowerCase()],
-                },
+                  type: "custom",
+                } as Record<string, unknown>,
               },
               "messages",
               false, // not unique

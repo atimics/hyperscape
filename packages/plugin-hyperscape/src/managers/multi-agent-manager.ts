@@ -57,7 +57,7 @@ export class MultiAgentManager extends EventEmitter {
       id: agentId,
       runtime,
       service,
-      name: runtime.character.name,
+      name: runtime.character.name || "Unknown Agent",
       status: "connecting",
       lastUpdate: Date.now(),
     };

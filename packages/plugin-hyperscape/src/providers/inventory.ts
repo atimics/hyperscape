@@ -68,7 +68,7 @@ ${itemsList}`;
         itemCount: playerEntity.items.length,
         freeSlots,
       },
-      data: inventoryData,
+      data: {},
     };
   },
 };

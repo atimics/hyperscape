@@ -164,6 +164,31 @@ async function registerIndexHtmlRoute(
 ): Promise<void> {
   const indexHtmlPath = path.join(config.__dirname, "public", "index.html");
 
+  // Check if index.html exists before registering routes
+  if (!(await fs.pathExists(indexHtmlPath))) {
+    console.log(
+      `[HTTP] ⚠️  No index.html found at ${indexHtmlPath}, registering fallback routes`,
+    );
+
+    // Register fallback routes that return a helpful message
+    const fallbackHandler = async (
+      _req: FastifyRequest,
+      reply: FastifyReply,
+    ) => {
+      return reply.status(503).send({
+        error: "Frontend not available",
+        message:
+          "The client application has not been built or deployed. Please ensure the client is built and copied to the server's public directory.",
+        expectedPath: indexHtmlPath,
+      });
+    };
+
+    fastify.get("/", fallbackHandler);
+    fastify.get("/index.html", fallbackHandler);
+    console.log("[HTTP] ⚠️  Fallback routes registered (frontend not found)");
+    return;
+  }
+
   const serveIndexHtml = async (_req: FastifyRequest, reply: FastifyReply) => {
     const html = await fs.promises.readFile(indexHtmlPath, "utf-8");
 

@@ -2,6 +2,7 @@ import type { Route } from "@elizaos/core";
 import { logger } from "@elizaos/core";
 
 export const getSettingsRoute: Route = {
+  name: "hyperscape-settings",
   type: "GET",
   path: "/hyperscape/settings/:agentId",
   public: true,

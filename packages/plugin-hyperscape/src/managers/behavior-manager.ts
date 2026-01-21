@@ -150,9 +150,8 @@ export class BehaviorManager {
       createdAt: Date.now(),
       entityId: this.runtime.agentId,
       metadata: {
-        type: "behavior",
-        userId: this.runtime.agentId,
-      },
+        type: "custom",
+      } as Record<string, unknown>,
     };
 
     // Compose the current state
@@ -344,9 +343,8 @@ Or for chat:
       createdAt: latestMessage?.timestamp || Date.now(),
       entityId: this.runtime.agentId,
       metadata: {
-        type: "chat_history",
-        userId: latestMessage?.from || ("unknown" as UUID),
-      },
+        type: "custom",
+      } as Record<string, unknown>,
     };
   }
 }

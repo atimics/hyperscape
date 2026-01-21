@@ -446,10 +446,7 @@ export function registerEventHandlers(
           },
           metadata: {
             type: "message",
-            senderName: chatData.from,
-            senderId: chatData.fromId,
-            timestamp: chatData.timestamp,
-          },
+          } as Record<string, unknown>,
         },
         "messages",
         false,

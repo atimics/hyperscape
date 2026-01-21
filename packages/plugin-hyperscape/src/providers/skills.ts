@@ -86,7 +86,7 @@ ${skillsList}`;
         totalLevel,
         combatLevel,
       },
-      data: skillsData,
+      data: {},
     };
   },
 };
