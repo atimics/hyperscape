@@ -28,6 +28,8 @@ export interface PlayerJoinedPayload {
   player: PlayerLocal;
   /** Equipment data loaded from database during login (optional for backwards compatibility) */
   equipment?: EquipmentSyncData[];
+  /** Whether this player is a load test bot */
+  isLoadTestBot?: boolean;
 }
 
 export interface PlayerEnterPayload {

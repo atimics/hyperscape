@@ -34,6 +34,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Clone assets repository
+        run: |
+          git clone https://github.com/HyperscapeAI/assets.git packages/server/world/assets
+          echo "✅ Assets repository cloned"
+          ls -la packages/server/world/assets/manifests/
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
