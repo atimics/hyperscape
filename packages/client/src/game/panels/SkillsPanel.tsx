@@ -7,8 +7,9 @@ import React, { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { COLORS } from "../../constants";
 import type { ClientWorld, PlayerStats } from "../../types";
-import { EventType, getAllSkillUnlocks } from "@hyperscape/shared";
+import { EventType, type SkillUnlock } from "@hyperscape/shared";
 import { SkillGuidePanel } from "./SkillGuidePanel";
+import { GAME_API_URL } from "../../lib/api-config";
 
 interface SkillsPanelProps {
   world: ClientWorld;
@@ -294,9 +295,25 @@ export function SkillsPanel({ world, stats }: SkillsPanelProps) {
   // Skill Guide Panel state
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
+  const [skillUnlocks, setSkillUnlocks] = useState<
+    Record<string, SkillUnlock[]>
+  >({});
 
-  // Get skill unlocks data
-  const skillUnlocks = getAllSkillUnlocks();
+  // Fetch skill unlocks data from server
+  useEffect(() => {
+    const fetchSkillUnlocks = async () => {
+      try {
+        const response = await fetch(`${GAME_API_URL}/api/data/skill-unlocks`);
+        if (response.ok) {
+          const data = await response.json();
+          setSkillUnlocks(data);
+        }
+      } catch (error) {
+        console.warn("[SkillsPanel] Failed to fetch skill unlocks:", error);
+      }
+    };
+    fetchSkillUnlocks();
+  }, []);
 
   // Skill Guide Panel handlers
   const handleSkillClick = useCallback((skill: Skill) => {

@@ -49,6 +49,7 @@ import { registerAgentRoutes } from "./routes/agent-routes.js";
 import { registerUserRoutes } from "./routes/user-routes.js";
 import { registerTemplateRoutes } from "./routes/template-routes.js";
 import { registerAdminRoutes } from "./routes/admin-routes.js";
+import { registerDataRoutes } from "./routes/data-routes.js";
 
 /**
  * Register all API routes
@@ -100,6 +101,9 @@ export function registerApiRoutes(
 
   // Admin/debug endpoints (combat debugging, anti-cheat)
   registerAdminRoutes(fastify, world, config);
+
+  // Static game data endpoints
+  registerDataRoutes(fastify);
 
   console.log("[API] ✅ API routes registered");
 }
