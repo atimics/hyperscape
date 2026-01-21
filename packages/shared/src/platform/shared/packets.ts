@@ -150,6 +150,7 @@ const names = [
   // Inventory sync packets
   'inventoryUpdated',
   'coinsUpdated',
+  'playerWeightUpdated',  // Player inventory weight changed (for stamina drain)
   // Equipment sync packets
   'equipmentUpdated',
   // Skills sync packets

@@ -46,12 +46,22 @@ import {
   getPathfindRateLimiter,
 } from "./services/SlidingWindowRateLimiter";
 
+// Agility XP constants (batched to prevent visual spam)
+const AGILITY_TILES_PER_XP_GRANT = 100; // Tiles needed before XP is granted
+const AGILITY_XP_PER_GRANT = 50; // XP granted per threshold (effectively 1 XP per 2 tiles)
+
 /**
  * Tile-based movement manager for RuneScape-style movement
  */
 export class TileMovementManager {
   private playerStates: Map<string, TileMovementState> = new Map();
   private pathfinder: BFSPathfinder;
+
+  /**
+   * Agility XP tracking: tiles traveled per player (batched at 100 tiles = 50 XP)
+   * Reset on death, cleared on disconnect
+   */
+  private tilesTraveledForXP: Map<string, number> = new Map();
   // Y-axis for stable yaw rotation calculation
   private _up = new THREE.Vector3(0, 1, 0);
   private _tempQuat = new THREE.Quaternion();
@@ -504,6 +514,35 @@ export class TileMovementManager {
         state.pathIndex++;
       }
 
+      // Track tiles moved for Agility XP (batched at 100 tiles = 50 XP)
+      const tilesMoved =
+        Math.abs(state.currentTile.x - this._prevTile.x) +
+        Math.abs(state.currentTile.z - this._prevTile.z);
+      if (tilesMoved > 0) {
+        const currentTiles =
+          (this.tilesTraveledForXP.get(playerId) || 0) + tilesMoved;
+        if (currentTiles >= AGILITY_TILES_PER_XP_GRANT) {
+          // Grant XP and preserve overflow
+          const grantsEarned = Math.floor(
+            currentTiles / AGILITY_TILES_PER_XP_GRANT,
+          );
+          const xpToGrant = grantsEarned * AGILITY_XP_PER_GRANT;
+          this.tilesTraveledForXP.set(
+            playerId,
+            currentTiles % AGILITY_TILES_PER_XP_GRANT,
+          );
+          // Emit XP gain event (handled by SkillsSystem)
+          this.world.emit(EventType.SKILLS_XP_GAINED, {
+            playerId,
+            skill: "agility",
+            amount: xpToGrant,
+          });
+        } else {
+          // Accumulate tiles silently
+          this.tilesTraveledForXP.set(playerId, currentTiles);
+        }
+      }
+
       // Convert tile to world position
       const worldPos = tileToWorld(state.currentTile);
 
@@ -761,9 +800,18 @@ export class TileMovementManager {
   cleanup(playerId: string): void {
     this.playerStates.delete(playerId);
     this.arrivalEmotes.delete(playerId);
+    this.tilesTraveledForXP.delete(playerId);
     this.antiCheat.cleanup(playerId);
     this.movementRateLimiter.reset(playerId);
     this.pathfindRateLimiter.reset(playerId);
+  }
+
+  /**
+   * Reset agility XP progress for a player (called on death)
+   * Tiles accumulated toward the next XP grant are lost as a death penalty
+   */
+  resetAgilityProgress(playerId: string): void {
+    this.tilesTraveledForXP.set(playerId, 0);
   }
 
   /**

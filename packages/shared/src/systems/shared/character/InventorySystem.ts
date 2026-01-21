@@ -242,6 +242,13 @@ export class InventorySystem extends SystemBase {
         maxSlots: inventoryData.maxSlots,
       },
     });
+
+    // Emit initial weight for stamina drain calculations
+    const totalWeight = this.getTotalWeight(playerData.id);
+    this.emitTypedEvent(EventType.PLAYER_WEIGHT_CHANGED, {
+      playerId: playerData.id,
+      weight: totalWeight,
+    });
   }
 
   private addStarterEquipment(playerId: PlayerID): void {
@@ -1157,6 +1164,13 @@ export class InventorySystem extends SystemBase {
     // Emit local event for server-side systems
     this.emitTypedEvent(EventType.INVENTORY_UPDATED, inventoryUpdateData);
 
+    // Calculate and emit weight change (for stamina drain calculations)
+    const totalWeight = this.getTotalWeight(playerId);
+    this.emitTypedEvent(EventType.PLAYER_WEIGHT_CHANGED, {
+      playerId,
+      weight: totalWeight,
+    });
+
     // Broadcast to all clients if on server
     if (this.world.isServer) {
       const network = this.world.network as
@@ -1167,6 +1181,11 @@ export class InventorySystem extends SystemBase {
           playerId,
           items: inventoryUpdateData.items,
           coins: inventoryData.coins,
+        });
+        // Also send weight update for stamina calculations
+        network.send("playerWeightUpdated", {
+          playerId,
+          weight: totalWeight,
         });
       }
     }
@@ -1797,6 +1816,14 @@ export class InventorySystem extends SystemBase {
           maxSlots: data.maxSlots,
         },
       });
+
+      // Emit initial weight for stamina drain calculations
+      const totalWeight = this.getTotalWeight(playerId);
+      this.emitTypedEvent(EventType.PLAYER_WEIGHT_CHANGED, {
+        playerId,
+        weight: totalWeight,
+      });
+
       return true;
     } catch (error) {
       this.loadingInventories.delete(playerId);

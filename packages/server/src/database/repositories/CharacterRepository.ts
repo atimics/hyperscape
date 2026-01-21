@@ -206,12 +206,14 @@ export class CharacterRepository extends BaseRepository {
     defense: { level: number; xp: number };
     constitution: { level: number; xp: number };
     ranged: { level: number; xp: number };
+    prayer: { level: number; xp: number };
     woodcutting: { level: number; xp: number };
     mining: { level: number; xp: number };
     fishing: { level: number; xp: number };
     firemaking: { level: number; xp: number };
     cooking: { level: number; xp: number };
     smithing: { level: number; xp: number };
+    agility: { level: number; xp: number };
   } | null> {
     this.ensureDatabase();
 
@@ -222,23 +224,27 @@ export class CharacterRepository extends BaseRepository {
         defenseLevel: schema.characters.defenseLevel,
         constitutionLevel: schema.characters.constitutionLevel,
         rangedLevel: schema.characters.rangedLevel,
+        prayerLevel: schema.characters.prayerLevel,
         woodcuttingLevel: schema.characters.woodcuttingLevel,
         miningLevel: schema.characters.miningLevel,
         fishingLevel: schema.characters.fishingLevel,
         firemakingLevel: schema.characters.firemakingLevel,
         cookingLevel: schema.characters.cookingLevel,
         smithingLevel: schema.characters.smithingLevel,
+        agilityLevel: schema.characters.agilityLevel,
         attackXp: schema.characters.attackXp,
         strengthXp: schema.characters.strengthXp,
         defenseXp: schema.characters.defenseXp,
         constitutionXp: schema.characters.constitutionXp,
         rangedXp: schema.characters.rangedXp,
+        prayerXp: schema.characters.prayerXp,
         woodcuttingXp: schema.characters.woodcuttingXp,
         miningXp: schema.characters.miningXp,
         fishingXp: schema.characters.fishingXp,
         firemakingXp: schema.characters.firemakingXp,
         cookingXp: schema.characters.cookingXp,
         smithingXp: schema.characters.smithingXp,
+        agilityXp: schema.characters.agilityXp,
       })
       .from(schema.characters)
       .where(eq(schema.characters.id, characterId))
@@ -259,6 +265,7 @@ export class CharacterRepository extends BaseRepository {
         xp: row.constitutionXp || 1154,
       },
       ranged: { level: row.rangedLevel || 1, xp: row.rangedXp || 0 },
+      prayer: { level: row.prayerLevel || 1, xp: row.prayerXp || 0 },
       woodcutting: {
         level: row.woodcuttingLevel || 1,
         xp: row.woodcuttingXp || 0,
@@ -271,6 +278,7 @@ export class CharacterRepository extends BaseRepository {
       },
       cooking: { level: row.cookingLevel || 1, xp: row.cookingXp || 0 },
       smithing: { level: row.smithingLevel || 1, xp: row.smithingXp || 0 },
+      agility: { level: row.agilityLevel || 1, xp: row.agilityXp || 0 },
     };
   }
 

@@ -442,7 +442,8 @@ export interface XPDrop {
     | "fishing"
     | "firemaking"
     | "cooking"
-    | "smithing";
+    | "smithing"
+    | "agility";
   amount: number;
   timestamp: number;
   playerId: string;
@@ -520,11 +521,13 @@ export interface SkillsData {
   defense: { level: number; xp: number };
   constitution: { level: number; xp: number };
   ranged: { level: number; xp: number };
+  prayer: { level: number; xp: number };
   woodcutting: { level: number; xp: number };
   mining: { level: number; xp: number };
   fishing: { level: number; xp: number };
   firemaking: { level: number; xp: number };
   cooking: { level: number; xp: number };
+  agility: { level: number; xp: number };
 }
 
 export interface InventoryData {

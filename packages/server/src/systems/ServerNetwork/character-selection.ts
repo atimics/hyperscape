@@ -646,6 +646,10 @@ export async function handleEnterWorld(
               level: (savedData as { prayerLevel?: number }).prayerLevel || 1,
               xp: (savedData as { prayerXp?: number }).prayerXp || 0,
             },
+            agility: {
+              level: (savedData as { agilityLevel?: number }).agilityLevel || 1,
+              xp: (savedData as { agilityXp?: number }).agilityXp || 0,
+            },
           };
           // Load auto-retaliate preference (1=ON, 0=OFF, default ON)
           savedAutoRetaliate =

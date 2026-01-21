@@ -163,7 +163,7 @@ describe("getUnlocksUpToLevel", () => {
 // ============================================================================
 
 describe("Skill data integrity", () => {
-  // All 11 implemented skills
+  // All 12 implemented skills
   const implementedSkills = [
     "attack",
     "strength",
@@ -176,9 +176,10 @@ describe("Skill data integrity", () => {
     "cooking",
     "firemaking",
     "smithing",
+    "agility",
   ];
 
-  it("has all 11 implemented skills defined", () => {
+  it("has all 12 implemented skills defined", () => {
     const allUnlocks = getAllSkillUnlocks();
     implementedSkills.forEach((skill) => {
       expect(allUnlocks[skill]).toBeDefined();
@@ -186,10 +187,10 @@ describe("Skill data integrity", () => {
     });
   });
 
-  it("has exactly 11 skills (no extra unimplemented skills)", () => {
+  it("has exactly 12 skills (no extra unimplemented skills)", () => {
     const allUnlocks = getAllSkillUnlocks();
     const skillCount = Object.keys(allUnlocks).length;
-    expect(skillCount).toBe(11);
+    expect(skillCount).toBe(12);
   });
 
   it("all skills have sorted levels (ascending)", () => {

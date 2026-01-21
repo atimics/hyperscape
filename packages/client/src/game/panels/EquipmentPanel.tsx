@@ -317,6 +317,37 @@ export function EquipmentPanel({
   // Track if context menu is open (suppress hover tooltips while open)
   const [isContextMenuOpen, setIsContextMenuOpen] = useState(false);
 
+  // Track total weight for display (synced from server via PlayerLocal)
+  const [totalWeight, setTotalWeight] = useState(0);
+
+  // Subscribe to weight updates from server
+  useEffect(() => {
+    if (!world) return;
+
+    // Initialize with current weight
+    const player = world.getPlayer?.();
+    if (player?.totalWeight !== undefined) {
+      setTotalWeight(player.totalWeight);
+    }
+
+    // Listen for weight change events
+    const handleWeightChanged = (data: {
+      playerId: string;
+      weight: number;
+    }) => {
+      const localPlayer = world.getPlayer?.();
+      if (localPlayer && data.playerId === localPlayer.id) {
+        setTotalWeight(data.weight);
+      }
+    };
+
+    world.on(EventType.PLAYER_WEIGHT_CHANGED, handleWeightChanged);
+
+    return () => {
+      world.off(EventType.PLAYER_WEIGHT_CHANGED, handleWeightChanged);
+    };
+  }, [world]);
+
   // Listen for context menu close to re-enable hover tooltips
   useEffect(() => {
     const handleContextMenuClose = () => {
@@ -883,15 +914,7 @@ export function EquipmentPanel({
                       fontWeight: "bold",
                     }}
                   >
-                    {slots
-                      .reduce(
-                        (sum, slot) =>
-                          sum +
-                          (slot.item?.weight || 0) * (slot.item?.quantity || 0),
-                        0,
-                      )
-                      .toFixed(1)}{" "}
-                    kg
+                    {totalWeight.toFixed(1)} kg
                   </span>
                 </div>
               </div>

@@ -541,6 +541,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.actionQueue.cleanup(event.playerId);
     });
 
+    // Reset agility progress on death (small penalty - lose accumulated tiles toward next XP grant)
+    this.world.on(EventType.PLAYER_DIED, (event: { entityId: string }) => {
+      this.tileMovementManager.resetAgilityProgress(event.entityId);
+    });
+
     // Sync tile position when player respawns at spawn point
     // CRITICAL: Without this, TileMovementManager has stale tile position from death location
     // and paths would be calculated from wrong starting tile

@@ -450,6 +450,13 @@ export function SkillsPanel({ world, stats }: SkillsPanelProps) {
       xp: s?.smithing?.xp || 0,
     },
     {
+      key: "agility",
+      label: "Agility",
+      icon: "🏃",
+      level: s?.agility?.level || 1,
+      xp: s?.agility?.xp || 0,
+    },
+    {
       key: "prayer",
       label: "Prayer",
       icon: "🙏",

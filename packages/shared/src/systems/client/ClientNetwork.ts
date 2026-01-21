@@ -1529,6 +1529,23 @@ export class ClientNetwork extends SystemBase {
     });
   };
 
+  onPlayerWeightUpdated = (data: { playerId: string; weight: number }) => {
+    // Update local player's weight for stamina drain calculation
+    const localPlayer = this.world.getPlayer?.();
+    if (
+      localPlayer &&
+      data.playerId === localPlayer.id &&
+      localPlayer instanceof PlayerLocal
+    ) {
+      localPlayer.totalWeight = data.weight;
+      // Emit event for UI components (e.g., EquipmentPanel) to update weight display
+      this.world.emit(EventType.PLAYER_WEIGHT_CHANGED, {
+        playerId: data.playerId,
+        weight: data.weight,
+      });
+    }
+  };
+
   onEquipmentUpdated = (data: {
     playerId: string;
     equipment: {

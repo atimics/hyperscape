@@ -46,6 +46,7 @@ export interface PlayerRow {
   firemakingLevel: number;
   cookingLevel: number;
   smithingLevel: number;
+  agilityLevel: number;
   attackXp: number;
   strengthXp: number;
   defenseXp: number;
@@ -57,6 +58,7 @@ export interface PlayerRow {
   firemakingXp: number;
   cookingXp: number;
   smithingXp: number;
+  agilityXp: number;
   health: number;
   maxHealth: number;
   coins: number;
