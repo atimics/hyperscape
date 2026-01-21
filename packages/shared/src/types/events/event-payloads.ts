@@ -15,10 +15,19 @@ import { EventType } from "./event-types";
 // EVENT PAYLOAD INTERFACES
 // ============================================================================
 
+/** Equipment sync data for login - subset of database row for event payloads */
+export interface EquipmentSyncData {
+  slotType: string;
+  itemId: string | null;
+  quantity: number;
+}
+
 // Core Event Payloads
 export interface PlayerJoinedPayload {
   playerId: string;
   player: PlayerLocal;
+  /** Equipment data loaded from database during login (optional for backwards compatibility) */
+  equipment?: EquipmentSyncData[];
 }
 
 export interface PlayerEnterPayload {
@@ -487,8 +496,7 @@ export interface ProcessingCookingRequestPayload {
  */
 export interface FiremakingMoveRequestPayload {
   playerId: string;
-  fromPosition: Position3D;
-  toPosition: Position3D;
+  position: Position3D;
 }
 
 // =========================================================================
