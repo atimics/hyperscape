@@ -355,6 +355,10 @@ export class PlayerLocal extends Entity implements HotReloadable {
   private readonly staminaRegenPerSecond: number = 4; // regen while idle
   // Internal helper: prevent spamming run->walk requests when energy hits 0
   private autoRunSwitchSent: boolean = false;
+  // Weight from inventory (synced from server) - affects stamina drain
+  public totalWeight: number = 0;
+  // Weight drain modifier: +0.5% drain per kg carried
+  private readonly weightDrainModifier: number = 0.005;
   // Implement HotReloadable interface
   hotReload?(): void {
     // Implementation for hot reload functionality
@@ -378,6 +382,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
     firemaking: { level: 1, xp: 0 },
     cooking: { level: 1, xp: 0 },
     smithing: { level: 1, xp: 0 },
+    agility: { level: 1, xp: 0 },
   };
   equipment: PlayerEquipmentItems = {
     weapon: null,
@@ -2145,8 +2150,11 @@ export class PlayerLocal extends Entity implements HotReloadable {
     const dt = delta;
     const currentEmote = this.emote || "";
     if (currentEmote === "run") {
+      // Weight-based drain: +0.5% per kg carried
+      const weightMultiplier = 1 + this.totalWeight * this.weightDrainModifier;
+      const drainRate = this.staminaDrainPerSecond * weightMultiplier;
       this.stamina = THREE.MathUtils.clamp(
-        this.stamina - this.staminaDrainPerSecond * dt,
+        this.stamina - drainRate * dt,
         0,
         100,
       );

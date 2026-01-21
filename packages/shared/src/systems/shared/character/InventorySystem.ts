@@ -1157,6 +1157,13 @@ export class InventorySystem extends SystemBase {
     // Emit local event for server-side systems
     this.emitTypedEvent(EventType.INVENTORY_UPDATED, inventoryUpdateData);
 
+    // Calculate and emit weight change (for stamina drain calculations)
+    const totalWeight = this.getTotalWeight(playerId);
+    this.emitTypedEvent(EventType.PLAYER_WEIGHT_CHANGED, {
+      playerId,
+      weight: totalWeight,
+    });
+
     // Broadcast to all clients if on server
     if (this.world.isServer) {
       const network = this.world.network as
@@ -1167,6 +1174,11 @@ export class InventorySystem extends SystemBase {
           playerId,
           items: inventoryUpdateData.items,
           coins: inventoryData.coins,
+        });
+        // Also send weight update for stamina calculations
+        network.send("playerWeightUpdated", {
+          playerId,
+          weight: totalWeight,
         });
       }
     }

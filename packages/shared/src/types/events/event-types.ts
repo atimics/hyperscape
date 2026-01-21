@@ -149,6 +149,9 @@ export enum EventType {
   PLAYER_EQUIPMENT_UPDATED = "player:equipment_updated",
   PLAYER_STATS_EQUIPMENT_UPDATED = "player:stats:equipment_updated",
 
+  // Player Weight (for stamina calculations)
+  PLAYER_WEIGHT_CHANGED = "player:weight_changed",
+
   // Player Movement & Position
   PLAYER_POSITION_UPDATED = "player:position:updated",
   PLAYER_TELEPORT_REQUEST = "player:teleport_request",
