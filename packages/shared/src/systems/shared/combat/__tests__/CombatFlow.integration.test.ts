@@ -78,7 +78,7 @@ function createTestPlayer(
     takeDamage: vi.fn((amount: number) => {
       healthTracker.damageHistory.push(amount);
       healthTracker.current = Math.max(0, healthTracker.current - amount);
-      return healthTracker.current;
+      return healthTracker.current <= 0; // Return true if died
     }),
     getHealth: () => healthTracker.current,
     getComponent: (name: string) => {
@@ -169,7 +169,7 @@ function createTestMob(
     takeDamage: vi.fn((amount: number) => {
       healthTracker.damageHistory.push(amount);
       healthTracker.current = Math.max(0, healthTracker.current - amount);
-      return healthTracker.current;
+      return healthTracker.current <= 0; // Return true if died
     }),
     isAttackable: () => healthTracker.current > 0,
     isDead: () => healthTracker.current <= 0,
@@ -182,18 +182,56 @@ function createTestMob(
  * Create a mock world with combat system support
  */
 function createTestWorld(options: { currentTick?: number } = {}) {
-  const players = new Map<string, ReturnType<typeof createTestPlayer>>();
   const eventHandlers = new Map<string, Function[]>();
   const emittedEvents: Array<{ event: string; data: unknown }> = [];
 
   let currentTick = options.currentTick ?? 100;
 
-  // Combined entities map - CombatSystem uses entities.get() for mobs
-  // and entities.players.get() for players
+  // Combined entities map - CombatSystem uses entities.get() for mobs AND players
+  // Damage handlers validate attackers via entities.get(attackerId)
   const entities = new Map<string, unknown>() as Map<string, unknown> & {
     players: Map<string, unknown>;
   };
-  entities.players = players;
+
+  // Auto-syncing player map - automatically updates entities when players are added
+  const playersInternalMap = new Map<
+    string,
+    ReturnType<typeof createTestPlayer>
+  >();
+  const players = {
+    set: (id: string, player: ReturnType<typeof createTestPlayer>) => {
+      playersInternalMap.set(id, player);
+      entities.set(id, player); // Auto-sync to entities for damage handler validation
+      return players;
+    },
+    get: (id: string) => playersInternalMap.get(id),
+    delete: (id: string) => {
+      entities.delete(id);
+      return playersInternalMap.delete(id);
+    },
+    has: (id: string) => playersInternalMap.has(id),
+    clear: () => {
+      for (const id of playersInternalMap.keys()) {
+        entities.delete(id);
+      }
+      playersInternalMap.clear();
+    },
+    get size() {
+      return playersInternalMap.size;
+    },
+    [Symbol.iterator]: () => playersInternalMap[Symbol.iterator](),
+    keys: () => playersInternalMap.keys(),
+    values: () => playersInternalMap.values(),
+    entries: () => playersInternalMap.entries(),
+    forEach: (
+      fn: (
+        value: ReturnType<typeof createTestPlayer>,
+        key: string,
+        map: Map<string, ReturnType<typeof createTestPlayer>>,
+      ) => void,
+    ) => playersInternalMap.forEach(fn),
+  };
+  entities.players = players as unknown as Map<string, unknown>;
 
   // Auto-syncing mob map - automatically updates entities when mobs are added
   const mobsInternalMap = new Map<string, ReturnType<typeof createTestMob>>();

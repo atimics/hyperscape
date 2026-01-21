@@ -26,7 +26,7 @@ function createTestPlayer(
     weaponRange?: number;
   } = {},
 ) {
-  const health = options.health ?? 100;
+  let health = options.health ?? 100;
   // Use same position object for all references so mutations propagate correctly
   const position = options.position ?? { x: 0, y: 0, z: 0 };
   const weaponRange = options.weaponRange ?? 1; // Default standard melee
@@ -49,7 +49,10 @@ function createTestPlayer(
     weaponRange, // For equipment system mock
     getPosition: () => position,
     markNetworkDirty: vi.fn(),
-    takeDamage: vi.fn((amount: number) => Math.max(0, health - amount)),
+    takeDamage: vi.fn((amount: number) => {
+      health = Math.max(0, health - amount);
+      return health <= 0; // Return true if died
+    }),
     getHealth: () => health,
     getComponent: (name: string) => {
       if (name === "health") {
@@ -104,7 +107,7 @@ function createTestMob(
     getHealth: () => health.current,
     takeDamage: vi.fn((amount: number) => {
       health.current = Math.max(0, health.current - amount);
-      return health.current;
+      return health.current <= 0; // Return true if died
     }),
     getCombatRange: () => combatRange,
     isAttackable: () => health.current > 0,
@@ -118,16 +121,35 @@ function createTestMob(
  * Create a mock world with melee range testing support
  */
 function createTestWorld(options: { currentTick?: number } = {}) {
-  const players = new Map<string, ReturnType<typeof createTestPlayer>>();
   const eventHandlers = new Map<string, Function[]>();
   const emittedEvents: Array<{ event: string; data: unknown }> = [];
 
   let currentTick = options.currentTick ?? 100;
 
+  // Combined entities map - damage handlers validate attackers via entities.get()
   const entities = new Map<string, unknown>() as Map<string, unknown> & {
     players: Map<string, ReturnType<typeof createTestPlayer>>;
   };
-  entities.players = players;
+
+  // Auto-syncing player map
+  const playersMap = new Map<string, ReturnType<typeof createTestPlayer>>();
+  const players = {
+    set: (id: string, player: ReturnType<typeof createTestPlayer>) => {
+      playersMap.set(id, player);
+      entities.set(id, player); // Auto-sync to entities for validation
+      return players;
+    },
+    get: (id: string) => playersMap.get(id),
+    delete: (id: string) => {
+      entities.delete(id);
+      return playersMap.delete(id);
+    },
+    has: (id: string) => playersMap.has(id),
+  };
+  entities.players = players as unknown as Map<
+    string,
+    ReturnType<typeof createTestPlayer>
+  >;
 
   // Mock EventBus for SystemBase.emitTypedEvent()
   const mockEventBus = {

@@ -5,7 +5,10 @@
 import type * as YogaTypes from "yoga-layout";
 import THREE from "../../extras/three/three";
 import type { Node } from "../../nodes/Node";
-import type { Entity, HotReloadable, NodeData } from "../../index";
+// Import from specific files to avoid circular dependency with ../../index
+import type { Entity } from "../../entities/Entity";
+import type { HotReloadable } from "../systems/physics";
+import type { NodeData } from "../core/base-types";
 import type {
   ActorHandle as EngineActorHandle,
   PxRigidBodyFlagEnum,

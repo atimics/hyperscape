@@ -49,3 +49,13 @@ export interface ComponentData {
   type: string;
   data: unknown;
 }
+
+// Node data for serialization
+export interface NodeData {
+  id?: string;
+  position?: [number, number, number];
+  quaternion?: [number, number, number, number];
+  scale?: [number, number, number];
+  active?: boolean;
+  [key: string]: unknown;
+}

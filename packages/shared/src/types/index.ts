@@ -1,10 +1,10 @@
-import { Component } from "../components/Component";
-import { Entity } from "../entities/Entity";
+import type { Component } from "../components/Component";
+import type { Entity } from "../entities/Entity";
 import THREE from "../extras/three/three";
-import { Avatar } from "../nodes";
+import type { Avatar } from "../nodes";
 import type { Node as NodeClass } from "../nodes/Node";
-import { System } from "../systems/shared";
-import { World } from "../core/World";
+import type { System } from "../systems/shared";
+import type { World } from "../core/World";
 import type { EntityData, Position2D, Position3D } from "./core/base-types";
 
 // Re-enable core imports - circular dependency should be resolved
@@ -993,15 +993,7 @@ export type HSNode = NodeClass;
 // Also export it as Node for external type imports that expect Node
 export type Node = HSNode;
 
-// Node data for serialization
-export interface NodeData {
-  id?: string;
-  position?: [number, number, number];
-  quaternion?: [number, number, number, number];
-  scale?: [number, number, number];
-  active?: boolean;
-  [key: string]: unknown;
-}
+// NodeData is now exported from ./core/base-types
 
 export interface Transform {
   position: Vector3;

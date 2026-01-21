@@ -1,7 +1,7 @@
 import { IAgentRuntime, logger, UUID, createUniqueUuid } from "@elizaos/core";
-import { HyperscapeService } from "../service";
 import { EventEmitter } from "events";
 import type { ChatMessage } from "../types/core-types";
+import type { HyperscapeService } from "../service";
 
 export interface AgentInstance {
   id: UUID;
@@ -11,6 +11,16 @@ export interface AgentInstance {
   position?: { x: number; y: number; z: number };
   status: "connecting" | "connected" | "disconnected" | "error";
   lastUpdate: number;
+}
+
+// Lazy load HyperscapeService to avoid circular dependency
+let HyperscapeServiceClass: typeof HyperscapeService | null = null;
+async function getHyperscapeServiceClass(): Promise<typeof HyperscapeService> {
+  if (!HyperscapeServiceClass) {
+    const module = await import("../service");
+    HyperscapeServiceClass = module.HyperscapeService;
+  }
+  return HyperscapeServiceClass;
 }
 
 export interface MultiAgentConfig {
@@ -40,7 +50,8 @@ export class MultiAgentManager extends EventEmitter {
    */
   async addAgent(runtime: IAgentRuntime): Promise<AgentInstance> {
     const agentId = runtime.agentId;
-    const service = new HyperscapeService(runtime);
+    const ServiceClass = await getHyperscapeServiceClass();
+    const service = new ServiceClass(runtime);
 
     const agent: AgentInstance = {
       id: agentId,
