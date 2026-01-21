@@ -1538,6 +1538,11 @@ export class ClientNetwork extends SystemBase {
       localPlayer instanceof PlayerLocal
     ) {
       localPlayer.totalWeight = data.weight;
+      // Emit event for UI components (e.g., EquipmentPanel) to update weight display
+      this.world.emit(EventType.PLAYER_WEIGHT_CHANGED, {
+        playerId: data.playerId,
+        weight: data.weight,
+      });
     }
   };
 

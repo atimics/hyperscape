@@ -242,6 +242,13 @@ export class InventorySystem extends SystemBase {
         maxSlots: inventoryData.maxSlots,
       },
     });
+
+    // Emit initial weight for stamina drain calculations
+    const totalWeight = this.getTotalWeight(playerData.id);
+    this.emitTypedEvent(EventType.PLAYER_WEIGHT_CHANGED, {
+      playerId: playerData.id,
+      weight: totalWeight,
+    });
   }
 
   private addStarterEquipment(playerId: PlayerID): void {
@@ -1809,6 +1816,14 @@ export class InventorySystem extends SystemBase {
           maxSlots: data.maxSlots,
         },
       });
+
+      // Emit initial weight for stamina drain calculations
+      const totalWeight = this.getTotalWeight(playerId);
+      this.emitTypedEvent(EventType.PLAYER_WEIGHT_CHANGED, {
+        playerId,
+        weight: totalWeight,
+      });
+
       return true;
     } catch (error) {
       this.loadingInventories.delete(playerId);
