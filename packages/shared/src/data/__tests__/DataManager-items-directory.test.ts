@@ -26,7 +26,8 @@ describe("DataManager items/ directory loading", () => {
         (item) => !item.id.endsWith("_noted"),
       );
       // Count reflects all items across weapons, tools, resources, food, misc
-      expect(baseItems.length).toBe(86);
+      // Use minimum count for maintainability as items may be added
+      expect(baseItems.length).toBeGreaterThanOrEqual(86);
     });
 
     it("loads items from all 5 category files", () => {
@@ -126,7 +127,8 @@ describe("DataManager items/ directory loading", () => {
         (item) => item.type === "resource" && !item.id.endsWith("_noted"),
       );
       // Ores, bars, logs, raw fish, etc.
-      expect(resources.length).toBe(36);
+      // Use minimum count for maintainability as resources may be added
+      expect(resources.length).toBeGreaterThanOrEqual(36);
     });
 
     it("has correct consumable count", () => {

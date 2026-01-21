@@ -20,6 +20,8 @@ import { ZoneType } from "../../../../types/death";
 interface MockWorld {
   isServer: boolean;
   getSystem: Mock;
+  on: Mock;
+  off: Mock;
 }
 
 interface MockDatabaseSystem {
@@ -27,6 +29,9 @@ interface MockDatabaseSystem {
   getDeathLockAsync: Mock;
   deleteDeathLockAsync: Mock;
   updateGroundItemsAsync: Mock;
+  acquireDeathLockAsync: Mock;
+  getUnrecoveredDeathsAsync: Mock;
+  markDeathRecoveredAsync: Mock;
 }
 
 // Factory functions
@@ -34,6 +39,8 @@ function createMockWorld(isServer = true): MockWorld {
   return {
     isServer,
     getSystem: vi.fn(),
+    on: vi.fn(),
+    off: vi.fn(),
   };
 }
 
@@ -43,6 +50,9 @@ function createMockDatabaseSystem(): MockDatabaseSystem {
     getDeathLockAsync: vi.fn().mockResolvedValue(null),
     deleteDeathLockAsync: vi.fn().mockResolvedValue(undefined),
     updateGroundItemsAsync: vi.fn().mockResolvedValue(undefined),
+    acquireDeathLockAsync: vi.fn().mockResolvedValue(true),
+    getUnrecoveredDeathsAsync: vi.fn().mockResolvedValue([]),
+    markDeathRecoveredAsync: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -161,7 +171,8 @@ describe("DeathStateManager", () => {
         itemCount: 2,
       });
 
-      expect(databaseSystem.saveDeathLockAsync).toHaveBeenCalledWith(
+      // Uses atomic acquireDeathLockAsync instead of saveDeathLockAsync
+      expect(databaseSystem.acquireDeathLockAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           playerId: "player1",
           gravestoneId: "gravestone_1",
@@ -187,7 +198,8 @@ describe("DeathStateManager", () => {
         mockTx,
       );
 
-      expect(databaseSystem.saveDeathLockAsync).toHaveBeenCalledWith(
+      // Uses atomic acquireDeathLockAsync
+      expect(databaseSystem.acquireDeathLockAsync).toHaveBeenCalledWith(
         expect.any(Object),
         mockTx,
       );
@@ -195,7 +207,7 @@ describe("DeathStateManager", () => {
 
     it("re-throws database error when in transaction", async () => {
       const mockTx = { __brand: Symbol() } as never;
-      databaseSystem.saveDeathLockAsync.mockRejectedValue(
+      databaseSystem.acquireDeathLockAsync.mockRejectedValue(
         new Error("DB error"),
       );
 
@@ -213,7 +225,7 @@ describe("DeathStateManager", () => {
     });
 
     it("continues with in-memory tracking when database fails (no transaction)", async () => {
-      databaseSystem.saveDeathLockAsync.mockRejectedValue(
+      databaseSystem.acquireDeathLockAsync.mockRejectedValue(
         new Error("DB error"),
       );
       const consoleSpy = vi

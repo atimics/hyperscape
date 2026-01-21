@@ -207,6 +207,9 @@ function createMockWorld(isServer = true, currentTick = 1000) {
     getDeathLockAsync: vi.fn().mockResolvedValue(null),
     deleteDeathLockAsync: vi.fn().mockResolvedValue(undefined),
     updateGroundItemsAsync: vi.fn().mockResolvedValue(undefined),
+    acquireDeathLockAsync: vi.fn().mockResolvedValue(true), // Atomic lock acquisition
+    getUnrecoveredDeathsAsync: vi.fn().mockResolvedValue([]),
+    markDeathRecoveredAsync: vi.fn().mockResolvedValue(undefined),
     executeInTransaction: vi.fn().mockImplementation(async (fn) => {
       const mockTx = { __brand: Symbol() };
       await fn(mockTx);
@@ -401,6 +404,7 @@ describe("PvP Death Integration", () => {
           scatter: true,
           scatterRadius: 3.0,
         }),
+        false, // throwOnFailure=false when no transaction
       );
 
       // Step 4: Verify death lock created
@@ -413,10 +417,15 @@ describe("PvP Death Integration", () => {
       // Step 5: Verify ground items exist
       expect(world.groundItems.size).toBe(7);
 
-      // Step 6: Simulate looting all items
-      const groundItemIds = Array.from(world.groundItems.keys());
-      for (const itemId of groundItemIds) {
-        await wildernessHandler.onItemLooted("victim", itemId);
+      // Step 6: Simulate looting all items - pass manifest itemIds with full quantity
+      const groundItemEntries = Array.from(world.groundItems.entries());
+      for (const [_entityId, groundItem] of groundItemEntries) {
+        // Pass the manifest itemId and full quantity to fully loot each item
+        await deathStateManager.onItemLooted(
+          "victim",
+          groundItem.itemId,
+          groundItem.quantity,
+        );
       }
 
       // Step 7: Verify death lock cleared after all items looted
@@ -616,8 +625,8 @@ describe("PvP Death Integration", () => {
         ZoneType.WILDERNESS,
       );
 
-      // Database should have been called
-      expect(world._databaseSystem.saveDeathLockAsync).toHaveBeenCalledWith(
+      // Database should have been called with atomic acquisition
+      expect(world._databaseSystem.acquireDeathLockAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           playerId: "victim",
           zoneType: ZoneType.WILDERNESS,
@@ -647,9 +656,15 @@ describe("PvP Death Integration", () => {
         ZoneType.WILDERNESS,
       );
 
-      // Loot the single item
+      // Loot the single item - pass the manifest itemId with full quantity
       const groundItemId = Array.from(world.groundItems.keys())[0];
-      await wildernessHandler.onItemLooted("victim", groundItemId);
+      const groundItem = world.groundItems.get(groundItemId);
+      // Pass the manifest itemId and quantity to fully loot the item
+      await deathStateManager.onItemLooted(
+        "victim",
+        groundItem!.itemId,
+        groundItem!.quantity,
+      );
 
       // Database delete should have been called
       expect(world._databaseSystem.deleteDeathLockAsync).toHaveBeenCalledWith(

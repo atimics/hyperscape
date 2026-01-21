@@ -610,17 +610,20 @@ export class DeathStateManager {
     const deathData = this.activeDeaths.get(playerId);
     if (!deathData) return;
 
+    let itemRemoved = false;
+
     // Remove item from ground item list (entity IDs)
     if (deathData.groundItemIds) {
       const index = deathData.groundItemIds.indexOf(itemId);
       if (index !== -1) {
         deathData.groundItemIds.splice(index, 1);
+        itemRemoved = true;
       }
     }
 
     // Remove item from items array (crash recovery tracking)
     // Only decrement itemCount when item is fully removed, not on partial loot
-    if (deathData.items) {
+    if (deathData.items && deathData.items.length > 0) {
       const itemIndex = deathData.items.findIndex((i) => i.itemId === itemId);
       if (itemIndex !== -1) {
         const item = deathData.items[itemIndex];
@@ -633,6 +636,9 @@ export class DeathStateManager {
           item.quantity -= quantity;
         }
       }
+    } else if (itemRemoved) {
+      // No items array but we removed from groundItemIds - decrement itemCount
+      deathData.itemCount = Math.max(0, deathData.itemCount - 1);
     }
 
     // If all items looted, clear death tracking

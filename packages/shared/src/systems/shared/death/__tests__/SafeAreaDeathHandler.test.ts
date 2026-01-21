@@ -318,6 +318,7 @@ describe("SafeAreaDeathHandler", () => {
           scatter: true,
           scatterRadius: 2.0,
         }),
+        // 4th arg (throwOnFailure) is not passed as this is not in a transaction
       );
     });
 

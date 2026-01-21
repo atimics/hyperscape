@@ -15,7 +15,7 @@
 
 import type { World } from "../../core/World";
 import type { WorldOptions } from "../../types";
-import { System } from "../shared";
+import { System } from "../shared/infrastructure/System";
 import { BIOMES } from "../../data/world-structure";
 import type { TerrainSystem } from "../shared/world/TerrainSystem";
 import type { WaterSystem } from "../shared/world/WaterSystem";
