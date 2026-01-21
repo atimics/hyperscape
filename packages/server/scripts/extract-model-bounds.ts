@@ -22,6 +22,7 @@ import {
   readdirSync,
   statSync,
   existsSync,
+  mkdirSync,
 } from "fs";
 import { join, relative, basename, dirname } from "path";
 
@@ -272,13 +273,32 @@ function findGlbFiles(dir: string): string[] {
 function main() {
   const assetsDir = join(__dirname, "../world/assets");
   const modelsDir = join(assetsDir, "models");
-  const outputPath = join(assetsDir, "manifests/model-bounds.json");
+  const manifestsDir = join(assetsDir, "manifests");
+  const outputPath = join(manifestsDir, "model-bounds.json");
 
   console.log("=".repeat(60));
   console.log("Model Bounds Extractor");
   console.log("=".repeat(60));
   console.log(`Scanning: ${modelsDir}`);
   console.log("");
+
+  // Check if models directory exists (assets may not be cloned in CI)
+  if (!existsSync(modelsDir)) {
+    console.log("Models directory not found - assets may not be cloned.");
+    console.log("Creating empty manifest for CI compatibility.");
+    // Ensure manifests directory exists
+    mkdirSync(manifestsDir, { recursive: true });
+    const emptyManifest = {
+      generatedAt: new Date().toISOString(),
+      tileSize: TILE_SIZE,
+      models: [],
+    };
+    writeFileSync(outputPath, JSON.stringify(emptyManifest, null, 2));
+    console.log("=".repeat(60));
+    console.log(`Generated: ${outputPath} (empty - no assets)`);
+    console.log("=".repeat(60));
+    return;
+  }
 
   // Find all GLB files
   const glbFiles = findGlbFiles(modelsDir);
@@ -345,6 +365,9 @@ function main() {
       console.log(`  -> Error: ${error}\n`);
     }
   }
+
+  // Ensure manifests directory exists
+  mkdirSync(manifestsDir, { recursive: true });
 
   // Write manifest
   const manifest: ModelBoundsManifest = {

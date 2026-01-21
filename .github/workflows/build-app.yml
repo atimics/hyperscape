@@ -52,7 +52,7 @@ jobs:
             rust_target: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.platform }}
-    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.target || github.event_name != 'workflow_dispatch'
+    if: ${{ github.event.inputs.platform == 'all' || github.event.inputs.platform == matrix.target || github.event_name != 'workflow_dispatch' }}
 
     steps:
       - name: Checkout

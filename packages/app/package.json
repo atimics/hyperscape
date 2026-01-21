@@ -6,7 +6,8 @@
   "description": "Hyperscape native desktop and mobile app powered by Tauri v2",
   "scripts": {
     "dev": "tauri dev",
-    "build": "CI=true tauri build",
+    "build": "CI=true tauri build --no-bundle",
+    "build:full": "CI=true tauri build",
     "build:debug": "CI=true tauri build --debug",
     "ios:init": "tauri ios init",
     "ios:dev": "tauri ios dev",
