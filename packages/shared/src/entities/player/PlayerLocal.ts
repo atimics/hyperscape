@@ -359,6 +359,8 @@ export class PlayerLocal extends Entity implements HotReloadable {
   public totalWeight: number = 0;
   // Weight drain modifier: +0.5% drain per kg carried
   private readonly weightDrainModifier: number = 0.005;
+  // Agility regen modifier: +1% regen per agility level
+  private readonly agilityRegenModifier: number = 0.01;
   // Implement HotReloadable interface
   hotReload?(): void {
     // Implementation for hot reload functionality
@@ -2165,8 +2167,13 @@ export class PlayerLocal extends Entity implements HotReloadable {
         this.autoRunSwitchSent = true;
       }
     } else if (currentEmote === "walk") {
+      // Agility-based regen: +1% per agility level
+      const agilityMultiplier =
+        1 + this.skills.agility.level * this.agilityRegenModifier;
+      const regenRate =
+        this.staminaRegenWhileWalkingPerSecond * agilityMultiplier;
       this.stamina = THREE.MathUtils.clamp(
-        this.stamina + this.staminaRegenWhileWalkingPerSecond * dt,
+        this.stamina + regenRate * dt,
         0,
         100,
       );
@@ -2174,9 +2181,12 @@ export class PlayerLocal extends Entity implements HotReloadable {
         this.autoRunSwitchSent = false;
       }
     } else {
-      // Idle or other emote
+      // Idle or other emote - Agility-based regen: +1% per agility level
+      const agilityMultiplier =
+        1 + this.skills.agility.level * this.agilityRegenModifier;
+      const regenRate = this.staminaRegenPerSecond * agilityMultiplier;
       this.stamina = THREE.MathUtils.clamp(
-        this.stamina + this.staminaRegenPerSecond * dt,
+        this.stamina + regenRate * dt,
         0,
         100,
       );
