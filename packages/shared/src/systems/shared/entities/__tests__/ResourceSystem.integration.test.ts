@@ -560,7 +560,9 @@ describe("ResourceSystem Integration", () => {
 
     // Directly inject a session to test the guard clause in isolation
     // This bypasses resource registration/validation - we only test the duplicate check
-    const activeGathering = (system as any).activeGathering;
+    const activeGathering = (
+      system as { activeGathering: Map<string, Record<string, unknown>> }
+    ).activeGathering;
     activeGathering.set(playerId, {
       playerId,
       resourceId,
@@ -594,7 +596,7 @@ describe("ResourceSystem Integration", () => {
     expect(activeGathering.get(playerId).startTick).toBe(initialTick);
 
     // Advance world tick
-    (mockWorld as any).currentTick = initialTick + 5;
+    (mockWorld as { currentTick: number }).currentTick = initialTick + 5;
 
     // Emit duplicate gather request - guard clause should ignore this
     mockWorld.emit(EventType.RESOURCE_GATHER, {

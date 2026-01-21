@@ -198,4 +198,6 @@ export const MESSAGE_TYPES = {
   COOKING_REQUEST: "cookingRequest",
   /** Pray at altar to recharge prayer points */
   ALTAR_PRAY: "altarPray",
+  /** Request trade with another player */
+  TRADE_REQUEST: "tradeRequest",
 } as const;

@@ -5,6 +5,9 @@
  * - Privy (wallet and social authentication)
  * - Legacy JWT (custom token authentication)
  * - Anonymous users (fallback)
+ * - Load test mode (in-memory users, no DB)
+ *
+ * Also handles ban checking to prevent banned users from connecting.
  *
  * This module extracts all authentication logic from ServerNetwork
  * to improve maintainability and testability.
@@ -21,6 +24,108 @@ import {
 } from "../../infrastructure/auth/privy-auth";
 import { createJWT, verifyJWT } from "../../shared/utils";
 import { uuid } from "@hyperscape/shared";
+
+/**
+ * Check if load test mode is enabled
+ * When enabled, allows anonymous connections without database insertion
+ */
+export function isLoadTestMode(): boolean {
+  return process.env.LOAD_TEST_MODE === "true";
+}
+
+/**
+ * Ban information returned when a user is banned
+ */
+export type BanInfo = {
+  isBanned: boolean;
+  reason?: string;
+  expiresAt?: number | null;
+  bannedByName?: string;
+};
+
+/**
+ * Checks if a user is currently banned
+ *
+ * @param userId - The user ID to check
+ * @param db - Database instance for ban lookups
+ * @returns Ban information if banned, or { isBanned: false } if not banned
+ */
+export async function checkUserBan(
+  userId: string,
+  db: SystemDatabase,
+): Promise<BanInfo> {
+  try {
+    const now = Date.now();
+
+    // Query for active bans that haven't expired
+    // A ban is active if: active=1 AND (expiresAt IS NULL OR expiresAt > now)
+    // Type for ban query result
+    type BanRow = {
+      bannedByUserId?: string;
+      reason?: string;
+      expiresAt?: number | null;
+    };
+
+    const activeBan = (await db("user_bans")
+      .where("bannedUserId", userId)
+      .where("active", 1)
+      .where(function (this: ReturnType<SystemDatabase>) {
+        this.whereNull("expiresAt").orWhere("expiresAt", ">", now);
+      })
+      .first()) as BanRow | undefined;
+
+    if (!activeBan) {
+      return { isBanned: false };
+    }
+
+    // Get the name of who banned them (for the ban message)
+    let bannedByName = "a moderator";
+    if (activeBan.bannedByUserId) {
+      const bannedByUser = (await db("users")
+        .where("id", activeBan.bannedByUserId)
+        .select("name")
+        .first()) as { name?: string } | undefined;
+      if (bannedByUser?.name) {
+        bannedByName = bannedByUser.name;
+      }
+    }
+
+    return {
+      isBanned: true,
+      reason: activeBan.reason || undefined,
+      expiresAt: activeBan.expiresAt || null,
+      bannedByName,
+    };
+  } catch (err) {
+    // ONLY allow connection if the error is specifically about missing table
+    // This prevents security bypass if database has other issues
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const isTableMissing =
+      errorMessage.includes("user_bans") &&
+      (errorMessage.includes("does not exist") ||
+        errorMessage.includes("no such table") ||
+        errorMessage.includes("relation") ||
+        errorMessage.includes("42P01")); // PostgreSQL error code for undefined table
+
+    if (isTableMissing) {
+      console.warn(
+        "[Authentication] user_bans table does not exist - skipping ban check (run migrations)",
+      );
+      return { isBanned: false };
+    }
+
+    // For any other error, log it and DENY access to be safe
+    console.error(
+      "[Authentication] Ban check failed with unexpected error:",
+      err,
+    );
+    console.error("[Authentication] DENYING ACCESS due to ban check failure");
+    return {
+      isBanned: true,
+      reason: "Unable to verify ban status - please try again later",
+    };
+  }
+}
 
 /**
  * Authenticates a user from connection parameters
@@ -201,20 +306,38 @@ export async function authenticateUser(
   // Create anonymous user if no authentication succeeded
   if (!user) {
     const timestamp = new Date().toISOString();
+
+    // Check if this is a load test bot (URL params come as strings)
+    const loadTestBotParam = (params as { loadTestBot?: string | boolean })
+      .loadTestBot;
+    const isLoadTestBot =
+      loadTestBotParam === "true" || loadTestBotParam === true;
+    const botName = (params as { botName?: string }).botName;
+
     user = {
       id: uuid(),
-      name: "Anonymous",
+      name: isLoadTestBot && botName ? botName : "Anonymous",
       avatar: null,
       roles: "",
       createdAt: timestamp,
     };
-    await db("users").insert({
-      id: user.id,
-      name: user.name,
-      avatar: user.avatar,
-      roles: Array.isArray(user.roles) ? user.roles.join(",") : user.roles,
-      createdAt: timestamp,
-    });
+
+    // In load test mode with load test bots, skip database insertion for performance
+    // This allows spawning thousands of bots without DB overhead
+    if (isLoadTestMode() && isLoadTestBot) {
+      console.log(
+        `[Authentication] Load test bot authenticated: ${user.name} (${user.id})`,
+      );
+    } else {
+      // Normal anonymous user - insert into database
+      await db("users").insert({
+        id: user.id,
+        name: user.name,
+        avatar: user.avatar,
+        roles: Array.isArray(user.roles) ? user.roles.join(",") : user.roles,
+        createdAt: timestamp,
+      });
+    }
     authToken = await createJWT({ userId: user.id });
   }
 

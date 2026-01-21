@@ -7,7 +7,6 @@ import {
   MapPin,
   TreePine,
   Landmark,
-  Coins,
   Flame,
   Pickaxe,
   Fish,

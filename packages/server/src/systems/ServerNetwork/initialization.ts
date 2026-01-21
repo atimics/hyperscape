@@ -22,7 +22,13 @@
 import type { World } from "@hyperscape/shared";
 import type { SystemDatabase, SpawnData } from "../../shared/types";
 
-// Default spawn point (safe height above terrain)
+interface TownSystemLike {
+  getSpawnTown: () =>
+    | { name: string; position: { x: number; y: number; z: number } }
+    | undefined;
+}
+
+// Default spawn point (fallback if TownSystem unavailable)
 const DEFAULT_SPAWN = '{ "position": [0, 50, 0], "quaternion": [0, 0, 0, 1] }';
 
 /**
@@ -43,20 +49,44 @@ export class InitializationManager {
   ) {}
 
   /**
-   * Load spawn point configuration from database
+   * Load spawn point configuration
    *
-   * Queries the config table for spawn point data and returns parsed result.
-   * Falls back to default spawn if not found or invalid.
+   * Priority: TownSystem spawn town > DB config > default fallback
+   * Uses the town nearest to world origin (0,0) as spawn point.
    *
    * @returns Spawn point configuration
    */
   async loadSpawnPoint(): Promise<SpawnData> {
+    // Try TownSystem first (town nearest to origin)
+    const townSystem = this.world.getSystem(
+      "towns",
+    ) as unknown as TownSystemLike | null;
+    const spawnTown = townSystem?.getSpawnTown?.();
+
+    if (spawnTown) {
+      console.log(
+        `[InitializationManager] Using spawn town: ${spawnTown.name} at (${spawnTown.position.x.toFixed(0)}, ${spawnTown.position.z.toFixed(0)})`,
+      );
+      return {
+        position: [
+          spawnTown.position.x,
+          spawnTown.position.y,
+          spawnTown.position.z,
+        ],
+        quaternion: [0, 0, 0, 1],
+      };
+    }
+
+    // Fallback to database config
     try {
       const spawnRow = (await this.db("config")
         .where("key", "spawn")
         .first()) as { value?: string } | undefined;
 
       const spawnValue = spawnRow?.value || DEFAULT_SPAWN;
+      console.log(
+        "[InitializationManager] TownSystem unavailable, using DB/default spawn",
+      );
       return JSON.parse(spawnValue) as SpawnData;
     } catch (err) {
       console.error(

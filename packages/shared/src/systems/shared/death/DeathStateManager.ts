@@ -24,7 +24,7 @@ import { EventType } from "../../../types/events";
 
 const DEBUG_DEATH_STATE = false;
 
-function debugLog(message: string, ...args: unknown[]): void {
+function _debugLog(message: string, ...args: unknown[]): void {
   if (DEBUG_DEATH_STATE) {
     console.log(message, ...args);
   }

@@ -40,6 +40,12 @@ import type {
   PlayerRow,
   PlayerSessionRow,
   WorldChunkRow,
+  ActivityLogEntry,
+  ActivityLogRow,
+  ActivityLogQueryOptions,
+  TradeEntry,
+  TradeRow,
+  TradeQueryOptions,
 } from "../../shared/types";
 import {
   CharacterRepository,
@@ -51,11 +57,10 @@ import {
   NPCKillRepository,
   DeathRepository,
   TemplateRepository,
+  ActivityLogRepository,
+  BankRepository,
 } from "../../database/repositories";
-import type {
-  DeathLockData,
-  DeathItemData,
-} from "../../database/repositories/DeathRepository";
+import type { DeathLockData } from "../../database/repositories/DeathRepository";
 
 /**
  * Transaction isolation levels for database operations
@@ -104,6 +109,8 @@ export class DatabaseSystem extends SystemBase {
   private npcKillRepository!: NPCKillRepository;
   private deathRepository!: DeathRepository;
   private templateRepository!: TemplateRepository;
+  private activityLogRepository!: ActivityLogRepository;
+  private bankRepository!: BankRepository;
 
   /**
    * Constructor
@@ -153,6 +160,11 @@ export class DatabaseSystem extends SystemBase {
       this.npcKillRepository = new NPCKillRepository(this.db, this.pool);
       this.deathRepository = new DeathRepository(this.db, this.pool);
       this.templateRepository = new TemplateRepository(this.db, this.pool);
+      this.activityLogRepository = new ActivityLogRepository(
+        this.db,
+        this.pool,
+      );
+      this.bankRepository = new BankRepository(this.db, this.pool);
     } else {
       throw new Error(
         "[DatabaseSystem] Drizzle database not provided on world object",
@@ -191,6 +203,8 @@ export class DatabaseSystem extends SystemBase {
     this.npcKillRepository.markDestroying();
     this.deathRepository.markDestroying();
     this.templateRepository.markDestroying();
+    this.activityLogRepository.markDestroying();
+    this.bankRepository.markDestroying();
 
     if (this.pendingOperations.size === 0) {
       return;
@@ -727,6 +741,122 @@ export class DatabaseSystem extends SystemBase {
    */
   async getNPCKillCountAsync(playerId: string, npcId: string): Promise<number> {
     return this.npcKillRepository.getNPCKillCountAsync(playerId, npcId);
+  }
+
+  // ============================================================================
+  // ACTIVITY LOG MANAGEMENT (Admin Panel)
+  // ============================================================================
+
+  /**
+   * Insert a single activity log entry
+   * Delegates to ActivityLogRepository
+   */
+  async insertActivityAsync(entry: ActivityLogEntry): Promise<number> {
+    return this.activityLogRepository.insertActivityAsync(entry);
+  }
+
+  /**
+   * Insert multiple activity log entries in a batch
+   * Delegates to ActivityLogRepository
+   */
+  async insertActivitiesBatchAsync(
+    entries: ActivityLogEntry[],
+  ): Promise<number> {
+    return this.activityLogRepository.insertActivitiesBatchAsync(entries);
+  }
+
+  /**
+   * Query activity logs with filtering
+   * Delegates to ActivityLogRepository
+   */
+  async queryActivitiesAsync(
+    options: ActivityLogQueryOptions,
+  ): Promise<ActivityLogRow[]> {
+    return this.activityLogRepository.queryActivitiesAsync(options);
+  }
+
+  /**
+   * Get count of activity logs matching criteria
+   * Delegates to ActivityLogRepository
+   */
+  async countActivitiesAsync(
+    options: ActivityLogQueryOptions,
+  ): Promise<number> {
+    return this.activityLogRepository.countActivitiesAsync(options);
+  }
+
+  /**
+   * Get distinct event types in the activity log
+   * Delegates to ActivityLogRepository
+   */
+  async getActivityEventTypesAsync(): Promise<string[]> {
+    return this.activityLogRepository.getEventTypesAsync();
+  }
+
+  /**
+   * Insert a trade record
+   * Delegates to ActivityLogRepository
+   */
+  async insertTradeAsync(entry: TradeEntry): Promise<number> {
+    return this.activityLogRepository.insertTradeAsync(entry);
+  }
+
+  /**
+   * Query trade history with filtering
+   * Delegates to ActivityLogRepository
+   */
+  async queryTradesAsync(options: TradeQueryOptions): Promise<TradeRow[]> {
+    return this.activityLogRepository.queryTradesAsync(options);
+  }
+
+  /**
+   * Get count of trades matching criteria
+   * Delegates to ActivityLogRepository
+   */
+  async countTradesAsync(options: TradeQueryOptions): Promise<number> {
+    return this.activityLogRepository.countTradesAsync(options);
+  }
+
+  /**
+   * Cleanup old activity logs (retention policy)
+   * Delegates to ActivityLogRepository
+   */
+  async cleanupOldActivitiesAsync(daysOld: number = 90): Promise<number> {
+    return this.activityLogRepository.cleanupOldActivitiesAsync(daysOld);
+  }
+
+  /**
+   * Cleanup old trade records (retention policy)
+   * Delegates to ActivityLogRepository
+   */
+  async cleanupOldTradesAsync(daysOld: number = 90): Promise<number> {
+    return this.activityLogRepository.cleanupOldTradesAsync(daysOld);
+  }
+
+  /**
+   * Get activity summary for a player
+   * Delegates to ActivityLogRepository
+   */
+  async getPlayerActivitySummaryAsync(
+    playerId: string,
+  ): Promise<Record<string, number>> {
+    return this.activityLogRepository.getPlayerActivitySummaryAsync(playerId);
+  }
+
+  /**
+   * Get the ActivityLogRepository for direct access
+   * Used by ActivityLoggerSystem for batch operations
+   */
+  getActivityLogRepository(): ActivityLogRepository {
+    return this.activityLogRepository;
+  }
+
+  /**
+   * Get the BankRepository for direct access
+   * Used by admin routes for bank queries
+   */
+  getBankRepository(): BankRepository {
+    return this.bankRepository;
   }
 
   // ============================================================================

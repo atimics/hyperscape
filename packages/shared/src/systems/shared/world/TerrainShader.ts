@@ -342,7 +342,7 @@ export function createTerrainMaterial(): THREE.Material & {
     mul(toCamera.z, toCamera.z),
   );
   // LOD threshold: 100m^2 = 10000 - closer threshold for faster falloff
-  const lodDetailFactor = smoothstep(float(15000.0), float(8000.0), distSq);
+  const _lodDetailFactor = smoothstep(float(15000.0), float(8000.0), distSq);
 
   // Sample Perlin noise - ONLY 1 base sample always needed
   const noiseUV = mul(vec2(worldPos.x, worldPos.z), noiseScale);

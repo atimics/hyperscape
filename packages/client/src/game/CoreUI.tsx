@@ -23,6 +23,7 @@ import { Sidebar } from "./Sidebar";
 import { StatusBars } from "./hud/StatusBars";
 import { XPProgressOrb } from "./hud/XPProgressOrb";
 import { LevelUpNotification } from "./hud/level-up";
+import { HomeTeleportButton } from "./hud/HomeTeleportButton";
 
 // Type for icon components
 type IconComponent = React.ComponentType<{ size?: number | string }>;
@@ -300,6 +301,7 @@ export function CoreUI({ world }: { world: ClientWorld }) {
         {deathScreen && <DeathScreen data={deathScreen} world={world} />}
         {ready && isTouch && <TouchBtns world={world} />}
         {ready && <EntityContextMenu world={world} />}
+        {ready && !isSpectatorMode && <HomeTeleportButton world={world} />}
         <div id="core-ui-portal" />
       </div>
     </ChatProvider>

@@ -8,6 +8,10 @@ dist/
 build/
 *.tsbuildinfo
 
+# Rust/Cargo (Tauri app)
+**/target/
+**/*.rs.bk
+
 # Serena
 .serena/
 
@@ -93,3 +97,5 @@ infrastructure/*.tfstate.*
 infrastructure/terraform.tfvars
 infrastructure/*.tfplan
 infrastructure/crash.log
+
+packages/server/world/assets/

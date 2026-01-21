@@ -23,8 +23,20 @@ export type ChunkID = string & { readonly __brand: "ChunkID" };
 export type SlotNumber = number & { readonly __brand: "SlotNumber" };
 
 // Validation functions
+// Note: These are type guards for branded types, not strict format validators.
+// The minimal checks (non-empty string) are intentional:
+// - Actual ID format validation happens at system boundaries (auth, DB)
+// - Overly strict validation here would break legitimate ID formats
+// - Invalid IDs simply won't match any records in the database
+
 export function isValidPlayerID(id: unknown): id is PlayerID {
-  return typeof id === "string" && id.length > 0;
+  // Basic type check + non-empty + reasonable length limit
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    id.length <= 128 &&
+    id.trim().length > 0
+  );
 }
 
 export function isValidMobID(id: unknown): id is MobID {

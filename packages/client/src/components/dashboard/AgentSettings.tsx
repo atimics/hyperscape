@@ -126,20 +126,17 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
       });
       if (response.ok) {
         console.log("[AgentSettings] ✅ Settings updated successfully");
-        // eslint-disable-next-line no-undef
-        alert("Settings saved successfully!");
+        window.alert("Settings saved successfully!");
       } else {
         const errorData = await response.json().catch(() => ({}));
         console.error("[AgentSettings] ❌ Failed to save settings:", errorData);
-        // eslint-disable-next-line no-undef
-        alert(
+        window.alert(
           `Failed to save settings: ${errorData.error || response.statusText}`,
         );
       }
     } catch (error) {
       console.error("[AgentSettings] ❌ Error saving settings:", error);
-      // eslint-disable-next-line no-undef
-      alert("Error saving settings.");
+      window.alert("Error saving settings.");
     } finally {
       setSaving(false);
     }
@@ -157,7 +154,7 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
       }
 
       if (Object.keys(secretsToSave).length === 0) {
-        alert("No API keys to save. Please enter at least one API key.");
+        window.alert("No API keys to save. Please enter at least one API key.");
         setSavingSecrets(false);
         return;
       }
@@ -175,19 +172,19 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
 
       if (response.ok) {
         console.log("[AgentSettings] ✅ API keys saved successfully");
-        alert(
+        window.alert(
           "API keys saved successfully! Restart the agent for changes to take effect.",
         );
       } else {
         const errorData = await response.json().catch(() => ({}));
         console.error("[AgentSettings] ❌ Failed to save API keys:", errorData);
-        alert(
+        window.alert(
           `Failed to save API keys: ${errorData.error || response.statusText}`,
         );
       }
     } catch (error) {
       console.error("[AgentSettings] ❌ Error saving API keys:", error);
-      alert("Error saving API keys.");
+      window.alert("Error saving API keys.");
     } finally {
       setSavingSecrets(false);
     }
@@ -202,8 +199,7 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
       // Navigation will happen automatically when agent is removed from list
     } catch (error) {
       console.error("[AgentSettings] ❌ Error deleting agent:", error);
-      // eslint-disable-next-line no-undef
-      alert("Failed to delete agent. Please try again.");
+      window.alert("Failed to delete agent. Please try again.");
       setDeleting(false);
       setShowDeleteConfirm(false);
     }

@@ -37,6 +37,12 @@ import { BIOMES } from "../../../data/world-structure";
 import { DataManager } from "../../../data/DataManager";
 import { WaterSystem, Environment } from "..";
 import { createTerrainMaterial, TerrainUniforms } from "./TerrainShader";
+import type { RoadNetworkSystem } from "./RoadNetworkSystem";
+
+// Road coloring constants
+const ROAD_COLOR = { r: 0.45, g: 0.35, b: 0.25 }; // Dirt brown color
+const ROAD_EDGE_COLOR = { r: 0.5, g: 0.4, b: 0.3 }; // Slightly lighter for edges
+const ROAD_BLEND_WIDTH = 2; // Extra blend distance beyond road width
 
 interface BiomeCenter {
   x: number;
@@ -91,6 +97,7 @@ export class TerrainSystem extends System {
   private _tempVec2_2 = new THREE.Vector2();
   private _tempBox3 = new THREE.Box3();
   private waterSystem?: WaterSystem;
+  private roadNetworkSystem?: RoadNetworkSystem;
 
   // PERFORMANCE: Template geometry and pre-allocated buffers for tile creation
   private templateGeometry: THREE.PlaneGeometry | null = null;
@@ -555,6 +562,22 @@ export class TerrainSystem extends System {
 
     // Load initial tiles
     this.loadInitialTiles();
+
+    // Get road network system reference (may not be available yet if roads depend on terrain)
+    // Roads will be applied when tiles are regenerated after road system initializes
+    this.roadNetworkSystem = this.world.getSystem("roads") as
+      | RoadNetworkSystem
+      | undefined;
+
+    // Subscribe to roads generated event to refresh existing tile colors
+    this.world.on(EventType.ROADS_GENERATED, () => {
+      // Get road system reference now that it's ready
+      this.roadNetworkSystem = this.world.getSystem("roads") as
+        | RoadNetworkSystem
+        | undefined;
+      // Refresh all loaded tiles to apply road coloring
+      this.refreshTileColors();
+    });
 
     // Start player-based terrain update loop
     this.terrainUpdateIntervalId = setInterval(() => {
@@ -1144,6 +1167,29 @@ export class TerrainSystem extends System {
         colorB = colorB + (0.333 - colorB) * shoreFactor;
       }
 
+      // Apply road coloring based on distance to road segments
+      const roadInfluence = this.calculateRoadInfluenceAtVertex(
+        x,
+        z,
+        tileX,
+        tileZ,
+      );
+      if (roadInfluence > 0) {
+        // Blend toward road color based on influence (1.0 = fully on road)
+        // Use slightly different colors for center vs edge of road
+        const edgeFactor = 1.0 - roadInfluence; // Higher at edges
+        const roadR =
+          ROAD_COLOR.r * roadInfluence + ROAD_EDGE_COLOR.r * edgeFactor * 0.3;
+        const roadG =
+          ROAD_COLOR.g * roadInfluence + ROAD_EDGE_COLOR.g * edgeFactor * 0.3;
+        const roadB =
+          ROAD_COLOR.b * roadInfluence + ROAD_EDGE_COLOR.b * edgeFactor * 0.3;
+
+        colorR = colorR * (1 - roadInfluence) + roadR * roadInfluence;
+        colorG = colorG * (1 - roadInfluence) + roadG * roadInfluence;
+        colorB = colorB * (1 - roadInfluence) + roadB * roadInfluence;
+      }
+
       // Store blended color
       colors[i * 3] = colorR;
       colors[i * 3 + 1] = colorG;
@@ -1158,6 +1204,173 @@ export class TerrainSystem extends System {
     this.storeHeightData(tileX, tileZ, heightData);
 
     return geometry;
+  }
+
+  /**
+   * Calculate road influence at a vertex position
+   * Returns 0-1 where 1 = center of road, 0 = no road
+   */
+  private calculateRoadInfluenceAtVertex(
+    worldX: number,
+    worldZ: number,
+    tileX: number,
+    tileZ: number,
+  ): number {
+    // Lazy-load road system reference
+    this.roadNetworkSystem ??= this.world.getSystem("roads") as
+      | RoadNetworkSystem
+      | undefined;
+    if (!this.roadNetworkSystem) return 0;
+
+    const segments = this.roadNetworkSystem.getRoadSegmentsForTile(
+      tileX,
+      tileZ,
+    );
+    if (segments.length === 0) return 0;
+
+    // Convert to local tile coordinates
+    const localX = worldX - tileX * this.CONFIG.TILE_SIZE;
+    const localZ = worldZ - tileZ * this.CONFIG.TILE_SIZE;
+
+    // Find minimum distance and width to any road segment
+    let minDistance = Infinity;
+    let closestWidth = this.CONFIG.ROAD_WIDTH;
+
+    for (const segment of segments) {
+      const distance = this.distanceToLineSegmentLocal(
+        localX,
+        localZ,
+        segment.start.x,
+        segment.start.z,
+        segment.end.x,
+        segment.end.z,
+      );
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestWidth = segment.width;
+      }
+    }
+
+    // Calculate influence based on distance
+    const halfWidth = closestWidth / 2;
+    const totalInfluenceWidth = halfWidth + ROAD_BLEND_WIDTH;
+
+    if (minDistance >= totalInfluenceWidth) return 0;
+    if (minDistance <= halfWidth) return 1.0;
+
+    // In blend zone - apply smoothstep falloff
+    const t = 1.0 - (minDistance - halfWidth) / ROAD_BLEND_WIDTH;
+    return t * t * (3 - 2 * t); // smoothstep
+  }
+
+  /**
+   * Calculate distance from point to line segment (local coordinates)
+   */
+  private distanceToLineSegmentLocal(
+    px: number,
+    pz: number,
+    x1: number,
+    z1: number,
+    x2: number,
+    z2: number,
+  ): number {
+    const dx = x2 - x1;
+    const dz = z2 - z1;
+    const lengthSq = dx * dx + dz * dz;
+
+    if (lengthSq === 0) {
+      // Segment is a point
+      return Math.sqrt((px - x1) ** 2 + (pz - z1) ** 2);
+    }
+
+    // Project point onto segment
+    const t = Math.max(
+      0,
+      Math.min(1, ((px - x1) * dx + (pz - z1) * dz) / lengthSq),
+    );
+
+    const projX = x1 + t * dx;
+    const projZ = z1 + t * dz;
+
+    return Math.sqrt((px - projX) ** 2 + (pz - projZ) ** 2);
+  }
+
+  /**
+   * Refresh vertex colors for all loaded tiles
+   * Called when road network becomes available to apply road coloring
+   */
+  private refreshTileColors(): void {
+    console.log(
+      `[TerrainSystem] Refreshing tile colors for ${this.terrainTiles.size} tiles after road generation`,
+    );
+
+    for (const [key, tile] of this.terrainTiles) {
+      if (!tile.mesh) continue;
+
+      // Parse tile coordinates from key
+      const parts = key.split("_");
+      const tileX = parseInt(parts[0], 10);
+      const tileZ = parseInt(parts[1], 10);
+
+      // Get geometry
+      const geometry = (tile.mesh as THREE.Mesh)
+        .geometry as THREE.BufferGeometry;
+      if (!geometry) continue;
+
+      const positions = geometry.attributes.position;
+      const colors = geometry.attributes.color;
+      if (!positions || !colors) continue;
+
+      // Verify biome data is loaded
+      if (Object.keys(BIOMES).length === 0) continue;
+
+      // Update colors with road influence
+      const colorArray = colors.array as Float32Array;
+
+      for (let i = 0; i < positions.count; i++) {
+        const localX = positions.getX(i);
+        const localZ = positions.getZ(i);
+        const x = localX + tileX * this.CONFIG.TILE_SIZE;
+        const z = localZ + tileZ * this.CONFIG.TILE_SIZE;
+
+        // Get current color
+        let colorR = colorArray[i * 3];
+        let colorG = colorArray[i * 3 + 1];
+        let colorB = colorArray[i * 3 + 2];
+
+        // Apply road coloring based on distance to road segments
+        const roadInfluence = this.calculateRoadInfluenceAtVertex(
+          x,
+          z,
+          tileX,
+          tileZ,
+        );
+        if (roadInfluence > 0) {
+          // Blend toward road color based on influence
+          const edgeFactor = 1.0 - roadInfluence;
+          const roadR =
+            ROAD_COLOR.r * roadInfluence + ROAD_EDGE_COLOR.r * edgeFactor * 0.3;
+          const roadG =
+            ROAD_COLOR.g * roadInfluence + ROAD_EDGE_COLOR.g * edgeFactor * 0.3;
+          const roadB =
+            ROAD_COLOR.b * roadInfluence + ROAD_EDGE_COLOR.b * edgeFactor * 0.3;
+
+          colorR = colorR * (1 - roadInfluence) + roadR * roadInfluence;
+          colorG = colorG * (1 - roadInfluence) + roadG * roadInfluence;
+          colorB = colorB * (1 - roadInfluence) + roadB * roadInfluence;
+
+          // Update color array
+          colorArray[i * 3] = colorR;
+          colorArray[i * 3 + 1] = colorG;
+          colorArray[i * 3 + 2] = colorB;
+        }
+      }
+
+      // Mark color attribute as needing update
+      colors.needsUpdate = true;
+    }
+
+    console.log("[TerrainSystem] Tile color refresh complete");
   }
 
   /**

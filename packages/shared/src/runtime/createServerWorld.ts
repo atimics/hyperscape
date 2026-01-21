@@ -43,6 +43,8 @@ import { ServerLoader } from "../systems/server/ServerLoader";
 // import { ServerNetwork } from './systems/ServerNetwork'
 
 import { TerrainSystem } from "../systems/shared";
+import { TownSystem } from "../systems/shared";
+import { RoadNetworkSystem } from "../systems/shared";
 
 // RPG systems are registered via SystemLoader to keep them modular
 import { registerSystems } from "../systems/shared";
@@ -83,6 +85,15 @@ export async function createServerWorld(): Promise<World> {
   // Server generates terrain data that clients can request
 
   world.register("terrain", TerrainSystem);
+
+  // ============================================================================
+  // TOWN AND ROAD SYSTEMS
+  // ============================================================================
+  // Procedural town generation with flatness-based placement
+  // Road network connects towns using A* pathfinding with terrain costs
+
+  world.register("towns", TownSystem);
+  world.register("roads", RoadNetworkSystem);
 
   // ============================================================================
   // RPG GAME SYSTEMS

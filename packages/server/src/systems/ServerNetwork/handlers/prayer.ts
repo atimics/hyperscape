@@ -72,9 +72,10 @@ export function handlePrayerToggle(
   const { prayerId } = data;
 
   // Validate timestamp to prevent replay attacks (if provided)
-  const payload = data as Record<string, unknown>;
-  if (payload.timestamp !== undefined) {
-    const timestampValidation = validateRequestTimestamp(payload.timestamp);
+  // Cast through unknown since PrayerTogglePayload may have extra fields from network
+  const rawPayload = data as unknown as Record<string, unknown>;
+  if (rawPayload.timestamp !== undefined) {
+    const timestampValidation = validateRequestTimestamp(rawPayload.timestamp);
     if (!timestampValidation.valid) {
       console.warn(
         `[Prayer] Replay attack blocked from ${playerId}: ${timestampValidation.reason}`,

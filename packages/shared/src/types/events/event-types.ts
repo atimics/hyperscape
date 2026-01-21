@@ -110,6 +110,10 @@ export enum EventType {
   TERRAIN_VALIDATION_COMPLETE = "terrain:validation:complete",
   TERRAIN_PHYSICS_READY = "terrain:physics:ready",
 
+  // Road System
+  ROADS_GENERATED = "roads:generated",
+  TERRAIN_REFRESH_TILES = "terrain:refresh:tiles",
+
   // Camera System
   CAMERA_SET_TARGET = "camera:set_target",
   CAMERA_CLICK_WORLD = "camera:click:world",
@@ -156,6 +160,13 @@ export enum EventType {
   PLAYER_POSITION_UPDATED = "player:position:updated",
   PLAYER_TELEPORT_REQUEST = "player:teleport_request",
   PLAYER_TELEPORTED = "player:teleported",
+
+  // Home Teleport
+  HOME_TELEPORT_REQUEST = "home:teleport:request",
+  HOME_TELEPORT_CAST_START = "home:teleport:cast_start",
+  HOME_TELEPORT_CAST_CANCEL = "home:teleport:cast_cancel",
+  HOME_TELEPORT_COMPLETE = "home:teleport:complete",
+  HOME_TELEPORT_FAILED = "home:teleport:failed",
 
   // Player Combat Style
   ATTACK_STYLE_CHANGED = "attack_style:changed",
@@ -598,4 +609,19 @@ export enum EventType {
   ENTITY_MODIFIED = "entityModified",
   ENTITY_INTERACT_REQUEST = "entity:interact_request",
   AGGRO_FORCE_TRIGGER = "aggro:force-trigger",
+
+  // Trading System
+  TRADE_REQUEST = "trade:request",
+  TRADE_REQUEST_RECEIVED = "trade:request_received",
+  TRADE_REQUEST_RESPOND = "trade:request_respond",
+  TRADE_STARTED = "trade:started",
+  TRADE_UPDATED = "trade:updated",
+  TRADE_ITEM_ADDED = "trade:item_added",
+  TRADE_ITEM_REMOVED = "trade:item_removed",
+  TRADE_ACCEPTED = "trade:accepted",
+  TRADE_ACCEPT_CANCELLED = "trade:accept_cancelled",
+  TRADE_COMPLETED = "trade:completed",
+  TRADE_CANCELLED = "trade:cancelled",
+  TRADE_ERROR = "trade:error",
+  TRADE_CLOSE = "trade:close",
 }

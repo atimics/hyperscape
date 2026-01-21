@@ -74,7 +74,7 @@ import { DeathState } from "../../types/entities";
 /**
  * Type guard to validate HeadstoneEntityConfig has required properties
  */
-function isValidHeadstoneConfig(
+function _isValidHeadstoneConfig(
   config: unknown,
 ): config is HeadstoneEntityConfig {
   if (!config || typeof config !== "object") return false;

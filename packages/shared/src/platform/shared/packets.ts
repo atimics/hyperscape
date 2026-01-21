@@ -241,6 +241,26 @@ const names = [
   'prayerStateSync',     // Server -> Client: full prayer state sync
   'prayerToggled',       // Server -> Client: prayer toggle feedback
   'prayerPointsChanged', // Server -> Client: prayer points changed
+  // Home Teleport packets
+  'homeTeleport',        // Client -> Server: request home teleport
+  'homeTeleportCancel',  // Client -> Server: cancel home teleport cast
+  'homeTeleportStart',   // Server -> Client: casting started (show progress)
+  'homeTeleportFailed',  // Server -> Client: teleport failed (combat, cooldown, etc.)
+  // Player Trading packets
+  'tradeRequest',        // Client -> Server: request trade with target player
+  'tradeRequestRespond', // Client -> Server: accept/decline incoming trade request
+  'tradeIncoming',       // Server -> Client: notify of incoming trade request
+  'tradeStarted',        // Server -> Client: trade session activated (both players)
+  'tradeAddItem',        // Client -> Server: add item from inventory to trade offer
+  'tradeRemoveItem',     // Client -> Server: remove item from trade offer back to inventory
+  'tradeSetItemQuantity',// Client -> Server: set quantity for stackable item in trade
+  'tradeUpdated',        // Server -> Client: trade state changed (items, acceptance)
+  'tradeAccept',         // Client -> Server: accept current trade state
+  'tradeCancelAccept',   // Client -> Server: cancel acceptance (offer modified)
+  'tradeCancel',         // Client -> Server: cancel/close trade session
+  'tradeCompleted',      // Server -> Client: trade successful, items swapped
+  'tradeCancelled',      // Server -> Client: trade cancelled (disconnect, decline, etc.)
+  'tradeError',          // Server -> Client: trade operation failed with reason
 ]
 
 const byName: Record<string, PacketInfo> = {};

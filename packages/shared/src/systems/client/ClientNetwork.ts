@@ -1939,6 +1939,176 @@ export class ClientNetwork extends SystemBase {
     this.world.emit(EventType.CHARACTER_SELECTED, data);
   };
 
+  // --- Trade packet handlers ---
+
+  /**
+   * Incoming trade request from another player
+   */
+  onTradeIncoming = (data: {
+    tradeId: string;
+    fromPlayerId: string;
+    fromPlayerName: string;
+    fromPlayerLevel: number;
+  }) => {
+    this.world.emit(EventType.TRADE_REQUEST_RECEIVED, data);
+    // Also emit as UI update for modal handling
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "tradeRequest",
+      data: {
+        visible: true,
+        tradeId: data.tradeId,
+        fromPlayer: {
+          id: data.fromPlayerId,
+          name: data.fromPlayerName,
+          level: data.fromPlayerLevel,
+        },
+      },
+    });
+  };
+
+  /**
+   * Trade session started (both players accepted)
+   */
+  onTradeStarted = (data: {
+    tradeId: string;
+    partnerId: string;
+    partnerName: string;
+    partnerLevel: number;
+  }) => {
+    this.world.emit(EventType.TRADE_STARTED, data);
+    // Emit UI update to open trade panel
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "trade",
+      data: {
+        isOpen: true,
+        tradeId: data.tradeId,
+        partner: {
+          id: data.partnerId,
+          name: data.partnerName,
+          level: data.partnerLevel,
+        },
+        myOffer: [],
+        myAccepted: false,
+        theirOffer: [],
+        theirAccepted: false,
+      },
+    });
+  };
+
+  /**
+   * Trade state updated (items changed, acceptance changed)
+   */
+  onTradeUpdated = (data: {
+    tradeId: string;
+    myOffer: {
+      items: Array<{
+        inventorySlot: number;
+        itemId: string;
+        quantity: number;
+        tradeSlot: number;
+      }>;
+      accepted: boolean;
+    };
+    theirOffer: {
+      items: Array<{
+        inventorySlot: number;
+        itemId: string;
+        quantity: number;
+        tradeSlot: number;
+      }>;
+      accepted: boolean;
+    };
+  }) => {
+    this.world.emit(EventType.TRADE_UPDATED, data);
+    // Emit UI update
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "tradeUpdate",
+      data: {
+        tradeId: data.tradeId,
+        myOffer: data.myOffer.items,
+        myAccepted: data.myOffer.accepted,
+        theirOffer: data.theirOffer.items,
+        theirAccepted: data.theirOffer.accepted,
+      },
+    });
+  };
+
+  /**
+   * Trade completed successfully
+   */
+  onTradeCompleted = (data: {
+    tradeId: string;
+    receivedItems: Array<{ itemId: string; quantity: number }>;
+  }) => {
+    this.world.emit(EventType.TRADE_COMPLETED, data);
+    // Close trade panel
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "tradeClose",
+      data: { tradeId: data.tradeId, reason: "completed" },
+    });
+  };
+
+  /**
+   * Trade cancelled
+   */
+  onTradeCancelled = (data: {
+    tradeId: string;
+    reason: string;
+    message: string;
+  }) => {
+    this.world.emit(EventType.TRADE_CANCELLED, data);
+    // Close trade panel and request modal
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "tradeClose",
+      data: {
+        tradeId: data.tradeId,
+        reason: data.reason,
+        message: data.message,
+      },
+    });
+  };
+
+  /**
+   * Trade operation error
+   */
+  onTradeError = (data: { message: string; code: string }) => {
+    this.world.emit(EventType.TRADE_ERROR, data);
+    // Show toast with error message
+    this.world.emit(EventType.UI_TOAST, {
+      message: data.message,
+      type: "error",
+    });
+  };
+
+  // Trade convenience methods
+  requestTrade(targetPlayerId: string) {
+    this.send("tradeRequest", { targetPlayerId });
+  }
+
+  respondToTradeRequest(tradeId: string, accept: boolean) {
+    this.send("tradeRequestRespond", { tradeId, accept });
+  }
+
+  addItemToTrade(tradeId: string, inventorySlot: number, quantity?: number) {
+    this.send("tradeAddItem", { tradeId, inventorySlot, quantity });
+  }
+
+  removeItemFromTrade(tradeId: string, tradeSlot: number) {
+    this.send("tradeRemoveItem", { tradeId, tradeSlot });
+  }
+
+  acceptTrade(tradeId: string) {
+    this.send("tradeAccept", { tradeId });
+  }
+
+  cancelTradeAccept(tradeId: string) {
+    this.send("tradeCancelAccept", { tradeId });
+  }
+
+  cancelTrade(tradeId: string) {
+    this.send("tradeCancel", { tradeId });
+  }
+
   // Convenience methods
   requestCharacterCreate(name: string) {
     this.send("characterCreate", { name });
@@ -2513,6 +2683,12 @@ export class ClientNetwork extends SystemBase {
 
       // Now teleport the player
       player.teleport(pos);
+
+      // Emit event for UI (e.g., home teleport completion)
+      this.world.emit(EventType.PLAYER_TELEPORTED, {
+        playerId: data.playerId,
+        position: { x: pos.x, y: pos.y, z: pos.z },
+      });
     }
   };
 
@@ -2549,6 +2725,28 @@ export class ClientNetwork extends SystemBase {
     this.emitTypedEvent("UI_KICK", {
       playerId: this.id || "unknown",
       reason: code || "unknown",
+    });
+  };
+
+  // ==== Home Teleport Handlers ====
+
+  /**
+   * Handle home teleport cast started
+   * Server confirms casting has begun, client shows progress UI
+   */
+  onHomeTeleportStart = (data: { castTimeMs: number }) => {
+    this.world.emit(EventType.HOME_TELEPORT_CAST_START, {
+      castTimeMs: data.castTimeMs,
+    });
+  };
+
+  /**
+   * Handle home teleport failed
+   * Server rejected teleport request (combat, cooldown, etc.)
+   */
+  onHomeTeleportFailed = (data: { reason: string }) => {
+    this.world.emit(EventType.HOME_TELEPORT_FAILED, {
+      reason: data.reason,
     });
   };
 

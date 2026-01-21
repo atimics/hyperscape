@@ -10,7 +10,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { dataManager } from "../DataManager";
 import { ITEMS } from "../items";
-import type { Item } from "../../types/core/core";
 
 describe("DataManager items/ directory loading", () => {
   beforeAll(async () => {

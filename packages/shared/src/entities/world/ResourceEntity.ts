@@ -288,7 +288,7 @@ export class ResourceEntity extends InteractableEntity {
       };
 
       this.node.add(this.mesh);
-    } catch (error) {
+    } catch (_error) {
       // Fallback: just hide the original mesh
       if (this.mesh) {
         this.mesh.visible = false;

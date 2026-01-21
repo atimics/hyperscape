@@ -23,7 +23,7 @@ const SCENERY_COLOR = "#00ffff";
 /**
  * Furnace entity interface for type safety
  */
-interface FurnaceEntity {
+interface _FurnaceEntity {
   entityType?: string;
   displayName?: string;
 }

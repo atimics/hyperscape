@@ -56,6 +56,7 @@ import {
   worldToTile,
   tilesWithinMeleeRange,
   getItem,
+  DeathState,
 } from "@hyperscape/shared";
 
 // PlayerDeathSystem type for tick processing (not exported from main index)
@@ -146,6 +147,24 @@ import { PendingCookManager } from "./PendingCookManager";
 import { FollowManager } from "./FollowManager";
 import { FaceDirectionManager } from "./FaceDirectionManager";
 import { handleFollowPlayer } from "./handlers/player";
+import {
+  initHomeTeleportManager,
+  getHomeTeleportManager,
+  handleHomeTeleport,
+  handleHomeTeleportCancel,
+} from "./handlers/home-teleport";
+import {
+  handleTradeRequest,
+  handleTradeRequestRespond,
+  handleTradeAddItem,
+  handleTradeRemoveItem,
+  handleTradeSetQuantity,
+  handleTradeAccept,
+  handleTradeCancelAccept,
+  handleTradeCancel,
+} from "./handlers/trade";
+import { TradingSystem } from "../TradingSystem";
+import { getDatabase } from "./handlers/common";
 
 const defaultSpawn = '{ "position": [0, 50, 0], "quaternion": [0, 0, 0, 1] }';
 
@@ -216,6 +235,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   private pendingGatherManager!: PendingGatherManager;
   private pendingCookManager!: PendingCookManager;
   private followManager!: FollowManager;
+  private tradingSystem!: TradingSystem;
   private actionQueue!: ActionQueue;
   private tickSystem!: TickSystem;
   private socketManager!: SocketManager;
@@ -436,6 +456,15 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.followManager.processTick(tickNumber);
     }, TickPriority.MOVEMENT);
 
+    // Trading system - server-authoritative player-to-player trading
+    // Manages trade sessions, item offers, acceptance state, and atomic swaps
+    this.tradingSystem = new TradingSystem(this.world);
+    this.tradingSystem.init();
+
+    // Store trading system on world so handlers can access it
+    (this.world as { tradingSystem?: TradingSystem }).tradingSystem =
+      this.tradingSystem;
+
     // OSRS-accurate face direction manager
     // Defers rotation until end of tick, only applies if player didn't move
     // @see https://osrs-docs.com/docs/packets/outgoing/updating/masks/face-direction/
@@ -528,6 +557,17 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       }
     }, TickPriority.RESOURCES);
 
+    // Register home teleport system to process on each tick
+    // Handles cast completion and combat interruption checks
+    this.tickSystem.onTick((tickNumber) => {
+      const manager = getHomeTeleportManager();
+      if (manager) {
+        manager.processTick(tickNumber, (playerId: string) => {
+          return this.broadcastManager.getPlayerSocket(playerId);
+        });
+      }
+    }, TickPriority.RESOURCES);
+
     // Socket manager
     this.socketManager = new SocketManager(
       this.sockets,
@@ -542,7 +582,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     });
 
     // Reset agility progress on death (small penalty - lose accumulated tiles toward next XP grant)
-    this.world.on(EventType.PLAYER_DIED, (event: { entityId: string }) => {
+    this.world.on(EventType.PLAYER_DIED, (eventData) => {
+      const event = eventData as { entityId: string };
       this.tileMovementManager.resetAgilityProgress(event.entityId);
     });
 
@@ -564,6 +605,24 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         console.log(
           `[ServerNetwork] Synced tile position for respawned player ${event.playerId} at (${event.spawnPosition.x}, ${event.spawnPosition.z})`,
         );
+      }
+    });
+
+    // Sync tile position when player teleports home
+    // CRITICAL: Without this, TileMovementManager has stale tile position from pre-teleport location
+    // and paths would be calculated from wrong starting tile, causing player to snap back
+    this.world.on(EventType.HOME_TELEPORT_COMPLETE, (eventData) => {
+      const event = eventData as {
+        playerId: string;
+        position: { x: number; y: number; z: number };
+      };
+      if (event.playerId && event.position) {
+        this.tileMovementManager.syncPlayerPosition(
+          event.playerId,
+          event.position,
+        );
+        // Clear any pending actions from before teleport
+        this.actionQueue.cleanup(event.playerId);
       }
     });
 
@@ -726,13 +785,17 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.world as { interactionSessionManager?: InteractionSessionManager }
     ).interactionSessionManager = this.interactionSessionManager;
 
-    // Clean up interaction sessions, pending attacks, follows, gathers, and cooks when player disconnects
+    // Clean up interaction sessions, pending attacks, follows, gathers, cooks, and home teleport when player disconnects
     this.world.on(EventType.PLAYER_LEFT, (event: { playerId: string }) => {
       this.interactionSessionManager.onPlayerDisconnect(event.playerId);
       this.pendingAttackManager.onPlayerDisconnect(event.playerId);
       this.followManager.onPlayerDisconnect(event.playerId);
       this.pendingGatherManager.onPlayerDisconnect(event.playerId);
       this.pendingCookManager.onPlayerDisconnect(event.playerId);
+      const homeTeleportManager = getHomeTeleportManager();
+      if (homeTeleportManager) {
+        homeTeleportManager.onPlayerDisconnect(event.playerId);
+      }
     });
 
     // Initialization manager
@@ -791,6 +854,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         this.db,
         this.broadcastManager.sendToAll.bind(this.broadcastManager),
         this.isBuilder.bind(this),
+        this.sockets,
       );
 
     this.handlers["onEntityModified"] = (socket, data) =>
@@ -1107,10 +1171,21 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Route movement and combat through action queue for OSRS-style tick processing
     // Actions are queued and processed on tick boundaries, not immediately
     this.handlers["onMoveRequest"] = (socket, data) => {
-      // Cancel any pending attack or follow when player moves elsewhere (OSRS behavior)
+      // Cancel any pending attack, follow, or home teleport when player moves elsewhere (OSRS behavior)
       if (socket.player) {
         this.pendingAttackManager.cancelPendingAttack(socket.player.id);
         this.followManager.stopFollowing(socket.player.id);
+        const homeTeleportManager = getHomeTeleportManager();
+        if (homeTeleportManager?.isCasting(socket.player.id)) {
+          homeTeleportManager.cancelCasting(socket.player.id, "Player moved");
+          socket.send("homeTeleportFailed", {
+            reason: "Interrupted by movement",
+          });
+          socket.send("showToast", {
+            message: "Home teleport canceled",
+            type: "info",
+          });
+        }
       }
       this.actionQueue.queueMovement(socket, data);
     };
@@ -1123,10 +1198,21 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         runMode?: boolean;
       };
       if (payload.type === "click" && Array.isArray(payload.target)) {
-        // Cancel any pending attack or follow when player moves elsewhere (OSRS behavior)
+        // Cancel any pending attack, follow, or home teleport when player moves elsewhere (OSRS behavior)
         if (socket.player) {
           this.pendingAttackManager.cancelPendingAttack(socket.player.id);
           this.followManager.stopFollowing(socket.player.id);
+          const homeTeleportManager = getHomeTeleportManager();
+          if (homeTeleportManager?.isCasting(socket.player.id)) {
+            homeTeleportManager.cancelCasting(socket.player.id, "Player moved");
+            socket.send("homeTeleportFailed", {
+              reason: "Interrupted by movement",
+            });
+            socket.send("showToast", {
+              message: "Home teleport canceled",
+              type: "info",
+            });
+          }
         }
         this.actionQueue.queueMovement(socket, {
           target: payload.target,
@@ -1319,8 +1405,12 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       if (playerEntity) {
         // Validate player is actually dead before allowing respawn
         // This prevents clients from sending fake respawn requests
-        const healthComponent = playerEntity.data?.properties?.healthComponent;
-        const isDead = healthComponent?.isDead === true;
+        const entityData = playerEntity.data as
+          | { deathState?: DeathState }
+          | undefined;
+        const isDead =
+          entityData?.deathState === DeathState.DYING ||
+          entityData?.deathState === DeathState.DEAD;
 
         if (!isDead) {
           console.warn(
@@ -1341,6 +1431,27 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         );
       }
     };
+
+    // Home teleport handlers
+    this.handlers["onHomeTeleport"] = (socket, data) =>
+      handleHomeTeleport(
+        socket,
+        data,
+        this.world,
+        this.tickSystem.getCurrentTick(),
+      );
+    this.handlers["homeTeleport"] = (socket, data) =>
+      handleHomeTeleport(
+        socket,
+        data,
+        this.world,
+        this.tickSystem.getCurrentTick(),
+      );
+
+    this.handlers["onHomeTeleportCancel"] = (socket, data) =>
+      handleHomeTeleportCancel(socket, data);
+    this.handlers["homeTeleportCancel"] = (socket, data) =>
+      handleHomeTeleportCancel(socket, data);
 
     // Character selection handlers
     // Support both with and without "on" prefix for client compatibility
@@ -1644,6 +1755,147 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     this.handlers["onStoreClose"] = (socket, data) =>
       handleStoreClose(socket, data as { storeId: string }, this.world);
+
+    // Trade handlers
+    this.handlers["onTradeRequest"] = (socket, data) =>
+      handleTradeRequest(
+        socket,
+        data as { targetPlayerId: string },
+        this.world,
+      );
+
+    this.handlers["tradeRequest"] = (socket, data) =>
+      handleTradeRequest(
+        socket,
+        data as { targetPlayerId: string },
+        this.world,
+      );
+
+    this.handlers["onTradeRequestRespond"] = (socket, data) =>
+      handleTradeRequestRespond(
+        socket,
+        data as { tradeId: string; accept: boolean },
+        this.world,
+      );
+
+    this.handlers["tradeRequestRespond"] = (socket, data) =>
+      handleTradeRequestRespond(
+        socket,
+        data as { tradeId: string; accept: boolean },
+        this.world,
+      );
+
+    this.handlers["onTradeAddItem"] = (socket, data) => {
+      const db = getDatabase(this.world);
+      if (!db) {
+        console.error(
+          "[ServerNetwork] Database not available for trade add item",
+        );
+        return;
+      }
+      handleTradeAddItem(
+        socket,
+        data as { tradeId: string; inventorySlot: number; quantity?: number },
+        this.world,
+        db,
+      );
+    };
+
+    this.handlers["tradeAddItem"] = (socket, data) => {
+      const db = getDatabase(this.world);
+      if (!db) {
+        console.error(
+          "[ServerNetwork] Database not available for trade add item",
+        );
+        return;
+      }
+      handleTradeAddItem(
+        socket,
+        data as { tradeId: string; inventorySlot: number; quantity?: number },
+        this.world,
+        db,
+      );
+    };
+
+    this.handlers["onTradeRemoveItem"] = (socket, data) =>
+      handleTradeRemoveItem(
+        socket,
+        data as { tradeId: string; tradeSlot: number },
+        this.world,
+      );
+
+    this.handlers["tradeRemoveItem"] = (socket, data) =>
+      handleTradeRemoveItem(
+        socket,
+        data as { tradeId: string; tradeSlot: number },
+        this.world,
+      );
+
+    this.handlers["onTradeSetItemQuantity"] = (socket, data) => {
+      const db = getDatabase(this.world);
+      if (!db) {
+        console.error(
+          "[ServerNetwork] Database not available for trade set quantity",
+        );
+        return;
+      }
+      handleTradeSetQuantity(
+        socket,
+        data as { tradeId: string; tradeSlot: number; quantity: number },
+        this.world,
+        db,
+      );
+    };
+
+    this.handlers["tradeSetItemQuantity"] = (socket, data) => {
+      const db = getDatabase(this.world);
+      if (!db) {
+        console.error(
+          "[ServerNetwork] Database not available for trade set quantity",
+        );
+        return;
+      }
+      handleTradeSetQuantity(
+        socket,
+        data as { tradeId: string; tradeSlot: number; quantity: number },
+        this.world,
+        db,
+      );
+    };
+
+    this.handlers["onTradeAccept"] = (socket, data) => {
+      const db = getDatabase(this.world);
+      if (!db) {
+        console.error(
+          "[ServerNetwork] Database not available for trade accept",
+        );
+        return;
+      }
+      handleTradeAccept(socket, data as { tradeId: string }, this.world, db);
+    };
+
+    this.handlers["tradeAccept"] = (socket, data) => {
+      const db = getDatabase(this.world);
+      if (!db) {
+        console.error(
+          "[ServerNetwork] Database not available for trade accept",
+        );
+        return;
+      }
+      handleTradeAccept(socket, data as { tradeId: string }, this.world, db);
+    };
+
+    this.handlers["onTradeCancelAccept"] = (socket, data) =>
+      handleTradeCancelAccept(socket, data as { tradeId: string }, this.world);
+
+    this.handlers["tradeCancelAccept"] = (socket, data) =>
+      handleTradeCancelAccept(socket, data as { tradeId: string }, this.world);
+
+    this.handlers["onTradeCancel"] = (socket, data) =>
+      handleTradeCancel(socket, data as { tradeId: string }, this.world);
+
+    this.handlers["tradeCancel"] = (socket, data) =>
+      handleTradeCancel(socket, data as { tradeId: string }, this.world);
   }
 
   async init(options: WorldOptions): Promise<void> {
@@ -1667,6 +1919,13 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Load spawn configuration
     this.spawn = await this.initializationManager.loadSpawnPoint();
+
+    // Initialize home teleport manager with spawn point
+    initHomeTeleportManager(
+      this.world,
+      this.spawn,
+      this.broadcastManager.sendToAll.bind(this.broadcastManager),
+    );
 
     // Hydrate entities from database
     await this.initializationManager.hydrateEntities();
@@ -1780,6 +2039,14 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
   isAdmin(player: { data?: { roles?: string[] } }): boolean {
     return hasRole(player.data?.roles as string[] | undefined, "admin");
+  }
+
+  /**
+   * Check if player has moderator permissions (mod or admin role)
+   * Moderators can use advanced commands like /teleport
+   */
+  isMod(player: { data?: { roles?: string[] } }): boolean {
+    return hasRole(player.data?.roles as string[] | undefined, "mod", "admin");
   }
 
   isBuilder(player: { data?: { roles?: string[] } }): boolean {

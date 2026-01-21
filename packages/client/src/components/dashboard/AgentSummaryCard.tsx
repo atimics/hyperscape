@@ -133,7 +133,9 @@ export const AgentSummaryCard: React.FC<AgentSummaryCardProps> = ({
         const goalResponse = await fetch(
           `${GAME_API_URL}/api/agents/${agent.id}/goal`,
         );
-        let goalData = null;
+        let goalData: {
+          goal?: { description?: string; progressPercent?: number };
+        } | null = null;
         if (goalResponse.ok) {
           goalData = await goalResponse.json();
         }

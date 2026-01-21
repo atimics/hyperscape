@@ -354,7 +354,8 @@ export class CollisionMatrix implements ICollisionMatrix {
    */
   deserializeZone(zoneX: number, zoneZ: number, base64Data: string): boolean {
     try {
-      const binary = atob(base64Data);
+      // Use globalThis.atob for Node.js/browser compatibility
+      const binary = globalThis.atob(base64Data);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) {
         bytes[i] = binary.charCodeAt(i);

@@ -80,9 +80,13 @@ export async function initializeWorld(
   const { KillTrackerSystem } = await import(
     "../systems/KillTrackerSystem/index.js"
   );
+  const { ActivityLoggerSystem } = await import(
+    "../systems/ActivityLoggerSystem/index.js"
+  );
 
   world.register("database", ServerDatabaseSystem);
   world.register("kill-tracker", KillTrackerSystem);
+  world.register("activity-logger", ActivityLoggerSystem);
   world.register("network", ServerNetwork);
   console.log("[World] ✅ Systems registered");
 

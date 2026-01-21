@@ -43,6 +43,7 @@ import {
   type GPUVegetationMaterial,
 } from "./GPUVegetation";
 import { csmLevels } from "./Environment";
+import type { RoadNetworkSystem } from "./RoadNetworkSystem";
 
 /**
  * Vegetation rendering configuration.
@@ -177,7 +178,7 @@ const DEFAULT_CONFIG: VegetationConfig = {
 
 // LOD distances per category - PERFORMANCE: Simplified, shader handles fade
 // fadeStart = fully opaque, fadeEnd = fully invisible
-const LOD_CONFIG = {
+const _LOD_CONFIG = {
   tree: { fadeStart: 100, fadeEnd: 150, imposterStart: 80 },
   bush: { fadeStart: 80, fadeEnd: 120, imposterStart: 60 },
   flower: { fadeStart: 60, fadeEnd: 100, imposterStart: 40 },
@@ -256,6 +257,9 @@ export class VegetationSystem extends System {
   // Noise generator for procedural placement
   private noise: NoiseGenerator | null = null;
 
+  // Road network system for road avoidance
+  private roadNetworkSystem: RoadNetworkSystem | null = null;
+
   // Temp objects to avoid allocations
   private _tempMatrix = new THREE.Matrix4();
   private _tempPosition = new THREE.Vector3();
@@ -278,7 +282,7 @@ export class VegetationSystem extends System {
   }
 
   override getDependencies() {
-    return { required: ["stage", "terrain"] };
+    return { required: ["stage", "terrain"], optional: ["roads"] };
   }
 
   async init(_options?: WorldOptions): Promise<void> {
@@ -293,6 +297,11 @@ export class VegetationSystem extends System {
 
     // Create shared billboard geometry for imposters (1x1 plane)
     this.billboardGeometry = new THREE.PlaneGeometry(1, 1);
+
+    // Get road network system for road avoidance
+    this.roadNetworkSystem = this.world.getSystem(
+      "roads",
+    ) as RoadNetworkSystem | null;
   }
 
   /**
@@ -962,6 +971,14 @@ export class VegetationSystem extends System {
         continue;
       }
 
+      // Check road avoidance - never place vegetation on roads
+      if (
+        this.roadNetworkSystem &&
+        this.roadNetworkSystem.isOnRoad(pos.x, pos.z)
+      ) {
+        continue;
+      }
+
       // Calculate slope once for all checks
       const slope = this.estimateSlope(pos.x, pos.z, getHeight);
 
@@ -1316,9 +1333,7 @@ export class VegetationSystem extends System {
     }
 
     // Track chunk bounds
-    const { chunkX, chunkZ } = this.getChunkCoords(x, z);
-    const chunkWorldX = chunkX * VEGETATION_CHUNK_SIZE;
-    const chunkWorldZ = chunkZ * VEGETATION_CHUNK_SIZE;
+    const { chunkX: _chunkX, chunkZ: _chunkZ } = this.getChunkCoords(x, z);
 
     chunked = {
       mesh,
@@ -1842,7 +1857,7 @@ export class VegetationSystem extends System {
    * - GPU fade provides smooth transitions without CPU overhead
    * - Frustum culling prevents rendering behind the camera
    */
-  override update(delta: number): void {
+  override update(_delta: number): void {
     if (!this.world.isClient) return;
 
     // Ensure camera can see vegetation layer (one-time setup)
@@ -2073,8 +2088,8 @@ export class VegetationSystem extends System {
     let totalVertices = 0;
     let totalInstances = 0;
     let totalVisibleInstances = 0;
-    let uniqueMaterials = new Set<THREE.Material>();
-    let uniqueTextures = new Set<THREE.Texture>();
+    const uniqueMaterials = new Set<THREE.Material>();
+    const uniqueTextures = new Set<THREE.Texture>();
 
     console.log("--- Per-Asset Breakdown ---");
     for (const [assetId, assetData] of this.loadedAssets) {

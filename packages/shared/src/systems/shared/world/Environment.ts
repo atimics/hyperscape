@@ -639,7 +639,7 @@ export class Environment extends System {
           this.csmNeedsAttach = false;
           console.log("[Environment] CSM shadowNode attached to light");
         }
-      } catch (err) {
+      } catch (_err) {
         // CSMShadowNode.updateFrustums() can fail if camera projection isn't ready yet
         // Will retry on next update() - this is expected during startup
         console.debug(

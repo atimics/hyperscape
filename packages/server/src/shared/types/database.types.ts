@@ -129,6 +129,84 @@ export interface WorldChunkRow {
   needsReset: number;
 }
 
+/** Activity log row - tracks player actions for admin panel */
+export interface ActivityLogRow {
+  id: number;
+  playerId: string;
+  eventType: string;
+  action: string;
+  entityType: string | null;
+  entityId: string | null;
+  details: Record<string, unknown>;
+  position: { x: number; y: number; z: number } | null;
+  timestamp: number;
+}
+
+/** Activity log entry for insertion (without id) */
+export interface ActivityLogEntry {
+  playerId: string;
+  eventType: string;
+  action: string;
+  entityType?: string;
+  entityId?: string;
+  details?: Record<string, unknown>;
+  position?: { x: number; y: number; z: number };
+  timestamp: number;
+}
+
+/** Trade item in a trade record */
+export interface TradeItem {
+  itemId: string;
+  quantity: number;
+  itemName?: string;
+}
+
+/** Trade record row - tracks player trades */
+export interface TradeRow {
+  id: number;
+  initiatorId: string | null;
+  receiverId: string | null;
+  status: "completed" | "cancelled" | "declined";
+  initiatorItems: TradeItem[];
+  receiverItems: TradeItem[];
+  initiatorCoins: number;
+  receiverCoins: number;
+  timestamp: number;
+}
+
+/** Trade entry for insertion (without id) */
+export interface TradeEntry {
+  initiatorId: string;
+  receiverId: string;
+  status: "completed" | "cancelled" | "declined";
+  initiatorItems: TradeItem[];
+  receiverItems: TradeItem[];
+  initiatorCoins: number;
+  receiverCoins: number;
+  timestamp: number;
+}
+
+/** Activity log query options */
+export interface ActivityLogQueryOptions {
+  playerId?: string;
+  eventType?: string;
+  eventTypes?: string[];
+  fromTimestamp?: number;
+  toTimestamp?: number;
+  limit?: number;
+  offset?: number;
+}
+
+/** Trade query options */
+export interface TradeQueryOptions {
+  playerId?: string;
+  fromTimestamp?: number;
+  toTimestamp?: number;
+  status?: "completed" | "cancelled" | "declined";
+  limit?: number;
+  offset?: number;
+}
+
 // ============================================================================
 // SAVE OPERATION TYPES
 // ============================================================================

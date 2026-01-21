@@ -16,6 +16,7 @@ import { ALL_WORLD_AREAS } from "../../../data/world-areas";
 import type { ZoneType, ZoneProperties } from "../../../types/death";
 import { ZoneType as ZoneTypeEnum } from "../../../types/death";
 import type { WorldArea } from "../../../types/core/core";
+import type { TownSystem } from "../world/TownSystem";
 
 export class ZoneDetectionSystem extends SystemBase {
   // Cache zone lookups (key: "x,z", value: ZoneProperties)
@@ -30,19 +31,24 @@ export class ZoneDetectionSystem extends SystemBase {
     minZ: number;
     maxZ: number;
   }> = [];
+  // Reference to procedural town system
+  private townSystem?: TownSystem;
 
   constructor(world: World) {
     super(world, {
       name: "zone-detection",
       dependencies: {
         required: [],
-        optional: [],
+        optional: ["towns"],
       },
       autoCleanup: true,
     });
   }
 
   async init(): Promise<void> {
+    // Get town system reference for procedural safe zones
+    this.townSystem = this.world.getSystem("towns") as TownSystem | undefined;
+
     // Build zone boundaries list for cache invalidation
     this.buildBoundariesList();
     // Pre-warm cache for known areas
@@ -236,6 +242,22 @@ export class ZoneDetectionSystem extends SystemBase {
         name: zone.name || "Unknown Zone",
         difficultyLevel: zone.difficultyLevel || 0,
       };
+    }
+
+    // Check procedurally generated towns from TownSystem
+    // These are safe zones where players cannot be attacked
+    if (this.townSystem) {
+      const town = this.townSystem.getTownAtPosition(position.x, position.z);
+      if (town) {
+        return {
+          type: ZoneTypeEnum.SAFE_AREA,
+          isSafe: true,
+          isPvPEnabled: false,
+          isWilderness: false,
+          name: town.name,
+          difficultyLevel: 0,
+        };
+      }
     }
 
     // Default unknown areas to UNKNOWN type (treated as wilderness for death mechanics)

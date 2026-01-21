@@ -31,7 +31,6 @@ import type { DatabaseSystem } from "../../../types/systems/system-interfaces";
 import {
   prayerDataProvider,
   type PrayerDefinition,
-  type PrayerBonuses,
 } from "../../../data/PrayerDataProvider";
 import {
   type PrayerState,
@@ -42,11 +41,6 @@ import {
   getPlayerPrayerLevel,
   getPlayerPrayerBonus,
   type PlayerWithPrayerStats,
-  // Typed event payloads
-  type PlayerRegisteredPayload,
-  type PlayerCleanupPayload,
-  type PrayerToggleEventPayload,
-  type AltarPrayPayload,
   // Type guards for validation
   isPlayerRegisteredPayload,
   isPlayerCleanupPayload,
@@ -56,7 +50,6 @@ import {
   clampPrayerLevel,
   clampPrayerPoints,
   isValidRestoreAmount,
-  MAX_PRAYER_POINTS,
 } from "../../../types/game/prayer-types";
 
 /**

@@ -21,3 +21,5 @@ export { NPCKillRepository } from "./NPCKillRepository";
 export { DeathRepository } from "./DeathRepository";
 export { TemplateRepository } from "./TemplateRepository";
 export type { TemplateRow } from "./TemplateRepository";
+export { ActivityLogRepository } from "./ActivityLogRepository";
+export { BankRepository } from "./BankRepository";
