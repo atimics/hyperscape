@@ -222,6 +222,7 @@ const names = [
   'dialogueStart',
   'dialogueNodeChange',
   'dialogueResponse',
+  'dialogueContinue',
   'dialogueEnd',
   'dialogueClose',
   // Tile movement packets (RuneScape-style)

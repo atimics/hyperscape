@@ -67,9 +67,38 @@ export function handleDialogueResponse(
 }
 
 /**
+ * Handle dialogue continue
+ *
+ * Called when player clicks "Click to continue..." on a terminal dialogue node.
+ * This allows the server to execute any pending effects (like quest completion)
+ * AFTER the player has seen the final dialogue text.
+ */
+export function handleDialogueContinue(
+  socket: ServerSocket,
+  data: { npcId: string },
+  world: World,
+): void {
+  const playerId = getPlayerId(socket);
+  if (!playerId) {
+    return;
+  }
+
+  // Basic validation
+  if (!isValidNpcId(data.npcId)) {
+    return;
+  }
+
+  // Emit continue event - DialogueSystem will execute pending effect and end dialogue
+  world.emit(EventType.DIALOGUE_CONTINUE, {
+    playerId,
+    npcId: data.npcId,
+  });
+}
+
+/**
  * Handle dialogue close
  *
- * Called when player explicitly closes dialogue UI.
+ * Called when player explicitly closes dialogue UI (X button).
  * InteractionSessionManager handles distance-based auto-close.
  */
 export function handleDialogueClose(

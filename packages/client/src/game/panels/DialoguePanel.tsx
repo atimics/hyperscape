@@ -67,7 +67,14 @@ export function DialoguePanel({
   };
 
   const handleContinue = () => {
-    // If no responses, this is the end of dialogue
+    // Terminal node - send continue packet to server so it can execute any pending effects
+    // Server will then send dialogueEnd which triggers onClose via Sidebar
+    if (world.network?.send) {
+      world.network.send("dialogueContinue", {
+        npcId,
+      });
+    }
+    // Close the dialogue UI immediately for responsive feel
     onClose();
   };
 

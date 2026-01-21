@@ -23,6 +23,8 @@ interface DialogueState {
   dialogueTree: NPCDialogueTree;
   currentNodeId: string;
   npcEntityId?: string;
+  pendingEffect?: string; // Effect to execute when player continues from terminal node
+  isTerminal?: boolean; // Whether current node is terminal (no responses)
 }
 
 /**
@@ -69,6 +71,29 @@ export class DialogueSystem extends SystemBase {
         effect?: string;
       }) => {
         this.handleDialogueResponse(data);
+      },
+    );
+
+    // Subscribe to dialogue continue events (from client on terminal nodes)
+    this.subscribe(
+      EventType.DIALOGUE_CONTINUE,
+      (data: { playerId: string; npcId: string }) => {
+        this.handleDialogueContinue(data);
+      },
+    );
+
+    // Subscribe to dialogue end events (from dialogueClose handler when player clicks X)
+    // This cleans up state WITHOUT executing pending effects
+    this.subscribe(
+      EventType.DIALOGUE_END,
+      (data: { playerId: string; npcId: string }) => {
+        // Only clean up if this came from external source (dialogueClose handler)
+        // Our own endDialogue also emits this, but after we've already cleaned up
+        const state = this.activeDialogues.get(data.playerId);
+        if (state && state.npcId === data.npcId) {
+          // Don't execute pending effect - player explicitly closed dialogue
+          this.activeDialogues.delete(data.playerId);
+        }
       },
     );
   }
@@ -179,15 +204,18 @@ export class DialogueSystem extends SystemBase {
 
     // Check if entry node is terminal (no responses)
     if (!entryNode.responses || entryNode.responses.length === 0) {
-      // Execute effect if present on terminal entry node
-      if (entryNode.effect) {
+      // Store pending effect for terminal node - will execute when player clicks continue
+      const state = this.activeDialogues.get(playerId);
+      if (state && entryNode.effect) {
+        state.pendingEffect = entryNode.effect;
+        state.isTerminal = true;
         this.logger.info(
-          `[DialogueSystem] Terminal entry node ${entryNode.id} has effect: ${entryNode.effect}`,
+          `[DialogueSystem] Terminal entry node ${entryNode.id} has pending effect: ${entryNode.effect}`,
         );
-        this.executeEffect(playerId, npcId, entryNode.effect, npcEntityId);
+      } else if (state) {
+        state.isTerminal = true;
       }
-      // End dialogue after displaying terminal node
-      this.endDialogue(playerId, npcId);
+      // Don't end dialogue yet - wait for player to click continue
     }
   }
 
@@ -262,26 +290,58 @@ export class DialogueSystem extends SystemBase {
 
     // Check if this node has responses
     if (!nextNode.responses || nextNode.responses.length === 0) {
-      // Terminal node - execute any effect on the node itself
-      // This allows nodes like "quest_complete" to have effects without responses
+      // Terminal node - store pending effect instead of executing immediately
+      // Effect will execute when player clicks continue
       if (nextNode.effect) {
+        state.pendingEffect = nextNode.effect;
         this.logger.info(
-          `[DialogueSystem] Terminal node ${nextNode.id} has effect: ${nextNode.effect}`,
+          `[DialogueSystem] Terminal node ${nextNode.id} has pending effect: ${nextNode.effect}`,
         );
-        this.executeEffect(playerId, npcId, nextNode.effect, state.npcEntityId);
       } else {
         this.logger.info(
           `[DialogueSystem] Terminal node ${nextNode.id} has no effect`,
         );
       }
-      // Send final node text then end dialogue
+      state.isTerminal = true;
+      // Send final node text - don't end dialogue yet, wait for player continue
       this.sendDialogueNode(playerId, npcId, state.npcName, nextNode, false);
-      // Auto-end after a brief moment (client will handle timing)
-      this.endDialogue(playerId, npcId);
     } else {
       // Continue dialogue
       this.sendDialogueNode(playerId, npcId, state.npcName, nextNode, false);
     }
+  }
+
+  /**
+   * Handle player clicking "continue" on a terminal dialogue node
+   * This executes any pending effects and ends the dialogue
+   */
+  private handleDialogueContinue(data: {
+    playerId: string;
+    npcId: string;
+  }): void {
+    const { playerId, npcId } = data;
+
+    const state = this.activeDialogues.get(playerId);
+    if (!state || state.npcId !== npcId) {
+      // No active dialogue or wrong NPC - just ignore
+      return;
+    }
+
+    // Execute pending effect if present
+    if (state.pendingEffect) {
+      this.logger.info(
+        `[DialogueSystem] Executing pending effect on continue: ${state.pendingEffect}`,
+      );
+      this.executeEffect(
+        playerId,
+        npcId,
+        state.pendingEffect,
+        state.npcEntityId,
+      );
+    }
+
+    // End the dialogue
+    this.endDialogue(playerId, npcId);
   }
 
   /**

@@ -139,6 +139,7 @@ import {
 } from "./handlers/store";
 import {
   handleDialogueResponse,
+  handleDialogueContinue,
   handleDialogueClose,
 } from "./handlers/dialogue";
 import {
@@ -1621,6 +1622,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         data as { npcId: string; responseIndex: number },
         this.world,
       );
+
+    this.handlers["onDialogueContinue"] = (socket, data) =>
+      handleDialogueContinue(socket, data as { npcId: string }, this.world);
 
     this.handlers["onDialogueClose"] = (socket, data) =>
       handleDialogueClose(socket, data as { npcId: string }, this.world);

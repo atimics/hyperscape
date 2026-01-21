@@ -328,6 +328,7 @@ export enum EventType {
   DIALOGUE_START = "dialogue:start",
   DIALOGUE_NODE_CHANGE = "dialogue:node_change",
   DIALOGUE_RESPONSE = "dialogue:response",
+  DIALOGUE_CONTINUE = "dialogue:continue", // For terminal nodes - player clicks to continue
   DIALOGUE_END = "dialogue:end",
 
   // Resource System
