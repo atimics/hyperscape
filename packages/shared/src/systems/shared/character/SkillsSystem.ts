@@ -854,6 +854,7 @@ export class SkillsSystem extends SystemBase {
       firemaking: stats.firemaking ?? { level: 1, xp: 0 },
       cooking: stats.cooking ?? { level: 1, xp: 0 },
       smithing: stats.smithing ?? { level: 1, xp: 0 },
+      agility: stats.agility ?? { level: 1, xp: 0 },
     };
 
     return skills;

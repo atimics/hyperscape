@@ -348,6 +348,7 @@ export class PlayerEntity extends CombatantEntity {
         firemaking: defaultSkill,
         cooking: defaultSkill,
         smithing: defaultSkill,
+        agility: defaultSkill,
       },
 
       // Equipment - initially empty
@@ -495,6 +496,7 @@ export class PlayerEntity extends CombatantEntity {
       firemaking: playerData.skills.firemaking,
       cooking: playerData.skills.cooking,
       smithing: playerData.skills.smithing || { level: 1, xp: 0 },
+      agility: playerData.skills.agility || { level: 1, xp: 0 },
       // Additional stats from StatsComponent interface
       combatLevel: 3, // Will be calculated by skills system
       totalLevel: 9, // Sum of all skill levels
@@ -507,7 +509,12 @@ export class PlayerEntity extends CombatantEntity {
         current: currentHealth,
         max: maxHealth,
       },
-      prayer: { level: 1, points: 1 },
+      prayer: {
+        level: playerData.skills.prayer?.level || 1,
+        xp: playerData.skills.prayer?.xp || 0,
+        points: playerData.skills.prayer?.level || 1, // Points default to level
+        maxPoints: playerData.skills.prayer?.level || 1, // Max points equal level
+      },
       magic: { level: 1, xp: 0 },
     });
   }

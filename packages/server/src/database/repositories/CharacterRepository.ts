@@ -206,6 +206,7 @@ export class CharacterRepository extends BaseRepository {
     defense: { level: number; xp: number };
     constitution: { level: number; xp: number };
     ranged: { level: number; xp: number };
+    prayer: { level: number; xp: number };
     woodcutting: { level: number; xp: number };
     mining: { level: number; xp: number };
     fishing: { level: number; xp: number };
@@ -223,6 +224,7 @@ export class CharacterRepository extends BaseRepository {
         defenseLevel: schema.characters.defenseLevel,
         constitutionLevel: schema.characters.constitutionLevel,
         rangedLevel: schema.characters.rangedLevel,
+        prayerLevel: schema.characters.prayerLevel,
         woodcuttingLevel: schema.characters.woodcuttingLevel,
         miningLevel: schema.characters.miningLevel,
         fishingLevel: schema.characters.fishingLevel,
@@ -235,6 +237,7 @@ export class CharacterRepository extends BaseRepository {
         defenseXp: schema.characters.defenseXp,
         constitutionXp: schema.characters.constitutionXp,
         rangedXp: schema.characters.rangedXp,
+        prayerXp: schema.characters.prayerXp,
         woodcuttingXp: schema.characters.woodcuttingXp,
         miningXp: schema.characters.miningXp,
         fishingXp: schema.characters.fishingXp,
@@ -262,6 +265,7 @@ export class CharacterRepository extends BaseRepository {
         xp: row.constitutionXp || 1154,
       },
       ranged: { level: row.rangedLevel || 1, xp: row.rangedXp || 0 },
+      prayer: { level: row.prayerLevel || 1, xp: row.prayerXp || 0 },
       woodcutting: {
         level: row.woodcuttingLevel || 1,
         xp: row.woodcuttingXp || 0,

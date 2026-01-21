@@ -442,7 +442,8 @@ export interface XPDrop {
     | "fishing"
     | "firemaking"
     | "cooking"
-    | "smithing";
+    | "smithing"
+    | "agility";
   amount: number;
   timestamp: number;
   playerId: string;

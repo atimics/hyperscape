@@ -1532,7 +1532,11 @@ export class ClientNetwork extends SystemBase {
   onPlayerWeightUpdated = (data: { playerId: string; weight: number }) => {
     // Update local player's weight for stamina drain calculation
     const localPlayer = this.world.getPlayer?.();
-    if (localPlayer && data.playerId === localPlayer.id) {
+    if (
+      localPlayer &&
+      data.playerId === localPlayer.id &&
+      localPlayer instanceof PlayerLocal
+    ) {
       localPlayer.totalWeight = data.weight;
     }
   };
