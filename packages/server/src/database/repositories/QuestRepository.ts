@@ -268,4 +268,52 @@ export class QuestRepository extends BaseRepository {
       })
       .where(eq(schema.characters.id, playerId));
   }
+
+  /**
+   * Complete a quest and award points atomically
+   *
+   * Wraps quest completion and point award in a transaction to ensure
+   * database consistency. If either operation fails, both are rolled back.
+   *
+   * @param playerId - The player ID (character ID)
+   * @param questId - The quest identifier
+   * @param questPoints - Number of quest points to award
+   */
+  async completeQuestWithPoints(
+    playerId: string,
+    questId: string,
+    questPoints: number,
+  ): Promise<void> {
+    if (this.isDestroying) {
+      return;
+    }
+
+    this.ensureDatabase();
+
+    await this.db.transaction(async (tx) => {
+      // Mark quest as completed
+      await tx
+        .update(schema.questProgress)
+        .set({
+          status: "completed",
+          completedAt: Date.now(),
+        })
+        .where(
+          and(
+            eq(schema.questProgress.playerId, playerId),
+            eq(schema.questProgress.questId, questId),
+          ),
+        );
+
+      // Award quest points (if any)
+      if (questPoints > 0) {
+        await tx
+          .update(schema.characters)
+          .set({
+            questPoints: sql`${schema.characters.questPoints} + ${questPoints}`,
+          })
+          .where(eq(schema.characters.id, playerId));
+      }
+    });
+  }
 }

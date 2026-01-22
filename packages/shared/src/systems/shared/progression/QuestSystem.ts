@@ -34,6 +34,7 @@ import type {
   QuestProgress,
   PlayerQuestState,
 } from "../../../types/game/quest-types";
+import { validateQuestDefinition } from "../../../types/game/quest-types";
 import type { NPCDiedPayload } from "../../../types/events/event-payloads";
 
 /**
@@ -164,14 +165,36 @@ export class QuestSystem extends SystemBase {
           QuestDefinition
         >;
 
+        let validCount = 0;
+        let invalidCount = 0;
+
         for (const [questId, definition] of Object.entries(questData)) {
+          // Validate quest definition
+          const validation = validateQuestDefinition(questId, definition);
+
+          if (!validation.valid) {
+            invalidCount++;
+            for (const error of validation.errors) {
+              this.logger.warn(`Quest validation error: ${error}`);
+            }
+            continue; // Skip invalid quests
+          }
+
           this.questDefinitions.set(questId, definition as QuestDefinition);
+          validCount++;
         }
 
         this.manifestLoaded = true;
-        this.logger.info(
-          `Loaded ${this.questDefinitions.size} quest definitions from ${questsPath}`,
-        );
+
+        if (invalidCount > 0) {
+          this.logger.warn(
+            `Loaded ${validCount} valid quests, skipped ${invalidCount} invalid quests from ${questsPath}`,
+          );
+        } else {
+          this.logger.info(
+            `Loaded ${validCount} quest definitions from ${questsPath}`,
+          );
+        }
       } catch (err) {
         this.logger.warn(
           `Quest manifest not found at ${questsPath}, using empty quest list`,
@@ -447,8 +470,8 @@ export class QuestSystem extends SystemBase {
 
     state.activeQuests.set(questId, progress);
 
-    // Save to database
-    await this.saveQuestProgress(playerId, questId, initialStage, {});
+    // Save to database (isNew=true since we just started the quest)
+    await this.saveQuestProgress(playerId, questId, initialStage, {}, true);
 
     // Grant starting items
     if (definition.onStart?.items) {
@@ -510,14 +533,17 @@ export class QuestSystem extends SystemBase {
     state.activeQuests.delete(questId);
     state.completedQuests.add(questId);
 
-    // Update database
-    await this.markQuestCompleted(playerId, questId);
-
-    // Award quest points
+    // Update in-memory quest points
     if (definition.rewards.questPoints > 0) {
       state.questPoints += definition.rewards.questPoints;
-      await this.addQuestPoints(playerId, definition.rewards.questPoints);
     }
+
+    // Update database atomically (quest completion + quest points in transaction)
+    await this.completeQuestWithPoints(
+      playerId,
+      questId,
+      definition.rewards.questPoints,
+    );
 
     // Grant reward items
     if (definition.rewards.items.length > 0) {
@@ -626,12 +652,13 @@ export class QuestSystem extends SystemBase {
         });
       }
 
-      // Save progress
+      // Save progress (isNew=false since this is an update)
       this.saveQuestProgress(
         killedBy,
         questId,
         progress.currentStage,
         progress.stageProgress,
+        false,
       );
 
       // Emit progress event
@@ -689,12 +716,14 @@ export class QuestSystem extends SystemBase {
 
   /**
    * Save quest progress to database
+   * @param isNew - true if this is a new quest being started, false if updating existing progress
    */
   private async saveQuestProgress(
     playerId: string,
     questId: string,
     stage: string,
     progress: StageProgress,
+    isNew: boolean,
   ): Promise<void> {
     try {
       const dbSystem = this.world.getSystem("database") as {
@@ -715,9 +744,6 @@ export class QuestSystem extends SystemBase {
 
       if (dbSystem?.getQuestRepository) {
         const repo = dbSystem.getQuestRepository();
-        const state = this.playerStates.get(playerId);
-        const isNew =
-          state?.activeQuests.get(questId)?.startedAt === Date.now();
 
         if (isNew) {
           await repo.startQuest(playerId, questId, stage);
@@ -734,50 +760,33 @@ export class QuestSystem extends SystemBase {
   }
 
   /**
-   * Mark quest as completed in database
+   * Complete quest and award points atomically in database
+   * Uses a transaction to ensure consistency
    */
-  private async markQuestCompleted(
+  private async completeQuestWithPoints(
     playerId: string,
     questId: string,
+    questPoints: number,
   ): Promise<void> {
     try {
       const dbSystem = this.world.getSystem("database") as {
         getQuestRepository?: () => {
-          completeQuest: (playerId: string, questId: string) => Promise<void>;
+          completeQuestWithPoints: (
+            playerId: string,
+            questId: string,
+            questPoints: number,
+          ) => Promise<void>;
         };
       };
 
       if (dbSystem?.getQuestRepository) {
-        await dbSystem.getQuestRepository().completeQuest(playerId, questId);
+        await dbSystem
+          .getQuestRepository()
+          .completeQuestWithPoints(playerId, questId, questPoints);
       }
     } catch (error) {
       this.logger.error(
-        `Failed to mark quest completed for ${playerId}`,
-        error instanceof Error ? error : undefined,
-      );
-    }
-  }
-
-  /**
-   * Add quest points to player in database
-   */
-  private async addQuestPoints(
-    playerId: string,
-    points: number,
-  ): Promise<void> {
-    try {
-      const dbSystem = this.world.getSystem("database") as {
-        getQuestRepository?: () => {
-          addQuestPoints: (playerId: string, points: number) => Promise<void>;
-        };
-      };
-
-      if (dbSystem?.getQuestRepository) {
-        await dbSystem.getQuestRepository().addQuestPoints(playerId, points);
-      }
-    } catch (error) {
-      this.logger.error(
-        `Failed to add quest points for ${playerId}`,
+        `Failed to complete quest ${questId} for ${playerId}`,
         error instanceof Error ? error : undefined,
       );
     }

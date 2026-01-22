@@ -341,6 +341,7 @@ export { PrayerSystem } from "./systems/shared/character/PrayerSystem";
 export { LootSystem } from "./systems/shared/economy/LootSystem";
 export { StoreSystem } from "./systems/shared/economy/StoreSystem";
 export { ResourceSystem } from "./systems/shared/entities/ResourceSystem";
+export { QuestSystem } from "./systems/shared/progression/QuestSystem";
 export {
   FOOTPRINT_SIZES,
   resolveFootprint,

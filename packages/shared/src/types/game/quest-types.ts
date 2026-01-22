@@ -237,3 +237,147 @@ export function isValidQuestDifficulty(
     difficulty === "grandmaster"
   );
 }
+
+/**
+ * Validates a quest stage type value
+ */
+export function isValidQuestStageType(type: unknown): type is QuestStageType {
+  return (
+    type === "dialogue" ||
+    type === "kill" ||
+    type === "gather" ||
+    type === "travel" ||
+    type === "interact"
+  );
+}
+
+/** Result of quest definition validation */
+export interface QuestValidationResult {
+  valid: boolean;
+  errors: string[];
+}
+
+/**
+ * Validates a quest definition from manifest
+ * Checks required fields, stage uniqueness, and type validity
+ */
+export function validateQuestDefinition(
+  questId: string,
+  definition: unknown,
+): QuestValidationResult {
+  const errors: string[] = [];
+
+  if (!definition || typeof definition !== "object") {
+    return {
+      valid: false,
+      errors: [`${questId}: Definition must be an object`],
+    };
+  }
+
+  const def = definition as Record<string, unknown>;
+
+  // Required string fields
+  if (!def.id || typeof def.id !== "string") {
+    errors.push(`${questId}: Missing or invalid 'id' field`);
+  } else if (def.id !== questId) {
+    errors.push(`${questId}: 'id' field doesn't match key (got '${def.id}')`);
+  }
+
+  if (!def.name || typeof def.name !== "string") {
+    errors.push(`${questId}: Missing or invalid 'name' field`);
+  }
+
+  if (!def.description || typeof def.description !== "string") {
+    errors.push(`${questId}: Missing or invalid 'description' field`);
+  }
+
+  if (!def.startNpc || typeof def.startNpc !== "string") {
+    errors.push(`${questId}: Missing or invalid 'startNpc' field`);
+  }
+
+  // Difficulty validation
+  if (!isValidQuestDifficulty(def.difficulty)) {
+    errors.push(`${questId}: Invalid 'difficulty' value: ${def.difficulty}`);
+  }
+
+  // Quest points validation
+  if (typeof def.questPoints !== "number" || def.questPoints < 0) {
+    errors.push(`${questId}: Invalid 'questPoints' value`);
+  }
+
+  // Stages validation
+  if (!Array.isArray(def.stages) || def.stages.length === 0) {
+    errors.push(`${questId}: 'stages' must be a non-empty array`);
+  } else {
+    const stageIds = new Set<string>();
+
+    for (let i = 0; i < def.stages.length; i++) {
+      const stage = def.stages[i] as Record<string, unknown>;
+
+      if (!stage.id || typeof stage.id !== "string") {
+        errors.push(`${questId}: Stage ${i} missing 'id' field`);
+        continue;
+      }
+
+      if (stageIds.has(stage.id)) {
+        errors.push(`${questId}: Duplicate stage ID '${stage.id}'`);
+      }
+      stageIds.add(stage.id);
+
+      if (!isValidQuestStageType(stage.type)) {
+        errors.push(
+          `${questId}: Stage '${stage.id}' has invalid type: ${stage.type}`,
+        );
+      }
+
+      if (!stage.description || typeof stage.description !== "string") {
+        errors.push(`${questId}: Stage '${stage.id}' missing description`);
+      }
+
+      // Type-specific validation
+      if (stage.type === "kill" || stage.type === "gather") {
+        if (!stage.target || typeof stage.target !== "string") {
+          errors.push(
+            `${questId}: Stage '${stage.id}' (${stage.type}) missing 'target'`,
+          );
+        }
+        if (typeof stage.count !== "number" || stage.count <= 0) {
+          errors.push(
+            `${questId}: Stage '${stage.id}' (${stage.type}) missing or invalid 'count'`,
+          );
+        }
+      }
+    }
+  }
+
+  // Requirements validation
+  if (!def.requirements || typeof def.requirements !== "object") {
+    errors.push(`${questId}: Missing 'requirements' object`);
+  } else {
+    const reqs = def.requirements as Record<string, unknown>;
+    if (!Array.isArray(reqs.quests)) {
+      errors.push(`${questId}: 'requirements.quests' must be an array`);
+    }
+    if (typeof reqs.skills !== "object" || reqs.skills === null) {
+      errors.push(`${questId}: 'requirements.skills' must be an object`);
+    }
+    if (!Array.isArray(reqs.items)) {
+      errors.push(`${questId}: 'requirements.items' must be an array`);
+    }
+  }
+
+  // Rewards validation
+  if (!def.rewards || typeof def.rewards !== "object") {
+    errors.push(`${questId}: Missing 'rewards' object`);
+  } else {
+    const rewards = def.rewards as Record<string, unknown>;
+    if (typeof rewards.questPoints !== "number") {
+      errors.push(`${questId}: 'rewards.questPoints' must be a number`);
+    }
+    if (!Array.isArray(rewards.items)) {
+      errors.push(`${questId}: 'rewards.items' must be an array`);
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
+}

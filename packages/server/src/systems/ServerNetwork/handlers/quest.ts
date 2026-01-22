@@ -127,11 +127,11 @@ export function handleGetQuestDetail(
  * Handle quest accept from client
  * Called when player clicks Accept on the quest start screen
  */
-export function handleQuestAccept(
+export async function handleQuestAccept(
   socket: ServerSocket,
   data: { questId: string },
   world: World,
-): void {
+): Promise<void> {
   const playerId = getPlayerId(socket);
   if (!playerId) {
     console.warn("[QuestHandlers] No playerId for questAccept request");
@@ -151,7 +151,7 @@ export function handleQuestAccept(
   }
 
   // Start the quest (this will validate requirements and set status to in_progress)
-  const success = questSystem.startQuest(playerId, questId);
+  const success = await questSystem.startQuest(playerId, questId);
 
   if (success) {
     console.log(`[QuestHandlers] Player ${playerId} started quest ${questId}`);

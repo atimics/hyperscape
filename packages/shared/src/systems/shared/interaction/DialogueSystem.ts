@@ -16,6 +16,7 @@ import type {
   NPCDialogueTree,
   NPCDialogueNode,
 } from "../../../types/entities/npc-mob-types";
+import { isValidQuestId } from "../../../types/game/quest-types";
 
 interface DialogueState {
   npcId: string;
@@ -434,8 +435,10 @@ export class DialogueSystem extends SystemBase {
 
       case "startQuest": {
         const questId = params[0];
-        if (!questId) {
-          this.logger.warn("startQuest effect missing quest ID");
+        if (!questId || !isValidQuestId(questId)) {
+          this.logger.warn(
+            `startQuest effect has invalid quest ID: ${questId}`,
+          );
           break;
         }
         // Get QuestSystem and request quest start (shows confirmation screen)
@@ -455,8 +458,10 @@ export class DialogueSystem extends SystemBase {
         this.logger.info(
           `[DialogueSystem] completeQuest effect called for quest: ${questIdToComplete}`,
         );
-        if (!questIdToComplete) {
-          this.logger.warn("completeQuest effect missing quest ID");
+        if (!questIdToComplete || !isValidQuestId(questIdToComplete)) {
+          this.logger.warn(
+            `completeQuest effect has invalid quest ID: ${questIdToComplete}`,
+          );
           break;
         }
         // Get QuestSystem and complete the quest
