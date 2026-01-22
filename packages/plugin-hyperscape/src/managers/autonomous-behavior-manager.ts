@@ -860,9 +860,6 @@ export class AutonomousBehaviorManager {
                   action: content.action,
                   source: "autonomous_behavior",
                 },
-                metadata: {
-                  type: "custom",
-                } as Record<string, unknown>,
               },
               "messages",
               false, // not unique

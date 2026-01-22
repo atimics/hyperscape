@@ -444,9 +444,6 @@ export function registerEventHandlers(
             text: chatData.text,
             source: "hyperscape_chat",
           },
-          metadata: {
-            type: "message",
-          } as Record<string, unknown>,
         },
         "messages",
         false,

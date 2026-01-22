@@ -122,9 +122,6 @@ Generate a natural response.
         },
         roomId: memory.roomId,
         createdAt: Date.now(),
-        metadata: {
-          type: "message",
-        } as Record<string, unknown>,
       };
 
       // Save both memories
