@@ -45,17 +45,6 @@ const DEFAULT_TICK_INTERVAL = 10000; // 10 seconds between decisions
 const MIN_TICK_INTERVAL = 5000; // Minimum 5 seconds
 const MAX_TICK_INTERVAL = 30000; // Maximum 30 seconds
 
-/**
- * Generate a UUID v4
- */
-function generateUUID(): UUID {
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  }) as UUID;
-}
-
 export interface AutonomousBehaviorConfig {
   /** Interval between decision ticks in milliseconds */
   tickInterval?: number;
@@ -283,7 +272,7 @@ export class AutonomousBehaviorManager {
         if (userAction) {
           // Create a message with the ORIGINAL user text so action handlers can match correctly
           const userCommandMessage: Memory = {
-            id: generateUUID(),
+            id: crypto.randomUUID() as UUID,
             entityId: this.runtime.agentId,
             agentId: this.runtime.agentId,
             roomId: this.runtime.agentId,
@@ -953,7 +942,7 @@ export class AutonomousBehaviorManager {
     const messageText = this.buildTickMessageText();
 
     return {
-      id: generateUUID(),
+      id: crypto.randomUUID() as UUID,
       entityId: this.runtime.agentId,
       agentId: this.runtime.agentId,
       roomId: this.runtime.agentId, // Use agentId as roomId (standard ElizaOS pattern)
