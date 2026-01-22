@@ -8,8 +8,12 @@
 
 import type { World } from "@hyperscape/shared";
 import type { QuestSystem } from "@hyperscape/shared";
+import { SystemLogger } from "@hyperscape/shared";
 import type { ServerSocket } from "../../../shared/types";
 import { sendToSocket, getPlayerId } from "./common";
+
+/** Logger for quest handlers */
+const logger = new SystemLogger("QuestHandlers");
 
 /**
  * Handle request for quest list
@@ -21,13 +25,13 @@ export function handleGetQuestList(
 ): void {
   const playerId = getPlayerId(socket);
   if (!playerId) {
-    console.warn("[QuestHandlers] No playerId for getQuestList request");
+    logger.warn("No playerId for getQuestList request");
     return;
   }
 
   const questSystem = world.getSystem("quest") as QuestSystem | undefined;
   if (!questSystem) {
-    console.warn("[QuestHandlers] QuestSystem not available");
+    logger.warn("QuestSystem not available");
     return;
   }
 
@@ -62,25 +66,25 @@ export function handleGetQuestDetail(
 ): void {
   const playerId = getPlayerId(socket);
   if (!playerId) {
-    console.warn("[QuestHandlers] No playerId for getQuestDetail request");
+    logger.warn("No playerId for getQuestDetail request");
     return;
   }
 
   const { questId } = data;
   if (!questId) {
-    console.warn("[QuestHandlers] No questId provided");
+    logger.warn("No questId provided");
     return;
   }
 
   const questSystem = world.getSystem("quest") as QuestSystem | undefined;
   if (!questSystem) {
-    console.warn("[QuestHandlers] QuestSystem not available");
+    logger.warn("QuestSystem not available");
     return;
   }
 
   const definition = questSystem.getQuestDefinition(questId);
   if (!definition) {
-    console.warn(`[QuestHandlers] Quest not found: ${questId}`);
+    logger.warn(`Quest not found: ${questId}`);
     return;
   }
 
@@ -90,10 +94,9 @@ export function handleGetQuestDetail(
   const activeQuests = questSystem.getActiveQuests(playerId);
   const activeQuest = activeQuests.find((q) => q.questId === questId);
 
-  console.log(
-    `[QuestHandlers] getQuestDetail for ${questId}: activeQuest=`,
-    activeQuest ? JSON.stringify(activeQuest) : "null",
-  );
+  logger.debug(`getQuestDetail for ${questId}`, {
+    activeQuest: activeQuest ? JSON.stringify(activeQuest) : null,
+  });
 
   // Build detail response
   const detail = {
@@ -114,10 +117,9 @@ export function handleGetQuestDetail(
     })),
   };
 
-  console.log(
-    `[QuestHandlers] Sending detail with stageProgress:`,
-    JSON.stringify(detail.stageProgress),
-  );
+  logger.debug("Sending detail with stageProgress", {
+    stageProgress: detail.stageProgress,
+  });
 
   // Send quest detail to client via packet
   sendToSocket(socket, "questDetail", detail);
@@ -134,19 +136,19 @@ export async function handleQuestAccept(
 ): Promise<void> {
   const playerId = getPlayerId(socket);
   if (!playerId) {
-    console.warn("[QuestHandlers] No playerId for questAccept request");
+    logger.warn("No playerId for questAccept request");
     return;
   }
 
   const { questId } = data;
   if (!questId) {
-    console.warn("[QuestHandlers] No questId provided for questAccept");
+    logger.warn("No questId provided for questAccept");
     return;
   }
 
   const questSystem = world.getSystem("quest") as QuestSystem | undefined;
   if (!questSystem) {
-    console.warn("[QuestHandlers] QuestSystem not available");
+    logger.warn("QuestSystem not available");
     return;
   }
 
@@ -154,10 +156,8 @@ export async function handleQuestAccept(
   const success = await questSystem.startQuest(playerId, questId);
 
   if (success) {
-    console.log(`[QuestHandlers] Player ${playerId} started quest ${questId}`);
+    logger.info(`Player ${playerId} started quest ${questId}`);
   } else {
-    console.warn(
-      `[QuestHandlers] Failed to start quest ${questId} for player ${playerId}`,
-    );
+    logger.warn(`Failed to start quest ${questId} for player ${playerId}`);
   }
 }
