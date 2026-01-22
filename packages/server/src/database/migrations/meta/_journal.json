@@ -134,6 +134,27 @@
       "when": 1768728921620,
       "tag": "0018_add_agility_skill",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1768815321620,
+      "tag": "0019_add_quest_progress",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1768901721620,
+      "tag": "0020_add_trading_activity_bans",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1768988121620,
+      "tag": "0021_add_quest_audit_log",
+      "breakpoints": true
     }
   ]
 }

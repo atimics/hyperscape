@@ -260,11 +260,9 @@ export function registerAdminRoutes(
       const endTick = parseInt(request.params.endTick, 10);
 
       if (Number.isNaN(startTick) || Number.isNaN(endTick)) {
-        return reply
-          .code(400)
-          .send({
-            error: "Invalid tick range - startTick and endTick must be numbers",
-          });
+        return reply.code(400).send({
+          error: "Invalid tick range - startTick and endTick must be numbers",
+        });
       }
 
       const combatSystem = world.getSystem<CombatSystem>("combat");

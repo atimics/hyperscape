@@ -222,6 +222,7 @@ const names = [
   'dialogueStart',
   'dialogueNodeChange',
   'dialogueResponse',
+  'dialogueContinue',
   'dialogueEnd',
   'dialogueClose',
   // Tile movement packets (RuneScape-style)
@@ -241,6 +242,17 @@ const names = [
   'prayerStateSync',     // Server -> Client: full prayer state sync
   'prayerToggled',       // Server -> Client: prayer toggle feedback
   'prayerPointsChanged', // Server -> Client: prayer points changed
+  // Quest system packets
+  'getQuestList',        // Client -> Server: request quest list
+  'getQuestDetail',      // Client -> Server: request quest detail
+  'questList',           // Server -> Client: quest list response
+  'questDetail',         // Server -> Client: quest detail response
+  'questStartConfirm',   // Server -> Client: show quest accept screen
+  'questAccept',         // Client -> Server: player accepted quest
+  'questProgressed',     // Server -> Client: quest progress updated
+  'questCompleted',      // Server -> Client: quest completed, show rewards
+  // XP Lamp packets
+  'xpLampUse',           // Client -> Server: use XP lamp on skill
   // Home Teleport packets
   'homeTeleport',        // Client -> Server: request home teleport
   'homeTeleportCancel',  // Client -> Server: cancel home teleport cast

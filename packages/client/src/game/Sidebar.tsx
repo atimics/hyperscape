@@ -27,6 +27,10 @@ import { StorePanel } from "./panels/StorePanel";
 import { DialoguePanel } from "./panels/DialoguePanel";
 import { SmeltingPanel } from "./panels/SmeltingPanel";
 import { SmithingPanel } from "./panels/SmithingPanel";
+import { SkillSelectModal } from "./panels/SkillSelectModal";
+import { QuestJournal } from "./panels/QuestJournal";
+import { QuestCompleteScreen } from "./panels/QuestCompleteScreen";
+import { QuestStartScreen } from "./panels/QuestStartScreen";
 import { TradePanel, TradeRequestModal } from "./panels/TradePanel";
 import type {
   TradeOfferItem,
@@ -149,6 +153,47 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
     }>;
   } | null>(null);
 
+  // XP Lamp skill selection modal state
+  const [xpLampData, setXpLampData] = useState<{
+    visible: boolean;
+    itemId: string;
+    slot: number;
+    xpAmount: number;
+  } | null>(null);
+
+  // Quest Journal state
+  const [questJournalVisible, setQuestJournalVisible] = useState(false);
+
+  // Quest Complete screen state
+  const [questCompleteData, setQuestCompleteData] = useState<{
+    visible: boolean;
+    questName: string;
+    rewards: {
+      questPoints: number;
+      items: Array<{ itemId: string; quantity: number }>;
+      xp: Record<string, number>;
+    };
+  } | null>(null);
+
+  // Quest Start confirmation screen state
+  const [questStartData, setQuestStartData] = useState<{
+    visible: boolean;
+    questId: string;
+    questName: string;
+    description: string;
+    difficulty: string;
+    requirements: {
+      quests: string[];
+      skills: Record<string, number>;
+      items: string[];
+    };
+    rewards: {
+      questPoints: number;
+      items: Array<{ itemId: string; quantity: number }>;
+      xp: Record<string, number>;
+    };
+  } | null>(null);
+
   // Trade panel state
   const [tradeData, setTradeData] = useState<TradeWindowState>({
     isOpen: false,
@@ -174,6 +219,12 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
   }, [openWindows, setHasOpenWindows]);
 
   const toggleWindow = (windowId: string) => {
+    // Special handling for quest journal (uses modal instead of window)
+    if (windowId === "quests") {
+      setQuestJournalVisible((prev) => !prev);
+      return;
+    }
+
     setOpenWindows((prev) => {
       const next = new Set(prev);
       if (next.has(windowId)) {
@@ -635,6 +686,80 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
     world.on(EventType.CORPSE_CLICK, onCorpseClick);
     world.on(EventType.PLAYER_SET_DEAD, onPlayerDeath);
 
+    // XP Lamp skill selection modal
+    const onXpLampUseRequest = (raw: unknown) => {
+      const data = raw as {
+        playerId: string;
+        itemId: string;
+        slot: number;
+        xpAmount: number;
+      };
+      setXpLampData({
+        visible: true,
+        itemId: data.itemId,
+        slot: data.slot,
+        xpAmount: data.xpAmount,
+      });
+    };
+    world.on(EventType.XP_LAMP_USE_REQUEST, onXpLampUseRequest);
+
+    // Quest completion screen
+    const onQuestCompleted = (raw: unknown) => {
+      const data = raw as {
+        playerId: string;
+        questId: string;
+        questName: string;
+        rewards: {
+          questPoints: number;
+          items: Array<{ itemId: string; quantity: number }>;
+          xp: Record<string, number>;
+        };
+      };
+      // Only show for local player
+      const localId = world.entities?.player?.id;
+      if (localId && data.playerId === localId) {
+        setQuestCompleteData({
+          visible: true,
+          questName: data.questName,
+          rewards: data.rewards,
+        });
+      }
+    };
+    world.on(EventType.QUEST_COMPLETED, onQuestCompleted);
+
+    // Listen for quest start confirmation (show quest accept screen)
+    const onQuestStartConfirm = (data: {
+      playerId: string;
+      questId: string;
+      questName: string;
+      description: string;
+      difficulty: string;
+      requirements: {
+        quests: string[];
+        skills: Record<string, number>;
+        items: string[];
+      };
+      rewards: {
+        questPoints: number;
+        items: Array<{ itemId: string; quantity: number }>;
+        xp: Record<string, number>;
+      };
+    }) => {
+      const localId = world.entities?.player?.id;
+      if (localId && data.playerId === localId) {
+        setQuestStartData({
+          visible: true,
+          questId: data.questId,
+          questName: data.questName,
+          description: data.description,
+          difficulty: data.difficulty,
+          requirements: data.requirements,
+          rewards: data.rewards,
+        });
+      }
+    };
+    world.on(EventType.QUEST_START_CONFIRM, onQuestStartConfirm);
+
     const requestInitial = () => {
       // For spectator/embedded mode, use characterId from config
       let lp = world.entities?.player?.id;
@@ -713,6 +838,9 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
       world.off(EventType.SKILLS_UPDATED, onSkillsUpdate);
       world.off(EventType.CORPSE_CLICK, onCorpseClick);
       world.off(EventType.PLAYER_SET_DEAD, onPlayerDeath);
+      world.off(EventType.XP_LAMP_USE_REQUEST, onXpLampUseRequest);
+      world.off(EventType.QUEST_COMPLETED, onQuestCompleted);
+      world.off(EventType.QUEST_START_CONFIRM, onQuestStartConfirm);
     };
   }, []);
 
@@ -732,6 +860,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
     { windowId: "skills", icon: "🧠", label: "Skills" },
     { windowId: "inventory", icon: "🎒", label: "Inventory" },
     { windowId: "equipment", icon: "🛡️", label: "Equipment" },
+    { windowId: "quests", icon: "📜", label: "Quests" },
     { windowId: "prefs", icon: "⚙️", label: "Settings" },
     { windowId: "account", icon: "👤", label: "Account" },
   ] as const;
@@ -831,7 +960,11 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
                   <MenuButton
                     icon={button.icon}
                     label={button.label}
-                    active={openWindows.has(button.windowId)}
+                    active={
+                      button.windowId === "quests"
+                        ? questJournalVisible
+                        : openWindows.has(button.windowId)
+                    }
                     onClick={() => toggleWindow(button.windowId)}
                     size={radialButtonSize}
                     circular={true}
@@ -1075,6 +1208,63 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
             availableRecipes={smithingData.availableRecipes}
             world={world}
             onClose={() => setSmithingData(null)}
+          />
+        )}
+
+        {/* XP Lamp Skill Selection Modal */}
+        {xpLampData?.visible && (
+          <SkillSelectModal
+            visible={xpLampData.visible}
+            world={world}
+            stats={playerStats}
+            xpAmount={xpLampData.xpAmount}
+            itemId={xpLampData.itemId}
+            slot={xpLampData.slot}
+            onClose={() => setXpLampData(null)}
+          />
+        )}
+
+        {/* Quest Journal */}
+        <QuestJournal
+          world={world}
+          visible={questJournalVisible}
+          onClose={() => setQuestJournalVisible(false)}
+        />
+
+        {/* Quest Complete Screen */}
+        {questCompleteData?.visible && (
+          <QuestCompleteScreen
+            visible={questCompleteData.visible}
+            questName={questCompleteData.questName}
+            rewards={questCompleteData.rewards}
+            world={world}
+            onClose={() => setQuestCompleteData(null)}
+          />
+        )}
+
+        {/* Quest Start Confirmation Screen */}
+        {questStartData?.visible && (
+          <QuestStartScreen
+            visible={questStartData.visible}
+            questId={questStartData.questId}
+            questName={questStartData.questName}
+            description={questStartData.description}
+            difficulty={questStartData.difficulty}
+            requirements={questStartData.requirements}
+            rewards={questStartData.rewards}
+            onAccept={() => {
+              // Send quest accept to server
+              if (world.network?.send) {
+                world.network.send("questAccept", {
+                  questId: questStartData.questId,
+                });
+              }
+              setQuestStartData(null);
+            }}
+            onDecline={() => {
+              // Just close the screen
+              setQuestStartData(null);
+            }}
           />
         )}
 

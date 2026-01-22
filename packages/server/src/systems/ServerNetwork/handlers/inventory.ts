@@ -836,3 +836,159 @@ export async function handleCoinPouchWithdraw(
     }
   }
 }
+
+// ============================================================================
+// XP LAMP USAGE
+// ============================================================================
+
+/**
+ * Valid skill IDs that can receive XP from lamps
+ */
+const VALID_SKILL_IDS = new Set([
+  "attack",
+  "strength",
+  "defense",
+  "constitution",
+  "ranged",
+  "prayer",
+  "mining",
+  "smithing",
+  "fishing",
+  "cooking",
+  "firemaking",
+  "woodcutting",
+  "agility",
+]);
+
+/**
+ * Handle XP lamp usage - player selected a skill to receive XP
+ *
+ * Security:
+ * - Rate limited (shared with consume limiter)
+ * - Validates item exists at specified slot
+ * - Validates item is an XP lamp with correct xpAmount
+ * - Validates skill ID is valid
+ * - Consumes item and grants XP atomically
+ *
+ * @param socket - Client socket with player entity
+ * @param data - Use request { itemId, slot, skillId, xpAmount }
+ * @param world - Game world instance
+ */
+export async function handleXpLampUse(
+  socket: ServerSocket,
+  data: unknown,
+  world: World,
+): Promise<void> {
+  const playerEntity = socket.player;
+  if (!playerEntity) {
+    console.warn("[Inventory] handleXpLampUse: no player entity for socket");
+    return;
+  }
+
+  // Rate limit check
+  if (!getConsumeRateLimiter().check(playerEntity.id)) {
+    return;
+  }
+
+  // Validate payload structure
+  if (!data || typeof data !== "object") {
+    console.warn("[Inventory] handleXpLampUse: invalid payload");
+    return;
+  }
+
+  const payload = data as Record<string, unknown>;
+
+  // Validate itemId
+  if (!isValidItemId(payload.itemId)) {
+    console.warn("[Inventory] handleXpLampUse: invalid itemId");
+    return;
+  }
+
+  // Validate slot
+  if (!isValidInventorySlot(payload.slot)) {
+    console.warn("[Inventory] handleXpLampUse: invalid slot");
+    return;
+  }
+
+  // Validate skillId
+  const skillId = payload.skillId;
+  if (typeof skillId !== "string" || !VALID_SKILL_IDS.has(skillId)) {
+    console.warn("[Inventory] handleXpLampUse: invalid skillId");
+    sendInventoryError(socket, "xpLampUse", "Invalid skill selected");
+    return;
+  }
+
+  // Validate xpAmount
+  const xpAmount = payload.xpAmount;
+  if (
+    typeof xpAmount !== "number" ||
+    !Number.isInteger(xpAmount) ||
+    xpAmount <= 0 ||
+    xpAmount > 100000
+  ) {
+    console.warn("[Inventory] handleXpLampUse: invalid xpAmount");
+    return;
+  }
+
+  const playerId = playerEntity.id;
+  const itemId = payload.itemId as string;
+  const slot = payload.slot as number;
+
+  // Get inventory system to validate item exists
+  const inventorySystem = world.getSystem("inventory") as {
+    getInventory?: (playerId: string) =>
+      | {
+          items: Array<{ slot: number; itemId: string; quantity: number }>;
+        }
+      | undefined;
+  } | null;
+
+  if (!inventorySystem?.getInventory) {
+    console.error("[Inventory] handleXpLampUse: inventory system unavailable");
+    return;
+  }
+
+  // Get player's inventory and find item at slot
+  const inventory = inventorySystem.getInventory(playerId);
+  if (!inventory) {
+    sendInventoryError(socket, "xpLampUse", "Inventory not found");
+    return;
+  }
+
+  // Find item at the specified slot
+  const itemAtSlot = inventory.items.find((item) => item.slot === slot);
+  if (!itemAtSlot || itemAtSlot.itemId !== itemId) {
+    sendInventoryError(socket, "xpLampUse", "Item not found");
+    return;
+  }
+
+  // Remove the lamp from inventory via event
+  world.emit(EventType.INVENTORY_ITEM_REMOVED, {
+    playerId,
+    itemId,
+    quantity: 1,
+    slot,
+  });
+
+  // Grant XP via SkillsSystem (uses SKILLS_XP_GAINED which SkillsSystem listens to)
+  world.emit(EventType.SKILLS_XP_GAINED, {
+    playerId,
+    skill: skillId,
+    amount: xpAmount,
+  });
+
+  // Emit XP lamp applied event for UI feedback
+  world.emit(EventType.XP_LAMP_APPLIED, {
+    playerId,
+    skillId,
+    xpAmount,
+  });
+
+  // Send success toast
+  socket.send("showToast", {
+    message: `Granted ${xpAmount.toLocaleString()} ${skillId} XP!`,
+    type: "success",
+  });
+
+  auditLog("XP_LAMP_USE", playerId, { itemId, slot, skillId, xpAmount }, true);
+}

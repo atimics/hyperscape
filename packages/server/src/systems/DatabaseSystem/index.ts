@@ -57,6 +57,7 @@ import {
   NPCKillRepository,
   DeathRepository,
   TemplateRepository,
+  QuestRepository,
   ActivityLogRepository,
   BankRepository,
 } from "../../database/repositories";
@@ -109,6 +110,7 @@ export class DatabaseSystem extends SystemBase {
   private npcKillRepository!: NPCKillRepository;
   private deathRepository!: DeathRepository;
   private templateRepository!: TemplateRepository;
+  private questRepository!: QuestRepository;
   private activityLogRepository!: ActivityLogRepository;
   private bankRepository!: BankRepository;
 
@@ -160,6 +162,7 @@ export class DatabaseSystem extends SystemBase {
       this.npcKillRepository = new NPCKillRepository(this.db, this.pool);
       this.deathRepository = new DeathRepository(this.db, this.pool);
       this.templateRepository = new TemplateRepository(this.db, this.pool);
+      this.questRepository = new QuestRepository(this.db, this.pool);
       this.activityLogRepository = new ActivityLogRepository(
         this.db,
         this.pool,
@@ -203,6 +206,7 @@ export class DatabaseSystem extends SystemBase {
     this.npcKillRepository.markDestroying();
     this.deathRepository.markDestroying();
     this.templateRepository.markDestroying();
+    this.questRepository.markDestroying();
     this.activityLogRepository.markDestroying();
     this.bankRepository.markDestroying();
 
@@ -741,6 +745,22 @@ export class DatabaseSystem extends SystemBase {
    */
   async getNPCKillCountAsync(playerId: string, npcId: string): Promise<number> {
     return this.npcKillRepository.getNPCKillCountAsync(playerId, npcId);
+  }
+
+  // ============================================================================
+  // QUEST MANAGEMENT
+  // ============================================================================
+
+  /**
+   * Get the quest repository for quest persistence operations
+   *
+   * Used by QuestSystem to persist quest progress, completion status,
+   * and quest points to the database.
+   *
+   * @returns The QuestRepository instance
+   */
+  getQuestRepository(): QuestRepository {
+    return this.questRepository;
   }
 
   // ============================================================================

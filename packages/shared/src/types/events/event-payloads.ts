@@ -92,8 +92,15 @@ export interface InventoryItemAddedPayload {
 
 export interface NPCDiedPayload {
   mobId: string;
-  killerId: string;
-  loot: InventoryItem[];
+  mobType: string;
+  level: number;
+  killedBy: string;
+  position: { x: number; y: number; z: number };
+  loot?: InventoryItem[];
+  /** Timestamp when the kill occurred (Unix ms) - for anti-spoof validation */
+  timestamp?: number;
+  /** HMAC signature for kill validation - prevents spoofed kill events */
+  killToken?: string;
 }
 
 // Item System Event Payloads
@@ -946,6 +953,19 @@ export interface EventMap {
   [EventType.SMITHING_START]: SmithingStartPayload;
   [EventType.SMITHING_COMPLETE]: SmithingCompletePayload;
   [EventType.PROCESSING_SMITHING_REQUEST]: ProcessingSmithingRequestPayload;
+
+  // Quest Events
+  [EventType.QUEST_START_CONFIRM]: QuestStartConfirmPayload;
+  [EventType.QUEST_START_ACCEPTED]: QuestStartAcceptedPayload;
+  [EventType.QUEST_START_DECLINED]: QuestStartDeclinedPayload;
+  [EventType.QUEST_STARTED]: QuestStartedPayload;
+  [EventType.QUEST_PROGRESSED]: QuestProgressedPayload;
+  [EventType.QUEST_COMPLETED]: QuestCompletedPayload;
+
+  // XP Lamp Events
+  [EventType.XP_LAMP_USE_REQUEST]: XpLampUseRequestPayload;
+  [EventType.XP_LAMP_SKILL_SELECTED]: XpLampSkillSelectedPayload;
+  [EventType.XP_LAMP_APPLIED]: XpLampAppliedPayload;
 }
 
 /**
@@ -965,6 +985,115 @@ export interface TypedEventEmitter {
     event: K,
     listener: (data: EventMap[K]) => void,
   ): void;
+}
+
+// =========================================================================
+// QUEST EVENT PAYLOADS
+// =========================================================================
+
+/**
+ * Quest started payload
+ */
+export interface QuestStartedPayload {
+  playerId: string;
+  questId: string;
+  questName: string;
+}
+
+/**
+ * Quest progressed payload
+ */
+export interface QuestProgressedPayload {
+  playerId: string;
+  questId: string;
+  stage: string;
+  progress: Record<string, number>;
+  description: string;
+}
+
+/**
+ * Quest completed payload
+ */
+export interface QuestCompletedPayload {
+  playerId: string;
+  questId: string;
+  questName: string;
+  rewards: {
+    questPoints: number;
+    items: Array<{ itemId: string; quantity: number }>;
+    xp: Record<string, number>;
+  };
+}
+
+/**
+ * Quest start confirm payload - show quest accept screen
+ */
+export interface QuestStartConfirmPayload {
+  playerId: string;
+  questId: string;
+  questName: string;
+  description: string;
+  difficulty: string;
+  requirements: {
+    quests: string[];
+    skills: Record<string, number>;
+    items: string[];
+  };
+  rewards: {
+    questPoints: number;
+    items: Array<{ itemId: string; quantity: number }>;
+    xp: Record<string, number>;
+  };
+}
+
+/**
+ * Quest start accepted payload - player confirmed quest start
+ */
+export interface QuestStartAcceptedPayload {
+  playerId: string;
+  questId: string;
+}
+
+/**
+ * Quest start declined payload - player declined quest
+ */
+export interface QuestStartDeclinedPayload {
+  playerId: string;
+  questId: string;
+}
+
+// =========================================================================
+// XP LAMP EVENT PAYLOADS
+// =========================================================================
+
+/**
+ * XP lamp use request payload - player wants to use an XP lamp
+ */
+export interface XpLampUseRequestPayload {
+  playerId: string;
+  itemId: string;
+  slot: number;
+  xpAmount: number;
+}
+
+/**
+ * XP lamp skill selected payload - player selected a skill for XP
+ */
+export interface XpLampSkillSelectedPayload {
+  playerId: string;
+  itemId: string;
+  slot: number;
+  skillId: string;
+  xpAmount: number;
+}
+
+/**
+ * XP lamp applied payload - server confirms XP was applied
+ */
+export interface XpLampAppliedPayload {
+  playerId: string;
+  skillId: string;
+  xpAmount: number;
 }
 
 // Generic event base type

@@ -16,6 +16,7 @@ import type {
   NPCDialogueTree,
   NPCDialogueNode,
 } from "../../../types/entities/npc-mob-types";
+import { isValidQuestId } from "../../../types/game/quest-types";
 
 interface DialogueState {
   npcId: string;
@@ -23,6 +24,8 @@ interface DialogueState {
   dialogueTree: NPCDialogueTree;
   currentNodeId: string;
   npcEntityId?: string;
+  pendingEffect?: string; // Effect to execute when player continues from terminal node
+  isTerminal?: boolean; // Whether current node is terminal (no responses)
 }
 
 /**
@@ -71,6 +74,29 @@ export class DialogueSystem extends SystemBase {
         this.handleDialogueResponse(data);
       },
     );
+
+    // Subscribe to dialogue continue events (from client on terminal nodes)
+    this.subscribe(
+      EventType.DIALOGUE_CONTINUE,
+      (data: { playerId: string; npcId: string }) => {
+        this.handleDialogueContinue(data);
+      },
+    );
+
+    // Subscribe to dialogue end events (from dialogueClose handler when player clicks X)
+    // This cleans up state WITHOUT executing pending effects
+    this.subscribe(
+      EventType.DIALOGUE_END,
+      (data: { playerId: string; npcId: string }) => {
+        // Only clean up if this came from external source (dialogueClose handler)
+        // Our own endDialogue also emits this, but after we've already cleaned up
+        const state = this.activeDialogues.get(data.playerId);
+        if (state && state.npcId === data.npcId) {
+          // Don't execute pending effect - player explicitly closed dialogue
+          this.activeDialogues.delete(data.playerId);
+        }
+      },
+    );
   }
 
   /**
@@ -113,13 +139,47 @@ export class DialogueSystem extends SystemBase {
     dialogueTree: NPCDialogueTree,
     npcEntityId?: string,
   ): void {
+    // Determine entry node ID, considering quest overrides
+    let entryNodeId = dialogueTree.entryNodeId;
+
+    // Check for quest-based entry node overrides
+    if (dialogueTree.questOverrides) {
+      const questSystem = this.world.getSystem("quest") as {
+        getQuestStatus?: (
+          playerId: string,
+          questId: string,
+        ) => "not_started" | "in_progress" | "ready_to_complete" | "completed";
+      };
+
+      if (questSystem?.getQuestStatus) {
+        // Check each quest's status and use override if available
+        for (const [questId, overrides] of Object.entries(
+          dialogueTree.questOverrides,
+        )) {
+          const status = questSystem.getQuestStatus(playerId, questId);
+
+          // Priority: ready_to_complete > in_progress > completed > default
+          if (status === "ready_to_complete" && overrides.ready_to_complete) {
+            entryNodeId = overrides.ready_to_complete;
+            break; // Use first matching quest override
+          } else if (status === "in_progress" && overrides.in_progress) {
+            entryNodeId = overrides.in_progress;
+            break;
+          } else if (status === "completed" && overrides.completed) {
+            entryNodeId = overrides.completed;
+            break;
+          }
+        }
+      }
+    }
+
     // Find entry node
     const entryNode = dialogueTree.nodes.find(
-      (node) => node.id === dialogueTree.entryNodeId,
+      (node) => node.id === entryNodeId,
     );
     if (!entryNode) {
       this.logger.error(
-        `Dialogue tree for ${npcId} has invalid entryNodeId: ${dialogueTree.entryNodeId}`,
+        `Dialogue tree for ${npcId} has invalid entryNodeId: ${entryNodeId}`,
       );
       return;
     }
@@ -142,6 +202,22 @@ export class DialogueSystem extends SystemBase {
       true,
       npcEntityId,
     );
+
+    // Check if entry node is terminal (no responses)
+    if (!entryNode.responses || entryNode.responses.length === 0) {
+      // Store pending effect for terminal node - will execute when player clicks continue
+      const state = this.activeDialogues.get(playerId);
+      if (state && entryNode.effect) {
+        state.pendingEffect = entryNode.effect;
+        state.isTerminal = true;
+        this.logger.info(
+          `[DialogueSystem] Terminal entry node ${entryNode.id} has pending effect: ${entryNode.effect}`,
+        );
+      } else if (state) {
+        state.isTerminal = true;
+      }
+      // Don't end dialogue yet - wait for player to click continue
+    }
   }
 
   /**
@@ -215,14 +291,58 @@ export class DialogueSystem extends SystemBase {
 
     // Check if this node has responses
     if (!nextNode.responses || nextNode.responses.length === 0) {
-      // Send final node text then end dialogue
+      // Terminal node - store pending effect instead of executing immediately
+      // Effect will execute when player clicks continue
+      if (nextNode.effect) {
+        state.pendingEffect = nextNode.effect;
+        this.logger.info(
+          `[DialogueSystem] Terminal node ${nextNode.id} has pending effect: ${nextNode.effect}`,
+        );
+      } else {
+        this.logger.info(
+          `[DialogueSystem] Terminal node ${nextNode.id} has no effect`,
+        );
+      }
+      state.isTerminal = true;
+      // Send final node text - don't end dialogue yet, wait for player continue
       this.sendDialogueNode(playerId, npcId, state.npcName, nextNode, false);
-      // Auto-end after a brief moment (client will handle timing)
-      this.endDialogue(playerId, npcId);
     } else {
       // Continue dialogue
       this.sendDialogueNode(playerId, npcId, state.npcName, nextNode, false);
     }
+  }
+
+  /**
+   * Handle player clicking "continue" on a terminal dialogue node
+   * This executes any pending effects and ends the dialogue
+   */
+  private handleDialogueContinue(data: {
+    playerId: string;
+    npcId: string;
+  }): void {
+    const { playerId, npcId } = data;
+
+    const state = this.activeDialogues.get(playerId);
+    if (!state || state.npcId !== npcId) {
+      // No active dialogue or wrong NPC - just ignore
+      return;
+    }
+
+    // Execute pending effect if present
+    if (state.pendingEffect) {
+      this.logger.info(
+        `[DialogueSystem] Executing pending effect on continue: ${state.pendingEffect}`,
+      );
+      this.executeEffect(
+        playerId,
+        npcId,
+        state.pendingEffect,
+        state.npcEntityId,
+      );
+    }
+
+    // End the dialogue
+    this.endDialogue(playerId, npcId);
   }
 
   /**
@@ -313,12 +433,68 @@ export class DialogueSystem extends SystemBase {
         });
         break;
 
-      case "startQuest":
-        // Future: implement quest system integration
-        this.logger.info(
-          `TODO: Start quest ${params[0]} for player ${playerId}`,
-        );
+      case "startQuest": {
+        const questId = params[0];
+        if (!questId || !isValidQuestId(questId)) {
+          this.logger.warn(
+            `startQuest effect has invalid quest ID: ${questId}`,
+          );
+          break;
+        }
+        // Get QuestSystem and request quest start (shows confirmation screen)
+        const questSystem = this.world.getSystem("quest") as {
+          requestQuestStart?: (playerId: string, questId: string) => boolean;
+        };
+        if (questSystem?.requestQuestStart) {
+          questSystem.requestQuestStart(playerId, questId);
+        } else {
+          this.logger.warn("QuestSystem not available for startQuest effect");
+        }
         break;
+      }
+
+      case "completeQuest": {
+        const questIdToComplete = params[0];
+        this.logger.info(
+          `[DialogueSystem] completeQuest effect called for quest: ${questIdToComplete}`,
+        );
+        if (!questIdToComplete || !isValidQuestId(questIdToComplete)) {
+          this.logger.warn(
+            `completeQuest effect has invalid quest ID: ${questIdToComplete}`,
+          );
+          break;
+        }
+        // Get QuestSystem and complete the quest
+        const questSystemForComplete = this.world.getSystem("quest") as {
+          completeQuest?: (
+            playerId: string,
+            questId: string,
+          ) => Promise<boolean>;
+        };
+        if (questSystemForComplete?.completeQuest) {
+          this.logger.info(
+            `[DialogueSystem] Calling QuestSystem.completeQuest for ${questIdToComplete}`,
+          );
+          questSystemForComplete
+            .completeQuest(playerId, questIdToComplete)
+            .then((success) => {
+              this.logger.info(
+                `[DialogueSystem] completeQuest returned: ${success}`,
+              );
+            })
+            .catch((err) => {
+              this.logger.error(
+                `Failed to complete quest ${questIdToComplete}:`,
+                err,
+              );
+            });
+        } else {
+          this.logger.warn(
+            "QuestSystem not available for completeQuest effect",
+          );
+        }
+        break;
+      }
 
       default:
         this.logger.warn(`Unknown dialogue effect: ${effectName}`);

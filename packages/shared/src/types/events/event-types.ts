@@ -280,9 +280,17 @@ export enum EventType {
   NPC_QUEST_OPEN = "quest:open_request",
 
   // Quest System
+  QUEST_START_CONFIRM = "quest:start_confirm", // Show quest accept screen
+  QUEST_START_ACCEPTED = "quest:start_accepted", // Player accepted quest
+  QUEST_START_DECLINED = "quest:start_declined", // Player declined quest
   QUEST_STARTED = "quest:started",
   QUEST_PROGRESSED = "quest:progressed",
   QUEST_COMPLETED = "quest:completed",
+
+  // XP Lamp System
+  XP_LAMP_USE_REQUEST = "xp_lamp:use_request",
+  XP_LAMP_SKILL_SELECTED = "xp_lamp:skill_selected",
+  XP_LAMP_APPLIED = "xp_lamp:applied",
 
   // Mob NPCs
   MOB_NPC_SPAWNED = "mob_npc:spawned",
@@ -331,6 +339,7 @@ export enum EventType {
   DIALOGUE_START = "dialogue:start",
   DIALOGUE_NODE_CHANGE = "dialogue:node_change",
   DIALOGUE_RESPONSE = "dialogue:response",
+  DIALOGUE_CONTINUE = "dialogue:continue", // For terminal nodes - player clicks to continue
   DIALOGUE_END = "dialogue:end",
 
   // Resource System
@@ -360,6 +369,7 @@ export enum EventType {
   SKILLS_ACTION = "skills:action",
   SKILLS_RESET = "skills:reset",
   SKILLS_MILESTONE = "skills:milestone",
+  XP_DROP_BROADCAST = "xp:drop_broadcast", // Server-side: emitted after XP processing with full data
   XP_DROP_RECEIVED = "xp:drop_received",
   TOTAL_LEVEL_CHANGED = "total:level:changed",
 

@@ -275,6 +275,9 @@ export type {
   TradeRequestModalState,
 } from "./types/game/trade-types";
 
+// Export quest type guards for server validation
+export { isValidQuestId } from "./types/game/quest-types";
+
 // Export item helpers used by server network snapshot
 export {
   getItem,
@@ -341,6 +344,7 @@ export { PrayerSystem } from "./systems/shared/character/PrayerSystem";
 export { LootSystem } from "./systems/shared/economy/LootSystem";
 export { StoreSystem } from "./systems/shared/economy/StoreSystem";
 export { ResourceSystem } from "./systems/shared/entities/ResourceSystem";
+export { QuestSystem } from "./systems/shared/progression/QuestSystem";
 export {
   FOOTPRINT_SIZES,
   resolveFootprint,
@@ -656,7 +660,7 @@ export type {
 export type { LoaderResult } from "./types/index";
 export type { ComponentDefinition, EntityData } from "./types/index";
 export type { Entities as EntitiesInterface } from "./types/index";
-export type { SystemLogger } from "./utils/Logger";
+export { SystemLogger } from "./utils/Logger";
 
 // Export network/system interface types
 export type {

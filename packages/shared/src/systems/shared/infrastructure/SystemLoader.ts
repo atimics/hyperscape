@@ -111,6 +111,7 @@ import { StoreSystem } from "..";
 import { InteractionRouter } from "../../client";
 import { LootSystem } from "..";
 import { GroundItemSystem } from "../economy/GroundItemSystem";
+import { generateKillToken } from "../../../utils/game/KillTokenUtils";
 // Movement now handled by physics in PlayerLocal
 // CameraSystem is ClientCameraSystem
 // UI components are React-based in the client package
@@ -132,6 +133,7 @@ import { SmeltingSystem } from "..";
 import { SmithingSystem } from "..";
 import { HealthRegenSystem } from "..";
 import { PrayerSystem } from "..";
+import { QuestSystem } from "..";
 
 // Interface for the systems collection
 export interface Systems {
@@ -377,6 +379,14 @@ export async function registerSystems(world: World): Promise<void> {
 
   // Dialogue system - handles NPC dialogue trees
   world.register("dialogue", DialogueSystem);
+
+  // Quest system - handles quest progression (server only)
+  // Note: world.isServer isn't reliable here because ServerNetwork registers later
+  // Use Node.js environment check instead (isServerEnvironment defined above)
+  if (isServerEnvironment) {
+    world.register("quest", QuestSystem);
+    console.log("[SystemLoader] ✅ QuestSystem registered (server-only)");
+  }
 
   // DYNAMIC WORLD CONTENT SYSTEMS - FULL THREE.JS ACCESS, NO SANDBOX
   world.register("mob-npc-spawner", MobNPCSpawnerSystem);
@@ -1301,12 +1311,16 @@ function setupAPI(world: World, systems: Systems): void {
       },
 
       killMob: (mobId: string, killerId: string) => {
+        const timestamp = Date.now();
+        const killToken = generateKillToken(mobId, killerId, timestamp);
         world.emit(EventType.NPC_DIED, {
           mobId,
           mobType: "unknown",
           level: 1,
           killedBy: killerId,
           position: { x: 0, y: 0, z: 0 },
+          timestamp,
+          killToken,
         });
       },
 

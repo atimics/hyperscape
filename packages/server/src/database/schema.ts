@@ -258,6 +258,9 @@ export const characters = pgTable(
 
     // Bank settings
     alwaysSetPlaceholder: integer("alwaysSetPlaceholder").default(0).notNull(), // SQLite: 0=false, 1=true
+
+    // Quest progression
+    questPoints: integer("questPoints").default(0).notNull(),
   },
   (table) => ({
     accountIdx: index("idx_characters_account").on(table.accountId),
@@ -699,6 +702,48 @@ export const npcKills = pgTable(
 );
 
 /**
+ * Quest Progress Table - Player quest state tracking
+ *
+ * Tracks quest progress for each player. Each row represents a player's
+ * progress on a specific quest.
+ *
+ * Key columns:
+ * - `playerId` - References characters.id (CASCADE DELETE)
+ * - `questId` - Quest identifier from quests.json manifest
+ * - `status` - "not_started" | "in_progress" | "completed"
+ * - `currentStage` - Current stage ID within the quest
+ * - `stageProgress` - JSON object tracking stage-specific progress (e.g., {"kills": 7})
+ * - `startedAt` - Unix timestamp when quest was started
+ * - `completedAt` - Unix timestamp when quest was completed
+ *
+ * Note: "ready_to_complete" is a derived state computed by QuestSystem when
+ * status is "in_progress" AND the current stage objective is met.
+ */
+export const questProgress = pgTable(
+  "quest_progress",
+  {
+    id: serial("id").primaryKey(),
+    playerId: text("playerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    questId: text("questId").notNull(),
+    status: text("status").default("not_started").notNull(),
+    currentStage: text("currentStage"),
+    stageProgress: jsonb("stageProgress").default({}),
+    startedAt: bigint("startedAt", { mode: "number" }),
+    completedAt: bigint("completedAt", { mode: "number" }),
+  },
+  (table) => ({
+    uniquePlayerQuest: unique().on(table.playerId, table.questId),
+    playerIdx: index("idx_quest_progress_player").on(table.playerId),
+    statusIdx: index("idx_quest_progress_status").on(
+      table.playerId,
+      table.status,
+    ),
+  }),
+);
+
+/**
  * Player Deaths Table - Active death lock tracking
  *
  * Stores death locks for players who have died and need to retrieve their items.
@@ -955,6 +1000,70 @@ export const userBansRelations = relations(userBans, ({ one }) => ({
   bannedByUser: one(users, {
     fields: [userBans.bannedByUserId],
     references: [users.id],
+  }),
+}));
+
+// ============================================================================
+// QUEST AUDIT TABLES
+// ============================================================================
+
+/**
+ * Quest Audit Log Table - Tracks all quest state changes for security auditing
+ *
+ * Provides an immutable audit trail for quest actions to detect exploits.
+ * Each row represents a single quest action (start, progress, complete).
+ *
+ * Key columns:
+ * - `id` - Auto-incrementing primary key
+ * - `playerId` - References characters.id (who performed the action)
+ * - `questId` - Quest identifier from quests.json manifest
+ * - `action` - Type of action ("started", "progressed", "completed")
+ * - `questPointsAwarded` - Points awarded (for completed actions)
+ * - `stageId` - Current stage at time of action
+ * - `stageProgress` - Progress snapshot at time of action (JSON)
+ * - `timestamp` - When the action occurred (Unix ms)
+ * - `metadata` - Additional context (IP, session, etc.)
+ *
+ * Design notes:
+ * - Immutable log - no updates or deletes in normal operation
+ * - Used for security auditing and exploit detection
+ * - Indexed for efficient queries by player and quest
+ * - CASCADE DELETE ensures cleanup when character is deleted
+ */
+export const questAuditLog = pgTable(
+  "quest_audit_log",
+  {
+    id: serial("id").primaryKey(),
+    playerId: text("playerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    questId: text("questId").notNull(),
+    action: text("action").notNull(), // "started", "progressed", "completed"
+    questPointsAwarded: integer("questPointsAwarded").default(0),
+    stageId: text("stageId"),
+    stageProgress: jsonb("stageProgress").default({}),
+    timestamp: bigint("timestamp", { mode: "number" }).notNull(),
+    metadata: jsonb("metadata").default({}),
+  },
+  (table) => ({
+    playerIdx: index("idx_quest_audit_log_player").on(table.playerId),
+    questIdx: index("idx_quest_audit_log_quest").on(table.questId),
+    playerQuestIdx: index("idx_quest_audit_log_player_quest").on(
+      table.playerId,
+      table.questId,
+    ),
+    timestampIdx: index("idx_quest_audit_log_timestamp").on(table.timestamp),
+    actionIdx: index("idx_quest_audit_log_action").on(table.action),
+  }),
+);
+
+/**
+ * Quest Audit Log Relations
+ */
+export const questAuditLogRelations = relations(questAuditLog, ({ one }) => ({
+  character: one(characters, {
+    fields: [questAuditLog.playerId],
+    references: [characters.id],
   }),
 }));
 

@@ -21,5 +21,11 @@ export { NPCKillRepository } from "./NPCKillRepository";
 export { DeathRepository } from "./DeathRepository";
 export { TemplateRepository } from "./TemplateRepository";
 export type { TemplateRow } from "./TemplateRepository";
+export { QuestRepository } from "./QuestRepository";
+export type {
+  QuestDbStatus,
+  StageProgress,
+  QuestProgressRow,
+} from "./QuestRepository";
 export { ActivityLogRepository } from "./ActivityLogRepository";
 export { BankRepository } from "./BankRepository";

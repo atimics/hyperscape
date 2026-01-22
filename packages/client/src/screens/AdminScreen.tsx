@@ -551,9 +551,7 @@ interface UsersViewProps {
   onUserClick: (userId: string) => void;
   onPlayerClick: (playerId: string) => void;
   selectedUserId: string | null;
-  adminFetch: (
-    path: string,
-  ) => Promise<{
+  adminFetch: (path: string) => Promise<{
     characters?: AdminCharacter[];
     user?: AdminUser & { roles: string[] };
     ban?: { reason: string; expiresAt: number | null } | null;
