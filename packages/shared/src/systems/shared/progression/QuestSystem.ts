@@ -38,11 +38,17 @@ import type {
 import { validateQuestDefinition } from "../../../types/game/quest-types";
 import type { NPCDiedPayload } from "../../../types/events/event-payloads";
 import { validateKillToken } from "../../../utils/game/KillTokenUtils";
+import type { IQuestSystem } from "../../../types/game/quest-interfaces";
 
 /**
  * QuestSystem - Handles quest progression and rewards
+ *
+ * Implements IQuestSystem interface which combines:
+ * - IQuestQuery: Read-only quest information queries
+ * - IQuestProgress: Active quest progress tracking
+ * - IQuestActions: Quest state mutation actions
  */
-export class QuestSystem extends SystemBase {
+export class QuestSystem extends SystemBase implements IQuestSystem {
   /** Quest definitions loaded from manifest */
   private questDefinitions: Map<string, QuestDefinition> = new Map();
 
@@ -876,88 +882,43 @@ export class QuestSystem extends SystemBase {
   /**
    * Handle gather stage progress (woodcutting, fishing, mining)
    * Triggered by INVENTORY_ITEM_ADDED when player receives gathered resources
-   *
-   * Tracks progress by item ID across ALL gather stages in the quest,
-   * allowing players to gather items in any order (e.g., copper and tin interleaved)
    */
   private handleGatherStage(
     playerId: string,
     itemId: string,
     quantity: number,
   ): void {
-    const state = this.playerStates.get(playerId);
-    if (!state) return;
-
-    for (const [questId, progress] of state.activeQuests) {
-      const definition = this.questDefinitions.get(questId);
-      if (!definition) continue;
-
-      // Check if ANY gather stage in this quest needs this item (O(1) cached lookup)
-      const relevantStage = this.getGatherStageByTarget(questId, itemId);
-      if (!relevantStage) continue;
-
-      // Track progress by item ID (direct mutation to avoid GC pressure)
-      progress.stageProgress[itemId] =
-        (progress.stageProgress[itemId] || 0) + quantity;
-      const currentCount = progress.stageProgress[itemId];
-      this.markActiveQuestsDirty(playerId);
-
-      // Log at info level only for milestones (first, halfway, complete)
-      const requiredCount = relevantStage.count || 1;
-      const halfway = Math.floor(requiredCount / 2);
-      if (
-        currentCount === 1 ||
-        currentCount === halfway ||
-        currentCount >= requiredCount
-      ) {
-        this.logger.info(
-          `Quest ${questId}: gathered ${currentCount}/${requiredCount} ${itemId}`,
-        );
-      }
-
-      // Check if CURRENT stage is complete (only advance if we're on that stage)
-      // Use cached lookup (O(1) instead of O(n))
-      const currentStage = this.getStageById(questId, progress.currentStage);
-      if (
-        currentStage?.type === "gather" &&
-        currentStage.target &&
-        currentStage.count
-      ) {
-        const stageItemCount = progress.stageProgress[currentStage.target] || 0;
-        if (stageItemCount >= currentStage.count) {
-          this.advanceToNextStage(playerId, questId, progress, definition);
-        }
-      }
-
-      // Save and emit progress
-      this.saveQuestProgress(
-        playerId,
-        questId,
-        progress.currentStage,
-        progress.stageProgress,
-        false,
-      );
-      this.emitTypedEvent(EventType.QUEST_PROGRESSED, {
-        playerId,
-        questId,
-        stage: progress.currentStage,
-        progress: progress.stageProgress,
-        description: currentStage?.description || relevantStage.description,
-      });
-    }
+    this.handleProgressStage(playerId, "gather", itemId, quantity);
   }
 
   /**
    * Handle interact stage progress (firemaking, cooking, smelting, smithing)
    * Triggered by skill-specific events when player creates items
-   *
-   * Tracks progress by target ID across ALL interact stages in the quest,
-   * allowing flexible completion order
    */
   private handleInteractStage(
     playerId: string,
     target: string,
     count: number,
+  ): void {
+    this.handleProgressStage(playerId, "interact", target, count);
+  }
+
+  /**
+   * Shared handler for gather and interact stage progress (DRY consolidation)
+   *
+   * Tracks progress by target key across ALL stages of the given type in the quest,
+   * allowing flexible completion order (e.g., copper and tin interleaved)
+   *
+   * @param playerId - Player making progress
+   * @param stageType - "gather" or "interact"
+   * @param targetKey - Item ID for gather, target ID for interact
+   * @param amount - Quantity to add to progress
+   */
+  private handleProgressStage(
+    playerId: string,
+    stageType: "gather" | "interact",
+    targetKey: string,
+    amount: number,
   ): void {
     const state = this.playerStates.get(playerId);
     if (!state) return;
@@ -966,14 +927,17 @@ export class QuestSystem extends SystemBase {
       const definition = this.questDefinitions.get(questId);
       if (!definition) continue;
 
-      // Check if ANY interact stage in this quest needs this target (O(1) cached lookup)
-      const relevantStage = this.getInteractStageByTarget(questId, target);
+      // Use appropriate cached lookup based on stage type (O(1))
+      const relevantStage =
+        stageType === "gather"
+          ? this.getGatherStageByTarget(questId, targetKey)
+          : this.getInteractStageByTarget(questId, targetKey);
       if (!relevantStage) continue;
 
-      // Track progress by target ID (direct mutation to avoid GC pressure)
-      progress.stageProgress[target] =
-        (progress.stageProgress[target] || 0) + count;
-      const currentCount = progress.stageProgress[target];
+      // Track progress by target key (direct mutation to avoid GC pressure)
+      progress.stageProgress[targetKey] =
+        (progress.stageProgress[targetKey] || 0) + amount;
+      const currentCount = progress.stageProgress[targetKey];
       this.markActiveQuestsDirty(playerId);
 
       // Log at info level only for milestones (first, halfway, complete)
@@ -984,8 +948,9 @@ export class QuestSystem extends SystemBase {
         currentCount === halfway ||
         currentCount >= requiredCount
       ) {
+        const actionWord = stageType === "gather" ? "gathered" : "interacted";
         this.logger.info(
-          `Quest ${questId}: interacted ${currentCount}/${requiredCount} ${target}`,
+          `Quest ${questId}: ${actionWord} ${currentCount}/${requiredCount} ${targetKey}`,
         );
       }
 
@@ -993,7 +958,7 @@ export class QuestSystem extends SystemBase {
       // Use cached lookup (O(1) instead of O(n))
       const currentStage = this.getStageById(questId, progress.currentStage);
       if (
-        currentStage?.type === "interact" &&
+        currentStage?.type === stageType &&
         currentStage.target &&
         currentStage.count
       ) {
