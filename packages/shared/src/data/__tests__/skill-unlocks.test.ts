@@ -9,9 +9,6 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
-import { readFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
 import {
   getUnlocksAtLevel,
   getUnlocksUpToLevel,
@@ -28,58 +25,37 @@ import {
 // ============================================================================
 
 /**
- * Find the workspace root by looking for package.json with "hyperscape2" or similar
+ * Get CDN base URL from environment
  */
-function findWorkspaceRoot(): string {
-  // Try multiple approaches for ESM/CJS compatibility
-  let currentDir: string;
-
-  // Try import.meta.url for ESM
-  try {
-    const __filename = fileURLToPath(import.meta.url);
-    currentDir = dirname(__filename);
-  } catch {
-    // Fallback to __dirname for CJS (vitest might polyfill this)
-    currentDir = __dirname;
+function getCdnUrl(): string {
+  // Check for PUBLIC_CDN_URL in environment (set by CI)
+  if (process.env.PUBLIC_CDN_URL) {
+    return process.env.PUBLIC_CDN_URL;
   }
-
-  // Navigate up from packages/shared/src/data/__tests__ to find workspace root
-  // We look for a turbo.json which is at the workspace root
-  let searchDir = currentDir;
-  for (let i = 0; i < 10; i++) {
-    if (existsSync(join(searchDir, "turbo.json"))) {
-      return searchDir;
-    }
-    const parent = dirname(searchDir);
-    if (parent === searchDir) break; // Reached filesystem root
-    searchDir = parent;
-  }
-
-  // Fallback: navigate from current dir assuming standard structure
-  return join(currentDir, "..", "..", "..", "..", "..");
+  // Default to production CDN
+  return "https://assets.hyperscape.club";
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   // Reset any previous state
   resetSkillUnlocks();
 
-  // Find workspace root and load manifest
-  const workspaceRoot = findWorkspaceRoot();
-  const manifestPath = join(
-    workspaceRoot,
-    "packages/server/world/assets/manifests/skill-unlocks.json",
-  );
+  // Load manifest from CDN
+  const cdnUrl = getCdnUrl();
+  const manifestUrl = `${cdnUrl}/manifests/skill-unlocks.json`;
 
   try {
-    if (!existsSync(manifestPath)) {
-      throw new Error(`Manifest not found at: ${manifestPath}`);
+    const response = await fetch(manifestUrl);
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch skill-unlocks.json: ${response.status} ${response.statusText}`,
+      );
     }
-    const data = readFileSync(manifestPath, "utf-8");
-    const manifest = JSON.parse(data) as SkillUnlocksManifest;
+    const manifest = (await response.json()) as SkillUnlocksManifest;
     loadSkillUnlocks(manifest);
   } catch (e) {
     console.warn(
-      `Could not load skill-unlocks.json manifest for tests: ${e instanceof Error ? e.message : e}`,
+      `Could not load skill-unlocks.json manifest from CDN: ${e instanceof Error ? e.message : e}`,
     );
   }
 });

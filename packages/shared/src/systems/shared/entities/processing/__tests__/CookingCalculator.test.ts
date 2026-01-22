@@ -13,9 +13,6 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
-import { readFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
 import {
   calculateBurnChance,
   getStopBurnLevel,
@@ -34,84 +31,31 @@ import {
 } from "../../../../../data/ProcessingDataProvider";
 
 /**
- * Find the workspace root by looking for turbo.json
+ * Get CDN base URL from environment
  */
-function findWorkspaceRoot(): string {
-  // Try multiple approaches for ESM/CJS compatibility
-  let currentDir: string;
-
-  // Try import.meta.url for ESM
-  try {
-    const __filename = fileURLToPath(import.meta.url);
-    currentDir = dirname(__filename);
-  } catch {
-    // Fallback to __dirname for CJS (vitest might polyfill this)
-    currentDir = __dirname;
+function getCdnUrl(): string {
+  // Check for PUBLIC_CDN_URL in environment (set by CI)
+  if (process.env.PUBLIC_CDN_URL) {
+    return process.env.PUBLIC_CDN_URL;
   }
-
-  // Navigate up from current location to find workspace root
-  // We look for a turbo.json which is at the workspace root
-  let searchDir = currentDir;
-  for (let i = 0; i < 15; i++) {
-    if (existsSync(join(searchDir, "turbo.json"))) {
-      return searchDir;
-    }
-    const parent = dirname(searchDir);
-    if (parent === searchDir) break; // Reached filesystem root
-    searchDir = parent;
-  }
-
-  // Fallback: navigate from current dir assuming standard structure
-  // packages/shared/src/systems/shared/entities/processing/__tests__
-  return join(currentDir, "..", "..", "..", "..", "..", "..", "..", "..");
+  // Default to production CDN
+  return "https://assets.hyperscape.club";
 }
 
 describe("CookingCalculator", () => {
-  beforeAll(() => {
-    // Directly load cooking recipes from manifest instead of using DataManager
-    // This avoids complex async initialization and CDN/filesystem detection
-    const workspaceRoot = findWorkspaceRoot();
-    const cookingPath = join(
-      workspaceRoot,
-      "packages/server/world/assets/manifests/recipes/cooking.json",
-    );
+  beforeAll(async () => {
+    // Load cooking recipes from CDN
+    const cdnUrl = getCdnUrl();
+    const manifestUrl = `${cdnUrl}/manifests/recipes/cooking.json`;
 
-    // Try multiple paths in case the workspace root detection fails
-    const possiblePaths = [
-      cookingPath,
-      // Fallback: from process.cwd() (might be workspace root)
-      join(
-        process.cwd(),
-        "packages/server/world/assets/manifests/recipes/cooking.json",
-      ),
-      // Fallback: relative from packages/shared
-      join(
-        process.cwd(),
-        "../server/world/assets/manifests/recipes/cooking.json",
-      ),
-    ];
-
-    let manifest: CookingManifest | null = null;
-    let loadedPath = "";
-
-    for (const path of possiblePaths) {
-      try {
-        if (existsSync(path)) {
-          const data = readFileSync(path, "utf-8");
-          manifest = JSON.parse(data) as CookingManifest;
-          loadedPath = path;
-          break;
-        }
-      } catch {
-        // Try next path
-      }
-    }
-
-    if (!manifest) {
+    const response = await fetch(manifestUrl);
+    if (!response.ok) {
       throw new Error(
-        `Could not load cooking.json manifest from any of these paths:\n${possiblePaths.join("\n")}\nWorkspace root detected as: ${workspaceRoot}\nprocess.cwd(): ${process.cwd()}`,
+        `Failed to fetch cooking.json from CDN: ${response.status} ${response.statusText}\nURL: ${manifestUrl}`,
       );
     }
+
+    const manifest = (await response.json()) as CookingManifest;
 
     // Load recipes into ProcessingDataProvider
     const provider = ProcessingDataProvider.getInstance();
@@ -122,7 +66,7 @@ describe("CookingCalculator", () => {
     const cookableCount = provider.getCookableItemIds().size;
     if (cookableCount === 0) {
       throw new Error(
-        `Manifest loaded from ${loadedPath} but ProcessingDataProvider has 0 cookable items after rebuild`,
+        `Manifest loaded from ${manifestUrl} but ProcessingDataProvider has 0 cookable items after rebuild`,
       );
     }
   });
