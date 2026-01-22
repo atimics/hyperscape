@@ -19,8 +19,7 @@
   ],
   "scripts": {
     "dev": "vite --host --port 3333",
-    "prebuild": "cd ../.. && turbo run build --filter=@hyperscape/shared",
-    "build": "vite build",
+    "build": "cd ../.. && turbo run build --filter=@hyperscape/shared && cd packages/client && vite build",
     "preview": "vite preview",
     "lint": "eslint src --max-warnings 22100",
     "typecheck": "tsc --noEmit",

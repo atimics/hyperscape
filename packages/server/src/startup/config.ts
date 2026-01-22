@@ -168,12 +168,28 @@ async function fetchManifestsFromCDN(
     `[Config] 📦 Manifests: ${fetched} fetched, ${updated} updated, ${failed} failed`,
   );
 
-  // Fail if no manifests could be fetched and none exist locally
+  // Check if we have any manifests after fetch attempt
   if (fetched === 0) {
     const existingFiles = await fs.readdir(manifestsDir).catch(() => []);
     if (existingFiles.length === 0) {
+      // In test/CI environments, allow starting without manifests
+      // This enables unit tests and CI builds that don't need game data
+      if (
+        nodeEnv === "test" ||
+        process.env.CI === "true" ||
+        process.env.SKIP_MANIFESTS === "true"
+      ) {
+        console.warn(
+          `[Config] ⚠️  No manifests available - running in minimal mode (test/CI)`,
+        );
+        console.warn(
+          `[Config] 💡 For full functionality, clone the assets repo or set PUBLIC_CDN_URL to a valid CDN`,
+        );
+        return;
+      }
       throw new Error(
-        `Failed to fetch any manifests from CDN (${cdnUrl}) and no local manifests exist`,
+        `Failed to fetch any manifests from CDN (${cdnUrl}) and no local manifests exist. ` +
+          `Set SKIP_MANIFESTS=true to bypass this check in test environments.`,
       );
     }
     console.warn(

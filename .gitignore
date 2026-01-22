@@ -93,5 +93,8 @@ clear-users.sql
 logs/
 
 eliza/
-packages/server/world/assets/
+
+# Server world assets - ignore large binaries, keep manifests
+packages/server/world/assets/*
+packages/server/world/
 .wrangler/

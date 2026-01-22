@@ -36,6 +36,11 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Clone assets repository
+        run: |
+          git clone --depth 1 https://github.com/HyperscapeAI/assets.git packages/server/world/assets
+          echo "✓ Assets cloned ($(ls packages/server/world/assets/manifests/*.json 2>/dev/null | wc -l) manifest files)"
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
