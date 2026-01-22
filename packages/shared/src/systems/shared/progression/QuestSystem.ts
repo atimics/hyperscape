@@ -37,6 +37,7 @@ import type {
 } from "../../../types/game/quest-types";
 import { validateQuestDefinition } from "../../../types/game/quest-types";
 import type { NPCDiedPayload } from "../../../types/events/event-payloads";
+import { validateKillToken } from "../../../utils/game/KillTokenUtils";
 
 /**
  * QuestSystem - Handles quest progression and rewards
@@ -772,7 +773,17 @@ export class QuestSystem extends SystemBase {
    * Handle NPC death for kill quest tracking
    */
   private handleNPCDied(data: NPCDiedPayload): void {
-    const { killedBy, mobType } = data;
+    const { killedBy, mobType, mobId, timestamp, killToken } = data;
+
+    // Validate kill token to prevent spoofed events
+    if (timestamp && killToken && mobId) {
+      if (!validateKillToken(mobId, killedBy, timestamp, killToken)) {
+        this.logger.warn(
+          `Invalid kill token for ${killedBy} killing ${mobId} - possible spoof attempt`,
+        );
+        return;
+      }
+    }
 
     // Debug-level logging for hot path (reduces I/O and string allocations)
     this.logger.debug(`NPC_DIED: killedBy=${killedBy}, mobType=${mobType}`);

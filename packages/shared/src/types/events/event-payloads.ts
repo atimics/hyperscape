@@ -95,6 +95,10 @@ export interface NPCDiedPayload {
   killedBy: string;
   position: { x: number; y: number; z: number };
   loot?: InventoryItem[];
+  /** Timestamp when the kill occurred (Unix ms) - for anti-spoof validation */
+  timestamp?: number;
+  /** HMAC signature for kill validation - prevents spoofed kill events */
+  killToken?: string;
 }
 
 // Item System Event Payloads

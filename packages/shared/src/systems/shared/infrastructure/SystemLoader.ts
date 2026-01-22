@@ -111,6 +111,7 @@ import { StoreSystem } from "..";
 import { InteractionRouter } from "../../client";
 import { LootSystem } from "..";
 import { GroundItemSystem } from "../economy/GroundItemSystem";
+import { generateKillToken } from "../../../utils/game/KillTokenUtils";
 // Movement now handled by physics in PlayerLocal
 // CameraSystem is ClientCameraSystem
 // UI components are React-based in the client package
@@ -1309,12 +1310,16 @@ function setupAPI(world: World, systems: Systems): void {
       },
 
       killMob: (mobId: string, killerId: string) => {
+        const timestamp = Date.now();
+        const killToken = generateKillToken(mobId, killerId, timestamp);
         world.emit(EventType.NPC_DIED, {
           mobId,
           mobType: "unknown",
           level: 1,
           killedBy: killerId,
           position: { x: 0, y: 0, z: 0 },
+          timestamp,
+          killToken,
         });
       },
 
