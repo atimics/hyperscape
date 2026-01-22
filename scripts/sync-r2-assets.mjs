@@ -47,8 +47,27 @@ const DRY_RUN = args.includes("--dry-run");
 const FORCE = args.includes("--force");
 const VERBOSE = args.includes("--verbose") || args.includes("-v");
 
+// File extensions to include
+const ASSET_EXTENSIONS = new Set([
+  ".mp3", ".ogg", ".wav",           // Audio
+  ".json",                           // Manifests/data
+  ".glb", ".gltf", ".vrm",          // 3D models
+  ".png", ".jpg", ".jpeg", ".webp", // Images
+  ".ktx2",                          // Compressed textures
+  ".wasm", ".js",                   // WebAssembly/Scripts
+  ".hdr", ".cube", ".3dl",          // HDR/LUT files
+]);
+
+// Directories to skip
+const SKIP_DIRS = new Set([
+  ".git",
+  "node_modules",
+  "__pycache__",
+  ".cache",
+]);
+
 /**
- * Recursively get all files in a directory
+ * Recursively get all asset files in a directory
  */
 function getAllFiles(dir, files = []) {
   if (!existsSync(dir)) return files;
@@ -59,12 +78,19 @@ function getAllFiles(dir, files = []) {
     const fullPath = join(dir, entry.name);
     
     if (entry.isDirectory()) {
+      // Skip certain directories
+      if (SKIP_DIRS.has(entry.name)) continue;
+      if (entry.name.startsWith(".")) continue;
+      
       getAllFiles(fullPath, files);
     } else if (entry.isFile()) {
-      // Skip hidden files and common non-asset files
+      // Skip hidden files and non-asset files
       if (entry.name.startsWith(".")) continue;
       if (entry.name === "Thumbs.db") continue;
-      if (entry.name === ".DS_Store") continue;
+      
+      // Only include files with known asset extensions
+      const ext = extname(entry.name).toLowerCase();
+      if (!ASSET_EXTENSIONS.has(ext)) continue;
       
       files.push(fullPath);
     }
