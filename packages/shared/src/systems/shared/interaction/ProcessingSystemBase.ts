@@ -263,18 +263,20 @@ export abstract class ProcessingSystemBase
     // Set layer 1 for raycasting
     fireMesh.layers.set(1);
 
-    // Add flickering animation with proper cleanup
+    // Add flickering animation with proper cleanup (browser only)
     let animationFrameId: number | null = null;
 
-    const animate = () => {
-      if (fire.isActive && fire.mesh) {
-        fireMaterial.opacity = 0.6 + Math.sin(Date.now() * 0.01) * 0.2;
-        animationFrameId = requestAnimationFrame(animate);
-      } else {
-        animationFrameId = null;
-      }
-    };
-    animate();
+    if (typeof requestAnimationFrame !== "undefined") {
+      const animate = () => {
+        if (fire.isActive && fire.mesh) {
+          fireMaterial.opacity = 0.6 + Math.sin(Date.now() * 0.01) * 0.2;
+          animationFrameId = requestAnimationFrame(animate);
+        } else {
+          animationFrameId = null;
+        }
+      };
+      animate();
+    }
 
     // Store cancel function on fire object for cleanup
     (fire as { cancelAnimation?: () => void }).cancelAnimation = () => {

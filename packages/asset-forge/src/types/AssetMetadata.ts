@@ -3,7 +3,7 @@
  * Defines the structure for all asset metadata stored in gdd-assets/{id}/metadata.json
  */
 
-import type { ExtendedAssetMetadata, RiggingMetadata } from "./RiggingMetadata";
+import type { RiggingMetadata } from "./RiggingMetadata";
 
 export type AssetType =
   | "weapon"
@@ -152,6 +152,12 @@ export interface VariantAssetMetadata extends RiggingMetadata {
  * Combined type for any asset metadata
  */
 export type AssetMetadata = BaseAssetMetadata | VariantAssetMetadata;
+
+/**
+ * ExtendedAssetMetadata is simply AssetMetadata (which already includes RiggingMetadata)
+ * This type alias is kept for backward compatibility
+ */
+export type ExtendedAssetMetadata = AssetMetadata;
 
 /**
  * Type for assets with animation metadata

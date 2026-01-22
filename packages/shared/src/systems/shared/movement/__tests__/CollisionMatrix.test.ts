@@ -15,7 +15,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { CollisionMatrix, ZONE_SIZE } from "../CollisionMatrix";
-import { CollisionFlag, CollisionMask } from "../CollisionFlags";
+import { CollisionFlag } from "../CollisionFlags";
 
 describe("CollisionMatrix", () => {
   let matrix: CollisionMatrix;

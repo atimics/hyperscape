@@ -28,6 +28,13 @@ export type {
   EquipmentSaveItem,
   DatabaseSystemOperations,
   SystemDatabase,
+  ActivityLogRow,
+  ActivityLogEntry,
+  ActivityLogQueryOptions,
+  TradeRow,
+  TradeEntry,
+  TradeItem,
+  TradeQueryOptions,
 } from "./database.types.js";
 export { dbHelpers, isDatabaseInstance } from "./database.types.js";
 

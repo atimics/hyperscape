@@ -1,6 +1,6 @@
 import React from "react";
 import { Plus, Settings, LogOut, Play, Square } from "lucide-react";
-import { Agent } from "../../screens/DashboardScreen";
+import type { Agent } from "./types";
 import { AgentSummaryCard } from "./AgentSummaryCard";
 import { AgentGoalPanel } from "./AgentGoalPanel";
 import { AgentSkillsPanel } from "./AgentSkillsPanel";

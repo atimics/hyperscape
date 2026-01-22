@@ -838,6 +838,54 @@ export const characterTemplates = pgTable(
 );
 
 /**
+ * User Bans Table - Tracks banned users
+ *
+ * Stores ban records for users who have been banned by moderators or admins.
+ * Supports both temporary and permanent bans.
+ *
+ * Key columns:
+ * - `id` - Auto-incrementing primary key
+ * - `bannedUserId` - References users.id (the banned user)
+ * - `bannedByUserId` - References users.id (the mod/admin who banned them)
+ * - `reason` - Optional reason for the ban
+ * - `expiresAt` - When the ban expires (null for permanent bans)
+ * - `createdAt` - When the ban was created
+ * - `active` - Whether the ban is currently active (false = unbanned)
+ *
+ * Design notes:
+ * - `active` flag allows soft-delete of bans (preserves history)
+ * - expiresAt = null means permanent ban
+ * - Ban checks should filter by active=true AND (expiresAt IS NULL OR expiresAt > NOW())
+ * - Mods cannot ban other mods or admins (enforced in application logic)
+ */
+export const userBans = pgTable(
+  "user_bans",
+  {
+    id: serial("id").primaryKey(),
+    bannedUserId: text("bannedUserId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    bannedByUserId: text("bannedByUserId")
+      .notNull()
+      .references(() => users.id, { onDelete: "set null" }),
+    reason: text("reason"),
+    expiresAt: bigint("expiresAt", { mode: "number" }), // null = permanent
+    createdAt: bigint("createdAt", { mode: "number" })
+      .notNull()
+      .default(sql`(EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT`),
+    active: integer("active").default(1).notNull(), // 1=active, 0=unbanned
+  },
+  (table) => ({
+    bannedUserIdx: index("idx_user_bans_banned_user").on(table.bannedUserId),
+    activeIdx: index("idx_user_bans_active").on(table.active),
+    activeBannedIdx: index("idx_user_bans_active_banned").on(
+      table.active,
+      table.bannedUserId,
+    ),
+  }),
+);
+
+/**
  * ============================================================================
  * TABLE RELATIONS
  * ============================================================================
@@ -943,6 +991,181 @@ export const playerDeathsRelations = relations(playerDeaths, ({ one }) => ({
     references: [characters.id],
   }),
 }));
+
+export const userBansRelations = relations(userBans, ({ one }) => ({
+  bannedUser: one(users, {
+    fields: [userBans.bannedUserId],
+    references: [users.id],
+  }),
+  bannedByUser: one(users, {
+    fields: [userBans.bannedByUserId],
+    references: [users.id],
+  }),
+}));
+
+// ============================================================================
+// ADMIN PANEL TABLES
+// ============================================================================
+
+/**
+ * Activity Log Table - Tracks all player actions for admin auditing
+ *
+ * Stores a comprehensive log of player activities including:
+ * - Item pickup/drop
+ * - Equipment changes
+ * - NPC kills
+ * - Bank transactions
+ * - Store transactions
+ * - Trading
+ *
+ * Key columns:
+ * - `id` - Auto-incrementing primary key
+ * - `playerId` - References characters.id (who performed the action)
+ * - `eventType` - Type of event (e.g., "ITEM_PICKUP", "NPC_DIED")
+ * - `action` - Human-readable action (e.g., "picked_up", "killed")
+ * - `entityType` - Type of entity involved (e.g., "item", "npc", "player")
+ * - `entityId` - ID of the entity involved
+ * - `details` - JSON object with event-specific data
+ * - `position` - JSON object {x, y, z} of where action occurred
+ * - `timestamp` - When the action occurred (Unix ms)
+ *
+ * Design notes:
+ * - 90-day retention policy (cleanup via maintenance job)
+ * - Indexed for efficient queries by player, event type, and time range
+ * - CASCADE DELETE ensures cleanup when character is deleted
+ */
+export const activityLog = pgTable(
+  "activity_log",
+  {
+    id: serial("id").primaryKey(),
+    playerId: text("playerId")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    eventType: text("eventType").notNull(),
+    action: text("action").notNull(),
+    entityType: text("entityType"),
+    entityId: text("entityId"),
+    details: jsonb("details")
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    position: jsonb("position"),
+    timestamp: bigint("timestamp", { mode: "number" }).notNull(),
+  },
+  (table) => ({
+    playerIdx: index("idx_activity_log_player").on(table.playerId),
+    timestampIdx: index("idx_activity_log_timestamp").on(table.timestamp),
+    playerTimestampIdx: index("idx_activity_log_player_timestamp").on(
+      table.playerId,
+      table.timestamp,
+    ),
+    eventTypeIdx: index("idx_activity_log_event_type").on(table.eventType),
+    playerEventTypeIdx: index("idx_activity_log_player_event_type").on(
+      table.playerId,
+      table.eventType,
+      table.timestamp,
+    ),
+  }),
+);
+
+/**
+ * Trades Table - Records all completed trades between players
+ *
+ * Stores a history of all player-to-player trades including:
+ * - Who initiated the trade
+ * - Who received the trade
+ * - What items were exchanged
+ * - What coins were exchanged
+ * - Trade status (completed, cancelled, declined)
+ *
+ * Key columns:
+ * - `id` - Auto-incrementing primary key
+ * - `initiatorId` - References characters.id (who started the trade)
+ * - `receiverId` - References characters.id (who accepted the trade)
+ * - `status` - Trade outcome ("completed", "cancelled", "declined")
+ * - `initiatorItems` - JSON array of items given by initiator
+ * - `receiverItems` - JSON array of items given by receiver
+ * - `initiatorCoins` - Coins given by initiator
+ * - `receiverCoins` - Coins given by receiver
+ * - `timestamp` - When trade completed (Unix ms)
+ *
+ * Design notes:
+ * - SET NULL on delete preserves trade history even if player is deleted
+ * - 90-day retention policy (cleanup via maintenance job)
+ * - Indexed for efficient queries by player and time range
+ */
+export const trades = pgTable(
+  "trades",
+  {
+    id: serial("id").primaryKey(),
+    initiatorId: text("initiatorId").references(() => characters.id, {
+      onDelete: "set null",
+    }),
+    receiverId: text("receiverId").references(() => characters.id, {
+      onDelete: "set null",
+    }),
+    status: text("status").notNull(), // "completed", "cancelled", "declined"
+    initiatorItems: jsonb("initiatorItems")
+      .default(sql`'[]'::jsonb`)
+      .notNull(),
+    receiverItems: jsonb("receiverItems")
+      .default(sql`'[]'::jsonb`)
+      .notNull(),
+    initiatorCoins: integer("initiatorCoins").default(0).notNull(),
+    receiverCoins: integer("receiverCoins").default(0).notNull(),
+    timestamp: bigint("timestamp", { mode: "number" }).notNull(),
+  },
+  (table) => ({
+    initiatorIdx: index("idx_trades_initiator").on(table.initiatorId),
+    receiverIdx: index("idx_trades_receiver").on(table.receiverId),
+    timestampIdx: index("idx_trades_timestamp").on(table.timestamp),
+    initiatorTimestampIdx: index("idx_trades_initiator_timestamp").on(
+      table.initiatorId,
+      table.timestamp,
+    ),
+    receiverTimestampIdx: index("idx_trades_receiver_timestamp").on(
+      table.receiverId,
+      table.timestamp,
+    ),
+  }),
+);
+
+/**
+ * Activity Log Relations
+ */
+export const activityLogRelations = relations(activityLog, ({ one }) => ({
+  character: one(characters, {
+    fields: [activityLog.playerId],
+    references: [characters.id],
+  }),
+}));
+
+/**
+ * Trades Relations
+ */
+export const tradesRelations = relations(trades, ({ one }) => ({
+  initiator: one(characters, {
+    fields: [trades.initiatorId],
+    references: [characters.id],
+    relationName: "tradeInitiator",
+  }),
+  receiver: one(characters, {
+    fields: [trades.receiverId],
+    references: [characters.id],
+    relationName: "tradeReceiver",
+  }),
+}));
+
+/**
+ * Update characters relations to include activity logs and trades
+ */
+export const charactersActivityRelations = relations(
+  characters,
+  ({ many }) => ({
+    activityLogs: many(activityLog),
+    initiatedTrades: many(trades, { relationName: "tradeInitiator" }),
+    receivedTrades: many(trades, { relationName: "tradeReceiver" }),
+  }),
+);
 
 /**
  * SQL template tag for raw SQL expressions

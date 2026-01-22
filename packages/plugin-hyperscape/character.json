@@ -61,11 +61,8 @@
     ]
   },
   "plugins": [
-    "@hyperscape/plugin-hyperscape",
-    "@elizaos/plugin-sql",
-    "@elizaos/plugin-openrouter",
-    "@elizaos/plugin-openai",
-    "@elizaos/plugin-anthropic"
+    "./dist/index.js",
+    "@elizaos/plugin-sql"
   ],
   "settings": {
     "secrets": {},

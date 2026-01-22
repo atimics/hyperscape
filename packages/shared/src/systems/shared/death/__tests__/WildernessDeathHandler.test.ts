@@ -159,6 +159,7 @@ describe("WildernessDeathHandler", () => {
           scatter: true,
           scatterRadius: 3.0,
         }),
+        false, // throwOnFailure=false when no transaction
       );
     });
 
@@ -329,8 +330,8 @@ describe("WildernessDeathHandler", () => {
       const expectedMs = ticksToMs(COMBAT_CONSTANTS.GROUND_ITEM_DESPAWN_TICKS);
 
       expect(spawnCall.despawnTime).toBe(expectedMs);
-      // 300 ticks * 600ms = 180000ms = 3 minutes
-      expect(expectedMs).toBe(180000);
+      // 6000 ticks * 600ms = 3600000ms = 60 minutes (OSRS-accurate)
+      expect(expectedMs).toBe(3600000);
     });
 
     it("uses configured loot protection from COMBAT_CONSTANTS (100 ticks = 1 minute)", async () => {

@@ -8,6 +8,10 @@ dist/
 build/
 *.tsbuildinfo
 
+# Rust/Cargo (Tauri app)
+**/target/
+**/*.rs.bk
+
 # Serena
 .serena/
 
@@ -61,6 +65,8 @@ assets/
 
 # 3D Models and Avatars - downloaded from separate assets repo
 packages/server/world/assets/
+# Exception: manifests directory contains essential JSON data for server startup
+!packages/server/world/assets/manifests/
 packages/client/src/public/models/
 packages/client/dist/models/
 
@@ -93,3 +99,5 @@ infrastructure/*.tfstate.*
 infrastructure/terraform.tfvars
 infrastructure/*.tfplan
 infrastructure/crash.log
+
+packages/server/world/assets/

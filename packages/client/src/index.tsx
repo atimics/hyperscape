@@ -493,10 +493,63 @@ function App() {
 
 import { DashboardScreen } from "./screens/DashboardScreen";
 import { CharacterEditorScreen } from "./screens/CharacterEditorScreen";
+import { AdminScreen } from "./screens/AdminScreen";
+import {
+  isTauriApp,
+  onDeepLink,
+  parseOAuthCallback,
+} from "./lib/tauri-integration";
 
-function mountApp() {
+/**
+ * Setup Tauri deep link handler for OAuth callbacks
+ */
+async function setupTauriDeepLinks(): Promise<void> {
+  if (!isTauriApp()) return;
+
+  console.log("[Hyperscape] Running in Tauri app, setting up deep links");
+
+  const unlisten = await onDeepLink((url) => {
+    console.log("[Hyperscape] OAuth callback received:", url);
+
+    const { code, state, error } = parseOAuthCallback(url);
+
+    if (error) {
+      console.error("[Hyperscape] OAuth error:", error);
+      return;
+    }
+
+    if (code) {
+      // Store the auth code for Privy to pick up
+      // Privy will handle the token exchange
+      console.log("[Hyperscape] OAuth code received, state:", state);
+
+      // Dispatch custom event for auth handling
+      window.dispatchEvent(
+        new CustomEvent("hyperscape:oauth-callback", {
+          detail: { code, state },
+        }),
+      );
+    }
+  });
+
+  // Store unlisten function for cleanup if needed
+  if (unlisten) {
+    (
+      window as Window & { __tauriDeepLinkUnlisten?: () => void }
+    ).__tauriDeepLinkUnlisten = unlisten;
+  }
+}
+
+async function mountApp() {
   const rootElement = document.getElementById("root")!;
   const root = ReactDOM.createRoot(rootElement);
+
+  // Setup Tauri deep links for OAuth
+  await setupTauriDeepLinks();
+
+  // Check for special page modes
+  const urlParams = new URLSearchParams(window.location.search);
+  const page = urlParams.get("page");
 
   // Check if running in embedded viewport mode
   if (isEmbeddedMode()) {
@@ -511,10 +564,6 @@ function mountApp() {
       </ErrorBoundary>,
     );
   } else {
-    // Check for special page modes
-    const urlParams = new URLSearchParams(window.location.search);
-    const page = urlParams.get("page");
-
     if (page === "dashboard") {
       console.log(
         "[Hyperscape] Dashboard mode detected - rendering DashboardScreen",
@@ -535,6 +584,13 @@ function mountApp() {
           <PrivyAuthProvider>
             <CharacterEditorScreen />
           </PrivyAuthProvider>
+        </ErrorBoundary>,
+      );
+    } else if (page === "admin") {
+      console.log("[Hyperscape] Admin mode detected - rendering AdminScreen");
+      root.render(
+        <ErrorBoundary>
+          <AdminScreen />
         </ErrorBoundary>,
       );
     } else {
@@ -577,8 +633,8 @@ function mountApp() {
 // Ensure DOM is ready before mounting
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", () => {
-    mountApp();
+    void mountApp();
   });
 } else {
-  mountApp();
+  void mountApp();
 }

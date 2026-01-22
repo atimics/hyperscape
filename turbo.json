@@ -34,6 +34,11 @@
       "outputs": ["dist/**", "build/**"],
       "cache": true
     },
+    "app#build": {
+      "dependsOn": ["client#build"],
+      "outputs": ["src-tauri/target/release/**"],
+      "cache": false
+    },
     "dev": {
       "dependsOn": ["^build"],
       "cache": false,

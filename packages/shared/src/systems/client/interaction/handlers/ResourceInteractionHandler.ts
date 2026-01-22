@@ -19,7 +19,7 @@
  */
 
 import { BaseInteractionHandler } from "./BaseInteractionHandler";
-import type { RaycastTarget, ContextMenuAction, LabelSegment } from "../types";
+import type { RaycastTarget, ContextMenuAction } from "../types";
 import { INTERACTION_RANGE, TIMING, MESSAGE_TYPES } from "../constants";
 import { getExternalResource } from "../../../../utils/ExternalAssetUtils";
 import { CONTEXT_MENU_COLORS } from "../../../../constants/GameConstants";

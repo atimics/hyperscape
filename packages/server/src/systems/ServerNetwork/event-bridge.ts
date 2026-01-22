@@ -98,6 +98,7 @@ export class EventBridge {
     this.setupFireEvents();
     this.setupSmeltingEvents();
     this.setupQuestEvents();
+    this.setupTradeEvents();
   }
 
   /**
@@ -1124,6 +1125,65 @@ export class EventBridge {
       });
     } catch (_err) {
       console.error("[EventBridge] Error setting up quest events:", _err);
+    }
+  }
+
+  /**
+   * Setup trade event listeners
+   *
+   * Handles trade cancellation events from TradingSystem (disconnect, timeout, death).
+   * When a trade is cancelled by the system (not by player action), we need to notify
+   * the affected players via network packets.
+   *
+   * @private
+   */
+  private setupTradeEvents(): void {
+    try {
+      // Listen for trade cancellation events from TradingSystem
+      // This handles: timeout, disconnect, player death
+      this.world.on(EventType.TRADE_CANCELLED, (payload: unknown) => {
+        const data = payload as {
+          tradeId: string;
+          reason: string;
+          initiatorId: string;
+          recipientId: string;
+          initiatorSocketId?: string;
+          recipientSocketId?: string;
+        };
+
+        // Build user-friendly message based on reason
+        const reasonMessages: Record<string, string> = {
+          timeout: "Trade request timed out",
+          disconnected: "Other player disconnected",
+          player_died: "Trade cancelled - player died",
+          cancelled: "Trade was cancelled",
+          declined: "Trade request declined",
+          invalid_items: "Trade cancelled - items changed",
+          inventory_full: "Trade cancelled - inventory full",
+          server_error: "Trade cancelled - server error",
+        };
+        const message = reasonMessages[data.reason] || "Trade cancelled";
+
+        // Send to initiator if we have their player ID
+        if (data.initiatorId) {
+          this.broadcast.sendToPlayer(data.initiatorId, "tradeCancelled", {
+            tradeId: data.tradeId,
+            reason: data.reason,
+            message,
+          });
+        }
+
+        // Send to recipient if we have their player ID
+        if (data.recipientId) {
+          this.broadcast.sendToPlayer(data.recipientId, "tradeCancelled", {
+            tradeId: data.tradeId,
+            reason: data.reason,
+            message,
+          });
+        }
+      });
+    } catch (_err) {
+      console.error("[EventBridge] Error setting up trade events:", _err);
     }
   }
 }

@@ -12,6 +12,7 @@ import type { HyperscapeService } from "../services/HyperscapeService.js";
  * Get current goal route
  */
 export const goalRoute: Route = {
+  name: "hyperscape-goal",
   type: "GET",
   path: "/hyperscape/goal",
   public: true, // Allow dashboard to access without auth

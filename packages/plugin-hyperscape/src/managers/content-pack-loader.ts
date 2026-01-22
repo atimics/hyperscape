@@ -4,7 +4,8 @@ import {
   IGameSystem,
   IVisualConfig,
 } from "../types/content-pack";
-import { HyperscapeService } from "../service";
+import type { HyperscapeService } from "../service";
+import { HYPERSCAPE_SERVICE_NAME } from "../constants";
 import { HyperscapeActionDescriptor } from "../types/core-types";
 import { World } from "../types/core-types";
 
@@ -20,7 +21,7 @@ export class ContentPackLoader {
   constructor(runtime: IAgentRuntime) {
     this.runtime = runtime;
     this.service = runtime.getService<HyperscapeService>(
-      HyperscapeService.serviceName,
+      HYPERSCAPE_SERVICE_NAME,
     )!;
   }
 

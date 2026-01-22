@@ -6,6 +6,7 @@ import type { World } from "../../../types/index";
 import type { EntitySpawnedEvent } from "../../../types/systems/system-interfaces";
 import { SystemBase } from "../infrastructure/SystemBase";
 import { TerrainSystem } from "..";
+import type { TownSystem } from "../world/TownSystem";
 
 // Types are now imported from shared type files
 
@@ -20,6 +21,7 @@ export class MobNPCSpawnerSystem extends SystemBase {
   private spawnedMobs = new Map<string, string>(); // mobId -> entityId
   private mobIdCounter = 0;
   private terrainSystem!: TerrainSystem;
+  private townSystem: TownSystem | null = null;
   private lastSpawnTime = 0;
   private readonly SPAWN_COOLDOWN = 5000; // 5 seconds between spawns
 
@@ -28,7 +30,7 @@ export class MobNPCSpawnerSystem extends SystemBase {
       name: "mob-npc-spawner",
       dependencies: {
         required: ["entity-manager", "terrain"], // Depends on EntityManager and terrain for placement
-        optional: ["mob-npc"], // Better with mob NPC system
+        optional: ["mob-npc", "towns"], // Better with mob NPC system, towns for safe zone checking
       },
       autoCleanup: true,
     });
@@ -37,6 +39,10 @@ export class MobNPCSpawnerSystem extends SystemBase {
   async init(): Promise<void> {
     // Get terrain system reference
     this.terrainSystem = this.world.getSystem<TerrainSystem>("terrain")!;
+
+    // Get town system reference for safe zone checking (procedural towns)
+    this.townSystem =
+      (this.world.getSystem("towns") as unknown as TownSystem) ?? null;
 
     // Set up event subscriptions for mob lifecycle (do not consume MOB_NPC_SPAWN_REQUEST to avoid re-emission loops)
     this.subscribe<{ mobId: string }>(EventType.MOB_NPC_DESPAWN, (data) => {
@@ -276,6 +282,14 @@ export class MobNPCSpawnerSystem extends SystemBase {
     mobData: NPCData,
     position: { x: number; y: number; z: number },
   ): Promise<void> {
+    // Check if position is in a procedural town safe zone - don't spawn mobs there
+    if (
+      this.townSystem &&
+      this.townSystem.isInSafeZone(position.x, position.z)
+    ) {
+      return;
+    }
+
     // Use spawn point position as key to prevent duplicates (same spot = same mob)
     const spawnKey = `${mobData.id}_${Math.round(position.x)}_${Math.round(position.z)}`;
 

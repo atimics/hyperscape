@@ -2321,7 +2321,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
     this.chat(msg);
   }
 
-  onNetworkData(data: Partial<NetworkData>): void {
+  onNetworkData(_data: Partial<NetworkData>): void {
     // Name stored in this.data.name - shown in right-click menu (OSRS pattern)
     // Health bar is NOT updated here - visual updates ONLY via handleHealthChange()
     // to prevent stale snapshot data from overwriting event-driven values

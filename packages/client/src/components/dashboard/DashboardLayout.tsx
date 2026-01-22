@@ -1,6 +1,6 @@
 import React from "react";
 import { AgentSidebar } from "./AgentSidebar";
-import { Agent } from "../../screens/DashboardScreen";
+import type { Agent } from "./types";
 
 interface DashboardLayoutProps {
   agents: Agent[];

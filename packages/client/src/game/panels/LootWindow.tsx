@@ -37,7 +37,7 @@ function LootWindowContent({
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
 
   // Shadow state - track pending loot transactions for rollback
-  const [pendingTransactions, setPendingTransactions] = useState<
+  const [_pendingTransactions, setPendingTransactions] = useState<
     Map<string, PendingLootTransaction>
   >(new Map());
   const timeoutRefs = useRef<Map<string, ReturnType<typeof setTimeout>>>(
@@ -146,7 +146,7 @@ function LootWindowContent({
             INVALID_REQUEST: "Invalid loot request",
             PLAYER_DYING: "Cannot loot while dying",
           };
-          world.emit(EventType.SHOW_TOAST, {
+          world.emit(EventType.UI_TOAST, {
             message: errorMessages[reason] || "Failed to loot item",
             type: "error",
           });
@@ -269,7 +269,8 @@ function LootWindowContent({
     };
 
     // Event handler for gravestone expiration
-    const handleHeadstoneExpired = (data: { gravestoneId?: string }) => {
+    const handleHeadstoneExpired = (...args: unknown[]) => {
+      const data = args[0] as { gravestoneId?: string };
       if (data.gravestoneId === corpseId) {
         console.log("[LootWindow] Headstone expired event received");
         onClose();
@@ -277,7 +278,10 @@ function LootWindowContent({
     };
 
     // Subscribe to entity update events
-    world.on(EventType.ENTITY_UPDATED, handleEntityUpdate);
+    world.on(
+      EventType.ENTITY_UPDATED,
+      handleEntityUpdate as (...args: unknown[]) => void,
+    );
     world.on(EventType.DEATH_HEADSTONE_EXPIRED, handleHeadstoneExpired);
 
     // Reduced polling as fallback (1s instead of 100ms = 10x less CPU)
@@ -285,7 +289,10 @@ function LootWindowContent({
     const fallbackInterval = setInterval(syncEntityState, 1000);
 
     return () => {
-      world.off(EventType.ENTITY_UPDATED, handleEntityUpdate);
+      world.off(
+        EventType.ENTITY_UPDATED,
+        handleEntityUpdate as (...args: unknown[]) => void,
+      );
       world.off(EventType.DEATH_HEADSTONE_EXPIRED, handleHeadstoneExpired);
       clearInterval(fallbackInterval);
     };
@@ -318,7 +325,7 @@ function LootWindowContent({
     const timeout = setTimeout(() => {
       console.warn(`[LootWindow] Transaction timed out: ${transactionId}`);
       rollbackTransaction(transactionId);
-      world.emit(EventType.SHOW_TOAST, {
+      world.emit(EventType.UI_TOAST, {
         message: "Loot request timed out",
         type: "error",
       });
@@ -388,7 +395,7 @@ function LootWindowContent({
       itemsCopy.forEach((_, index) => {
         rollbackTransaction(`${transactionId}_${index}`);
       });
-      world.emit(EventType.SHOW_TOAST, {
+      world.emit(EventType.UI_TOAST, {
         message: "Loot request timed out",
         type: "error",
       });

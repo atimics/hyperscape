@@ -5,7 +5,7 @@
  */
 
 import type { Route, Memory, UUID } from "@elizaos/core";
-import { logger, ModelType } from "@elizaos/core";
+import { logger, MemoryType, ModelType } from "@elizaos/core";
 import {
   composeContext,
   generateMessageResponse,
@@ -17,6 +17,7 @@ import {
  * Endpoint: POST /hyperscape/message
  */
 export const messageRoute: Route = {
+  name: "hyperscape-message",
   type: "POST",
   path: "/hyperscape/message",
   public: true,
@@ -122,8 +123,7 @@ Generate a natural response.
         roomId: memory.roomId,
         createdAt: Date.now(),
         metadata: {
-          type: "message",
-          inReplyTo: memory.id,
+          type: MemoryType.MESSAGE,
         },
       };
 

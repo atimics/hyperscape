@@ -5,7 +5,7 @@
  * for the agent to learn from and reference later.
  */
 
-import { logger, type IAgentRuntime } from "@elizaos/core";
+import { logger, MemoryType, type IAgentRuntime } from "@elizaos/core";
 import type { HyperscapeService } from "../services/HyperscapeService.js";
 import type { EventType } from "../types.js";
 
@@ -445,10 +445,7 @@ export function registerEventHandlers(
             source: "hyperscape_chat",
           },
           metadata: {
-            type: "message",
-            senderName: chatData.from,
-            senderId: chatData.fromId,
-            timestamp: chatData.timestamp,
+            type: MemoryType.MESSAGE,
           },
         },
         "messages",

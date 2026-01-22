@@ -41,7 +41,7 @@ function sanitizeKilledBy(killedBy: unknown): string {
   }
 
   // Normalize Unicode to NFKC form to prevent homograph attacks
-  let normalized = killedBy.normalize("NFKC");
+  const normalized = killedBy.normalize("NFKC");
 
   // Build sanitized string character by character
   let sanitized = "";
@@ -171,6 +171,12 @@ interface EquipmentData {
 interface TerrainSystemLike {
   isReady: () => boolean;
   getHeightAt: (x: number, z: number) => number;
+}
+
+interface TownSystemLike {
+  getSpawnTown: () =>
+    | { name: string; position: { x: number; y: number; z: number } }
+    | undefined;
 }
 
 interface NetworkLike {
@@ -977,19 +983,21 @@ export class PlayerDeathSystem extends SystemBase {
       console.log(
         `[PlayerDeathSystem] No death data in deathLocations for ${playerId}, checking pendingGravestones...`,
       );
-      // For crash recovery, deathLocations might not have data but pendingGravestones might
     }
 
-    const DEATH_RESPAWN_POSITION =
-      COMBAT_CONSTANTS.DEATH.DEFAULT_RESPAWN_POSITION;
-    const DEATH_RESPAWN_TOWN = COMBAT_CONSTANTS.DEATH.DEFAULT_RESPAWN_TOWN;
+    // Get spawn town from TownSystem (nearest to origin)
+    const townSystem = this.world.getSystem(
+      "towns",
+    ) as unknown as TownSystemLike | null;
+    const spawnTown = townSystem?.getSpawnTown?.();
+
+    const spawnPosition =
+      spawnTown?.position ?? COMBAT_CONSTANTS.DEATH.DEFAULT_RESPAWN_POSITION;
+    const spawnTownName =
+      spawnTown?.name ?? COMBAT_CONSTANTS.DEATH.DEFAULT_RESPAWN_TOWN;
 
     // CRITICAL: Must await to ensure death lock is cleared before next death
-    await this.respawnPlayer(
-      playerId,
-      DEATH_RESPAWN_POSITION,
-      DEATH_RESPAWN_TOWN,
-    );
+    await this.respawnPlayer(playerId, spawnPosition, spawnTownName);
 
     const gravestoneData = this.pendingGravestones.get(playerId);
     if (gravestoneData && gravestoneData.items.length > 0) {

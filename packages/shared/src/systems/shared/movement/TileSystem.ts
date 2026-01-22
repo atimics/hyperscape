@@ -13,8 +13,8 @@
  */
 
 import { COMBAT_CONSTANTS } from "../../../constants/CombatConstants";
-import type { IEntityOccupancy } from "./EntityOccupancyMap";
 import type { EntityID } from "../../../types/core/identifiers";
+import type { IEntityOccupancy } from "./EntityOccupancyMap";
 
 /**
  * Core tile system constants

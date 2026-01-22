@@ -25,7 +25,7 @@ const SCENERY_COLOR = "#00ffff";
 /**
  * Anvil entity interface for type safety
  */
-interface AnvilEntity {
+interface _AnvilEntity {
   entityType?: string;
   displayName?: string;
 }

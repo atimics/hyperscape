@@ -221,14 +221,12 @@ export interface GameStateData {
   inCombat: boolean;
   combatTarget: string | null;
   alive: boolean;
-  [key: string]: unknown;
 }
 
 export interface InventoryData {
   items: InventoryItem[];
   coins: number;
   freeSlots: number;
-  [key: string]: unknown;
 }
 
 export interface NearbyEntitiesData {
@@ -248,14 +246,12 @@ export interface NearbyEntitiesData {
     position: [number, number, number];
     type: string;
   }>;
-  [key: string]: unknown;
 }
 
 export interface SkillsData {
   skills: Skills;
   totalLevel: number;
   combatLevel: number;
-  [key: string]: unknown;
 }
 
 export interface EquipmentData {
@@ -274,7 +270,6 @@ export interface EquipmentData {
     ring: string | null;
     arrows: string | null;
   };
-  [key: string]: unknown;
 }
 
 /**

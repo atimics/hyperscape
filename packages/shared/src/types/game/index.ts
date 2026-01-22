@@ -1,6 +1,6 @@
 /**
  * Game mechanics types
- * Combat, inventory, items, interaction, spawning, resource processing
+ * Combat, inventory, items, interaction, spawning, resource processing, trading
  */
 
 export * from "./combat-types";
@@ -12,3 +12,4 @@ export * from "./spawning-types";
 export * from "./resource-processing-types";
 export * from "./prayer-types";
 export * from "./quest-types";
+export * from "./trade-types";

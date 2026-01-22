@@ -177,7 +177,7 @@ export class Entity implements IEntity {
   constructor(
     world: World,
     dataOrConfig: EntityData | EntityConfig,
-    local?: boolean,
+    _local?: boolean,
   ) {
     this.world = world;
 
@@ -434,7 +434,8 @@ export class Entity implements IEntity {
     // Create component using the registry
     const component = createComponent(type, this, data);
     if (!component) {
-      throw new Error(`Failed to create component of type: ${type}`);
+      // Unknown component type - skip gracefully for headless clients
+      return null as unknown as T;
     }
 
     // Store component

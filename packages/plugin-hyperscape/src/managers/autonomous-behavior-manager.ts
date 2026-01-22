@@ -18,6 +18,7 @@
 
 import {
   logger,
+  MemoryType,
   ModelType,
   type IAgentRuntime,
   type Memory,
@@ -872,10 +873,7 @@ export class AutonomousBehaviorManager {
                   source: "autonomous_behavior",
                 },
                 metadata: {
-                  type: "autonomous_action",
-                  actionName: action.name,
-                  timestamp: Date.now(),
-                  tags: ["hyperscape", "autonomous", action.name.toLowerCase()],
+                  type: MemoryType.CUSTOM,
                 },
               },
               "messages",

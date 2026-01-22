@@ -46,9 +46,54 @@ import type {
   NetworkWithSocket,
   SystemDatabase,
 } from "../../shared/types";
-import { authenticateUser } from "./authentication";
+import { authenticateUser, checkUserBan } from "./authentication";
 import { loadCharacterList } from "./character-selection";
 import type { BroadcastManager } from "./broadcast";
+
+/**
+ * Format ban message for display to user
+ *
+ * @param banInfo - Ban information from checkUserBan
+ * @returns Human-readable ban message
+ */
+function formatBanMessage(banInfo: {
+  reason?: string;
+  expiresAt?: number | null;
+  bannedByName?: string;
+}): string {
+  let message = "You have been banned";
+
+  if (banInfo.bannedByName) {
+    message += ` by ${banInfo.bannedByName}`;
+  }
+
+  if (banInfo.reason) {
+    message += `. Reason: ${banInfo.reason}`;
+  }
+
+  if (banInfo.expiresAt) {
+    const now = new Date();
+    const diffMs = banInfo.expiresAt - now.getTime();
+
+    if (diffMs > 0) {
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffDays = Math.floor(diffHours / 24);
+
+      if (diffDays > 0) {
+        message += `. Ban expires in ${diffDays} day${diffDays > 1 ? "s" : ""}`;
+      } else if (diffHours > 0) {
+        message += `. Ban expires in ${diffHours} hour${diffHours > 1 ? "s" : ""}`;
+      } else {
+        const diffMinutes = Math.floor(diffMs / (1000 * 60));
+        message += `. Ban expires in ${diffMinutes} minute${diffMinutes > 1 ? "s" : ""}`;
+      }
+    }
+  } else {
+    message += ". This ban is permanent.";
+  }
+
+  return message;
+}
 
 /**
  * ConnectionHandler - Manages WebSocket connection flow
@@ -109,11 +154,35 @@ export class ConnectionHandler {
         return;
       }
 
+      // Check if this is a load test bot (URL params come as strings)
+      const loadTestBotParam = (params as { loadTestBot?: string | boolean })
+        .loadTestBot;
+      const isLoadTestBot =
+        loadTestBotParam === "true" || loadTestBotParam === true;
+
       // Authenticate user
       const { user, authToken, userWithPrivy } = await authenticateUser(
         params,
         this.db,
       );
+
+      // Skip ban check for load test bots (performance optimization)
+      // Load test bots always skip ban check regardless of LOAD_TEST_MODE setting
+      if (!isLoadTestBot) {
+        // Check if user is banned
+        const banInfo = await checkUserBan(user.id, this.db);
+        if (banInfo.isBanned) {
+          const banMessage = formatBanMessage(banInfo);
+          console.log(
+            `[ConnectionHandler] 🚫 Banned user ${user.id} (${user.name}) attempted to connect: ${banInfo.reason || "no reason"}`,
+          );
+          // Note: kick packet payload must be a string (client's onKick expects string code)
+          const packet = writePacket("kick", `banned: ${banMessage}`);
+          ws.send(packet);
+          ws.close(4003, "Banned");
+          return;
+        }
+      }
 
       // Get LiveKit options if available
       const livekit = await this.world.livekit?.getPlayerOpts?.(user.id);

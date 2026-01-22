@@ -25,7 +25,6 @@ import {
   EventType,
   getItem,
   uuid,
-  type Item,
   // OSRS-accurate item helpers (extracted to shared)
   isFood,
   isPotion,

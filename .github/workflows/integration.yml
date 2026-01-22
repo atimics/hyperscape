@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main, develop]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   integration:
     name: Integration Tests
@@ -30,13 +34,27 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Fetch manifests from CDN
+        run: |
+          mkdir -p packages/server/world/assets/manifests
+          CDN_URL="https://d20g7vd4m53hpb.cloudfront.net"
+          MANIFESTS="items npcs resources tools biomes world-areas stores music vegetation buildings"
+          for file in $MANIFESTS; do
+            echo "Fetching ${file}.json..."
+            curl -sSf "$CDN_URL/manifests/${file}.json" -o "packages/server/world/assets/manifests/${file}.json" || echo "Warning: ${file}.json not found"
+          done
+          echo "✅ Manifests fetched from CDN"
+          ls -la packages/server/world/assets/manifests/
+        env:
+          PUBLIC_CDN_URL: https://d20g7vd4m53hpb.cloudfront.net
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Build physx-js-webidl package (required dependency)
         working-directory: packages/physx-js-webidl
@@ -54,17 +72,16 @@ jobs:
         working-directory: packages/plugin-hyperscape
         run: bun run build
 
-      - name: Install ElizaOS CLI
-        run: bun add -g @elizaos/cli
-
       - name: Start ElizaOS in background
         working-directory: packages/plugin-hyperscape
         run: |
           mkdir -p logs
-          elizaos start --character character.json > logs/elizaos.log 2>&1 &
+          # Use bunx to run elizaos from workspace context so it can find local plugins
+          bunx elizaos start --character character.json > logs/elizaos.log 2>&1 &
           echo "ELIZAOS_PID=$!" >> $GITHUB_ENV
         env:
           NODE_ENV: test
+          SERVER_PORT: 3000
 
       - name: Wait for ElizaOS to be ready
         run: |
@@ -72,7 +89,8 @@ jobs:
           MAX_RETRIES=30
           RETRY_DELAY=2
           for i in $(seq 1 $MAX_RETRIES); do
-            if curl -f -s http://localhost:4001/health > /dev/null 2>&1; then
+            # Check both /health and /healthz endpoints (ElizaOS 1.7.x uses these)
+            if curl -f -s http://localhost:3000/health > /dev/null 2>&1 || curl -f -s http://localhost:3000/healthz > /dev/null 2>&1; then
               echo "✓ ElizaOS is ready (attempt $i/$MAX_RETRIES)"
               exit 0
             fi
@@ -102,6 +120,7 @@ jobs:
           DATABASE_URL: postgresql://hyperscape:hyperscape_test@localhost:5432/hyperscape_test
           NODE_ENV: test
           PORT: 5555
+          PUBLIC_CDN_URL: https://d20g7vd4m53hpb.cloudfront.net
 
       - name: Wait for server to be ready
         working-directory: packages/server
@@ -128,7 +147,7 @@ jobs:
         working-directory: packages/server
         run: bun scripts/test-integration.mjs
         env:
-          ELIZAOS_API_URL: http://localhost:4001
+          ELIZAOS_API_URL: http://localhost:3000
 
       - name: Show logs if test failed
         if: failure()

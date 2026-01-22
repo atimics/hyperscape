@@ -218,8 +218,17 @@ export class PersistenceSystem extends SystemBase {
     playerId: string;
     userId?: string;
     playerToken?: string;
+    isLoadTestBot?: boolean;
   }): Promise<void> {
     if (!this.databaseSystem) return;
+
+    // Skip session creation for load test bots - they don't have DB characters
+    if (event.isLoadTestBot) {
+      this.logger.debug(
+        `Skipping session creation for load test bot: ${event.playerId}`,
+      );
+      return;
+    }
 
     // Use userId from event if available, otherwise fall back to playerId
     // userId is the persistent account/character ID that exists in the database

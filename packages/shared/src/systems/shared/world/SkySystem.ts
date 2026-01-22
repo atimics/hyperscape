@@ -9,7 +9,7 @@
  * No WebGL-specific extensions or shaders are used.
  */
 
-import { System } from "..";
+import { System } from "../infrastructure/System";
 import THREE, {
   abs,
   add,

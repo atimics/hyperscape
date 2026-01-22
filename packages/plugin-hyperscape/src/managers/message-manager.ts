@@ -2,6 +2,7 @@ import {
   Entity as ElizaEntity,
   IAgentRuntime,
   Memory,
+  MemoryType,
   ModelType,
   UUID,
 } from "@elizaos/core";
@@ -95,15 +96,7 @@ export class MessageManager {
       roomId: world.entities.player!.data.id as UUID,
       createdAt: new Date(msg.createdAt).getTime(),
       metadata: {
-        type: "message",
-        hyperscape: {
-          username: msg.username,
-          name: msg.username,
-          worldId: service.currentWorldId!,
-        },
-        username: msg.username,
-        avatar: msg.avatar,
-        userId: msg.userId,
+        type: MemoryType.MESSAGE,
       },
     };
 
@@ -170,8 +163,7 @@ Generate a natural chat response that fits the conversation flow.
       roomId: memory.roomId,
       createdAt: Date.now(),
       metadata: {
-        type: "message",
-        inReplyTo: memory.id,
+        type: MemoryType.MESSAGE,
       },
     };
 

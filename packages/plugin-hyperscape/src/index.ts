@@ -118,10 +118,10 @@ export const hyperscapePlugin: Plugin = {
     "Connect ElizaOS AI agents to Hyperscape 3D multiplayer RPG worlds",
 
   config: {
-    HYPERSCAPE_SERVER_URL: process.env.HYPERSCAPE_SERVER_URL,
-    HYPERSCAPE_AUTO_RECONNECT: process.env.HYPERSCAPE_AUTO_RECONNECT,
-    HYPERSCAPE_AUTH_TOKEN: process.env.HYPERSCAPE_AUTH_TOKEN,
-    HYPERSCAPE_PRIVY_USER_ID: process.env.HYPERSCAPE_PRIVY_USER_ID,
+    HYPERSCAPE_SERVER_URL: process.env.HYPERSCAPE_SERVER_URL || "",
+    HYPERSCAPE_AUTO_RECONNECT: process.env.HYPERSCAPE_AUTO_RECONNECT || "true",
+    HYPERSCAPE_AUTH_TOKEN: process.env.HYPERSCAPE_AUTH_TOKEN || "",
+    HYPERSCAPE_PRIVY_USER_ID: process.env.HYPERSCAPE_PRIVY_USER_ID || "",
   },
 
   async init(config: Record<string, string>, runtime: IAgentRuntime) {

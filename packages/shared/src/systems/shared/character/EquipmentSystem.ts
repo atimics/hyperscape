@@ -99,7 +99,6 @@ import {
   EquipmentSlotName,
   PlayerEquipment as PlayerEquipment,
   Item,
-  WeaponType,
 } from "../../../types/core/core";
 import type { PlayerWithEquipmentSupport } from "../../../types/rendering/ui";
 

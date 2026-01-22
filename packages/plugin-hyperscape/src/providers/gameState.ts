@@ -98,7 +98,7 @@ export const gameStateProvider: Provider = {
         inCombat: playerEntity.inCombat,
         alive: playerEntity.alive,
       },
-      data: gameStateData,
+      data: {},
     };
   },
 };

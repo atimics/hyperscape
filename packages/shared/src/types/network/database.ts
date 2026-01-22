@@ -296,32 +296,36 @@ export interface PluginMigration {
   down?: (knex: unknown) => Promise<void>;
 }
 
+// SystemDatabase query builder interface
+// Models Knex-like query builder with chainable methods
+interface QueryBuilder {
+  // Chainable where methods
+  where(key: string, value: unknown): QueryBuilder;
+  where(key: string, operator: string, value: unknown): QueryBuilder;
+  where(callback: (builder: QueryBuilder) => void): QueryBuilder;
+  whereNull(key: string): QueryBuilder;
+  whereIn(key: string, values: unknown[]): QueryBuilder;
+  whereRaw(sql: string, bindings?: unknown[]): QueryBuilder;
+  orWhere(key: string, operator: string, value: unknown): QueryBuilder;
+
+  // Terminal methods
+  first(): Promise<unknown>;
+  update(data: Record<string, unknown>): Promise<number>;
+  delete(): Promise<number>;
+
+  // Select with chaining
+  select(columns?: string | string[]): QueryBuilder;
+
+  // Promise interface
+  then<T>(onfulfilled: (value: unknown[]) => T): Promise<T>;
+  catch<T>(onrejected: (reason: unknown) => T): Promise<T>;
+}
+
 // SystemDatabase type definition
-export type SystemDatabase = (table: string) => {
-  where: (
-    key: string,
-    value: unknown,
-  ) => {
-    first: () => Promise<unknown>;
-    update: (data: Record<string, unknown>) => Promise<number>;
-    delete: () => Promise<number>;
-  };
-  select: (columns?: string | string[]) => {
-    where: (
-      key: string,
-      value: unknown,
-    ) => {
-      first: () => Promise<unknown>;
-    };
-  };
-  insert: (
+export type SystemDatabase = (table: string) => QueryBuilder & {
+  insert(
     data: Record<string, unknown> | Record<string, unknown>[],
-  ) => Promise<void>;
-  update: (data: Record<string, unknown>) => Promise<number>;
-  delete: () => Promise<number>;
-  first: () => Promise<unknown>;
-  then: <T>(onfulfilled: (value: unknown[]) => T) => Promise<T>;
-  catch: <T>(onrejected: (reason: unknown) => T) => Promise<T>;
+  ): Promise<void>;
 };
 
 // TypedKnexDatabase - alias for SystemDatabase with type safety

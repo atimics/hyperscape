@@ -9,7 +9,9 @@
     "strict": true,
     "downlevelIteration": true,
     "baseUrl": ".",
-    "paths": {},
+    "paths": {
+      "@/*": ["./packages/client/src/*"]
+    },
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
@@ -27,8 +29,7 @@
   },
   "include": [
     "packages/client/src/**/*",
-    "packages/server/src/**/*",
-    "packages/asset-forge/src/**/*"
+    "packages/server/src/**/*"
   ],
   "exclude": [
     "node_modules",
@@ -38,7 +39,8 @@
     "**/*.test.ts",
     "**/*.spec.ts",
     "**/test-*.ts",
-    "**/public/**"
+    "**/public/**",
+    "packages/asset-forge/**/*"
   ]
 }
 

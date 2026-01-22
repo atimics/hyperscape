@@ -31,6 +31,12 @@ import { SkillSelectModal } from "./panels/SkillSelectModal";
 import { QuestJournal } from "./panels/QuestJournal";
 import { QuestCompleteScreen } from "./panels/QuestCompleteScreen";
 import { QuestStartScreen } from "./panels/QuestStartScreen";
+import { TradePanel, TradeRequestModal } from "./panels/TradePanel";
+import type {
+  TradeOfferItem,
+  TradeRequestModalState,
+  TradeWindowState,
+} from "@hyperscape/shared";
 
 type InventorySlotViewItem = Pick<
   InventorySlotItem,
@@ -73,7 +79,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
   } | null>(null);
 
   // Track if local player is dead/dying to block loot window
-  const [isPlayerDead, setIsPlayerDead] = useState(false);
+  const [_isPlayerDead, setIsPlayerDead] = useState(false);
   const isPlayerDeadRef = useRef(false);
 
   // Bank panel state (RS3-style: placeholders are items with qty=0 in items array)
@@ -187,6 +193,25 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
       xp: Record<string, number>;
     };
   } | null>(null);
+
+  // Trade panel state
+  const [tradeData, setTradeData] = useState<TradeWindowState>({
+    isOpen: false,
+    tradeId: null,
+    partner: null,
+    myOffer: [],
+    myAccepted: false,
+    theirOffer: [],
+    theirAccepted: false,
+  });
+
+  // Trade request modal state
+  const [tradeRequestModal, setTradeRequestModal] =
+    useState<TradeRequestModalState>({
+      visible: false,
+      tradeId: null,
+      fromPlayer: null,
+    });
 
   // Update chat context whenever windows open/close
   useEffect(() => {
@@ -449,6 +474,127 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
           setSmithingData(null);
         }
       }
+      // Handle trade request modal
+      if (update.component === "tradeRequest") {
+        const data = update.data as {
+          visible: boolean;
+          tradeId: string | null;
+          fromPlayer: { id: string; name: string; level: number } | null;
+        };
+        setTradeRequestModal({
+          visible: data.visible,
+          tradeId: data.tradeId,
+          fromPlayer: data.fromPlayer
+            ? {
+                id: data.fromPlayer.id as import("@hyperscape/shared").PlayerID,
+                name: data.fromPlayer.name,
+                level: data.fromPlayer.level,
+              }
+            : null,
+        });
+      }
+      // Handle trade window open
+      if (update.component === "trade") {
+        const data = update.data as {
+          isOpen: boolean;
+          tradeId: string;
+          partner: { id: string; name: string; level: number };
+          myOffer: TradeOfferItem[];
+          myAccepted: boolean;
+          theirOffer: TradeOfferItem[];
+          theirAccepted: boolean;
+        };
+        // Close the request modal when trade starts
+        setTradeRequestModal({
+          visible: false,
+          tradeId: null,
+          fromPlayer: null,
+        });
+        setTradeData({
+          isOpen: data.isOpen,
+          tradeId: data.tradeId,
+          partner: {
+            id: data.partner.id as import("@hyperscape/shared").PlayerID,
+            name: data.partner.name,
+            level: data.partner.level,
+          },
+          myOffer: data.myOffer,
+          myAccepted: data.myAccepted,
+          theirOffer: data.theirOffer,
+          theirAccepted: data.theirAccepted,
+        });
+      }
+      // Handle trade state updates
+      if (update.component === "tradeUpdate") {
+        const data = update.data as {
+          tradeId: string;
+          myOffer: TradeOfferItem[];
+          myAccepted: boolean;
+          theirOffer: TradeOfferItem[];
+          theirAccepted: boolean;
+        };
+        // Only update if tradeId matches current trade (prevents stale updates)
+        setTradeData((prev) => {
+          if (prev.tradeId !== data.tradeId) {
+            // Ignore updates for different/old trade sessions
+            console.debug(
+              "[Sidebar] Ignoring trade update for different session:",
+              data.tradeId,
+              "current:",
+              prev.tradeId,
+            );
+            return prev;
+          }
+          return {
+            ...prev,
+            myOffer: data.myOffer,
+            myAccepted: data.myAccepted,
+            theirOffer: data.theirOffer,
+            theirAccepted: data.theirAccepted,
+          };
+        });
+      }
+      // Handle trade close
+      if (update.component === "tradeClose") {
+        const data = update.data as {
+          tradeId?: string;
+          reason?: string;
+          message?: string;
+        };
+        // Close trade panel - validate tradeId if provided
+        setTradeData((prev) => {
+          if (data.tradeId && prev.tradeId && prev.tradeId !== data.tradeId) {
+            // Ignore close for different trade session
+            console.debug(
+              "[Sidebar] Ignoring trade close for different session:",
+              data.tradeId,
+              "current:",
+              prev.tradeId,
+            );
+            return prev;
+          }
+          return {
+            isOpen: false,
+            tradeId: null,
+            partner: null,
+            myOffer: [],
+            myAccepted: false,
+            theirOffer: [],
+            theirAccepted: false,
+          };
+        });
+        // Also close trade request modal if it matches
+        setTradeRequestModal((prev) => {
+          if (data.tradeId && prev.tradeId && prev.tradeId !== data.tradeId) {
+            return prev;
+          }
+          return {
+            visible: false,
+            tradeId: null,
+            fromPlayer: null,
+          };
+        });
+      }
     };
     const onInventory = (raw: unknown) => {
       const data = raw as {
@@ -496,13 +642,12 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
       }
 
       // Get the gravestone entity to retrieve its name
-      const gravestoneEntity = world.entities?.get?.(data.corpseId) as
+      const gravestoneEntity = world.entities?.get?.(data.corpseId);
+      const entityData = gravestoneEntity as unknown as
         | { name?: string; config?: { name?: string } }
         | undefined;
       const corpseName =
-        gravestoneEntity?.name ||
-        gravestoneEntity?.config?.name ||
-        "Gravestone";
+        entityData?.name || entityData?.config?.name || "Gravestone";
 
       // Open loot window with corpse items
       setLootWindowData({
@@ -1122,6 +1267,96 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
             }}
           />
         )}
+
+        {/* Trade Request Modal */}
+        <TradeRequestModal
+          state={tradeRequestModal}
+          onAccept={() => {
+            if (tradeRequestModal.tradeId) {
+              const network = world.network as unknown as {
+                respondToTradeRequest: (
+                  tradeId: string,
+                  accept: boolean,
+                ) => void;
+              };
+              network.respondToTradeRequest(tradeRequestModal.tradeId, true);
+            }
+          }}
+          onDecline={() => {
+            if (tradeRequestModal.tradeId) {
+              const network = world.network as unknown as {
+                respondToTradeRequest: (
+                  tradeId: string,
+                  accept: boolean,
+                ) => void;
+              };
+              network.respondToTradeRequest(tradeRequestModal.tradeId, false);
+            }
+            setTradeRequestModal({
+              visible: false,
+              tradeId: null,
+              fromPlayer: null,
+            });
+          }}
+        />
+
+        {/* Trade Panel */}
+        <TradePanel
+          state={tradeData}
+          inventory={inventory}
+          onAddItem={(inventorySlot, quantity) => {
+            if (tradeData.tradeId) {
+              const network = world.network as unknown as {
+                addItemToTrade: (
+                  tradeId: string,
+                  inventorySlot: number,
+                  quantity?: number,
+                ) => void;
+              };
+              network.addItemToTrade(
+                tradeData.tradeId,
+                inventorySlot,
+                quantity,
+              );
+            }
+          }}
+          onRemoveItem={(tradeSlot) => {
+            if (tradeData.tradeId) {
+              const network = world.network as unknown as {
+                removeItemFromTrade: (
+                  tradeId: string,
+                  tradeSlot: number,
+                ) => void;
+              };
+              network.removeItemFromTrade(tradeData.tradeId, tradeSlot);
+            }
+          }}
+          onAccept={() => {
+            if (tradeData.tradeId) {
+              const network = world.network as unknown as {
+                acceptTrade: (tradeId: string) => void;
+              };
+              network.acceptTrade(tradeData.tradeId);
+            }
+          }}
+          onCancel={() => {
+            if (tradeData.tradeId) {
+              const network = world.network as unknown as {
+                cancelTrade: (tradeId: string) => void;
+              };
+              network.cancelTrade(tradeData.tradeId);
+            }
+            setTradeData({
+              isOpen: false,
+              tradeId: null,
+              partner: null,
+              myOffer: [],
+              myAccepted: false,
+              theirOffer: [],
+              theirAccepted: false,
+            });
+          }}
+        />
       </div>
     </HintProvider>
   );

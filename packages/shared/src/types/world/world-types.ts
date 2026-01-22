@@ -536,3 +536,124 @@ export interface VegetationTileData {
   /** Seed used for procedural generation */
   seed: number;
 }
+
+// ============== PROCEDURAL TOWN TYPES ==============
+
+/**
+ * Town size category determines building count and services
+ */
+export type TownSize = "hamlet" | "village" | "town";
+
+/**
+ * Building types available in towns
+ */
+export type TownBuildingType = "bank" | "store" | "anvil" | "house" | "well";
+
+/**
+ * A building placed within a town
+ */
+export interface TownBuilding {
+  /** Unique building ID */
+  id: string;
+  /** Type of building */
+  type: TownBuildingType;
+  /** World position of building center */
+  position: { x: number; y: number; z: number };
+  /** Y-axis rotation in radians */
+  rotation: number;
+  /** Building footprint size */
+  size: { width: number; depth: number };
+}
+
+/**
+ * Procedurally generated town data
+ * Towns are safe zones with buildings and services
+ */
+export interface ProceduralTown {
+  /** Unique town ID */
+  id: string;
+  /** Town name (generated from seed) */
+  name: string;
+  /** World position of town center */
+  position: { x: number; y: number; z: number };
+  /** Town size category */
+  size: TownSize;
+  /** Safe zone radius in meters */
+  safeZoneRadius: number;
+  /** Biome the town is located in */
+  biome: string;
+  /** Buildings placed in this town */
+  buildings: TownBuilding[];
+  /** Suitability score used for placement (higher = better location) */
+  suitabilityScore: number;
+  /** Connected road IDs */
+  connectedRoads: string[];
+}
+
+// ============== PROCEDURAL ROAD TYPES ==============
+
+/**
+ * A single point along a road path
+ */
+export interface RoadPathPoint {
+  /** World X coordinate */
+  x: number;
+  /** World Z coordinate */
+  z: number;
+  /** Terrain height at this point (computed) */
+  y: number;
+}
+
+/**
+ * Road material type affects visual appearance
+ */
+export type RoadMaterial = "dirt" | "cobblestone" | "stone";
+
+/**
+ * A road connection between two towns
+ */
+export interface ProceduralRoad {
+  /** Unique road ID */
+  id: string;
+  /** Source town ID */
+  fromTownId: string;
+  /** Destination town ID */
+  toTownId: string;
+  /** Path points from source to destination */
+  path: RoadPathPoint[];
+  /** Road width in meters */
+  width: number;
+  /** Road material for visual rendering */
+  material: RoadMaterial;
+  /** Total road length in meters */
+  length: number;
+}
+
+/**
+ * A road segment within a single terrain tile
+ * Used for efficient spatial queries during rendering
+ */
+export interface RoadTileSegment {
+  /** Start point within tile (local coordinates) */
+  start: { x: number; z: number };
+  /** End point within tile (local coordinates) */
+  end: { x: number; z: number };
+  /** Road width */
+  width: number;
+  /** Parent road ID */
+  roadId: string;
+}
+
+/**
+ * Complete procedural road network data
+ */
+export interface RoadNetwork {
+  /** All towns in the network */
+  towns: ProceduralTown[];
+  /** All roads connecting towns */
+  roads: ProceduralRoad[];
+  /** World seed used for generation */
+  seed: number;
+  /** Generation timestamp */
+  generatedAt: number;
+}

@@ -90,3 +90,87 @@ export function serializeRoles(roles: string[]): string {
   // convert to string
   return roles.join(",");
 }
+
+/**
+ * Role Hierarchy:
+ * - user: Basic player, can do normal gameplay actions
+ * - mod: Moderator, can use advanced commands like /teleport
+ * - admin: Administrator, can do everything mod can + manage mods
+ *
+ * Role checks should use hasModPermission() or hasAdminPermission() for proper hierarchy.
+ */
+
+/**
+ * Checks if user has moderator permissions (mod or admin role)
+ *
+ * Moderators can use advanced commands like /teleport.
+ * Admins automatically have mod permissions.
+ *
+ * @param arr - Array of role strings (may be null/undefined for guests)
+ * @returns true if user has mod or admin role
+ *
+ * @example
+ * hasModPermission(['mod']) // => true
+ * hasModPermission(['admin']) // => true (admin includes mod permissions)
+ * hasModPermission(['user']) // => false
+ * hasModPermission(null) // => false
+ */
+export function hasModPermission(arr: string[] | null | undefined): boolean {
+  return hasRole(arr, "mod", "admin");
+}
+
+/**
+ * Checks if user has administrator permissions (admin role only)
+ *
+ * Administrators can manage mods (/mod, /demod, /listmods) and have all mod permissions.
+ *
+ * @param arr - Array of role strings (may be null/undefined for guests)
+ * @returns true if user has admin role
+ *
+ * @example
+ * hasAdminPermission(['admin']) // => true
+ * hasAdminPermission(['mod']) // => false
+ * hasAdminPermission(['user']) // => false
+ * hasAdminPermission(null) // => false
+ */
+export function hasAdminPermission(arr: string[] | null | undefined): boolean {
+  return hasRole(arr, "admin");
+}
+
+/**
+ * Checks if a user is protected from mod actions (kick/ban)
+ *
+ * Mods and admins cannot be kicked or banned by other mods.
+ * Only admins can kick/ban mods, and admins cannot kick/ban other admins.
+ *
+ * @param targetRoles - Roles of the user being targeted
+ * @param actorRoles - Roles of the user performing the action
+ * @returns Object with protected status and reason
+ *
+ * @example
+ * isProtectedFromModAction(['mod'], ['mod']) // => { protected: true, reason: "Cannot kick/ban other moderators" }
+ * isProtectedFromModAction(['admin'], ['admin']) // => { protected: true, reason: "Cannot kick/ban administrators" }
+ * isProtectedFromModAction(['user'], ['mod']) // => { protected: false }
+ * isProtectedFromModAction(['mod'], ['admin']) // => { protected: false } (admins can kick mods)
+ */
+export function isProtectedFromModAction(
+  targetRoles: string[] | null | undefined,
+  actorRoles: string[] | null | undefined,
+): { protected: boolean; reason?: string } {
+  // Admins are always protected - nobody can kick/ban them
+  if (hasRole(targetRoles, "admin")) {
+    return { protected: true, reason: "Cannot kick/ban administrators" };
+  }
+
+  // Mods are protected from other mods, but not from admins
+  if (hasRole(targetRoles, "mod")) {
+    if (!hasRole(actorRoles, "admin")) {
+      return {
+        protected: true,
+        reason: "Cannot kick/ban other moderators. Only admins can do this.",
+      };
+    }
+  }
+
+  return { protected: false };
+}
