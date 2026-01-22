@@ -8,7 +8,7 @@
  * - Shown when player accepts quest via dialogue
  */
 
-import React from "react";
+import React, { useEffect } from "react";
 
 interface QuestRequirements {
   quests: string[];
@@ -49,6 +49,33 @@ export function QuestStartScreen({
   onAccept,
   onDecline,
 }: QuestStartScreenProps) {
+  // Inject themed scrollbar styles
+  useEffect(() => {
+    const styleId = "quest-start-scrollbar-styles";
+    if (document.getElementById(styleId)) return;
+
+    const style = document.createElement("style");
+    style.id = styleId;
+    style.textContent = `
+      .quest-parchment-scroll::-webkit-scrollbar {
+        width: 10px;
+      }
+      .quest-parchment-scroll::-webkit-scrollbar-track {
+        background: rgba(139, 115, 85, 0.3);
+        border-radius: 4px;
+      }
+      .quest-parchment-scroll::-webkit-scrollbar-thumb {
+        background: linear-gradient(to bottom, #8b7355, #6b5545);
+        border-radius: 4px;
+        border: 1px solid rgba(74, 63, 47, 0.3);
+      }
+      .quest-parchment-scroll::-webkit-scrollbar-thumb:hover {
+        background: linear-gradient(to bottom, #9b8365, #7b6555);
+      }
+    `;
+    document.head.appendChild(style);
+  }, []);
+
   if (!visible) return null;
 
   // Check if player meets requirements (for display purposes)
@@ -66,7 +93,7 @@ export function QuestStartScreen({
     >
       {/* Parchment Style Container */}
       <div
-        className="relative"
+        className="relative quest-parchment-scroll"
         style={{
           width: "26rem",
           maxWidth: "90vw",
