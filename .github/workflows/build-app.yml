@@ -161,6 +161,8 @@ jobs:
           PUBLIC_API_URL: https://hyperscape-production.up.railway.app
           PUBLIC_WS_URL: wss://hyperscape-production.up.railway.app/ws
           PUBLIC_APP_URL: https://hyperscape.club
+          PUBLIC_CDN_URL: https://assets.hyperscape.club
+          PUBLIC_PRIVY_APP_ID: ${{ secrets.PUBLIC_PRIVY_APP_ID }}
 
       - name: Initialize iOS project
         run: bun run ios:init
@@ -236,6 +238,8 @@ jobs:
           PUBLIC_API_URL: https://hyperscape-production.up.railway.app
           PUBLIC_WS_URL: wss://hyperscape-production.up.railway.app/ws
           PUBLIC_APP_URL: https://hyperscape.club
+          PUBLIC_CDN_URL: https://assets.hyperscape.club
+          PUBLIC_PRIVY_APP_ID: ${{ secrets.PUBLIC_PRIVY_APP_ID }}
 
       - name: Initialize Android project
         run: bun run android:init
