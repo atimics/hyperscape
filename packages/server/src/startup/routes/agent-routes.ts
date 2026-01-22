@@ -2215,7 +2215,7 @@ export function registerAgentRoutes(
         });
       }
 
-      const { characters } = await import("../../database/schema.js");
+      await import("../../database/schema.js");
       const { eq } = await import("drizzle-orm");
 
       const character = await databaseSystem.db.query.characters.findFirst({
