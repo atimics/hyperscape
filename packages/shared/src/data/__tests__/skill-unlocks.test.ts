@@ -9,8 +9,9 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
-import { readFileSync } from "fs";
-import { join } from "path";
+import { readFileSync, existsSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import {
   getUnlocksAtLevel,
   getUnlocksUpToLevel,
@@ -26,21 +27,60 @@ import {
 // Test Setup
 // ============================================================================
 
+/**
+ * Find the workspace root by looking for package.json with "hyperscape2" or similar
+ */
+function findWorkspaceRoot(): string {
+  // Try multiple approaches for ESM/CJS compatibility
+  let currentDir: string;
+
+  // Try import.meta.url for ESM
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    currentDir = dirname(__filename);
+  } catch {
+    // Fallback to __dirname for CJS (vitest might polyfill this)
+    currentDir = __dirname;
+  }
+
+  // Navigate up from packages/shared/src/data/__tests__ to find workspace root
+  // We look for a turbo.json which is at the workspace root
+  let searchDir = currentDir;
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(join(searchDir, "turbo.json"))) {
+      return searchDir;
+    }
+    const parent = dirname(searchDir);
+    if (parent === searchDir) break; // Reached filesystem root
+    searchDir = parent;
+  }
+
+  // Fallback: navigate from current dir assuming standard structure
+  return join(currentDir, "..", "..", "..", "..", "..");
+}
+
 beforeAll(() => {
   // Reset any previous state
   resetSkillUnlocks();
 
-  // Load skill unlocks manifest
+  // Find workspace root and load manifest
+  const workspaceRoot = findWorkspaceRoot();
   const manifestPath = join(
-    __dirname,
-    "../../../../server/world/assets/manifests/skill-unlocks.json",
+    workspaceRoot,
+    "packages/server/world/assets/manifests/skill-unlocks.json",
   );
+
   try {
+    if (!existsSync(manifestPath)) {
+      throw new Error(`Manifest not found at: ${manifestPath}`);
+    }
     const data = readFileSync(manifestPath, "utf-8");
     const manifest = JSON.parse(data) as SkillUnlocksManifest;
     loadSkillUnlocks(manifest);
-  } catch {
-    console.warn("Could not load skill-unlocks.json manifest for tests");
+  } catch (e) {
+    console.warn(
+      `Could not load skill-unlocks.json manifest for tests: ${e instanceof Error ? e.message : e}`,
+    );
   }
 });
 

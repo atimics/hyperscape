@@ -13,6 +13,9 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
+import { readFileSync, existsSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import {
   calculateBurnChance,
   getStopBurnLevel,
@@ -25,17 +28,103 @@ import {
   getValidRawFoodIds,
   rollBurn,
 } from "../CookingCalculator";
-import { dataManager } from "../../../../../data/DataManager";
-import { ProcessingDataProvider } from "../../../../../data/ProcessingDataProvider";
+import {
+  ProcessingDataProvider,
+  type CookingManifest,
+} from "../../../../../data/ProcessingDataProvider";
+
+/**
+ * Find the workspace root by looking for turbo.json
+ */
+function findWorkspaceRoot(): string {
+  // Try multiple approaches for ESM/CJS compatibility
+  let currentDir: string;
+
+  // Try import.meta.url for ESM
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    currentDir = dirname(__filename);
+  } catch {
+    // Fallback to __dirname for CJS (vitest might polyfill this)
+    currentDir = __dirname;
+  }
+
+  // Navigate up from current location to find workspace root
+  // We look for a turbo.json which is at the workspace root
+  let searchDir = currentDir;
+  for (let i = 0; i < 15; i++) {
+    if (existsSync(join(searchDir, "turbo.json"))) {
+      return searchDir;
+    }
+    const parent = dirname(searchDir);
+    if (parent === searchDir) break; // Reached filesystem root
+    searchDir = parent;
+  }
+
+  // Fallback: navigate from current dir assuming standard structure
+  // packages/shared/src/systems/shared/entities/processing/__tests__
+  return join(currentDir, "..", "..", "..", "..", "..", "..", "..", "..");
+}
 
 describe("CookingCalculator", () => {
-  beforeAll(async () => {
-    // Initialize DataManager to load recipe manifests before tests
-    if (!dataManager.isReady()) {
-      await dataManager.initialize();
+  beforeAll(() => {
+    // Directly load cooking recipes from manifest instead of using DataManager
+    // This avoids complex async initialization and CDN/filesystem detection
+    const workspaceRoot = findWorkspaceRoot();
+    const cookingPath = join(
+      workspaceRoot,
+      "packages/server/world/assets/manifests/recipes/cooking.json",
+    );
+
+    // Try multiple paths in case the workspace root detection fails
+    const possiblePaths = [
+      cookingPath,
+      // Fallback: from process.cwd() (might be workspace root)
+      join(
+        process.cwd(),
+        "packages/server/world/assets/manifests/recipes/cooking.json",
+      ),
+      // Fallback: relative from packages/shared
+      join(
+        process.cwd(),
+        "../server/world/assets/manifests/recipes/cooking.json",
+      ),
+    ];
+
+    let manifest: CookingManifest | null = null;
+    let loadedPath = "";
+
+    for (const path of possiblePaths) {
+      try {
+        if (existsSync(path)) {
+          const data = readFileSync(path, "utf-8");
+          manifest = JSON.parse(data) as CookingManifest;
+          loadedPath = path;
+          break;
+        }
+      } catch {
+        // Try next path
+      }
     }
-    // Force rebuild ProcessingDataProvider to use loaded manifests
-    ProcessingDataProvider.getInstance().rebuild();
+
+    if (!manifest) {
+      throw new Error(
+        `Could not load cooking.json manifest from any of these paths:\n${possiblePaths.join("\n")}\nWorkspace root detected as: ${workspaceRoot}\nprocess.cwd(): ${process.cwd()}`,
+      );
+    }
+
+    // Load recipes into ProcessingDataProvider
+    const provider = ProcessingDataProvider.getInstance();
+    provider.loadCookingRecipes(manifest);
+    provider.rebuild();
+
+    // Verify data is loaded
+    const cookableCount = provider.getCookableItemIds().size;
+    if (cookableCount === 0) {
+      throw new Error(
+        `Manifest loaded from ${loadedPath} but ProcessingDataProvider has 0 cookable items after rebuild`,
+      );
+    }
   });
   describe("getStopBurnLevel", () => {
     it("returns correct fire stop-burn level for shrimp", () => {

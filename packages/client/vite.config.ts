@@ -187,7 +187,9 @@ export default defineConfig(({ mode }) => {
       // These ALWAYS use production URLs when mode is "production", ignoring .env files
       // NOTE: mode is passed from Vite - "production" for `vite build`, "development" for `vite dev`
       // Use environment variables if set, otherwise use defaults
-      // Deployment script sets these from Terraform outputs during build
+      //
+      // Production: Frontend on Cloudflare Pages (hyperscape.club)
+      //             Server on Railway (hyperscape-production.up.railway.app)
       "import.meta.env.PUBLIC_API_URL": JSON.stringify(
         env.PUBLIC_API_URL ||
           (mode === "production"
@@ -200,16 +202,15 @@ export default defineConfig(({ mode }) => {
             ? "wss://hyperscape-production.up.railway.app/ws"
             : "ws://localhost:5555/ws"),
       ),
+      // CDN URL must be set via environment variable in Cloudflare Pages dashboard
+      // There's no sensible default for production - it depends on your R2 bucket config
       "import.meta.env.PUBLIC_CDN_URL": JSON.stringify(
-        env.PUBLIC_CDN_URL ||
-          (mode === "production"
-            ? "https://d20g7vd4m53hpb.cloudfront.net"
-            : "http://localhost:8080"),
+        env.PUBLIC_CDN_URL || "http://localhost:8080",
       ),
       "import.meta.env.PUBLIC_APP_URL": JSON.stringify(
         env.PUBLIC_APP_URL ||
           (mode === "production"
-            ? "https://hyperscape.lol"
+            ? "https://hyperscape.club"
             : "http://localhost:3333"),
       ),
       "import.meta.env.PUBLIC_ELIZAOS_URL": JSON.stringify(

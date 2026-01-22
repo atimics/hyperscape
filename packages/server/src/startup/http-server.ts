@@ -59,11 +59,13 @@ export async function createHttpServer(
   const fastify = Fastify({ logger: { level: "error" } });
 
   // Configure CORS for development and production
+  // Frontend: Cloudflare Pages (hyperscape.club)
+  // Backend: Railway (hyperscape-production.up.railway.app)
   const elizaOSUrl =
     process.env.ELIZAOS_URL ||
     process.env.ELIZAOS_API_URL ||
     (process.env.NODE_ENV === "production"
-      ? "https://api.hyperscape.lol"
+      ? "https://hyperscape-production.up.railway.app"
       : "http://localhost:4001");
   const clientUrl =
     process.env.CLIENT_URL ||
@@ -73,8 +75,7 @@ export async function createHttpServer(
 
   const allowedOrigins = [
     // Production domains
-    "https://hyperscape.lol",
-    "https://api.hyperscape.lol",
+    "https://hyperscape.club",
     "https://hyperscape-production.up.railway.app",
     // Development (from env vars or defaults)
     elizaOSUrl, // ElizaOS API
@@ -85,7 +86,6 @@ export async function createHttpServer(
     /^https:\/\/.+\.farcaster\.xyz$/,
     /^https:\/\/.+\.warpcast\.com$/,
     /^https:\/\/.+\.privy\.io$/,
-    /^https:\/\/.+\.hyperscape\.lol$/,
     /^https:\/\/.+\.up\.railway\.app$/,
   ];
 
