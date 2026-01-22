@@ -24,9 +24,19 @@ cmds = ["bun install"]
 # Build the packages in correct order: shared -> client -> server
 # Then copy client dist to server public for static serving
 # Note: Assets/manifests are fetched from CDN at server startup
+# Cache bust: 2026-01-22-v1
 dependsOn = ["install"]
 cmds = [
-  "set -ex && bun run build:shared && bun run build:client && test -f packages/client/dist/index.html && bun run build:server && mkdir -p packages/server/public && cp -r packages/client/dist/* packages/server/public/ && test -f packages/server/public/index.html && mkdir -p packages/server/world/assets/manifests && echo 'Build complete - index.html verified'"
+  "echo 'Build started at:' && date",
+  "bun run build:shared",
+  "bun run build:client",
+  "ls -la packages/client/dist/ && test -f packages/client/dist/index.html",
+  "bun run build:server",
+  "mkdir -p packages/server/public",
+  "cp -r packages/client/dist/* packages/server/public/",
+  "ls -la packages/server/public/ && test -f packages/server/public/index.html",
+  "mkdir -p packages/server/world/assets/manifests",
+  "echo 'Build completed successfully at:' && date"
 ]
 
 [start]
