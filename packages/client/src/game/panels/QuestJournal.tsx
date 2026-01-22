@@ -348,13 +348,23 @@ function QuestDetailView({ quest }: { quest: QuestDetail }) {
       return `${formatTarget(currentStage.target)} killed: ${kills}/${currentStage.count}`;
     }
 
-    if (currentStage.type === "gather" && currentStage.count) {
-      const gathered = quest.stageProgress.gathered || 0;
+    if (
+      currentStage.type === "gather" &&
+      currentStage.count &&
+      currentStage.target
+    ) {
+      // Progress is tracked by item ID (e.g., copper_ore, tin_ore)
+      const gathered = quest.stageProgress[currentStage.target] || 0;
       return `${formatTarget(currentStage.target)} gathered: ${gathered}/${currentStage.count}`;
     }
 
-    if (currentStage.type === "interact" && currentStage.count) {
-      const interacted = quest.stageProgress.interacted || 0;
+    if (
+      currentStage.type === "interact" &&
+      currentStage.count &&
+      currentStage.target
+    ) {
+      // Progress is tracked by target ID (e.g., fire, bronze_bar)
+      const interacted = quest.stageProgress[currentStage.target] || 0;
       return `${formatTarget(currentStage.target)} created: ${interacted}/${currentStage.count}`;
     }
 

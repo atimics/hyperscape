@@ -355,14 +355,16 @@ export class QuestSystem extends SystemBase {
     }
 
     if (stage.type === "gather" && stage.count && stage.target) {
-      const gathered = row.stageProgress.gathered || 0;
+      // Progress is tracked by item ID (e.g., copper_ore, tin_ore)
+      const gathered = row.stageProgress[stage.target] || 0;
       if (gathered >= stage.count) {
         return "ready_to_complete";
       }
     }
 
     if (stage.type === "interact" && stage.count && stage.target) {
-      const interacted = row.stageProgress.interacted || 0;
+      // Progress is tracked by target ID (e.g., fire, bronze_bar)
+      const interacted = row.stageProgress[stage.target] || 0;
       if (interacted >= stage.count) {
         return "ready_to_complete";
       }
@@ -735,6 +737,9 @@ export class QuestSystem extends SystemBase {
   /**
    * Handle gather stage progress (woodcutting, fishing, mining)
    * Triggered by INVENTORY_ITEM_ADDED when player receives gathered resources
+   *
+   * Tracks progress by item ID across ALL gather stages in the quest,
+   * allowing players to gather items in any order (e.g., copper and tin interleaved)
    */
   private handleGatherStage(
     playerId: string,
@@ -748,23 +753,36 @@ export class QuestSystem extends SystemBase {
       const definition = this.questDefinitions.get(questId);
       if (!definition) continue;
 
-      const stage = definition.stages.find(
-        (s) => s.id === progress.currentStage,
+      // Check if ANY gather stage in this quest needs this item
+      const relevantStage = definition.stages.find(
+        (s) => s.type === "gather" && s.target === itemId,
       );
-      if (!stage || stage.type !== "gather" || stage.target !== itemId)
-        continue;
+      if (!relevantStage) continue;
 
-      // Increment gather count
-      const gathered = (progress.stageProgress.gathered || 0) + quantity;
-      progress.stageProgress = { ...progress.stageProgress, gathered };
+      // Track progress by item ID (e.g., copper_ore: 2, tin_ore: 3)
+      const currentCount = (progress.stageProgress[itemId] || 0) + quantity;
+      progress.stageProgress = {
+        ...progress.stageProgress,
+        [itemId]: currentCount,
+      };
 
       this.logger.info(
-        `[QuestSystem] ${playerId} gathered ${itemId}: ${gathered}/${stage.count}`,
+        `[QuestSystem] ${playerId} gathered ${itemId}: ${currentCount}/${relevantStage.count}`,
       );
 
-      // Check if stage complete
-      if (stage.count && gathered >= stage.count) {
-        this.advanceToNextStage(playerId, questId, progress, definition);
+      // Check if CURRENT stage is complete (only advance if we're on that stage)
+      const currentStage = definition.stages.find(
+        (s) => s.id === progress.currentStage,
+      );
+      if (
+        currentStage?.type === "gather" &&
+        currentStage.target &&
+        currentStage.count
+      ) {
+        const stageItemCount = progress.stageProgress[currentStage.target] || 0;
+        if (stageItemCount >= currentStage.count) {
+          this.advanceToNextStage(playerId, questId, progress, definition);
+        }
       }
 
       // Save and emit progress
@@ -780,7 +798,7 @@ export class QuestSystem extends SystemBase {
         questId,
         stage: progress.currentStage,
         progress: progress.stageProgress,
-        description: stage.description,
+        description: currentStage?.description || relevantStage.description,
       });
     }
   }
@@ -788,6 +806,9 @@ export class QuestSystem extends SystemBase {
   /**
    * Handle interact stage progress (firemaking, cooking, smelting, smithing)
    * Triggered by skill-specific events when player creates items
+   *
+   * Tracks progress by target ID across ALL interact stages in the quest,
+   * allowing flexible completion order
    */
   private handleInteractStage(
     playerId: string,
@@ -801,23 +822,37 @@ export class QuestSystem extends SystemBase {
       const definition = this.questDefinitions.get(questId);
       if (!definition) continue;
 
-      const stage = definition.stages.find(
-        (s) => s.id === progress.currentStage,
+      // Check if ANY interact stage in this quest needs this target
+      const relevantStage = definition.stages.find(
+        (s) => s.type === "interact" && s.target === target,
       );
-      if (!stage || stage.type !== "interact" || stage.target !== target)
-        continue;
+      if (!relevantStage) continue;
 
-      // Increment interact count
-      const interacted = (progress.stageProgress.interacted || 0) + count;
-      progress.stageProgress = { ...progress.stageProgress, interacted };
+      // Track progress by target ID (e.g., bronze_bar: 2, fire: 3)
+      const currentCount = (progress.stageProgress[target] || 0) + count;
+      progress.stageProgress = {
+        ...progress.stageProgress,
+        [target]: currentCount,
+      };
 
       this.logger.info(
-        `[QuestSystem] ${playerId} interacted ${target}: ${interacted}/${stage.count}`,
+        `[QuestSystem] ${playerId} interacted ${target}: ${currentCount}/${relevantStage.count}`,
       );
 
-      // Check if stage complete
-      if (stage.count && interacted >= stage.count) {
-        this.advanceToNextStage(playerId, questId, progress, definition);
+      // Check if CURRENT stage is complete (only advance if we're on that stage)
+      const currentStage = definition.stages.find(
+        (s) => s.id === progress.currentStage,
+      );
+      if (
+        currentStage?.type === "interact" &&
+        currentStage.target &&
+        currentStage.count
+      ) {
+        const stageTargetCount =
+          progress.stageProgress[currentStage.target] || 0;
+        if (stageTargetCount >= currentStage.count) {
+          this.advanceToNextStage(playerId, questId, progress, definition);
+        }
       }
 
       // Save and emit progress
@@ -833,7 +868,7 @@ export class QuestSystem extends SystemBase {
         questId,
         stage: progress.currentStage,
         progress: progress.stageProgress,
-        description: stage.description,
+        description: currentStage?.description || relevantStage.description,
       });
     }
   }
@@ -879,7 +914,21 @@ export class QuestSystem extends SystemBase {
     ) {
       // Move to next objective stage
       progress.currentStage = nextStage.id;
-      progress.stageProgress = {}; // Reset progress for new stage
+      // Don't reset stageProgress - keep tracked item counts for flexible completion order
+
+      // Check if this stage is already complete (player pre-gathered items)
+      if (
+        (nextStage.type === "gather" || nextStage.type === "interact") &&
+        nextStage.target &&
+        nextStage.count
+      ) {
+        const existingProgress = progress.stageProgress[nextStage.target] || 0;
+        if (existingProgress >= nextStage.count) {
+          // This stage is already complete, advance again
+          this.advanceToNextStage(playerId, questId, progress, definition);
+          return;
+        }
+      }
 
       this.emitTypedEvent(EventType.CHAT_MESSAGE, {
         playerId,
