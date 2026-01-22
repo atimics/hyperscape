@@ -27,14 +27,16 @@ cmds = ["bun install"]
 # Cache bust: 2026-01-22-v1
 dependsOn = ["install"]
 cmds = [
-  "echo 'Build started at:' && date",
+  "echo 'Build started at:' && date > /tmp/build_started.txt",
   "bun run build:shared",
   "bun run build:client",
   "ls -la packages/client/dist/ && test -f packages/client/dist/index.html",
   "bun run build:server",
   "mkdir -p packages/server/public",
   "cp -r packages/client/dist/* packages/server/public/",
-  "ls -la packages/server/public/ && test -f packages/server/public/index.html",
+  "date > packages/server/public/build_timestamp.txt",
+  "ls -la packages/server/public/",
+  "test -f packages/server/public/index.html || (echo 'ERROR: index.html not found after copy!' && exit 1)",
   "mkdir -p packages/server/world/assets/manifests",
   "echo 'Build completed successfully at:' && date"
 ]
