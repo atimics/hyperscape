@@ -329,6 +329,15 @@ function QuestDetailView({ quest }: { quest: QuestDetail }) {
     return "future";
   };
 
+  // Helper to format target IDs for display (e.g., "bronze_bar" -> "Bronze Bar")
+  const formatTarget = (target?: string): string => {
+    if (!target) return "Items";
+    return target
+      .split("_")
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+  };
+
   // Get progress text for current stage
   const getProgressText = (): string | null => {
     const currentStage = quest.stages.find((s) => s.id === quest.currentStage);
@@ -336,7 +345,17 @@ function QuestDetailView({ quest }: { quest: QuestDetail }) {
 
     if (currentStage.type === "kill" && currentStage.count) {
       const kills = quest.stageProgress.kills || 0;
-      return `${currentStage.target || "Enemies"} killed: ${kills}/${currentStage.count}`;
+      return `${formatTarget(currentStage.target)} killed: ${kills}/${currentStage.count}`;
+    }
+
+    if (currentStage.type === "gather" && currentStage.count) {
+      const gathered = quest.stageProgress.gathered || 0;
+      return `${formatTarget(currentStage.target)} gathered: ${gathered}/${currentStage.count}`;
+    }
+
+    if (currentStage.type === "interact" && currentStage.count) {
+      const interacted = quest.stageProgress.interacted || 0;
+      return `${formatTarget(currentStage.target)} created: ${interacted}/${currentStage.count}`;
     }
 
     return null;
