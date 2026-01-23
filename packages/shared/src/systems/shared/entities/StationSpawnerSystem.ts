@@ -104,17 +104,16 @@ export class StationSpawnerSystem extends SystemBase {
           name: stationName,
           type: entityType,
           position: { x: station.position.x, y: spawnY, z: station.position.z },
-          // Bank-specific: include bankId
+          // Bank-specific: include bankId in properties (BankEntity expects config.properties.bankId)
           ...(station.type === "bank" && {
-            bankId: station.bankId ?? "spawn_bank",
+            properties: {
+              bankId: station.bankId ?? "spawn_bank",
+            },
           }),
         };
 
         try {
           await entityManager.spawnEntity(stationConfig);
-          console.log(
-            `[StationSpawnerSystem] Spawned ${station.type} "${stationName}" at (${station.position.x}, ${spawnY.toFixed(2)}, ${station.position.z})`,
-          );
         } catch (err) {
           console.error(
             `[StationSpawnerSystem] Failed to spawn ${station.type} ${station.id}:`,
