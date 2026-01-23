@@ -325,6 +325,20 @@ export interface NPCDialogueNode {
   id: string; // Unique identifier for this node
   text: string; // NPC's dialogue text
   responses?: NPCDialogueResponse[]; // Player response options (if empty, dialogue ends)
+  effect?: string; // Effect to execute when this node is displayed (for terminal nodes)
+}
+
+/**
+ * Quest-based dialogue overrides for NPCs
+ * Allows different entry nodes based on player's quest status
+ */
+export interface NPCDialogueQuestOverrides {
+  /** Entry node when quest is in progress but objective incomplete */
+  in_progress?: string;
+  /** Entry node when quest is in progress AND objective complete */
+  ready_to_complete?: string;
+  /** Entry node after quest is completed */
+  completed?: string;
 }
 
 /**
@@ -332,6 +346,8 @@ export interface NPCDialogueNode {
  */
 export interface NPCDialogueTree {
   entryNodeId: string; // Starting node ID
+  /** Quest-specific entry node overrides, keyed by quest ID */
+  questOverrides?: Record<string, NPCDialogueQuestOverrides>;
   nodes: NPCDialogueNode[]; // All dialogue nodes
 }
 

@@ -19,7 +19,8 @@
   ],
   "scripts": {
     "dev": "vite --host --port 3333",
-    "build": "vite build",
+    "build": "cd ../.. && turbo run build --filter=@hyperscape/shared && cd packages/client && NODE_OPTIONS='--max-old-space-size=4096' vite build",
+    "build:cf": "NODE_OPTIONS='--max-old-space-size=4096' vite build",
     "preview": "vite preview",
     "lint": "eslint src --max-warnings 22100",
     "typecheck": "tsc --noEmit",
@@ -27,16 +28,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "deploy": "node scripts/deploy-cloudflare.mjs",
-    "deploy:prod": "node scripts/deploy-cloudflare.mjs --production",
-    "cap:sync": "cap sync",
-    "cap:sync:ios": "cap sync ios",
-    "cap:sync:android": "cap sync android",
-    "ios": "bun run build && cap sync ios && cap open ios",
-    "ios:dev": "cap sync ios && cap open ios",
-    "ios:build": "bun run build && cap sync ios && cap copy ios",
-    "android": "bun run build && cap sync android && cap open android",
-    "android:dev": "cap sync android && cap open android",
-    "android:build": "bun run build && cap sync android && cap copy android"
+    "deploy:prod": "node scripts/deploy-cloudflare.mjs --production"
   },
   "files": [
     "dist/",
@@ -44,6 +36,8 @@
     "LICENSE"
   ],
   "dependencies": {
+    "@tauri-apps/api": "^2.5.0",
+    "@tauri-apps/plugin-opener": "^2.3.0",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
@@ -77,10 +71,6 @@
   "devDependencies": {
     "@babel/eslint-parser": "^7.23.10",
     "@babel/preset-react": "^7.23.10",
-    "@capacitor/android": "^7.4.3",
-    "@capacitor/cli": "^7.4.3",
-    "@capacitor/core": "^7.4.3",
-    "@capacitor/ios": "^7.4.3",
     "@tailwindcss/postcss": "^4.1.14",
     "@testing-library/jest-dom": "^6.5.0",
     "@testing-library/react": "^16.0.0",

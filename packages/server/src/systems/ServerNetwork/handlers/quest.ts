@@ -1,0 +1,192 @@
+/**
+ * Quest Network Handlers
+ *
+ * Handles network messages for quest-related operations:
+ * - getQuestList: Fetch all quests for a player
+ * - getQuestDetail: Fetch detailed info for a specific quest
+ */
+
+import type { World } from "@hyperscape/shared";
+import type { QuestSystem } from "@hyperscape/shared";
+import { SystemLogger, isValidQuestId } from "@hyperscape/shared";
+import type { ServerSocket } from "../../../shared/types";
+import { sendToSocket, getPlayerId } from "./common";
+import {
+  getQuestListRateLimiter,
+  getQuestDetailRateLimiter,
+  getQuestAcceptRateLimiter,
+} from "../services/SlidingWindowRateLimiter";
+
+/** Logger for quest handlers */
+const logger = new SystemLogger("QuestHandlers");
+
+/**
+ * Handle request for quest list
+ */
+export function handleGetQuestList(
+  socket: ServerSocket,
+  _data: Record<string, unknown>,
+  world: World,
+): void {
+  const playerId = getPlayerId(socket);
+  if (!playerId) {
+    logger.warn("No playerId for getQuestList request");
+    return;
+  }
+
+  // Rate limit check
+  if (!getQuestListRateLimiter().check(playerId)) {
+    logger.debug(`Rate limit exceeded for ${playerId} on getQuestList`);
+    return;
+  }
+
+  const questSystem = world.getSystem("quest") as QuestSystem | undefined;
+  if (!questSystem) {
+    logger.warn("QuestSystem not available");
+    return;
+  }
+
+  // Get all quest definitions
+  const allDefinitions = questSystem.getAllQuestDefinitions();
+
+  // Build quest list with status for this player
+  const quests = allDefinitions.map((def) => ({
+    id: def.id,
+    name: def.name,
+    status: questSystem.getQuestStatus(playerId, def.id),
+    difficulty: def.difficulty,
+    questPoints: def.questPoints,
+  }));
+
+  const questPoints = questSystem.getQuestPoints(playerId);
+
+  // Send quest list to client via packet
+  sendToSocket(socket, "questList", {
+    quests,
+    questPoints,
+  });
+}
+
+/**
+ * Handle request for quest detail
+ */
+export function handleGetQuestDetail(
+  socket: ServerSocket,
+  data: { questId: string },
+  world: World,
+): void {
+  const playerId = getPlayerId(socket);
+  if (!playerId) {
+    logger.warn("No playerId for getQuestDetail request");
+    return;
+  }
+
+  // Rate limit check
+  if (!getQuestDetailRateLimiter().check(playerId)) {
+    logger.debug(`Rate limit exceeded for ${playerId} on getQuestDetail`);
+    return;
+  }
+
+  const { questId } = data;
+
+  // Validate questId format (prevents log injection and invalid lookups)
+  if (!isValidQuestId(questId)) {
+    logger.warn("Invalid or missing questId format for getQuestDetail");
+    return;
+  }
+
+  const questSystem = world.getSystem("quest") as QuestSystem | undefined;
+  if (!questSystem) {
+    logger.warn("QuestSystem not available");
+    return;
+  }
+
+  const definition = questSystem.getQuestDefinition(questId);
+  if (!definition) {
+    // Safe to log questId now since it passed validation
+    logger.warn(`Quest not found: ${questId}`);
+    return;
+  }
+
+  const status = questSystem.getQuestStatus(playerId, questId);
+
+  // Get active quest progress if in progress
+  const activeQuests = questSystem.getActiveQuests(playerId);
+  const activeQuest = activeQuests.find((q) => q.questId === questId);
+
+  logger.debug(`getQuestDetail for ${questId}`, {
+    activeQuest: activeQuest ? JSON.stringify(activeQuest) : null,
+  });
+
+  // Build detail response
+  const detail = {
+    id: definition.id,
+    name: definition.name,
+    description: definition.description,
+    status,
+    difficulty: definition.difficulty,
+    questPoints: definition.questPoints,
+    currentStage: activeQuest?.currentStage || definition.stages[0]?.id || "",
+    stageProgress: activeQuest?.stageProgress || {},
+    stages: definition.stages.map((stage) => ({
+      id: stage.id,
+      description: stage.description,
+      type: stage.type,
+      target: stage.target,
+      count: stage.count,
+    })),
+  };
+
+  logger.debug("Sending detail with stageProgress", {
+    stageProgress: detail.stageProgress,
+  });
+
+  // Send quest detail to client via packet
+  sendToSocket(socket, "questDetail", detail);
+}
+
+/**
+ * Handle quest accept from client
+ * Called when player clicks Accept on the quest start screen
+ */
+export async function handleQuestAccept(
+  socket: ServerSocket,
+  data: { questId: string },
+  world: World,
+): Promise<void> {
+  const playerId = getPlayerId(socket);
+  if (!playerId) {
+    logger.warn("No playerId for questAccept request");
+    return;
+  }
+
+  // Rate limit check
+  if (!getQuestAcceptRateLimiter().check(playerId)) {
+    logger.debug(`Rate limit exceeded for ${playerId} on questAccept`);
+    return;
+  }
+
+  const { questId } = data;
+
+  // Validate questId format (prevents log injection and invalid lookups)
+  if (!isValidQuestId(questId)) {
+    logger.warn("Invalid or missing questId format for questAccept");
+    return;
+  }
+
+  const questSystem = world.getSystem("quest") as QuestSystem | undefined;
+  if (!questSystem) {
+    logger.warn("QuestSystem not available");
+    return;
+  }
+
+  // Start the quest (this will validate requirements and set status to in_progress)
+  // Safe to use questId now since it passed validation
+  const success = await questSystem.startQuest(playerId, questId);
+
+  if (success) {
+    logger.info(`Player ${playerId} started quest ${questId}`);
+  } else {
+    logger.warn(`Failed to start quest ${questId} for player ${playerId}`);
+  }
+}

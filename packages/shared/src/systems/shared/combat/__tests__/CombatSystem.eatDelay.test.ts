@@ -7,7 +7,7 @@
  * - Correct integration with nextAttackTicks and CombatData
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { COMBAT_CONSTANTS } from "../../../../constants/CombatConstants";
 
 // Type for mocked nextAttackTicks map
@@ -183,7 +183,7 @@ describe("CombatSystem - Eat Delay Integration", () => {
 
   describe("integration scenario: eating mid-combat", () => {
     it("delays next attack when eating while on cooldown", () => {
-      const currentTick = 100;
+      const _currentTick = 100;
 
       // Player attacked at tick 96, weapon speed is 4 ticks
       // Next attack at tick 100

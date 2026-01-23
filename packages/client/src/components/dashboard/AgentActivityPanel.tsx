@@ -1,6 +1,6 @@
 import { GAME_API_URL } from "@/lib/api-config";
 import React, { useState, useEffect, useRef } from "react";
-import { Agent } from "../../screens/DashboardScreen";
+import type { Agent } from "./types";
 import {
   ChevronDown,
   ChevronUp,
@@ -14,7 +14,6 @@ import {
   Package,
   Target,
   Skull,
-  Heart,
   MapPin,
 } from "lucide-react";
 
@@ -58,7 +57,7 @@ export const AgentActivityPanel: React.FC<AgentActivityPanelProps> = ({
     resourcesGathered: {},
   });
   const [expanded, setExpanded] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [_error, setError] = useState<string | null>(null);
   const activityIdCounter = useRef(0);
 
   // Listen for activity events via WebSocket or polling
@@ -113,7 +112,7 @@ export const AgentActivityPanel: React.FC<AgentActivityPanelProps> = ({
         }
         setError(null);
       }
-    } catch (err) {
+    } catch (_err) {
       // Activity endpoint might not exist yet - that's okay
       // We'll track local activities instead
     }

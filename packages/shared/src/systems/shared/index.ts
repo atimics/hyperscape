@@ -29,5 +29,8 @@ export * from "./interaction";
 // Presentation systems (rendering, visual effects, audio, chat, actions)
 export * from "./presentation";
 
+// Progression systems (quests, achievements)
+export * from "./progression";
+
 // Event recording and replay
 export * from "./EventStore";

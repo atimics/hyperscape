@@ -42,7 +42,7 @@ async function _createElizaOSAgent(
     const elizaOSApiUrl =
       process.env.ELIZAOS_API_URL ||
       (process.env.NODE_ENV === "production"
-        ? "https://api.hyperscape.lol"
+        ? "https://hyperscape-production.up.railway.app"
         : "http://localhost:4001");
 
     console.log(
@@ -387,14 +387,25 @@ export async function handleEnterWorld(
   sendFn: (name: string, data: unknown, ignoreSocketId?: string) => void,
   sendToFn: (socketId: string, name: string, data: unknown) => void,
 ): Promise<void> {
-  const payload = (data as { characterId?: string }) || {};
+  const payload =
+    (data as {
+      characterId?: string;
+      loadTestBot?: boolean | string;
+      botName?: string;
+    }) || {};
   const characterId = payload.characterId || null;
+  // Load test bots can skip character DB lookup regardless of LOAD_TEST_MODE setting
+  const loadTestBotParam = payload.loadTestBot;
+  const isLoadTestBot =
+    loadTestBotParam === true || loadTestBotParam === "true";
+  const botName = payload.botName;
 
   console.log("[PlayerLoading] enterWorld received", {
     socketId: socket.id,
     accountId: socket.accountId,
     characterId,
     hasExistingPlayer: !!socket.player,
+    isLoadTestBot,
   });
 
   // Spawn the entity now, preserving legacy spawn shape
@@ -480,7 +491,7 @@ export async function handleEnterWorld(
   }
 
   // Load character data from DB if characterId provided
-  let name = "Adventurer";
+  let name = isLoadTestBot && botName ? botName : "Adventurer";
   let avatar: string | undefined = undefined;
   let walletAddress: string | undefined = undefined;
   let characterData: {
@@ -489,7 +500,12 @@ export async function handleEnterWorld(
     avatar?: string | null;
     wallet?: string | null;
   } | null = null;
-  if (characterId) {
+
+  // Skip character DB lookup for load test bots (performance optimization)
+  if (isLoadTestBot) {
+    console.log(`[CharacterSelection] Load test bot spawning: ${name}`);
+    // Load test bots use socket.id as entity ID, no character DB lookup needed
+  } else if (characterId) {
     try {
       const databaseSystem = world.getSystem("database") as
         | import("../DatabaseSystem").DatabaseSystem
@@ -578,9 +594,10 @@ export async function handleEnterWorld(
     : [0, 0, 0, 1];
 
   // Load full character data from DB (position, skills, AND combat preferences)
+  // Skip for load test bots - they use default values for performance
   let savedSkills: Record<string, { level: number; xp: number }> | undefined;
   let savedAutoRetaliate = true; // Default ON (OSRS behavior)
-  if (characterId && accountId) {
+  if (characterId && accountId && !isLoadTestBot) {
     try {
       const databaseSystem = world.getSystem("database") as
         | import("../DatabaseSystem").DatabaseSystem
@@ -767,6 +784,7 @@ export async function handleEnterWorld(
       player:
         socket.player as unknown as import("@hyperscape/shared").PlayerLocal,
       equipment: equipmentRows,
+      isLoadTestBot,
     });
 
     try {

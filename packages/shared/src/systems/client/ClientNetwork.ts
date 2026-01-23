@@ -1939,6 +1939,259 @@ export class ClientNetwork extends SystemBase {
     this.world.emit(EventType.CHARACTER_SELECTED, data);
   };
 
+  // --- Quest system handlers ---
+  onQuestList = (data: {
+    quests: Array<{
+      id: string;
+      name: string;
+      status: string;
+      difficulty: string;
+      questPoints: number;
+    }>;
+    questPoints: number;
+  }) => {
+    // Emit for QuestJournal to update
+    this.emit("questList", data);
+  };
+
+  onQuestDetail = (data: {
+    id: string;
+    name: string;
+    description: string;
+    status: string;
+    difficulty: string;
+    questPoints: number;
+    currentStage: string;
+    stageProgress: Record<string, number>;
+    stages: Array<{
+      id: string;
+      description: string;
+      type: string;
+      target?: string;
+      count?: number;
+    }>;
+  }) => {
+    // Emit for QuestJournal to update
+    this.emit("questDetail", data);
+  };
+
+  onQuestStartConfirm = (data: {
+    questId: string;
+    questName: string;
+    description: string;
+    difficulty: string;
+    requirements: {
+      quests: string[];
+      skills: Record<string, number>;
+      items: string[];
+    };
+    rewards: {
+      questPoints: number;
+      items: Array<{ itemId: string; quantity: number }>;
+      xp: Record<string, number>;
+    };
+  }) => {
+    // Emit QUEST_START_CONFIRM event for Sidebar to show QuestStartScreen
+    // Add playerId since server doesn't send it (packet is already routed to this player)
+    const playerId = this.world?.entities?.player?.id || "";
+    this.world.emit(EventType.QUEST_START_CONFIRM, { ...data, playerId });
+  };
+
+  onQuestProgressed = (data: {
+    questId: string;
+    stage: string;
+    progress: Record<string, number>;
+    description: string;
+  }) => {
+    // Emit QUEST_PROGRESSED event for QuestJournal to update
+    const playerId = this.world?.entities?.player?.id || "";
+    this.world.emit(EventType.QUEST_PROGRESSED, { ...data, playerId });
+  };
+
+  onQuestCompleted = (data: {
+    questId: string;
+    questName: string;
+    rewards: {
+      questPoints: number;
+      items: Array<{ itemId: string; quantity: number }>;
+      xp: Record<string, number>;
+    };
+  }) => {
+    // Emit QUEST_COMPLETED event for Sidebar to show completion screen
+    const playerId = this.world?.entities?.player?.id || "";
+    this.world.emit(EventType.QUEST_COMPLETED, { ...data, playerId });
+  };
+
+  // --- Trade packet handlers ---
+
+  /**
+   * Incoming trade request from another player
+   */
+  onTradeIncoming = (data: {
+    tradeId: string;
+    fromPlayerId: string;
+    fromPlayerName: string;
+    fromPlayerLevel: number;
+  }) => {
+    this.world.emit(EventType.TRADE_REQUEST_RECEIVED, data);
+    // Also emit as UI update for modal handling
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "tradeRequest",
+      data: {
+        visible: true,
+        tradeId: data.tradeId,
+        fromPlayer: {
+          id: data.fromPlayerId,
+          name: data.fromPlayerName,
+          level: data.fromPlayerLevel,
+        },
+      },
+    });
+  };
+
+  /**
+   * Trade session started (both players accepted)
+   */
+  onTradeStarted = (data: {
+    tradeId: string;
+    partnerId: string;
+    partnerName: string;
+    partnerLevel: number;
+  }) => {
+    this.world.emit(EventType.TRADE_STARTED, data);
+    // Emit UI update to open trade panel
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "trade",
+      data: {
+        isOpen: true,
+        tradeId: data.tradeId,
+        partner: {
+          id: data.partnerId,
+          name: data.partnerName,
+          level: data.partnerLevel,
+        },
+        myOffer: [],
+        myAccepted: false,
+        theirOffer: [],
+        theirAccepted: false,
+      },
+    });
+  };
+
+  /**
+   * Trade state updated (items changed, acceptance changed)
+   */
+  onTradeUpdated = (data: {
+    tradeId: string;
+    myOffer: {
+      items: Array<{
+        inventorySlot: number;
+        itemId: string;
+        quantity: number;
+        tradeSlot: number;
+      }>;
+      accepted: boolean;
+    };
+    theirOffer: {
+      items: Array<{
+        inventorySlot: number;
+        itemId: string;
+        quantity: number;
+        tradeSlot: number;
+      }>;
+      accepted: boolean;
+    };
+  }) => {
+    this.world.emit(EventType.TRADE_UPDATED, data);
+    // Emit UI update
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "tradeUpdate",
+      data: {
+        tradeId: data.tradeId,
+        myOffer: data.myOffer.items,
+        myAccepted: data.myOffer.accepted,
+        theirOffer: data.theirOffer.items,
+        theirAccepted: data.theirOffer.accepted,
+      },
+    });
+  };
+
+  /**
+   * Trade completed successfully
+   */
+  onTradeCompleted = (data: {
+    tradeId: string;
+    receivedItems: Array<{ itemId: string; quantity: number }>;
+  }) => {
+    this.world.emit(EventType.TRADE_COMPLETED, data);
+    // Close trade panel
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "tradeClose",
+      data: { tradeId: data.tradeId, reason: "completed" },
+    });
+  };
+
+  /**
+   * Trade cancelled
+   */
+  onTradeCancelled = (data: {
+    tradeId: string;
+    reason: string;
+    message: string;
+  }) => {
+    this.world.emit(EventType.TRADE_CANCELLED, data);
+    // Close trade panel and request modal
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "tradeClose",
+      data: {
+        tradeId: data.tradeId,
+        reason: data.reason,
+        message: data.message,
+      },
+    });
+  };
+
+  /**
+   * Trade operation error
+   */
+  onTradeError = (data: { message: string; code: string }) => {
+    this.world.emit(EventType.TRADE_ERROR, data);
+    // Show toast with error message
+    this.world.emit(EventType.UI_TOAST, {
+      message: data.message,
+      type: "error",
+    });
+  };
+
+  // Trade convenience methods
+  requestTrade(targetPlayerId: string) {
+    this.send("tradeRequest", { targetPlayerId });
+  }
+
+  respondToTradeRequest(tradeId: string, accept: boolean) {
+    this.send("tradeRequestRespond", { tradeId, accept });
+  }
+
+  addItemToTrade(tradeId: string, inventorySlot: number, quantity?: number) {
+    this.send("tradeAddItem", { tradeId, inventorySlot, quantity });
+  }
+
+  removeItemFromTrade(tradeId: string, tradeSlot: number) {
+    this.send("tradeRemoveItem", { tradeId, tradeSlot });
+  }
+
+  acceptTrade(tradeId: string) {
+    this.send("tradeAccept", { tradeId });
+  }
+
+  cancelTradeAccept(tradeId: string) {
+    this.send("tradeCancelAccept", { tradeId });
+  }
+
+  cancelTrade(tradeId: string) {
+    this.send("tradeCancel", { tradeId });
+  }
+
   // Convenience methods
   requestCharacterCreate(name: string) {
     this.send("characterCreate", { name });
@@ -2029,6 +2282,28 @@ export class ClientNetwork extends SystemBase {
       resourceId: data.resourceId,
       successful: data.successful,
       skill: "woodcutting", // Will be refined later
+    });
+  };
+
+  // OSRS-STYLE: Show gathering tool in hand during gathering (e.g., fishing rod)
+  onGatheringToolShow = (data: {
+    playerId: string;
+    itemId: string;
+    slot: string;
+  }) => {
+    // Forward to local event system for EquipmentVisualSystem
+    this.world.emit(EventType.GATHERING_TOOL_SHOW, {
+      playerId: data.playerId,
+      itemId: data.itemId,
+      slot: data.slot,
+    });
+  };
+
+  onGatheringToolHide = (data: { playerId: string; slot: string }) => {
+    // Forward to local event system for EquipmentVisualSystem
+    this.world.emit(EventType.GATHERING_TOOL_HIDE, {
+      playerId: data.playerId,
+      slot: data.slot,
     });
   };
 
@@ -2513,6 +2788,12 @@ export class ClientNetwork extends SystemBase {
 
       // Now teleport the player
       player.teleport(pos);
+
+      // Emit event for UI (e.g., home teleport completion)
+      this.world.emit(EventType.PLAYER_TELEPORTED, {
+        playerId: data.playerId,
+        position: { x: pos.x, y: pos.y, z: pos.z },
+      });
     }
   };
 
@@ -2549,6 +2830,28 @@ export class ClientNetwork extends SystemBase {
     this.emitTypedEvent("UI_KICK", {
       playerId: this.id || "unknown",
       reason: code || "unknown",
+    });
+  };
+
+  // ==== Home Teleport Handlers ====
+
+  /**
+   * Handle home teleport cast started
+   * Server confirms casting has begun, client shows progress UI
+   */
+  onHomeTeleportStart = (data: { castTimeMs: number }) => {
+    this.world.emit(EventType.HOME_TELEPORT_CAST_START, {
+      castTimeMs: data.castTimeMs,
+    });
+  };
+
+  /**
+   * Handle home teleport failed
+   * Server rejected teleport request (combat, cooldown, etc.)
+   */
+  onHomeTeleportFailed = (data: { reason: string }) => {
+    this.world.emit(EventType.HOME_TELEPORT_FAILED, {
+      reason: data.reason,
     });
   };
 

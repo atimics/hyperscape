@@ -325,16 +325,17 @@ export function EquipmentPanel({
     if (!world) return;
 
     // Initialize with current weight
-    const player = world.getPlayer?.();
+    const player = world.getPlayer?.() as {
+      totalWeight?: number;
+      id?: string;
+    } | null;
     if (player?.totalWeight !== undefined) {
       setTotalWeight(player.totalWeight);
     }
 
     // Listen for weight change events
-    const handleWeightChanged = (data: {
-      playerId: string;
-      weight: number;
-    }) => {
+    const handleWeightChanged = (...args: unknown[]) => {
+      const data = args[0] as { playerId: string; weight: number };
       const localPlayer = world.getPlayer?.();
       if (localPlayer && data.playerId === localPlayer.id) {
         setTotalWeight(data.weight);

@@ -117,6 +117,10 @@ const names = [
   'resourceInteract',  // Server-authoritative: client sends resourceId, server calculates path
   'resourceGather',    // Legacy: used after server paths player to cardinal tile
   'gatheringComplete',
+  'gatheringStarted',  // Server -> Client: gathering session started
+  'gatheringStopped',  // Server -> Client: gathering session stopped
+  'gatheringToolShow', // Server -> Client: show gathering tool in hand (OSRS fishing rod)
+  'gatheringToolHide', // Server -> Client: hide gathering tool from hand
   // Processing packets (firemaking/cooking)
   'firemakingRequest', // Client -> Server: request to light fire (tinderbox + logs)
   'cookingRequest',    // Client -> Server: request to cook food on fire/range
@@ -226,6 +230,7 @@ const names = [
   'dialogueStart',
   'dialogueNodeChange',
   'dialogueResponse',
+  'dialogueContinue',
   'dialogueEnd',
   'dialogueClose',
   // Tile movement packets (RuneScape-style)
@@ -245,6 +250,37 @@ const names = [
   'prayerStateSync',     // Server -> Client: full prayer state sync
   'prayerToggled',       // Server -> Client: prayer toggle feedback
   'prayerPointsChanged', // Server -> Client: prayer points changed
+  // Quest system packets
+  'getQuestList',        // Client -> Server: request quest list
+  'getQuestDetail',      // Client -> Server: request quest detail
+  'questList',           // Server -> Client: quest list response
+  'questDetail',         // Server -> Client: quest detail response
+  'questStartConfirm',   // Server -> Client: show quest accept screen
+  'questAccept',         // Client -> Server: player accepted quest
+  'questProgressed',     // Server -> Client: quest progress updated
+  'questCompleted',      // Server -> Client: quest completed, show rewards
+  // XP Lamp packets
+  'xpLampUse',           // Client -> Server: use XP lamp on skill
+  // Home Teleport packets
+  'homeTeleport',        // Client -> Server: request home teleport
+  'homeTeleportCancel',  // Client -> Server: cancel home teleport cast
+  'homeTeleportStart',   // Server -> Client: casting started (show progress)
+  'homeTeleportFailed',  // Server -> Client: teleport failed (combat, cooldown, etc.)
+  // Player Trading packets
+  'tradeRequest',        // Client -> Server: request trade with target player
+  'tradeRequestRespond', // Client -> Server: accept/decline incoming trade request
+  'tradeIncoming',       // Server -> Client: notify of incoming trade request
+  'tradeStarted',        // Server -> Client: trade session activated (both players)
+  'tradeAddItem',        // Client -> Server: add item from inventory to trade offer
+  'tradeRemoveItem',     // Client -> Server: remove item from trade offer back to inventory
+  'tradeSetItemQuantity',// Client -> Server: set quantity for stackable item in trade
+  'tradeUpdated',        // Server -> Client: trade state changed (items, acceptance)
+  'tradeAccept',         // Client -> Server: accept current trade state
+  'tradeCancelAccept',   // Client -> Server: cancel acceptance (offer modified)
+  'tradeCancel',         // Client -> Server: cancel/close trade session
+  'tradeCompleted',      // Server -> Client: trade successful, items swapped
+  'tradeCancelled',      // Server -> Client: trade cancelled (disconnect, decline, etc.)
+  'tradeError',          // Server -> Client: trade operation failed with reason
 ]
 
 const byName: Record<string, PacketInfo> = {};

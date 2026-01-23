@@ -32,6 +32,16 @@ export const PLAYER_CONSTANTS = {
   STAMINA_DRAIN_RATE: 5.0,
 } as const;
 
+// === HOME TELEPORT ===
+export const HOME_TELEPORT_CONSTANTS = {
+  /** Cooldown in milliseconds (5 seconds) */
+  COOLDOWN_MS: 5 * 1000,
+  /** Cast time in milliseconds (10 seconds - can be interrupted by movement/combat) */
+  CAST_TIME_MS: 10 * 1000,
+  /** Cast time in ticks (for server-side processing, 10s = ~17 ticks at 600ms/tick) */
+  CAST_TIME_TICKS: 17,
+} as const;
+
 // === EXPERIENCE AND LEVELING ===
 export const XP_CONSTANTS = {
   BASE_XP_MULTIPLIER: 83,
@@ -319,6 +329,7 @@ export const GAME_CONSTANTS = {
   INVENTORY: INVENTORY_CONSTANTS,
   PLAYER: PLAYER_CONSTANTS,
   COMBAT: COMBAT_CONSTANTS,
+  HOME_TELEPORT: HOME_TELEPORT_CONSTANTS,
   XP: XP_CONSTANTS,
   WORLD: WORLD_CONSTANTS,
   GATHERING: GATHERING_CONSTANTS,

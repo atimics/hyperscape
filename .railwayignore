@@ -1,0 +1,35 @@
+# Railway ignore file - exclude large directories for faster uploads
+node_modules/
+.git/
+*.log
+coverage/
+.next/
+.nuxt/
+.cache/
+tmp/
+.turbo/
+
+# Note: NOT ignoring dist/ and build/ as they're needed for deployment
+# The client dist is copied to server/public during build
+
+# Large asset directories (served from CDN, not needed for build)
+packages/server/world/assets/
+
+# Test files
+test-results/
+playwright-report/
+
+# Development files
+*.local
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

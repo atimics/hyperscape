@@ -78,9 +78,9 @@ export class PlayerInteractionHandler extends BaseInteractionHandler {
         { text: `${targetLevel}`, color: levelColor },
         { text: ")" },
       ],
-      enabled: false, // Disabled until trading implemented
+      enabled: true,
       priority: 1,
-      handler: () => this.showExamineMessage("Trading is not yet available."),
+      handler: () => this.tradeWithPlayer(target),
     });
 
     // 3. Follow - Priority 2 (includes level for consistency)
@@ -272,5 +272,16 @@ export class PlayerInteractionHandler extends BaseInteractionHandler {
     });
 
     this.addChatMessage(`Following ${target.name}.`);
+  }
+
+  /**
+   * Send trade request to target player.
+   */
+  private tradeWithPlayer(target: RaycastTarget): void {
+    this.send(MESSAGE_TYPES.TRADE_REQUEST, {
+      targetPlayerId: target.entityId,
+    });
+
+    this.addChatMessage(`Sending trade request to ${target.name}...`);
   }
 }

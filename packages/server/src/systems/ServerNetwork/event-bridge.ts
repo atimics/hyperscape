@@ -97,6 +97,8 @@ export class EventBridge {
     this.setupStoreEvents();
     this.setupFireEvents();
     this.setupSmeltingEvents();
+    this.setupQuestEvents();
+    this.setupTradeEvents();
   }
 
   /**
@@ -127,6 +129,25 @@ export class EventBridge {
           this.broadcast.sendToAll("resourceSpawnPoints", args[0]);
         },
       );
+
+      // OSRS-STYLE: Forward gathering tool show/hide events (for fishing rod visual)
+      this.world.on(EventType.GATHERING_TOOL_SHOW, (payload: unknown) => {
+        const data = payload as {
+          playerId: string;
+          itemId: string;
+          slot: string;
+        };
+        if (data.playerId) {
+          this.broadcast.sendToPlayer(data.playerId, "gatheringToolShow", data);
+        }
+      });
+
+      this.world.on(EventType.GATHERING_TOOL_HIDE, (payload: unknown) => {
+        const data = payload as { playerId: string; slot: string };
+        if (data.playerId) {
+          this.broadcast.sendToPlayer(data.playerId, "gatheringToolHide", data);
+        }
+      });
     } catch (_err) {
       console.error("[EventBridge] Error setting up resource events:", _err);
     }
@@ -260,46 +281,29 @@ export class EventBridge {
         }
       });
 
-      // Forward XP gains to clients for visual XP drop feedback (RS3-style)
-      this.world.on(EventType.SKILLS_XP_GAINED, (payload: unknown) => {
+      // Forward XP drops to clients for visual feedback (RS3-style)
+      // Uses XP_DROP_BROADCAST which is emitted AFTER SkillsSystem processes XP
+      // This ensures newLevel reflects any level-ups that occurred
+      this.world.on(EventType.XP_DROP_BROADCAST, (payload: unknown) => {
         const data = payload as {
           playerId: string;
           skill: string;
           amount: number;
+          newXp: number;
+          newLevel: number;
+          position: { x: number; y: number; z: number };
         };
 
         if (!data?.playerId) return;
-
-        // Get player entity for position
-        const player = this.world.entities.get(data.playerId);
-        const position = player?.position || { x: 0, y: 0, z: 0 };
-
-        // Get updated skill data (SkillsSystem has already processed the XP gain)
-        const skillsSystem = this.world.getSystem("skills") as {
-          getSkillData?: (
-            entityId: string,
-            skill: string,
-          ) => { level: number; xp: number } | undefined;
-        };
-
-        const skillData = skillsSystem?.getSkillData?.(
-          data.playerId,
-          data.skill,
-        );
-        // Safely get values, handling NaN (which passes ?? but fails Number.isFinite)
-        const rawLevel = skillData?.level;
-        const rawXp = skillData?.xp;
-        const newLevel = Number.isFinite(rawLevel) ? rawLevel : 1;
-        const newXp = Number.isFinite(rawXp) ? rawXp : 0;
 
         // Send XP drop to the player AND spectators for visual feedback
         // Spectators watching the player should see XP orbs too
         this.broadcast.sendToPlayerAndSpectators(data.playerId, "xpDrop", {
           skill: data.skill,
           xpGained: data.amount,
-          newXp,
-          newLevel,
-          position: { x: position.x, y: position.y, z: position.z },
+          newXp: data.newXp,
+          newLevel: data.newLevel,
+          position: data.position,
         });
 
         // Persist skill XP to database (only if values are valid)
@@ -311,15 +315,15 @@ export class EventBridge {
         };
         if (
           dbSystem?.savePlayer &&
-          Number.isFinite(newXp) &&
-          Number.isFinite(newLevel)
+          Number.isFinite(data.newXp) &&
+          Number.isFinite(data.newLevel)
         ) {
           // Map skill name to database column names
           const skillLevelKey = `${data.skill}Level`;
           const skillXpKey = `${data.skill}Xp`;
           dbSystem.savePlayer(data.playerId, {
-            [skillLevelKey]: newLevel,
-            [skillXpKey]: newXp,
+            [skillLevelKey]: data.newLevel,
+            [skillXpKey]: data.newXp,
           });
         }
       });
@@ -1077,6 +1081,153 @@ export class EventBridge {
       });
     } catch (_err) {
       console.error("[EventBridge] Error setting up smelting events:", _err);
+    }
+  }
+
+  /**
+   * Setup quest system event listeners
+   *
+   * Forwards quest confirmation screen events to specific players
+   * so they can see the quest accept/decline UI.
+   *
+   * @private
+   */
+  private setupQuestEvents(): void {
+    try {
+      // Forward quest start confirmation to specific player
+      this.world.on(EventType.QUEST_START_CONFIRM, (payload: unknown) => {
+        const data = payload as {
+          playerId: string;
+          questId: string;
+          questName: string;
+          description: string;
+          difficulty: string;
+          requirements: {
+            quests: string[];
+            skills: Record<string, number>;
+            items: string[];
+          };
+          rewards: {
+            questPoints: number;
+            items: Array<{ itemId: string; quantity: number }>;
+            xp: Record<string, number>;
+          };
+        };
+
+        if (data.playerId) {
+          this.broadcast.sendToPlayer(data.playerId, "questStartConfirm", {
+            questId: data.questId,
+            questName: data.questName,
+            description: data.description,
+            difficulty: data.difficulty,
+            requirements: data.requirements,
+            rewards: data.rewards,
+          });
+        }
+      });
+
+      // Forward quest progress updates to specific player
+      this.world.on(EventType.QUEST_PROGRESSED, (payload: unknown) => {
+        const data = payload as {
+          playerId: string;
+          questId: string;
+          stage: string;
+          progress: Record<string, number>;
+          description: string;
+        };
+
+        if (data.playerId) {
+          this.broadcast.sendToPlayer(data.playerId, "questProgressed", {
+            questId: data.questId,
+            stage: data.stage,
+            progress: data.progress,
+            description: data.description,
+          });
+        }
+      });
+
+      // Forward quest completed event to specific player
+      this.world.on(EventType.QUEST_COMPLETED, (payload: unknown) => {
+        const data = payload as {
+          playerId: string;
+          questId: string;
+          questName: string;
+          rewards: {
+            questPoints: number;
+            items: Array<{ itemId: string; quantity: number }>;
+            xp: Record<string, number>;
+          };
+        };
+
+        if (data.playerId) {
+          this.broadcast.sendToPlayer(data.playerId, "questCompleted", {
+            questId: data.questId,
+            questName: data.questName,
+            rewards: data.rewards,
+          });
+        }
+      });
+    } catch (_err) {
+      console.error("[EventBridge] Error setting up quest events:", _err);
+    }
+  }
+
+  /**
+   * Setup trade event listeners
+   *
+   * Handles trade cancellation events from TradingSystem (disconnect, timeout, death).
+   * When a trade is cancelled by the system (not by player action), we need to notify
+   * the affected players via network packets.
+   *
+   * @private
+   */
+  private setupTradeEvents(): void {
+    try {
+      // Listen for trade cancellation events from TradingSystem
+      // This handles: timeout, disconnect, player death
+      this.world.on(EventType.TRADE_CANCELLED, (payload: unknown) => {
+        const data = payload as {
+          tradeId: string;
+          reason: string;
+          initiatorId: string;
+          recipientId: string;
+          initiatorSocketId?: string;
+          recipientSocketId?: string;
+        };
+
+        // Build user-friendly message based on reason
+        const reasonMessages: Record<string, string> = {
+          timeout: "Trade request timed out",
+          disconnected: "Other player disconnected",
+          player_died: "Trade cancelled - player died",
+          cancelled: "Trade was cancelled",
+          declined: "Trade request declined",
+          invalid_items: "Trade cancelled - items changed",
+          inventory_full: "Trade cancelled - inventory full",
+          server_error: "Trade cancelled - server error",
+        };
+        const message = reasonMessages[data.reason] || "Trade cancelled";
+
+        // Send to initiator if we have their player ID
+        if (data.initiatorId) {
+          this.broadcast.sendToPlayer(data.initiatorId, "tradeCancelled", {
+            tradeId: data.tradeId,
+            reason: data.reason,
+            message,
+          });
+        }
+
+        // Send to recipient if we have their player ID
+        if (data.recipientId) {
+          this.broadcast.sendToPlayer(data.recipientId, "tradeCancelled", {
+            tradeId: data.tradeId,
+            reason: data.reason,
+            message,
+          });
+        }
+      });
+    } catch (_err) {
+      console.error("[EventBridge] Error setting up trade events:", _err);
     }
   }
 }

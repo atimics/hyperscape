@@ -113,7 +113,7 @@ ${resourcesList}`;
         npcCount: npcs.length,
         resourceCount: resources.length,
       },
-      data: nearbyEntitiesData,
+      data: {},
     };
   },
 };

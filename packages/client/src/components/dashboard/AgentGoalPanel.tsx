@@ -1,6 +1,6 @@
 import { GAME_API_URL } from "@/lib/api-config";
 import React, { useState, useEffect } from "react";
-import { Agent } from "../../screens/DashboardScreen";
+import type { Agent } from "./types";
 import {
   ChevronDown,
   ChevronUp,

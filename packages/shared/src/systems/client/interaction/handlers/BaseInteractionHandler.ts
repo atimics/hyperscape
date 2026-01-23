@@ -26,7 +26,6 @@ import {
   TILE_SIZE,
   type TileCoord,
 } from "../../../shared/movement/TileSystem";
-import type { EntityFootprint } from "../types";
 import { ACTION_QUEUE } from "../constants";
 import { EventType } from "../../../../types/events/event-types";
 import { uuid } from "../../../../utils";

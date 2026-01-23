@@ -3,6 +3,7 @@ import { logger } from "@elizaos/core";
 import { HyperscapeService } from "../services/HyperscapeService.js";
 
 export const getLogsRoute: Route = {
+  name: "hyperscape-logs",
   type: "GET",
   path: "/hyperscape/logs/:agentId",
   public: true,

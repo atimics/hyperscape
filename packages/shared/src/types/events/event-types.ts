@@ -110,6 +110,10 @@ export enum EventType {
   TERRAIN_VALIDATION_COMPLETE = "terrain:validation:complete",
   TERRAIN_PHYSICS_READY = "terrain:physics:ready",
 
+  // Road System
+  ROADS_GENERATED = "roads:generated",
+  TERRAIN_REFRESH_TILES = "terrain:refresh:tiles",
+
   // Camera System
   CAMERA_SET_TARGET = "camera:set_target",
   CAMERA_CLICK_WORLD = "camera:click:world",
@@ -156,6 +160,13 @@ export enum EventType {
   PLAYER_POSITION_UPDATED = "player:position:updated",
   PLAYER_TELEPORT_REQUEST = "player:teleport_request",
   PLAYER_TELEPORTED = "player:teleported",
+
+  // Home Teleport
+  HOME_TELEPORT_REQUEST = "home:teleport:request",
+  HOME_TELEPORT_CAST_START = "home:teleport:cast_start",
+  HOME_TELEPORT_CAST_CANCEL = "home:teleport:cast_cancel",
+  HOME_TELEPORT_COMPLETE = "home:teleport:complete",
+  HOME_TELEPORT_FAILED = "home:teleport:failed",
 
   // Player Combat Style
   ATTACK_STYLE_CHANGED = "attack_style:changed",
@@ -269,9 +280,17 @@ export enum EventType {
   NPC_QUEST_OPEN = "quest:open_request",
 
   // Quest System
+  QUEST_START_CONFIRM = "quest:start_confirm", // Show quest accept screen
+  QUEST_START_ACCEPTED = "quest:start_accepted", // Player accepted quest
+  QUEST_START_DECLINED = "quest:start_declined", // Player declined quest
   QUEST_STARTED = "quest:started",
   QUEST_PROGRESSED = "quest:progressed",
   QUEST_COMPLETED = "quest:completed",
+
+  // XP Lamp System
+  XP_LAMP_USE_REQUEST = "xp_lamp:use_request",
+  XP_LAMP_SKILL_SELECTED = "xp_lamp:skill_selected",
+  XP_LAMP_APPLIED = "xp_lamp:applied",
 
   // Mob NPCs
   MOB_NPC_SPAWNED = "mob_npc:spawned",
@@ -323,6 +342,7 @@ export enum EventType {
   DIALOGUE_START = "dialogue:start",
   DIALOGUE_NODE_CHANGE = "dialogue:node_change",
   DIALOGUE_RESPONSE = "dialogue:response",
+  DIALOGUE_CONTINUE = "dialogue:continue", // For terminal nodes - player clicks to continue
   DIALOGUE_END = "dialogue:end",
 
   // Resource System
@@ -345,6 +365,10 @@ export enum EventType {
   RESOURCE_MESH_CREATED = "resource:mesh:created",
   RESOURCE_ACTION = "resource:action",
 
+  // Gathering Tool Visuals (show tool in hand during gathering, like OSRS fishing)
+  GATHERING_TOOL_SHOW = "gathering:tool:show",
+  GATHERING_TOOL_HIDE = "gathering:tool:hide",
+
   // Skills & XP System
   SKILLS_XP_GAINED = "skills:xp_gained",
   SKILLS_LEVEL_UP = "skills:level_up",
@@ -352,6 +376,7 @@ export enum EventType {
   SKILLS_ACTION = "skills:action",
   SKILLS_RESET = "skills:reset",
   SKILLS_MILESTONE = "skills:milestone",
+  XP_DROP_BROADCAST = "xp:drop_broadcast", // Server-side: emitted after XP processing with full data
   XP_DROP_RECEIVED = "xp:drop_received",
   TOTAL_LEVEL_CHANGED = "total:level:changed",
 
@@ -601,4 +626,19 @@ export enum EventType {
   ENTITY_MODIFIED = "entityModified",
   ENTITY_INTERACT_REQUEST = "entity:interact_request",
   AGGRO_FORCE_TRIGGER = "aggro:force-trigger",
+
+  // Trading System
+  TRADE_REQUEST = "trade:request",
+  TRADE_REQUEST_RECEIVED = "trade:request_received",
+  TRADE_REQUEST_RESPOND = "trade:request_respond",
+  TRADE_STARTED = "trade:started",
+  TRADE_UPDATED = "trade:updated",
+  TRADE_ITEM_ADDED = "trade:item_added",
+  TRADE_ITEM_REMOVED = "trade:item_removed",
+  TRADE_ACCEPTED = "trade:accepted",
+  TRADE_ACCEPT_CANCELLED = "trade:accept_cancelled",
+  TRADE_COMPLETED = "trade:completed",
+  TRADE_CANCELLED = "trade:cancelled",
+  TRADE_ERROR = "trade:error",
+  TRADE_CLOSE = "trade:close",
 }

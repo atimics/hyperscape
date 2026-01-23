@@ -27,6 +27,7 @@ import { ColliderComponent } from "./ColliderComponent";
 import { StatsComponent } from "./StatsComponent";
 import { VisualComponent } from "./VisualComponent";
 import { CombatComponent } from "./CombatComponent";
+// Import type to avoid circular dependency - Entity is only used in type positions
 import type { Entity } from "../entities/Entity";
 
 export interface ComponentConstructor {

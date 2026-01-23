@@ -88,6 +88,10 @@ import {
   AltarEntity,
   type AltarEntityConfig,
 } from "../../../entities/world/AltarEntity";
+import {
+  RangeEntity,
+  type RangeEntityConfig,
+} from "../../../entities/world/RangeEntity";
 import type {
   MobEntityConfig,
   NPCEntityConfig,
@@ -923,6 +927,36 @@ export class Entities extends SystemBase implements IEntities {
       }
 
       return entity;
+    } else if (data.type === "range") {
+      // Build RangeEntity from network data
+      const positionArray = (data.position || [-17, 40, -13]) as [
+        number,
+        number,
+        number,
+      ];
+      const name = data.name || "Cooking Range";
+
+      const rangeConfig: RangeEntityConfig = {
+        id: data.id,
+        name: name,
+        position: {
+          x: positionArray[0],
+          y: positionArray[1],
+          z: positionArray[2],
+        },
+      };
+
+      const entity = new RangeEntity(this.world, rangeConfig);
+      this.items.set(entity.id, entity);
+
+      // Initialize entity if it has an init method
+      if (entity.init) {
+        (entity.init() as Promise<void>)?.catch((err) =>
+          this.logger.error(`Entity ${entity.id} async init failed`, err),
+        );
+      }
+
+      return entity;
     } else if (data.type in EntityTypes) {
       EntityClass = EntityTypes[data.type];
     } else {
@@ -960,6 +994,12 @@ export class Entities extends SystemBase implements IEntities {
           );
         }
         this.player = entity as Player;
+        // Emit PLAYER_JOINED for local player so PlayerSystem can track them
+        // (Previously only PLAYER_REGISTERED was emitted, breaking skill updates)
+        this.emitTypedEvent("PLAYER_JOINED", {
+          playerId: entity.id,
+          player: entity as PlayerLocal,
+        });
         this.emitTypedEvent("PLAYER_REGISTERED", { playerId: entity.id });
       }
     }

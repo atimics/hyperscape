@@ -26,6 +26,7 @@ import { WildernessDeathHandler } from "../death/WildernessDeathHandler";
 import { ZoneType, type TransactionContext } from "../../../types/death";
 import type { InventorySystem } from "../character/InventorySystem";
 import { getEntityPosition } from "../../../utils/game/EntityPositionUtils";
+import { STARTER_TOWNS } from "../../../data/world-areas";
 
 /**
  * Sanitize killedBy string to prevent injection attacks
@@ -41,7 +42,7 @@ function sanitizeKilledBy(killedBy: unknown): string {
   }
 
   // Normalize Unicode to NFKC form to prevent homograph attacks
-  let normalized = killedBy.normalize("NFKC");
+  const normalized = killedBy.normalize("NFKC");
 
   // Build sanitized string character by character
   let sanitized = "";
@@ -977,19 +978,22 @@ export class PlayerDeathSystem extends SystemBase {
       console.log(
         `[PlayerDeathSystem] No death data in deathLocations for ${playerId}, checking pendingGravestones...`,
       );
-      // For crash recovery, deathLocations might not have data but pendingGravestones might
     }
 
-    const DEATH_RESPAWN_POSITION =
-      COMBAT_CONSTANTS.DEATH.DEFAULT_RESPAWN_POSITION;
-    const DEATH_RESPAWN_TOWN = COMBAT_CONSTANTS.DEATH.DEFAULT_RESPAWN_TOWN;
+    // Get spawn position from manifest starter town (Central Haven at origin)
+    const centralHaven = STARTER_TOWNS["central_haven"];
+    const spawnPosition = centralHaven
+      ? {
+          x: (centralHaven.bounds.minX + centralHaven.bounds.maxX) / 2,
+          y: 0,
+          z: (centralHaven.bounds.minZ + centralHaven.bounds.maxZ) / 2,
+        }
+      : COMBAT_CONSTANTS.DEATH.DEFAULT_RESPAWN_POSITION;
+    const spawnTownName =
+      centralHaven?.name ?? COMBAT_CONSTANTS.DEATH.DEFAULT_RESPAWN_TOWN;
 
     // CRITICAL: Must await to ensure death lock is cleared before next death
-    await this.respawnPlayer(
-      playerId,
-      DEATH_RESPAWN_POSITION,
-      DEATH_RESPAWN_TOWN,
-    );
+    await this.respawnPlayer(playerId, spawnPosition, spawnTownName);
 
     const gravestoneData = this.pendingGravestones.get(playerId);
     if (gravestoneData && gravestoneData.items.length > 0) {

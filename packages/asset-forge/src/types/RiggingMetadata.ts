@@ -41,6 +41,4 @@ type _AnimationProperty = {
   advanced?: AnimationSet;
 };
 
-// ExtendedAssetMetadata is now simply AssetMetadata (which already includes RiggingMetadata)
-// This type alias is kept for backward compatibility
-export type ExtendedAssetMetadata = import("./AssetMetadata").AssetMetadata;
+// ExtendedAssetMetadata type alias is now defined in AssetMetadata.ts to avoid circular deps

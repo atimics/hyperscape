@@ -8,7 +8,6 @@
 
 import type { Entity } from "../../../entities/Entity";
 import type { Position3D } from "../../../types/core/base-types";
-import type { TileCoord } from "../../shared/movement/TileSystem";
 
 /**
  * Entity types that can be interacted with

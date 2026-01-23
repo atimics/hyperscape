@@ -76,6 +76,7 @@ function createTestMob(
   options: {
     health?: number;
     position?: { x: number; y: number; z: number };
+    combatRange?: number; // Combat range in tiles (1 = melee, >1 = ranged)
   } = {},
 ) {
   const health = {
@@ -83,6 +84,7 @@ function createTestMob(
     max: options.health ?? 100,
   };
   const position = options.position ?? { x: 1, y: 0, z: 1 };
+  const combatRange = options.combatRange ?? 1;
 
   return {
     id,
@@ -100,15 +102,15 @@ function createTestMob(
       attackPower: 10,
       defense: 10,
       stats: { attack: 10, strength: 10, defence: 10, hitpoints: health.max },
-      combatRange: 1,
+      combatRange,
       attackSpeedTicks: COMBAT_CONSTANTS.DEFAULT_ATTACK_SPEED_TICKS,
     }),
     getHealth: () => health.current,
     takeDamage: vi.fn((amount: number) => {
       health.current = Math.max(0, health.current - amount);
-      return health.current;
+      return health.current <= 0; // Return true if died
     }),
-    getCombatRange: () => 1,
+    getCombatRange: () => combatRange,
     isAttackable: () => health.current > 0,
     isDead: () => health.current <= 0,
     setServerEmote: vi.fn(),
@@ -120,16 +122,35 @@ function createTestMob(
  * Create a mock world with auto-retaliate support
  */
 function createTestWorld(options: { currentTick?: number } = {}) {
-  const players = new Map<string, ReturnType<typeof createTestPlayer>>();
   const eventHandlers = new Map<string, Function[]>();
   const emittedEvents: Array<{ event: string; data: unknown }> = [];
 
   let currentTick = options.currentTick ?? 100;
 
+  // Combined entities map - damage handlers validate attackers via entities.get()
   const entities = new Map<string, unknown>() as Map<string, unknown> & {
     players: Map<string, ReturnType<typeof createTestPlayer>>;
   };
-  entities.players = players;
+
+  // Auto-syncing player map
+  const playersMap = new Map<string, ReturnType<typeof createTestPlayer>>();
+  const players = {
+    set: (id: string, player: ReturnType<typeof createTestPlayer>) => {
+      playersMap.set(id, player);
+      entities.set(id, player); // Auto-sync to entities for validation
+      return players;
+    },
+    get: (id: string) => playersMap.get(id),
+    delete: (id: string) => {
+      entities.delete(id);
+      return playersMap.delete(id);
+    },
+    has: (id: string) => playersMap.has(id),
+  };
+  entities.players = players as unknown as Map<
+    string,
+    ReturnType<typeof createTestPlayer>
+  >;
 
   const mockEventBus = {
     emitEvent: vi.fn((type: string, data: unknown, _source?: string) => {
@@ -236,17 +257,19 @@ describe("OSRS Auto-Retaliate Movement", () => {
   });
 
   describe("auto-retaliate ON - movement replacement", () => {
-    it("emits COMBAT_FOLLOW_TARGET when player is attacked with auto-retaliate ON", () => {
-      // Player and mob must be within melee range (adjacent tiles) for combat to start
+    it("emits COMBAT_FOLLOW_TARGET when mob with extended range attacks and player needs to close distance", () => {
+      // Scenario: Mob has range 2, player has range 1
+      // Combat starts at distance 2, player needs to move closer to attack back
       const player = createTestPlayer("player1", {
         position: { x: 5.5, y: 0, z: 5.5 }, // Tile (5, 5)
         autoRetaliate: true, // ON
       });
 
-      // Mob attacks the player from adjacent tile (cardinal direction)
+      // Mob with extended combat range attacks from 2 tiles away
       const mob = createTestMob("mob1", {
-        position: { x: 5.5, y: 0, z: 6.5 }, // Tile (5, 6) - NORTH of player
+        position: { x: 5.5, y: 0, z: 7.5 }, // Tile (5, 7) - 2 tiles NORTH of player
         health: 100,
+        combatRange: 2, // Extended range allows attacking from 2 tiles
       });
 
       world.players.set("player1", player);
@@ -255,13 +278,13 @@ describe("OSRS Auto-Retaliate Movement", () => {
       // Clear any previous events
       world.emittedEvents.length = 0;
 
-      // Mob attacks player (initiating combat where player will retaliate)
+      // Mob attacks player from range 2 (valid for mob, but player needs to close in)
       combatSystem.startCombat("mob1", "player1", {
         attackerType: "mob",
         targetType: "player",
       });
 
-      // Should emit COMBAT_FOLLOW_TARGET for the player to chase the mob
+      // Should emit COMBAT_FOLLOW_TARGET since player (range 1) needs to close distance
       const followEvent = world.emittedEvents.find(
         (e) => e.event === EventType.COMBAT_FOLLOW_TARGET,
       );
@@ -274,15 +297,16 @@ describe("OSRS Auto-Retaliate Movement", () => {
     });
 
     it("includes correct attacker position in follow event", () => {
-      // Adjacent tiles for valid combat
+      // Mob with extended range attacks - player needs to close distance
       const player = createTestPlayer("player1", {
         position: { x: 5.5, y: 0, z: 5.5 }, // Tile (5, 5)
         autoRetaliate: true,
       });
 
       const mob = createTestMob("mob1", {
-        position: { x: 6.5, y: 3, z: 5.5 }, // Tile (6, 5) - EAST of player, different Y
+        position: { x: 7.5, y: 3, z: 5.5 }, // Tile (7, 5) - 2 tiles EAST of player
         health: 100,
+        combatRange: 2, // Extended range allows attacking from 2 tiles
       });
 
       world.players.set("player1", player);
@@ -299,17 +323,19 @@ describe("OSRS Auto-Retaliate Movement", () => {
       );
 
       expect(followEvent).toBeDefined();
+      // The targetPosition should be the attacker's actual position
+      // The movement system will handle pathfinding to get adjacent to this position
       expect(followEvent?.data).toMatchObject({
         targetPosition: {
-          x: 6.5,
+          x: 7.5, // Mob's actual X position
           y: 3,
           z: 5.5,
         },
       });
     });
 
-    it("emits follow event for player-vs-player combat with auto-retaliate ON", () => {
-      // Adjacent tiles for valid combat
+    it("does NOT emit follow event for player-vs-player when already in melee range", () => {
+      // When both players are adjacent, no follow event is needed - they can attack immediately
       const defender = createTestPlayer("defender", {
         position: { x: 5.5, y: 0, z: 5.5 }, // Tile (5, 5)
         autoRetaliate: true,
@@ -326,20 +352,19 @@ describe("OSRS Auto-Retaliate Movement", () => {
 
       world.emittedEvents.length = 0;
 
-      combatSystem.startCombat("attacker", "defender", {
+      const combatStarted = combatSystem.startCombat("attacker", "defender", {
         attackerType: "player",
         targetType: "player",
       });
 
+      expect(combatStarted).toBe(true);
+
+      // No follow event needed - both players are already in melee range
       const followEvent = world.emittedEvents.find(
         (e) => e.event === EventType.COMBAT_FOLLOW_TARGET,
       );
 
-      expect(followEvent).toBeDefined();
-      expect(followEvent?.data).toMatchObject({
-        playerId: "defender",
-        targetId: "attacker",
-      });
+      expect(followEvent).toBeUndefined();
     });
   });
 
@@ -406,22 +431,24 @@ describe("OSRS Auto-Retaliate Movement", () => {
   });
 
   describe("mob attacks player scenarios", () => {
-    it("NPC-initiated combat triggers auto-retaliate movement", () => {
+    it("NPC with extended range triggers auto-retaliate movement", () => {
       const player = createTestPlayer("player1", {
         position: { x: 5.5, y: 0, z: 5.5 },
         autoRetaliate: true,
       });
 
+      // Mob with combat range 2 attacks from 2 tiles away
       const mob = createTestMob("goblin", {
-        position: { x: 5.5, y: 0, z: 6.5 }, // Adjacent tile
+        position: { x: 5.5, y: 0, z: 7.5 }, // 2 tiles away
         health: 50,
+        combatRange: 2, // Extended range
       });
 
       world.players.set("player1", player);
       world.mobs.set("goblin", mob);
       world.emittedEvents.length = 0;
 
-      // Goblin aggros the player
+      // Goblin aggros the player from range 2
       combatSystem.startCombat("goblin", "player1", {
         attackerType: "mob",
         targetType: "player",
@@ -443,14 +470,17 @@ describe("OSRS Auto-Retaliate Movement", () => {
         autoRetaliate: true,
       });
 
+      // Both mobs have extended range to attack from distance
       const mob1 = createTestMob("goblin1", {
-        position: { x: 5.5, y: 0, z: 6.5 },
+        position: { x: 5.5, y: 0, z: 7.5 }, // 2 tiles away
         health: 50,
+        combatRange: 2,
       });
 
       const mob2 = createTestMob("goblin2", {
-        position: { x: 6.5, y: 0, z: 5.5 },
+        position: { x: 7.5, y: 0, z: 5.5 }, // 2 tiles away
         health: 50,
+        combatRange: 2,
       });
 
       world.players.set("player1", player);
@@ -477,9 +507,9 @@ describe("OSRS Auto-Retaliate Movement", () => {
   });
 
   describe("OSRS-accurate auto-retaliate interrupts movement", () => {
-    it("ALWAYS emits COMBAT_FOLLOW_TARGET when auto-retaliate triggers (even if moving)", () => {
+    it("emits COMBAT_FOLLOW_TARGET when mob with extended range attacks moving player", () => {
       // Player is actively moving (tileMovementActive = true)
-      // In OSRS, auto-retaliate INTERRUPTS movement and redirects player toward attacker
+      // Mob with range 2 attacks, player needs to close distance
       const player = createTestPlayer("player1", {
         position: { x: 5.5, y: 0, z: 5.5 },
         autoRetaliate: true,
@@ -489,8 +519,9 @@ describe("OSRS Auto-Retaliate Movement", () => {
         true;
 
       const mob = createTestMob("mob1", {
-        position: { x: 5.5, y: 0, z: 6.5 }, // Adjacent tile
+        position: { x: 5.5, y: 0, z: 7.5 }, // 2 tiles away
         health: 100,
+        combatRange: 2, // Extended range
       });
 
       world.players.set("player1", player);
@@ -504,7 +535,7 @@ describe("OSRS Auto-Retaliate Movement", () => {
         targetType: "player",
       });
 
-      // OSRS-ACCURATE: COMBAT_FOLLOW_TARGET should be emitted even when moving
+      // COMBAT_FOLLOW_TARGET should be emitted since player needs to close distance
       // This replaces the player's current movement destination with the attacker
       // Wiki: "the player's character walks/runs towards the monster attacking and fights back"
       const followEvent = world.emittedEvents.find(
@@ -528,7 +559,7 @@ describe("OSRS Auto-Retaliate Movement", () => {
         true;
 
       const mob = createTestMob("mob1", {
-        position: { x: 5.5, y: 0, z: 6.5 },
+        position: { x: 5.5, y: 0, z: 6.5 }, // Adjacent for valid combat start
         health: 100,
       });
 
@@ -550,7 +581,7 @@ describe("OSRS Auto-Retaliate Movement", () => {
       expect(combatStartedEvent).toBeDefined();
     });
 
-    it("emits COMBAT_FOLLOW_TARGET when player is standing still", () => {
+    it("emits COMBAT_FOLLOW_TARGET when mob with extended range attacks stationary player", () => {
       // Player starts stationary (tileMovementActive = false or undefined)
       const player = createTestPlayer("player1", {
         position: { x: 5.5, y: 0, z: 5.5 },
@@ -561,8 +592,9 @@ describe("OSRS Auto-Retaliate Movement", () => {
         false;
 
       const mob = createTestMob("mob1", {
-        position: { x: 5.5, y: 0, z: 6.5 },
+        position: { x: 5.5, y: 0, z: 7.5 }, // 2 tiles away
         health: 100,
+        combatRange: 2, // Extended range
       });
 
       world.players.set("player1", player);
@@ -575,7 +607,7 @@ describe("OSRS Auto-Retaliate Movement", () => {
         targetType: "player",
       });
 
-      // Should emit COMBAT_FOLLOW_TARGET to follow the attacker
+      // Should emit COMBAT_FOLLOW_TARGET since player needs to close distance
       const followEvent = world.emittedEvents.find(
         (e) => e.event === EventType.COMBAT_FOLLOW_TARGET,
       );

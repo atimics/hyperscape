@@ -27,6 +27,16 @@ import { StorePanel } from "./panels/StorePanel";
 import { DialoguePanel } from "./panels/DialoguePanel";
 import { SmeltingPanel } from "./panels/SmeltingPanel";
 import { SmithingPanel } from "./panels/SmithingPanel";
+import { SkillSelectModal } from "./panels/SkillSelectModal";
+import { QuestJournal } from "./panels/QuestJournal";
+import { QuestCompleteScreen } from "./panels/QuestCompleteScreen";
+import { QuestStartScreen } from "./panels/QuestStartScreen";
+import { TradePanel, TradeRequestModal } from "./panels/TradePanel";
+import type {
+  TradeOfferItem,
+  TradeRequestModalState,
+  TradeWindowState,
+} from "@hyperscape/shared";
 
 type InventorySlotViewItem = Pick<
   InventorySlotItem,
@@ -69,7 +79,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
   } | null>(null);
 
   // Track if local player is dead/dying to block loot window
-  const [isPlayerDead, setIsPlayerDead] = useState(false);
+  const [_isPlayerDead, setIsPlayerDead] = useState(false);
   const isPlayerDeadRef = useRef(false);
 
   // Bank panel state (RS3-style: placeholders are items with qty=0 in items array)
@@ -143,12 +153,78 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
     }>;
   } | null>(null);
 
+  // XP Lamp skill selection modal state
+  const [xpLampData, setXpLampData] = useState<{
+    visible: boolean;
+    itemId: string;
+    slot: number;
+    xpAmount: number;
+  } | null>(null);
+
+  // Quest Journal state
+  const [questJournalVisible, setQuestJournalVisible] = useState(false);
+
+  // Quest Complete screen state
+  const [questCompleteData, setQuestCompleteData] = useState<{
+    visible: boolean;
+    questName: string;
+    rewards: {
+      questPoints: number;
+      items: Array<{ itemId: string; quantity: number }>;
+      xp: Record<string, number>;
+    };
+  } | null>(null);
+
+  // Quest Start confirmation screen state
+  const [questStartData, setQuestStartData] = useState<{
+    visible: boolean;
+    questId: string;
+    questName: string;
+    description: string;
+    difficulty: string;
+    requirements: {
+      quests: string[];
+      skills: Record<string, number>;
+      items: string[];
+    };
+    rewards: {
+      questPoints: number;
+      items: Array<{ itemId: string; quantity: number }>;
+      xp: Record<string, number>;
+    };
+  } | null>(null);
+
+  // Trade panel state
+  const [tradeData, setTradeData] = useState<TradeWindowState>({
+    isOpen: false,
+    tradeId: null,
+    partner: null,
+    myOffer: [],
+    myAccepted: false,
+    theirOffer: [],
+    theirAccepted: false,
+  });
+
+  // Trade request modal state
+  const [tradeRequestModal, setTradeRequestModal] =
+    useState<TradeRequestModalState>({
+      visible: false,
+      tradeId: null,
+      fromPlayer: null,
+    });
+
   // Update chat context whenever windows open/close
   useEffect(() => {
     setHasOpenWindows(openWindows.size > 0);
   }, [openWindows, setHasOpenWindows]);
 
   const toggleWindow = (windowId: string) => {
+    // Special handling for quest journal (uses modal instead of window)
+    if (windowId === "quests") {
+      setQuestJournalVisible((prev) => !prev);
+      return;
+    }
+
     setOpenWindows((prev) => {
       const next = new Set(prev);
       if (next.has(windowId)) {
@@ -398,6 +474,127 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
           setSmithingData(null);
         }
       }
+      // Handle trade request modal
+      if (update.component === "tradeRequest") {
+        const data = update.data as {
+          visible: boolean;
+          tradeId: string | null;
+          fromPlayer: { id: string; name: string; level: number } | null;
+        };
+        setTradeRequestModal({
+          visible: data.visible,
+          tradeId: data.tradeId,
+          fromPlayer: data.fromPlayer
+            ? {
+                id: data.fromPlayer.id as import("@hyperscape/shared").PlayerID,
+                name: data.fromPlayer.name,
+                level: data.fromPlayer.level,
+              }
+            : null,
+        });
+      }
+      // Handle trade window open
+      if (update.component === "trade") {
+        const data = update.data as {
+          isOpen: boolean;
+          tradeId: string;
+          partner: { id: string; name: string; level: number };
+          myOffer: TradeOfferItem[];
+          myAccepted: boolean;
+          theirOffer: TradeOfferItem[];
+          theirAccepted: boolean;
+        };
+        // Close the request modal when trade starts
+        setTradeRequestModal({
+          visible: false,
+          tradeId: null,
+          fromPlayer: null,
+        });
+        setTradeData({
+          isOpen: data.isOpen,
+          tradeId: data.tradeId,
+          partner: {
+            id: data.partner.id as import("@hyperscape/shared").PlayerID,
+            name: data.partner.name,
+            level: data.partner.level,
+          },
+          myOffer: data.myOffer,
+          myAccepted: data.myAccepted,
+          theirOffer: data.theirOffer,
+          theirAccepted: data.theirAccepted,
+        });
+      }
+      // Handle trade state updates
+      if (update.component === "tradeUpdate") {
+        const data = update.data as {
+          tradeId: string;
+          myOffer: TradeOfferItem[];
+          myAccepted: boolean;
+          theirOffer: TradeOfferItem[];
+          theirAccepted: boolean;
+        };
+        // Only update if tradeId matches current trade (prevents stale updates)
+        setTradeData((prev) => {
+          if (prev.tradeId !== data.tradeId) {
+            // Ignore updates for different/old trade sessions
+            console.debug(
+              "[Sidebar] Ignoring trade update for different session:",
+              data.tradeId,
+              "current:",
+              prev.tradeId,
+            );
+            return prev;
+          }
+          return {
+            ...prev,
+            myOffer: data.myOffer,
+            myAccepted: data.myAccepted,
+            theirOffer: data.theirOffer,
+            theirAccepted: data.theirAccepted,
+          };
+        });
+      }
+      // Handle trade close
+      if (update.component === "tradeClose") {
+        const data = update.data as {
+          tradeId?: string;
+          reason?: string;
+          message?: string;
+        };
+        // Close trade panel - validate tradeId if provided
+        setTradeData((prev) => {
+          if (data.tradeId && prev.tradeId && prev.tradeId !== data.tradeId) {
+            // Ignore close for different trade session
+            console.debug(
+              "[Sidebar] Ignoring trade close for different session:",
+              data.tradeId,
+              "current:",
+              prev.tradeId,
+            );
+            return prev;
+          }
+          return {
+            isOpen: false,
+            tradeId: null,
+            partner: null,
+            myOffer: [],
+            myAccepted: false,
+            theirOffer: [],
+            theirAccepted: false,
+          };
+        });
+        // Also close trade request modal if it matches
+        setTradeRequestModal((prev) => {
+          if (data.tradeId && prev.tradeId && prev.tradeId !== data.tradeId) {
+            return prev;
+          }
+          return {
+            visible: false,
+            tradeId: null,
+            fromPlayer: null,
+          };
+        });
+      }
     };
     const onInventory = (raw: unknown) => {
       const data = raw as {
@@ -445,13 +642,12 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
       }
 
       // Get the gravestone entity to retrieve its name
-      const gravestoneEntity = world.entities?.get?.(data.corpseId) as
+      const gravestoneEntity = world.entities?.get?.(data.corpseId);
+      const entityData = gravestoneEntity as unknown as
         | { name?: string; config?: { name?: string } }
         | undefined;
       const corpseName =
-        gravestoneEntity?.name ||
-        gravestoneEntity?.config?.name ||
-        "Gravestone";
+        entityData?.name || entityData?.config?.name || "Gravestone";
 
       // Open loot window with corpse items
       setLootWindowData({
@@ -489,6 +685,80 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
     world.on(EventType.SKILLS_UPDATED, onSkillsUpdate);
     world.on(EventType.CORPSE_CLICK, onCorpseClick);
     world.on(EventType.PLAYER_SET_DEAD, onPlayerDeath);
+
+    // XP Lamp skill selection modal
+    const onXpLampUseRequest = (raw: unknown) => {
+      const data = raw as {
+        playerId: string;
+        itemId: string;
+        slot: number;
+        xpAmount: number;
+      };
+      setXpLampData({
+        visible: true,
+        itemId: data.itemId,
+        slot: data.slot,
+        xpAmount: data.xpAmount,
+      });
+    };
+    world.on(EventType.XP_LAMP_USE_REQUEST, onXpLampUseRequest);
+
+    // Quest completion screen
+    const onQuestCompleted = (raw: unknown) => {
+      const data = raw as {
+        playerId: string;
+        questId: string;
+        questName: string;
+        rewards: {
+          questPoints: number;
+          items: Array<{ itemId: string; quantity: number }>;
+          xp: Record<string, number>;
+        };
+      };
+      // Only show for local player
+      const localId = world.entities?.player?.id;
+      if (localId && data.playerId === localId) {
+        setQuestCompleteData({
+          visible: true,
+          questName: data.questName,
+          rewards: data.rewards,
+        });
+      }
+    };
+    world.on(EventType.QUEST_COMPLETED, onQuestCompleted);
+
+    // Listen for quest start confirmation (show quest accept screen)
+    const onQuestStartConfirm = (data: {
+      playerId: string;
+      questId: string;
+      questName: string;
+      description: string;
+      difficulty: string;
+      requirements: {
+        quests: string[];
+        skills: Record<string, number>;
+        items: string[];
+      };
+      rewards: {
+        questPoints: number;
+        items: Array<{ itemId: string; quantity: number }>;
+        xp: Record<string, number>;
+      };
+    }) => {
+      const localId = world.entities?.player?.id;
+      if (localId && data.playerId === localId) {
+        setQuestStartData({
+          visible: true,
+          questId: data.questId,
+          questName: data.questName,
+          description: data.description,
+          difficulty: data.difficulty,
+          requirements: data.requirements,
+          rewards: data.rewards,
+        });
+      }
+    };
+    world.on(EventType.QUEST_START_CONFIRM, onQuestStartConfirm);
 
     const requestInitial = () => {
       // For spectator/embedded mode, use characterId from config
@@ -568,6 +838,9 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
       world.off(EventType.SKILLS_UPDATED, onSkillsUpdate);
       world.off(EventType.CORPSE_CLICK, onCorpseClick);
       world.off(EventType.PLAYER_SET_DEAD, onPlayerDeath);
+      world.off(EventType.XP_LAMP_USE_REQUEST, onXpLampUseRequest);
+      world.off(EventType.QUEST_COMPLETED, onQuestCompleted);
+      world.off(EventType.QUEST_START_CONFIRM, onQuestStartConfirm);
     };
   }, []);
 
@@ -587,6 +860,7 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
     { windowId: "skills", icon: "🧠", label: "Skills" },
     { windowId: "inventory", icon: "🎒", label: "Inventory" },
     { windowId: "equipment", icon: "🛡️", label: "Equipment" },
+    { windowId: "quests", icon: "📜", label: "Quests" },
     { windowId: "prefs", icon: "⚙️", label: "Settings" },
     { windowId: "account", icon: "👤", label: "Account" },
   ] as const;
@@ -686,7 +960,11 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
                   <MenuButton
                     icon={button.icon}
                     label={button.label}
-                    active={openWindows.has(button.windowId)}
+                    active={
+                      button.windowId === "quests"
+                        ? questJournalVisible
+                        : openWindows.has(button.windowId)
+                    }
                     onClick={() => toggleWindow(button.windowId)}
                     size={radialButtonSize}
                     circular={true}
@@ -932,6 +1210,153 @@ export function Sidebar({ world, ui: _ui }: SidebarProps) {
             onClose={() => setSmithingData(null)}
           />
         )}
+
+        {/* XP Lamp Skill Selection Modal */}
+        {xpLampData?.visible && (
+          <SkillSelectModal
+            visible={xpLampData.visible}
+            world={world}
+            stats={playerStats}
+            xpAmount={xpLampData.xpAmount}
+            itemId={xpLampData.itemId}
+            slot={xpLampData.slot}
+            onClose={() => setXpLampData(null)}
+          />
+        )}
+
+        {/* Quest Journal */}
+        <QuestJournal
+          world={world}
+          visible={questJournalVisible}
+          onClose={() => setQuestJournalVisible(false)}
+        />
+
+        {/* Quest Complete Screen */}
+        {questCompleteData?.visible && (
+          <QuestCompleteScreen
+            visible={questCompleteData.visible}
+            questName={questCompleteData.questName}
+            rewards={questCompleteData.rewards}
+            world={world}
+            onClose={() => setQuestCompleteData(null)}
+          />
+        )}
+
+        {/* Quest Start Confirmation Screen */}
+        {questStartData?.visible && (
+          <QuestStartScreen
+            visible={questStartData.visible}
+            questId={questStartData.questId}
+            questName={questStartData.questName}
+            description={questStartData.description}
+            difficulty={questStartData.difficulty}
+            requirements={questStartData.requirements}
+            rewards={questStartData.rewards}
+            onAccept={() => {
+              // Send quest accept to server
+              if (world.network?.send) {
+                world.network.send("questAccept", {
+                  questId: questStartData.questId,
+                });
+              }
+              setQuestStartData(null);
+            }}
+            onDecline={() => {
+              // Just close the screen
+              setQuestStartData(null);
+            }}
+          />
+        )}
+
+        {/* Trade Request Modal */}
+        <TradeRequestModal
+          state={tradeRequestModal}
+          onAccept={() => {
+            if (tradeRequestModal.tradeId) {
+              const network = world.network as unknown as {
+                respondToTradeRequest: (
+                  tradeId: string,
+                  accept: boolean,
+                ) => void;
+              };
+              network.respondToTradeRequest(tradeRequestModal.tradeId, true);
+            }
+          }}
+          onDecline={() => {
+            if (tradeRequestModal.tradeId) {
+              const network = world.network as unknown as {
+                respondToTradeRequest: (
+                  tradeId: string,
+                  accept: boolean,
+                ) => void;
+              };
+              network.respondToTradeRequest(tradeRequestModal.tradeId, false);
+            }
+            setTradeRequestModal({
+              visible: false,
+              tradeId: null,
+              fromPlayer: null,
+            });
+          }}
+        />
+
+        {/* Trade Panel */}
+        <TradePanel
+          state={tradeData}
+          inventory={inventory}
+          onAddItem={(inventorySlot, quantity) => {
+            if (tradeData.tradeId) {
+              const network = world.network as unknown as {
+                addItemToTrade: (
+                  tradeId: string,
+                  inventorySlot: number,
+                  quantity?: number,
+                ) => void;
+              };
+              network.addItemToTrade(
+                tradeData.tradeId,
+                inventorySlot,
+                quantity,
+              );
+            }
+          }}
+          onRemoveItem={(tradeSlot) => {
+            if (tradeData.tradeId) {
+              const network = world.network as unknown as {
+                removeItemFromTrade: (
+                  tradeId: string,
+                  tradeSlot: number,
+                ) => void;
+              };
+              network.removeItemFromTrade(tradeData.tradeId, tradeSlot);
+            }
+          }}
+          onAccept={() => {
+            if (tradeData.tradeId) {
+              const network = world.network as unknown as {
+                acceptTrade: (tradeId: string) => void;
+              };
+              network.acceptTrade(tradeData.tradeId);
+            }
+          }}
+          onCancel={() => {
+            if (tradeData.tradeId) {
+              const network = world.network as unknown as {
+                cancelTrade: (tradeId: string) => void;
+              };
+              network.cancelTrade(tradeData.tradeId);
+            }
+            setTradeData({
+              isOpen: false,
+              tradeId: null,
+              partner: null,
+              myOffer: [],
+              myAccepted: false,
+              theirOffer: [],
+              theirAccepted: false,
+            });
+          }}
+        />
       </div>
     </HintProvider>
   );

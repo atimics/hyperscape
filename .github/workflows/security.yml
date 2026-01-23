@@ -2,12 +2,16 @@ name: Security
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, staging, develop]
   pull_request:
-    branches: [main, develop]
+    branches: [main, staging, develop]
   schedule:
     # Run security scans weekly on Monday at 9am UTC
     - cron: '0 9 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   audit:
@@ -23,7 +27,7 @@ jobs:
           bun-version: latest
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Run security audit
         run: bun audit || true

@@ -20,9 +20,10 @@
  */
 
 import type { World } from "@hyperscape/shared";
+import { STARTER_TOWNS } from "@hyperscape/shared";
 import type { SystemDatabase, SpawnData } from "../../shared/types";
 
-// Default spawn point (safe height above terrain)
+// Default spawn point (fallback if manifest unavailable)
 const DEFAULT_SPAWN = '{ "position": [0, 50, 0], "quaternion": [0, 0, 0, 1] }';
 
 /**
@@ -43,28 +44,32 @@ export class InitializationManager {
   ) {}
 
   /**
-   * Load spawn point configuration from database
+   * Load spawn point configuration
    *
-   * Queries the config table for spawn point data and returns parsed result.
-   * Falls back to default spawn if not found or invalid.
+   * Uses Central Haven from manifest (starter town at world origin).
    *
    * @returns Spawn point configuration
    */
   async loadSpawnPoint(): Promise<SpawnData> {
-    try {
-      const spawnRow = (await this.db("config")
-        .where("key", "spawn")
-        .first()) as { value?: string } | undefined;
-
-      const spawnValue = spawnRow?.value || DEFAULT_SPAWN;
-      return JSON.parse(spawnValue) as SpawnData;
-    } catch (err) {
-      console.error(
-        "[InitializationManager] Error loading spawn point, using default:",
-        err,
+    // Use manifest starter town (Central Haven at origin)
+    const centralHaven = STARTER_TOWNS["central_haven"];
+    if (centralHaven) {
+      const centerX = (centralHaven.bounds.minX + centralHaven.bounds.maxX) / 2;
+      const centerZ = (centralHaven.bounds.minZ + centralHaven.bounds.maxZ) / 2;
+      console.log(
+        `[InitializationManager] Using starter town: ${centralHaven.name} at (${centerX}, ${centerZ})`,
       );
-      return JSON.parse(DEFAULT_SPAWN) as SpawnData;
+      return {
+        position: [centerX, 0, centerZ], // Y gets grounded to terrain later
+        quaternion: [0, 0, 0, 1],
+      };
     }
+
+    // Fallback to default spawn at origin
+    console.log(
+      "[InitializationManager] Starter town not found, using default spawn",
+    );
+    return JSON.parse(DEFAULT_SPAWN) as SpawnData;
   }
 
   /**

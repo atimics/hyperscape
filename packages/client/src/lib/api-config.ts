@@ -5,9 +5,9 @@
  * URLs are set via Vite's define feature in vite.config.ts.
  *
  * In production builds (vite build):
- *   - GAME_API_URL = https://api.hyperscape.lol
- *   - GAME_WS_URL = wss://api.hyperscape.lol/ws
- *   - CDN_URL = https://d20g7vd4m53hpb.cloudfront.net
+ *   - GAME_API_URL = https://hyperscape-production.up.railway.app
+ *   - GAME_WS_URL = wss://hyperscape-production.up.railway.app/ws
+ *   - CDN_URL = (set via PUBLIC_CDN_URL env var)
  *
  * In development (vite dev):
  *   - GAME_API_URL = http://localhost:5555
@@ -16,14 +16,17 @@
  */
 
 // =============================================================================
-// ElizaOS AI Agent Server
+// ElizaOS AI Agent Server (embedded in Hyperscape server)
 // =============================================================================
+// ElizaOS agent routes are now served directly from the Hyperscape game server.
+// No separate ElizaOS process needed - routes are at /api/agents, /api/agents/:id, etc.
 
 export const ELIZAOS_URL =
   import.meta.env.PUBLIC_ELIZAOS_URL ||
+  import.meta.env.PUBLIC_API_URL ||
   (import.meta.env.PROD
-    ? "https://api.hyperscape.lol"
-    : "http://localhost:4001");
+    ? "https://hyperscape-production.up.railway.app"
+    : "http://localhost:5555");
 
 export const ELIZAOS_API = `${ELIZAOS_URL}/api`;
 

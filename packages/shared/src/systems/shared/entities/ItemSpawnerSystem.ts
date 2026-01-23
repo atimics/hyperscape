@@ -122,11 +122,8 @@ export class ItemSpawnerSystem extends SystemBase {
       // Spawn world treasure items (equipment and resources)
       await this.spawnTreasureItems();
 
-      // Spawn chest loot items (valuable equipment)
-      await this.spawnChestLootItems();
-
-      // Spawn resource items
-      await this.spawnResourceItems();
+      // Note: spawnChestLootItems() and spawnResourceItems() removed
+      // These were hardcoded test spawns - items now come from loot drops only
     };
 
     // Start checking after a small initial delay
@@ -140,11 +137,8 @@ export class ItemSpawnerSystem extends SystemBase {
     // Spawn world treasure items (equipment and resources)
     await this.spawnTreasureItems();
 
-    // Spawn chest loot items (valuable equipment)
-    await this.spawnChestLootItems();
-
-    // Spawn resource items (logs, fish in appropriate locations)
-    await this.spawnResourceItems();
+    // Note: spawnChestLootItems() and spawnResourceItems() removed
+    // These were hardcoded test spawns - items now come from loot drops only
   }
 
   private async spawnTreasureItems(): Promise<void> {

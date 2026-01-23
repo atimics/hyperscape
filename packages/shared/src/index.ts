@@ -155,6 +155,9 @@ export {
   removeRole,
   hasRole,
   serializeRoles,
+  hasModPermission,
+  hasAdminPermission,
+  isProtectedFromModAction,
   uuid,
 } from "./utils/index";
 
@@ -245,6 +248,36 @@ export type {
   PlayerWithPrayerStats,
 } from "./types/game/prayer-types";
 
+// Export trade types
+export { TRADE_CONSTANTS } from "./types/game/trade-types";
+export type {
+  TradeStatus,
+  TradeCancelReason,
+  TradeOfferItem,
+  TradeParticipant,
+  TradeSession,
+  TradeRequestPayload,
+  TradeRequestRespondPayload,
+  TradeAddItemPayload,
+  TradeRemoveItemPayload,
+  TradeSetQuantityPayload,
+  TradeAcceptPayload,
+  TradeCancelAcceptPayload,
+  TradeCancelPayload,
+  TradeIncomingPayload,
+  TradeStartedPayload,
+  TradeOfferView,
+  TradeUpdatedPayload,
+  TradeCompletedPayload,
+  TradeCancelledPayload,
+  TradeErrorPayload,
+  TradeWindowState,
+  TradeRequestModalState,
+} from "./types/game/trade-types";
+
+// Export quest type guards for server validation
+export { isValidQuestId } from "./types/game/quest-types";
+
 // Export item helpers used by server network snapshot
 export {
   getItem,
@@ -284,7 +317,7 @@ export type {
 } from "./data/skill-unlocks";
 
 // Export world area data for server use
-export { ALL_WORLD_AREAS } from "./data/world-areas";
+export { ALL_WORLD_AREAS, STARTER_TOWNS } from "./data/world-areas";
 
 // Export systems (organized by platform for tree-shaking)
 export { Entities } from "./systems/shared";
@@ -311,6 +344,7 @@ export { PrayerSystem } from "./systems/shared/character/PrayerSystem";
 export { LootSystem } from "./systems/shared/economy/LootSystem";
 export { StoreSystem } from "./systems/shared/economy/StoreSystem";
 export { ResourceSystem } from "./systems/shared/entities/ResourceSystem";
+export { QuestSystem } from "./systems/shared/progression/QuestSystem";
 export {
   FOOTPRINT_SIZES,
   resolveFootprint,
@@ -347,9 +381,6 @@ export {
   createRenderer,
   configureRenderer,
   configureShadowMaps,
-  isWebGPURenderer,
-  getRendererBackend,
-  detectRenderingCapabilities,
   type UniversalRenderer,
   type RendererOptions,
 } from "./utils/rendering/RendererFactory";
@@ -626,7 +657,7 @@ export type {
 export type { LoaderResult } from "./types/index";
 export type { ComponentDefinition, EntityData } from "./types/index";
 export type { Entities as EntitiesInterface } from "./types/index";
-export type { SystemLogger } from "./utils/Logger";
+export { SystemLogger } from "./utils/Logger";
 
 // Export network/system interface types
 export type {
@@ -714,7 +745,7 @@ export type {
 // Export event payloads namespace
 export * as Payloads from "./types/events";
 // Export specific event payload types for convenience
-export type { SkillsLevelUpEvent } from "./types/events";
+export type { SkillsLevelUpEvent, EquipmentSyncData } from "./types/events";
 
 // Export additional core types
 export type { SkillsData } from "./types/systems/system-interfaces";
@@ -820,6 +851,10 @@ export { CircularSpawnArea } from "./utils/physics/CircularSpawnArea";
 // Export terrain system
 export { TerrainSystem } from "./systems/shared";
 
+// Export town and road systems
+export { TownSystem } from "./systems/shared";
+export { RoadNetworkSystem } from "./systems/shared";
+
 // Export tile movement system (RuneScape-style)
 export {
   // Constants
@@ -909,6 +944,9 @@ export {
 // Combat constants (tick-based timing, ranges, etc.)
 export { COMBAT_CONSTANTS } from "./constants/CombatConstants";
 
+// Home teleport constants (cooldown, cast time)
+export { HOME_TELEPORT_CONSTANTS } from "./constants/GameConstants";
+
 // Gathering constants (tick-based timing, ranges, etc.)
 export { GATHERING_CONSTANTS } from "./constants/GatheringConstants";
 
@@ -982,3 +1020,13 @@ export type {
   BankDepositEquipmentRequest,
   BankDepositEquipmentResponse,
 } from "./types/bank-equipment";
+
+// Load testing utilities
+export { LoadTestBot, BotPoolManager } from "./testing";
+export type {
+  LoadTestBehavior,
+  LoadTestBotConfig,
+  LoadTestBotMetrics,
+  BotPoolConfig,
+  AggregatedMetrics,
+} from "./testing";

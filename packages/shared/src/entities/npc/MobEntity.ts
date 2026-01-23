@@ -98,6 +98,7 @@ import {
   AIStateMachine,
   type AIStateContext,
 } from "../managers/AIStateMachine";
+import { generateKillToken } from "../../utils/game/KillTokenUtils";
 import { RespawnManager } from "../managers/RespawnManager";
 import type {
   HealthBars as HealthBarsSystem,
@@ -2382,12 +2383,18 @@ export class MobEntity extends CombatantEntity {
     // Emit death event with last attacker
     const lastAttackerId = this.combatManager.getLastAttackerId();
     if (lastAttackerId) {
+      // Generate kill token for anti-spoof validation
+      const timestamp = Date.now();
+      const killToken = generateKillToken(this.id, lastAttackerId, timestamp);
+
       this.world.emit(EventType.NPC_DIED, {
         mobId: this.id,
         mobType: this.config.mobType,
         level: this.config.level,
         killedBy: lastAttackerId,
         position: this.getPosition(),
+        timestamp,
+        killToken,
       });
 
       // Emit COMBAT_KILL event for SkillsSystem to grant combat XP

@@ -14,3 +14,6 @@ export const EMOTES_LIST: Array<{
   duration: number;
   description: string;
 }> = [];
+
+/** Service name for HyperscapeService */
+export const HYPERSCAPE_SERVICE_NAME = "hyperscape";

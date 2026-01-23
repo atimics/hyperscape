@@ -19,7 +19,6 @@
 
 import {
   type PrayerDefinition,
-  type PrayerManifest,
   type PrayerBonuses,
   type PrayerCategory,
   isValidPrayerId,

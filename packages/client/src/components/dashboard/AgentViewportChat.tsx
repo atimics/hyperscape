@@ -2,7 +2,7 @@ import { GAME_API_URL } from "@/lib/api-config";
 import { usePrivy } from "@privy-io/react-auth";
 import { Bot, Mic, Send } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
-import { Agent } from "../../screens/DashboardScreen";
+import type { Agent } from "./types";
 import { QuickActionMenu } from "./QuickActionMenu";
 import { AgentThoughtsOverlay } from "./AgentThoughtsOverlay";
 
@@ -30,7 +30,8 @@ export const AgentViewportChat: React.FC<AgentViewportChatProps> = ({
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isMountedRef = useRef(true);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+  // eslint-disable-next-line no-undef
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   // Use Privy hook to get fresh access token (not stale localStorage token)
   const { getAccessToken, user } = usePrivy();

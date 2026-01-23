@@ -444,12 +444,6 @@ export function registerEventHandlers(
             text: chatData.text,
             source: "hyperscape_chat",
           },
-          metadata: {
-            type: "message",
-            senderName: chatData.from,
-            senderId: chatData.fromId,
-            timestamp: chatData.timestamp,
-          },
         },
         "messages",
         false,

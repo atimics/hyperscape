@@ -20,7 +20,7 @@ import { PrayerSystem } from "../character/PrayerSystem";
 import { createEntityID } from "../../../utils/IdentifierUtils";
 import { EntityManager } from "..";
 import { MobNPCSystem } from "..";
-import { SystemBase } from "..";
+import { SystemBase } from "../infrastructure/SystemBase";
 import { tilesWithinMeleeRange, worldToTile } from "../movement/TileSystem";
 import { tilePool, PooledTile } from "../../../utils/pools/TilePool";
 import { CombatAnimationManager } from "./CombatAnimationManager";

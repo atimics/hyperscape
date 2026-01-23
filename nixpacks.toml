@@ -1,0 +1,50 @@
+# Nixpacks configuration for Railway deployment
+# This file configures how Railway builds the Hyperscape game server (API only)
+#
+# ARCHITECTURE:
+# - Frontend: Cloudflare Pages (hyperscape.club)
+# - Server/API: Railway (hyperscape-production.up.railway.app)
+# - Assets/CDN: Cloudflare R2
+
+[phases.setup]
+# Install system dependencies needed for native modules (canvas, better-sqlite3)
+aptPkgs = [
+  "python3",
+  "make",
+  "g++",
+  "pkg-config",
+  "libcairo2-dev",
+  "libpango1.0-dev",
+  "libjpeg-dev",
+  "libgif-dev",
+  "librsvg2-dev",
+  "ca-certificates"
+]
+
+[phases.install]
+# Use bun for package installation
+cmds = ["bun install"]
+
+[phases.build]
+# Build only shared and server packages (frontend is on Cloudflare Pages)
+dependsOn = ["install"]
+cmds = [
+  "echo '=== Building shared package ==='",
+  "bun run build:shared",
+  "echo '=== Building server package ==='",
+  "bun run build:server",
+  "echo '=== Creating manifests directory ==='",
+  "mkdir -p packages/server/world/assets/manifests",
+  "echo '=== Build complete ==='",
+]
+
+[start]
+cmd = "cd packages/server && bun dist/index.js"
+
+[variables]
+# Skip asset download in CI - assets are served from Cloudflare R2 CDN
+CI = "true"
+SKIP_ASSETS = "true"
+NODE_ENV = "production"
+# Disable Turbo caching to force fresh builds
+TURBO_FORCE = "true"

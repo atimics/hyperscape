@@ -6,7 +6,7 @@
  * Both context menu selections and left-click primary actions route through here.
  */
 
-import { EventType, uuid, getItem } from "@hyperscape/shared";
+import { EventType, uuid, getItem, type ItemData } from "@hyperscape/shared";
 import type { ClientWorld } from "../../types";
 
 export interface InventoryActionContext {
@@ -106,6 +106,28 @@ export function dispatchInventoryAction(
         slot,
       });
       return { success: true };
+
+    case "rub": {
+      // Handle XP lamp usage - check if item has useEffect with type "xp_lamp"
+      const lampData = getItem(itemId) as ItemData & {
+        useEffect?: { type: string; xpAmount: number };
+      };
+      if (lampData?.useEffect?.type === "xp_lamp") {
+        // Emit event to open skill selection modal
+        world.emit(EventType.XP_LAMP_USE_REQUEST, {
+          playerId: localPlayer.id,
+          itemId,
+          slot,
+          xpAmount: lampData.useEffect.xpAmount,
+        });
+        return { success: true };
+      }
+      // Fall through to default if not an XP lamp
+      console.warn(
+        `[InventoryActionDispatcher] Rub action on non-lamp item: ${itemId}`,
+      );
+      return { success: false, message: "Cannot rub this item" };
+    }
 
     case "cancel":
       // Intentional no-op - menu already closed by EntityContextMenu

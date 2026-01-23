@@ -29,6 +29,10 @@ import {
   StarterChestEntity,
   type StarterChestEntityConfig,
 } from "../../../entities/world/StarterChestEntity";
+import {
+  RangeEntity,
+  type RangeEntityConfig,
+} from "../../../entities/world/RangeEntity";
 import { MobEntity } from "../../../entities/npc/MobEntity";
 import { NPCEntity } from "../../../entities/npc/NPCEntity";
 import { ResourceEntity } from "../../../entities/world/ResourceEntity";
@@ -252,10 +256,12 @@ export class EntityManager extends SystemBase {
   }
 
   /**
-   * Start method - called after init, spawns world objects
+   * Start method - called after init
+   * Note: Stations are now spawned by StationSpawnerSystem from world-areas.json
    */
   async start(): Promise<void> {
     // Server spawns static world objects (banks, etc.)
+    // Note: Some stations are also spawned by StationSpawnerSystem from world-areas.json
     if (this.world.isServer) {
       await this.spawnWorldObjects();
     }
@@ -530,6 +536,10 @@ export class EntityManager extends SystemBase {
           this.world,
           config as StarterChestEntityConfig,
         );
+        break;
+      case EntityType.RANGE:
+      case "range":
+        entity = new RangeEntity(this.world, config as RangeEntityConfig);
         break;
       default:
         throw new Error(`[EntityManager] Unknown entity type: ${config.type}`);

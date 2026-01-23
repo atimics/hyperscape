@@ -64,8 +64,10 @@ import { Stage } from "../systems/shared";
 
 import THREE from "../extras/three/three";
 
-// Terrain, vegetation, and physics
+// Terrain, vegetation, towns, roads, and physics
 import { TerrainSystem } from "../systems/shared";
+import { TownSystem } from "../systems/shared";
+import { RoadNetworkSystem } from "../systems/shared";
 import { VegetationSystem } from "../systems/shared";
 import { Physics } from "../systems/shared";
 
@@ -173,6 +175,16 @@ export function createClientWorld() {
   // Renders heightmap-based terrain with LOD
 
   world.register("terrain", TerrainSystem);
+
+  // ============================================================================
+  // TOWN AND ROAD SYSTEMS
+  // ============================================================================
+  // Procedural town generation with flatness-based placement
+  // Road network connects towns using A* pathfinding with terrain costs
+  // Roads are rendered via vertex coloring in the terrain shader
+
+  world.register("towns", TownSystem);
+  world.register("roads", RoadNetworkSystem);
 
   // ============================================================================
   // VEGETATION SYSTEM

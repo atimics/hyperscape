@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Clock, Activity, MessageSquare, Zap, AlertCircle } from "lucide-react";
-import { Agent } from "../../screens/DashboardScreen";
+import type { Agent } from "./types";
 import { ELIZAOS_API } from "@/lib/api-config";
 
 interface TimelineEvent {

@@ -99,7 +99,6 @@ import {
   EquipmentSlotName,
   PlayerEquipment as PlayerEquipment,
   Item,
-  WeaponType,
 } from "../../../types/core/core";
 import type { PlayerWithEquipmentSupport } from "../../../types/rendering/ui";
 
@@ -1213,6 +1212,7 @@ export class EquipmentSystem extends SystemBase {
         ranged: cachedSkills.ranged?.level || 1,
         constitution: cachedSkills.constitution?.level || 10,
         woodcutting: cachedSkills.woodcutting?.level || 1,
+        mining: cachedSkills.mining?.level || 1,
         fishing: cachedSkills.fishing?.level || 1,
         firemaking: cachedSkills.firemaking?.level || 1,
         cooking: cachedSkills.cooking?.level || 1,
@@ -1226,6 +1226,7 @@ export class EquipmentSystem extends SystemBase {
       ranged: 1,
       constitution: 10,
       woodcutting: 1,
+      mining: 1,
       fishing: 1,
       firemaking: 1,
       cooking: 1,

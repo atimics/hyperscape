@@ -11,6 +11,7 @@ import { AgentDynamicPanel } from "../components/dashboard/AgentDynamicPanel";
 import { AgentRuns } from "../components/dashboard/AgentRuns";
 import { SystemStatus } from "../components/dashboard/SystemStatus";
 import { ViewportConfirmModal } from "../components/dashboard/ViewportConfirmModal";
+import type { Agent, AgentPanel } from "../components/dashboard/types";
 import {
   MessageSquare,
   Settings,
@@ -25,26 +26,8 @@ import {
 import { ELIZAOS_API } from "@/lib/api-config";
 import "./DashboardScreen.css";
 
-export interface Agent {
-  id: string;
-  name: string;
-  characterName?: string;
-  bio?: string;
-  status: "active" | "inactive" | string;
-  settings?: {
-    accountId?: string;
-    characterType?: string;
-    avatar?: string;
-    [key: string]: unknown;
-  };
-}
-
-export interface AgentPanel {
-  id: string;
-  name: string;
-  url: string;
-  type: string;
-}
+// Re-export types for backwards compatibility
+export type { Agent, AgentPanel } from "../components/dashboard/types";
 
 // Preference key for localStorage
 const VIEWPORT_AUTO_START_KEY = "hyperscape_viewport_auto_start";

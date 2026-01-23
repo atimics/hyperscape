@@ -160,11 +160,15 @@ bunx drizzle-kit migrate   # Run pending migrations
 
 ### Assets
 
-Game assets (3D models, textures, audio) are stored in a [separate repo](https://github.com/HyperscapeAI/assets) and auto-downloaded during `bun install` (~200MB via Git LFS).
+Game assets (3D models, textures, audio) source: [HyperscapeAI/assets](https://github.com/HyperscapeAI/assets)
+
+**Local Development**: Assets are auto-downloaded during `bun install` (~200MB via Git LFS).
 
 ```bash
-bun run assets:sync    # Pull latest assets from repo
+bun run assets:sync    # Pull latest assets from repo (local dev only)
 ```
+
+**Production/CI**: Manifests are committed to the repo at `packages/server/world/assets/manifests/`.
 
 ## Configuration
 

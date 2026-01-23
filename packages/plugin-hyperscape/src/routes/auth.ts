@@ -12,6 +12,7 @@ import type { HyperscapeService } from "../services/HyperscapeService.js";
  * Callback route - receives auth tokens and stores them
  */
 export const callbackRoute: Route = {
+  name: "hyperscape-auth-callback",
   type: "POST",
   path: "/hyperscape/auth/callback",
   public: true,
@@ -89,6 +90,7 @@ export const callbackRoute: Route = {
  * Status route - check if agent is authenticated
  */
 export const statusRoute: Route = {
+  name: "hyperscape-auth-status",
   type: "GET",
   path: "/hyperscape/auth/status",
   public: false,

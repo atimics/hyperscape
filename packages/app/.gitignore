@@ -1,0 +1,21 @@
+# Rust/Cargo build artifacts
+src-tauri/target/
+
+# Tauri generated files (regenerated on build)
+src-tauri/gen/android/
+src-tauri/gen/apple/hyperscape.xcodeproj/xcuserdata/
+src-tauri/gen/apple/Pods/
+
+# Node.js
+node_modules/
+dist/
+
+# Build outputs
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store

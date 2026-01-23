@@ -17,6 +17,7 @@ import {
  * Endpoint: POST /hyperscape/message
  */
 export const messageRoute: Route = {
+  name: "hyperscape-message",
   type: "POST",
   path: "/hyperscape/message",
   public: true,
@@ -121,10 +122,6 @@ Generate a natural response.
         },
         roomId: memory.roomId,
         createdAt: Date.now(),
-        metadata: {
-          type: "message",
-          inReplyTo: memory.id,
-        },
       };
 
       // Save both memories

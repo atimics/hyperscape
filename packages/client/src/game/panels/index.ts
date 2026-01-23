@@ -11,3 +11,4 @@ export { CombatPanel } from "./CombatPanel";
 export { DashboardPanel } from "./DashboardPanel";
 export { LootWindow } from "./LootWindow";
 export { ActionPanel } from "./ActionPanel";
+export { TradePanel, TradeRequestModal } from "./TradePanel";

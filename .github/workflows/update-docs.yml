@@ -9,7 +9,18 @@ jobs:
   update-docs:
     runs-on: ubuntu-latest
     steps:
+      - name: Check for required secrets
+        id: check-secrets
+        run: |
+          if [ -z "${{ secrets.MINTLIFY_API_KEY }}" ] || [ -z "${{ secrets.MINTLIFY_PROJECT_ID }}" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "::warning::MINTLIFY_API_KEY or MINTLIFY_PROJECT_ID secrets are not configured. Skipping docs update."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - uses: actions/github-script@v8
+        if: steps.check-secrets.outputs.skip != 'true'
         env:
           MINTLIFY_API_KEY: ${{ secrets.MINTLIFY_API_KEY }}
           PROJECT_ID: ${{ secrets.MINTLIFY_PROJECT_ID }}
@@ -20,7 +31,7 @@ jobs:
             const apiKey = process.env.MINTLIFY_API_KEY;
 
             if (!projectId || !apiKey) {
-              core.setFailed('Missing MINTLIFY_PROJECT_ID or MINTLIFY_API_KEY secrets');
+              core.warning('Missing MINTLIFY_PROJECT_ID or MINTLIFY_API_KEY secrets - skipping docs update');
               return;
             }
 
@@ -142,6 +153,10 @@ jobs:
               asDraft: false
             };
 
+            // Create an AbortController with a 10-minute timeout for long-running doc updates
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10 * 60 * 1000);
+
             try {
               const response = await fetch(url, {
                 method: 'POST',
@@ -149,7 +164,8 @@ jobs:
                   'Authorization': `Bearer ${apiKey}`,
                   'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
+                signal: controller.signal
               });
 
               if (!response.ok) {
@@ -159,16 +175,41 @@ jobs:
               const reader = response.body.getReader();
               const decoder = new TextDecoder();
               let buffer = '';
+              let lastEventType = '';
+              let jobCompleted = false;
 
               while (true) {
                 const { done, value } = await reader.read();
-                if (done) break;
+                if (done) {
+                  // Stream ended - check if it was a normal completion
+                  if (!jobCompleted) {
+                    console.log('Stream ended. Last event type:', lastEventType);
+                    // If the last event was a finish event with tool-calls, the job may still be processing
+                    if (lastEventType === 'finish-tool-calls') {
+                      core.notice(`Documentation job initiated for ${owner}/${repo}. The agent is processing tool calls - check Mintlify dashboard for PR status.`);
+                    }
+                  }
+                  break;
+                }
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split('\n');
                 buffer = lines.pop() || '';
                 for (const line of lines) {
                   if (line.trim()) {
                     console.log(line);
+                    // Track event types for better error reporting
+                    if (line.startsWith('e:')) {
+                      try {
+                        const eventData = JSON.parse(line.slice(2));
+                        if (eventData.finishReason === 'stop') {
+                          jobCompleted = true;
+                        } else if (eventData.finishReason === 'tool-calls') {
+                          lastEventType = 'finish-tool-calls';
+                        }
+                      } catch (parseErr) {
+                        // Ignore parse errors for event tracking
+                      }
+                    }
                   }
                 }
               }
@@ -176,7 +217,18 @@ jobs:
                 console.log(buffer);
               }
 
-              core.notice(`Documentation update job triggered for ${owner}/${repo}`);
+              clearTimeout(timeoutId);
+
+              if (jobCompleted) {
+                core.notice(`Documentation update completed for ${owner}/${repo}`);
+              } else {
+                core.notice(`Documentation update job triggered for ${owner}/${repo}`);
+              }
             } catch (error) {
-              core.setFailed(`Failed to create documentation update job: ${error.message}`);
+              clearTimeout(timeoutId);
+              if (error.name === 'AbortError') {
+                core.warning('Documentation job timed out after 10 minutes. Check Mintlify dashboard for job status.');
+              } else {
+                core.setFailed(`Failed to create documentation update job: ${error.message}`);
+              }
             }
