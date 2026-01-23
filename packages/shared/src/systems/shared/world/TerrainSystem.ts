@@ -38,6 +38,7 @@ import { DataManager } from "../../../data/DataManager";
 import { WaterSystem, Environment } from "..";
 import { createTerrainMaterial, TerrainUniforms } from "./TerrainShader";
 import type { RoadNetworkSystem } from "./RoadNetworkSystem";
+import type { TownSystem } from "./TownSystem";
 
 // Road coloring constants
 const ROAD_COLOR = { r: 0.45, g: 0.35, b: 0.25 }; // Dirt brown color
@@ -50,6 +51,24 @@ interface BiomeCenter {
   type: string;
   influence: number;
 }
+
+type DifficultySample = {
+  level: number;
+  scalar: number;
+  biome: string;
+  difficultyTier: number;
+  isSafe: boolean;
+};
+
+type BossHotspot = {
+  id: string;
+  x: number;
+  z: number;
+  radius: number;
+  minLevel: number;
+  maxLevel: number;
+  seed: number;
+};
 
 export class TerrainSystem extends System {
   private terrainTiles = new Map<string, TerrainTile>();
@@ -98,6 +117,8 @@ export class TerrainSystem extends System {
   private _tempBox3 = new THREE.Box3();
   private waterSystem?: WaterSystem;
   private roadNetworkSystem?: RoadNetworkSystem;
+  private townSystem: TownSystem | null = null;
+  private bossHotspots: BossHotspot[] = [];
 
   // PERFORMANCE: Template geometry and pre-allocated buffers for tile creation
   private templateGeometry: THREE.PlaneGeometry | null = null;
@@ -167,6 +188,19 @@ export class TerrainSystem extends System {
     // Always use fixed seed of 0 for deterministic terrain on both client and server
     const FIXED_SEED = 0;
     return FIXED_SEED;
+  }
+
+  private getActiveWorldSizeTiles(): number {
+    if (!this.CONFIG.ISLAND_MASK_ENABLED) {
+      return this.CONFIG.WORLD_SIZE;
+    }
+
+    const maxTiles = this.CONFIG.ISLAND_MAX_WORLD_SIZE_TILES;
+    return maxTiles > 0 ? maxTiles : this.CONFIG.WORLD_SIZE;
+  }
+
+  private getActiveWorldSizeMeters(): number {
+    return this.getActiveWorldSizeTiles() * this.CONFIG.TILE_SIZE;
   }
 
   /**
@@ -324,7 +358,7 @@ export class TerrainSystem extends System {
   }
 
   private initializeBiomeCenters(): void {
-    const worldSize = this.CONFIG.WORLD_SIZE * this.CONFIG.TILE_SIZE; // 10km x 10km
+    const worldSize = this.getActiveWorldSizeMeters();
     const gridSize = this.CONFIG.BIOME_GRID_SIZE; // 5x5 grid
     const cellSize = worldSize / gridSize;
 
@@ -421,6 +455,21 @@ export class TerrainSystem extends System {
     TREE_DENSITY: 0.25, // 25% chance for trees in forest biomes (increased for visibility)
     TOWN_RADIUS: 25, // Safe radius around towns
 
+    // Difficulty Scaling
+    DIFFICULTY_MAX_LEVEL: 1000,
+    DIFFICULTY_NOISE_SCALE: 0.0007,
+    DIFFICULTY_NOISE_WEIGHT: 0.3,
+    DIFFICULTY_CURVE_EXPONENT: 2.2,
+    DIFFICULTY_TOWN_FALLOFF_RADIUS: 300,
+
+    // Boss Hotspots
+    BOSS_HOTSPOT_MAX: 3,
+    BOSS_HOTSPOT_GRID_STEP: 500,
+    BOSS_HOTSPOT_MIN_SCALAR: 0.85,
+    BOSS_HOTSPOT_MIN_DISTANCE: 1200,
+    BOSS_HOTSPOT_RADIUS: 120,
+    BOSS_MIN_LEVEL: 800,
+
     // Biome Generation
     BIOME_GRID_SIZE: 3, // 3x3 grid = 9 very large biomes
     BIOME_JITTER: 0.35, // How much to randomize position within grid cell (0-0.5)
@@ -448,6 +497,13 @@ export class TerrainSystem extends System {
     SHORELINE_LAND_MAX_MULTIPLIER: 1.6, // Max land steepening multiplier
     SHORELINE_UNDERWATER_BAND: 3.0, // Meters below water to deepen shoreline
     UNDERWATER_DEPTH_MULTIPLIER: 1.8, // Max depth multiplier near shoreline
+
+    // Island Mask (default for main world)
+    ISLAND_MASK_ENABLED: true,
+    ISLAND_MAX_WORLD_SIZE_TILES: 100, // 10km x 10km island
+    ISLAND_FALLOFF_TILES: 4, // Coastline falloff width in tiles
+    ISLAND_EDGE_NOISE_SCALE: 0.0015, // Noise scale for coastline irregularity
+    ISLAND_EDGE_NOISE_STRENGTH: 0.03, // Radius variance as fraction of radius
   };
 
   // Biomes now loaded from assets/manifests/biomes.json via DataManager
@@ -467,6 +523,12 @@ export class TerrainSystem extends System {
 
     // Initialize biome centers using deterministic random placement
     this.initializeBiomeCenters();
+
+    // Cache optional TownSystem for difficulty falloff and boss placement
+    this.townSystem = this.world.getSystem<TownSystem>("towns") ?? null;
+
+    // Precompute boss hotspots for this world seed
+    this.generateBossHotspots();
 
     // Initialize terrain material (client-side only)
     if (this.world.isClient) {
@@ -1416,6 +1478,38 @@ export class TerrainSystem extends System {
     return biomeIds[biomeName] || 0;
   }
 
+  private getIslandMask(worldX: number, worldZ: number): number {
+    if (!this.CONFIG.ISLAND_MASK_ENABLED) return 1;
+
+    const maxRadiusMeters = this.getActiveWorldSizeMeters() / 2;
+    if (maxRadiusMeters <= 0) return 1;
+
+    const falloffMeters = Math.max(
+      this.CONFIG.ISLAND_FALLOFF_TILES * this.CONFIG.TILE_SIZE,
+      this.CONFIG.TILE_SIZE,
+    );
+    const noiseScale = this.CONFIG.ISLAND_EDGE_NOISE_SCALE;
+    const noiseStrength = this.CONFIG.ISLAND_EDGE_NOISE_STRENGTH;
+    const edgeNoise =
+      noiseScale > 0 && noiseStrength > 0
+        ? this.noise.simplex2D(worldX * noiseScale, worldZ * noiseScale)
+        : 0;
+    const radiusVariance = maxRadiusMeters * noiseStrength * edgeNoise;
+    const adjustedRadius = Math.max(
+      falloffMeters,
+      maxRadiusMeters + radiusVariance,
+    );
+    const falloffStart = adjustedRadius - falloffMeters;
+
+    const distance = Math.sqrt(worldX * worldX + worldZ * worldZ);
+    if (distance <= falloffStart) return 1;
+    if (distance >= adjustedRadius) return 0;
+
+    const t = (distance - falloffStart) / falloffMeters;
+    const smooth = t * t * (3 - 2 * t);
+    return 1 - smooth;
+  }
+
   /**
    * Get base terrain height WITHOUT mountain biome boost.
    * Used for biome influence calculation to avoid feedback loops.
@@ -1495,6 +1589,11 @@ export class TerrainSystem extends System {
     if (oceanMask < -0.3) {
       const oceanDepth = (-0.3 - oceanMask) * 2;
       height *= Math.max(0.1, 1 - oceanDepth);
+    }
+
+    const islandMask = this.getIslandMask(worldX, worldZ);
+    if (islandMask < 1) {
+      height *= islandMask;
     }
 
     return height * this.CONFIG.MAX_HEIGHT;
@@ -2709,6 +2808,251 @@ export class TerrainSystem extends System {
   }
 
   /**
+   * Get difficulty sample at a world position.
+   * Scales from biome difficulty with noise and town falloff.
+   */
+  getDifficultyAtWorldPosition(
+    worldX: number,
+    worldZ: number,
+    overrideDifficultyLevel?: number,
+  ): DifficultySample {
+    // Ensure noise and biome centers are initialized
+    if (!this.noise) {
+      this.noise = new NoiseGenerator(this.computeSeedFromWorldId());
+      if (this.biomeCenters.length === 0) {
+        this.initializeBiomeCenters();
+      }
+    }
+
+    const biome = this.getBiomeAtWorldPosition(worldX, worldZ);
+    const biomeData = BIOMES[biome];
+    const biomeDifficulty = biomeData ? biomeData.difficulty : 0;
+    const difficultyTier =
+      overrideDifficultyLevel !== undefined
+        ? overrideDifficultyLevel
+        : biomeDifficulty;
+
+    const townDistance = this.getNearestTownDistance(worldX, worldZ);
+    const townFalloff =
+      townDistance === null
+        ? 1
+        : Math.min(
+            1,
+            Math.max(
+              0,
+              townDistance / this.CONFIG.DIFFICULTY_TOWN_FALLOFF_RADIUS,
+            ),
+          );
+
+    if (difficultyTier <= 0 || townFalloff <= 0) {
+      return {
+        level: 0,
+        scalar: 0,
+        biome,
+        difficultyTier,
+        isSafe: true,
+      };
+    }
+
+    const baseScalar = Math.min(1, Math.max(0, difficultyTier / 3));
+    const noiseValue = this.noise.simplex2D(
+      worldX * this.CONFIG.DIFFICULTY_NOISE_SCALE,
+      worldZ * this.CONFIG.DIFFICULTY_NOISE_SCALE,
+    );
+    const noiseNormalized = (noiseValue + 1) * 0.5;
+    const blendedScalar =
+      baseScalar * (1 - this.CONFIG.DIFFICULTY_NOISE_WEIGHT) +
+      noiseNormalized * this.CONFIG.DIFFICULTY_NOISE_WEIGHT;
+
+    const scalar = Math.min(
+      1,
+      Math.max(
+        0,
+        Math.pow(
+          blendedScalar * townFalloff,
+          this.CONFIG.DIFFICULTY_CURVE_EXPONENT,
+        ),
+      ),
+    );
+
+    const maxLevel = this.CONFIG.DIFFICULTY_MAX_LEVEL;
+    const level =
+      scalar <= 0 ? 0 : Math.max(1, Math.floor(1 + scalar * (maxLevel - 1)));
+
+    return {
+      level,
+      scalar,
+      biome,
+      difficultyTier,
+      isSafe: false,
+    };
+  }
+
+  getBossLevelAtWorldPosition(worldX: number, worldZ: number): number {
+    const sample = this.getDifficultyAtWorldPosition(worldX, worldZ);
+    const maxLevel = this.CONFIG.DIFFICULTY_MAX_LEVEL;
+    if (sample.level <= 0) {
+      return this.CONFIG.BOSS_MIN_LEVEL;
+    }
+    return Math.min(
+      maxLevel,
+      Math.max(this.CONFIG.BOSS_MIN_LEVEL, sample.level),
+    );
+  }
+
+  getBossHotspots(): BossHotspot[] {
+    if (this.bossHotspots.length === 0) {
+      this.generateBossHotspots();
+    }
+    return [...this.bossHotspots];
+  }
+
+  getBossHotspotAtWorldPosition(
+    worldX: number,
+    worldZ: number,
+  ): BossHotspot | null {
+    const hotspots = this.getBossHotspots();
+    for (const hotspot of hotspots) {
+      const dx = worldX - hotspot.x;
+      const dz = worldZ - hotspot.z;
+      if (dx * dx + dz * dz <= hotspot.radius * hotspot.radius) {
+        return hotspot;
+      }
+    }
+    return null;
+  }
+
+  private getNearestTownDistance(
+    worldX: number,
+    worldZ: number,
+  ): number | null {
+    let nearest: number | null = null;
+
+    if (this.townSystem) {
+      const towns = this.townSystem.getTowns();
+      if (towns.length > 0) {
+        for (const town of towns) {
+          const dx = worldX - town.position.x;
+          const dz = worldZ - town.position.z;
+          const distance = Math.sqrt(dx * dx + dz * dz);
+          const distanceFromEdge = Math.max(0, distance - town.safeZoneRadius);
+          if (nearest === null || distanceFromEdge < nearest) {
+            nearest = distanceFromEdge;
+          }
+        }
+      }
+    }
+
+    if (nearest !== null) {
+      return nearest;
+    }
+
+    const fallbackRadius = this.CONFIG.TOWN_RADIUS;
+    const fallbackTowns = [
+      { x: 0, z: 0 },
+      { x: 10 * this.CONFIG.TILE_SIZE, z: 0 },
+      { x: -10 * this.CONFIG.TILE_SIZE, z: 0 },
+      { x: 0, z: 10 * this.CONFIG.TILE_SIZE },
+      { x: 0, z: -10 * this.CONFIG.TILE_SIZE },
+    ];
+
+    for (const town of fallbackTowns) {
+      const dx = worldX - town.x;
+      const dz = worldZ - town.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+      const distanceFromEdge = Math.max(0, distance - fallbackRadius);
+      if (nearest === null || distanceFromEdge < nearest) {
+        nearest = distanceFromEdge;
+      }
+    }
+
+    return nearest;
+  }
+
+  private generateBossHotspots(): void {
+    if (this.bossHotspots.length > 0) return;
+
+    if (!this.noise) {
+      this.noise = new NoiseGenerator(this.computeSeedFromWorldId());
+      if (this.biomeCenters.length === 0) {
+        this.initializeBiomeCenters();
+      }
+    }
+
+    const worldSizeMeters = this.CONFIG.WORLD_SIZE * this.CONFIG.TILE_SIZE;
+    const halfWorld = worldSizeMeters / 2;
+    const step = this.CONFIG.BOSS_HOTSPOT_GRID_STEP;
+    const minScalar = this.CONFIG.BOSS_HOTSPOT_MIN_SCALAR;
+    const candidates: Array<{
+      x: number;
+      z: number;
+      score: number;
+      seed: number;
+    }> = [];
+
+    const start = -halfWorld + step * 0.5;
+    const end = halfWorld - step * 0.5;
+
+    for (let x = start; x <= end; x += step) {
+      for (let z = start; z <= end; z += step) {
+        const sample = this.getDifficultyAtWorldPosition(x, z);
+        if (sample.isSafe || sample.scalar < minScalar) continue;
+
+        const height = this.getHeightAt(x, z);
+        if (height < this.CONFIG.WATER_THRESHOLD) continue;
+
+        const slope = this.calculateSlope(x, z);
+        if (slope > this.CONFIG.MAX_WALKABLE_SLOPE) continue;
+
+        const noiseValue = this.noise.simplex2D(
+          x * this.CONFIG.DIFFICULTY_NOISE_SCALE * 1.3 + 12.7,
+          z * this.CONFIG.DIFFICULTY_NOISE_SCALE * 1.3 - 8.1,
+        );
+        const seed = (noiseValue + 1) * 0.5;
+        const score = sample.scalar + seed * 0.1;
+
+        candidates.push({ x, z, score, seed });
+      }
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+
+    const minDistanceSq =
+      this.CONFIG.BOSS_HOTSPOT_MIN_DISTANCE *
+      this.CONFIG.BOSS_HOTSPOT_MIN_DISTANCE;
+    const selected: BossHotspot[] = [];
+
+    for (const candidate of candidates) {
+      if (selected.length >= this.CONFIG.BOSS_HOTSPOT_MAX) break;
+
+      let tooClose = false;
+      for (const hotspot of selected) {
+        const dx = candidate.x - hotspot.x;
+        const dz = candidate.z - hotspot.z;
+        if (dx * dx + dz * dz < minDistanceSq) {
+          tooClose = true;
+          break;
+        }
+      }
+
+      if (tooClose) continue;
+
+      const id = `boss_hotspot_${selected.length}`;
+      selected.push({
+        id,
+        x: candidate.x,
+        z: candidate.z,
+        radius: this.CONFIG.BOSS_HOTSPOT_RADIUS,
+        minLevel: this.CONFIG.BOSS_MIN_LEVEL,
+        maxLevel: this.CONFIG.DIFFICULTY_MAX_LEVEL,
+        seed: candidate.seed,
+      });
+    }
+
+    this.bossHotspots = selected;
+  }
+
+  /**
    * Get all loaded tiles with their biome and mob spawn data
    */
   getLoadedTilesWithSpawnData(): Array<{
@@ -2864,19 +3208,22 @@ export class TerrainSystem extends System {
     activeBiomes: string[];
     totalRoads: number;
   } {
+    const worldSizeTiles = this.getActiveWorldSizeTiles();
+    const worldSizeMeters = worldSizeTiles * this.CONFIG.TILE_SIZE;
+    const worldSizeKm = worldSizeMeters / 1000;
     const activeChunks = Array.from(this.terrainTiles.keys());
     return {
-      tileSize: "100x100m",
-      worldSize: "100x100",
-      totalArea: "10km x 10km",
+      tileSize: `${this.CONFIG.TILE_SIZE}x${this.CONFIG.TILE_SIZE}m`,
+      worldSize: `${worldSizeTiles}x${worldSizeTiles}`,
+      totalArea: `${worldSizeKm}km x ${worldSizeKm}km`,
       maxLoadedTiles: 9,
       tilesLoaded: this.terrainTiles.size,
       currentlyLoaded: activeChunks,
       biomeCount: Object.keys(BIOMES).length,
       chunkSize: this.CONFIG.TILE_SIZE,
       worldBounds: {
-        min: { x: -this.CONFIG.WORLD_SIZE / 2, z: -this.CONFIG.WORLD_SIZE / 2 },
-        max: { x: this.CONFIG.WORLD_SIZE / 2, z: this.CONFIG.WORLD_SIZE / 2 },
+        min: { x: -worldSizeMeters / 2, z: -worldSizeMeters / 2 },
+        max: { x: worldSizeMeters / 2, z: worldSizeMeters / 2 },
       },
       activeBiomes: Array.from(
         new Set(Array.from(this.terrainTiles.values()).map((t) => t.biome)),
@@ -2935,12 +3282,13 @@ export class TerrainSystem extends System {
    * Initialize bounding box verification system
    */
   private initializeBoundingBoxSystem(): void {
-    // Set world bounds based on 100x100 tile grid
+    // Set world bounds based on active world size
+    const halfWorldMeters = this.getActiveWorldSizeMeters() / 2;
     this.worldBounds = {
-      minX: -50 * this.CONFIG.TILE_SIZE,
-      maxX: 50 * this.CONFIG.TILE_SIZE,
-      minZ: -50 * this.CONFIG.TILE_SIZE,
-      maxZ: 50 * this.CONFIG.TILE_SIZE,
+      minX: -halfWorldMeters,
+      maxX: halfWorldMeters,
+      minZ: -halfWorldMeters,
+      maxZ: halfWorldMeters,
       minY: -50,
       maxY: 100,
     };

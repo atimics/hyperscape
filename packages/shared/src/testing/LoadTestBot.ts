@@ -30,9 +30,16 @@ export type LoadTestBotMetrics = {
 };
 
 type Position = { x: number; y: number; z: number };
+type PlayerPositionSource = {
+  node?: { position?: Position };
+  position?: Position;
+  getPosition?: () => Position;
+  data?: { position?: Position | [number, number, number] };
+};
 type NetworkSender = {
   send: (method: string, data: unknown) => void;
   connected?: boolean;
+  id?: string | null;
 };
 
 export class LoadTestBot {
@@ -102,6 +109,14 @@ export class LoadTestBot {
       }
     }
 
+    // Ensure snapshot processed so network id is set before enterWorld.
+    const startSnapshotWait = Date.now();
+    while (Date.now() - startSnapshotWait < 5000) {
+      const network = this.getNetworkSystem();
+      if (network?.id) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
     this.sendPacket("enterWorld", {
       loadTestBot: true,
       botName: this.config.name,
@@ -112,6 +127,19 @@ export class LoadTestBot {
       this.metrics.disconnectReason = "Disconnected after enterWorld";
       this.metrics.isConnected = false;
       throw new Error(`${this.config.name} disconnected after enterWorld`);
+    }
+
+    // Wait for local player entity to be created before starting behaviors.
+    const startPlayerWait = Date.now();
+    while (Date.now() - startPlayerWait < 5000) {
+      if (this.clientWorld?.entities?.player) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    if (!this.clientWorld?.entities?.player) {
+      this.metrics.disconnectReason = "Player entity not available";
+      this.metrics.isConnected = false;
+      throw new Error(`${this.config.name} player entity not available`);
     }
 
     const pos = this.getPlayerPosition();
@@ -222,10 +250,21 @@ export class LoadTestBot {
   }
 
   private getPlayerPosition(): Position | null {
-    const player = this.clientWorld?.entities?.player as {
-      node?: { position?: Position };
-    } | null;
-    return player?.node?.position ?? null;
+    const player = this.clientWorld?.entities
+      ?.player as PlayerPositionSource | null;
+    if (!player) return null;
+
+    if (player.node?.position) return player.node.position;
+    if (player.position) return player.position;
+    if (player.getPosition) return player.getPosition();
+
+    const dataPos = player.data?.position;
+    if (Array.isArray(dataPos) && dataPos.length === 3) {
+      return { x: dataPos[0], y: dataPos[1], z: dataPos[2] };
+    }
+    if (dataPos && !Array.isArray(dataPos)) return dataPos;
+
+    return null;
   }
 
   private updateMetrics(): void {

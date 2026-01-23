@@ -11,15 +11,22 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "fs";
 import * as path from "path";
+import WebSocket, { type RawData } from "ws";
+import { Unpackr } from "msgpackr";
+import { AgentLiveKit } from "../../../plugin-hyperscape/src/systems/liveKit";
 
 const SERVER_URL =
   process.env.PUBLIC_API_URL ||
   process.env.SERVER_URL ||
   "http://localhost:5555";
+const WS_URL =
+  process.env.PUBLIC_WS_URL || process.env.WS_URL || "ws://localhost:5555/ws";
 const LOG_DIR = path.resolve(
   process.env.HOME || "/Users/home",
   "logs/procedural-world-stats",
 );
+
+const unpackr = new Unpackr();
 
 if (!fs.existsSync(LOG_DIR)) {
   fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -29,6 +36,78 @@ function saveTestLog(testName: string, content: string) {
   const logFile = path.join(LOG_DIR, `${testName}.log`);
   fs.writeFileSync(logFile, content);
   console.log(`[${testName}] Logs saved to: ${logFile}`);
+}
+
+type LiveKitSnapshot = {
+  livekit?: {
+    wsUrl?: string;
+    token?: string;
+  };
+};
+
+function toBuffer(data: RawData): Buffer | null {
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  if (Array.isArray(data)) {
+    return Buffer.concat(data.map((item) => Buffer.from(item)));
+  }
+  if (typeof data === "string") return Buffer.from(data);
+  return null;
+}
+
+function decodeSnapshotPacket(buffer: Buffer): LiveKitSnapshot | null {
+  const decoded = unpackr.unpack(buffer) as [number, LiveKitSnapshot];
+  if (!Array.isArray(decoded) || decoded.length !== 2) return null;
+  const [packetId, data] = decoded;
+  return packetId === 0 ? data : null;
+}
+
+async function getLiveKitFromSnapshot(
+  timeoutMs: number = 10000,
+): Promise<{ wsUrl: string; token: string } | null> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(WS_URL);
+    const timer = setTimeout(() => {
+      ws.close();
+      resolve(null);
+    }, timeoutMs);
+
+    ws.on("message", (data: RawData) => {
+      const buffer = toBuffer(data);
+      if (!buffer) return;
+      const snapshot = decodeSnapshotPacket(buffer);
+      if (snapshot?.livekit?.wsUrl && snapshot.livekit.token) {
+        clearTimeout(timer);
+        ws.close();
+        resolve({
+          wsUrl: snapshot.livekit.wsUrl,
+          token: snapshot.livekit.token,
+        });
+      }
+    });
+
+    ws.on("error", (error) => {
+      clearTimeout(timer);
+      ws.close();
+      reject(error);
+    });
+  });
+}
+
+function createSineWavePcm(
+  durationMs: number,
+  sampleRate: number,
+  frequencyHz: number,
+): Buffer {
+  const totalSamples = Math.floor((durationMs / 1000) * sampleRate);
+  const buffer = Buffer.alloc(totalSamples * 2);
+  for (let i = 0; i < totalSamples; i += 1) {
+    const t = i / sampleRate;
+    const sample = Math.sin(2 * Math.PI * frequencyHz * t);
+    const intSample = Math.max(-1, Math.min(1, sample)) * 0x7fff;
+    buffer.writeInt16LE(Math.round(intSample), i * 2);
+  }
+  return buffer;
 }
 
 function parseOptionalNumber(value?: string): number | undefined {
@@ -183,6 +262,36 @@ type TerrainWindow = Window & {
   world?: WorldHandle;
 };
 
+type VoiceLiveKitStatus = {
+  available: boolean;
+  audio: boolean;
+};
+
+type VoiceEntry = {
+  source: MediaStreamAudioSourceNode;
+  gainNode: GainNode;
+  pannerNode: PannerNode;
+};
+
+type VoiceLiveKitHandle = {
+  status?: VoiceLiveKitStatus;
+  voices?: Map<string, VoiceEntry>;
+};
+
+type VoicePrefsHandle = {
+  voiceEnabled?: boolean;
+  setVoiceEnabled?: (value: boolean) => void;
+};
+
+type VoiceWorldHandle = {
+  livekit?: VoiceLiveKitHandle;
+  prefs?: VoicePrefsHandle;
+};
+
+type VoiceWindow = Window & {
+  world?: VoiceWorldHandle;
+};
+
 type MinimapDebugWindow = Window & {
   __HYPERSCAPE_MINIMAP_SET_EXTENT__?: (value: number) => void;
   __HYPERSCAPE_MINIMAP_SET_TARGET__?: (value: { x: number; z: number }) => void;
@@ -228,7 +337,7 @@ function saveJsonLog(testName: string, data: ProceduralWorldStats) {
 }
 
 test("terrain island mask makes edges underwater", async ({ page }) => {
-  await page.goto(SERVER_URL, { waitUntil: "networkidle" });
+  await page.goto(SERVER_URL, { waitUntil: "domcontentloaded" });
 
   await page.waitForFunction(() => {
     const terrainWindow = window as TerrainWindow;
@@ -293,7 +402,7 @@ test("shoreline edges have water and slope definition", async ({ page }) => {
     const tileSize = terrain.getTerrainStats().chunkSize;
 
     const step = 1;
-    const scanRange = tileSize * 6;
+    const scanRange = tileSize * 12;
     const zOffsets = [
       0,
       tileSize * 1.5,
@@ -394,7 +503,7 @@ test("shoreline edges have water and slope definition", async ({ page }) => {
 });
 
 test("procedural world stats snapshot", async ({ page }) => {
-  await page.goto(SERVER_URL, { waitUntil: "networkidle" });
+  await page.goto(SERVER_URL, { waitUntil: "domcontentloaded" });
 
   await page.waitForFunction(() => {
     const terrainWindow = window as TerrainWindow;
@@ -625,7 +734,7 @@ test("road network avoids water and has no A* fallback warnings", async ({
     }
   });
 
-  await page.goto(SERVER_URL, { waitUntil: "networkidle" });
+  await page.goto(SERVER_URL, { waitUntil: "domcontentloaded" });
 
   await page.waitForFunction(() => {
     const terrainWindow = window as TerrainWindow;
@@ -712,4 +821,136 @@ test("road network avoids water and has no A* fallback warnings", async ({
   expect(validation.underwaterPathPoints).toBe(0);
   expect(validation.roadsWithUnderwater.length).toBe(0);
   expect(fallbackWarnings.length).toBe(0);
+});
+
+test("voice chat toggles mic and subscribes remote audio", async ({
+  browser,
+}) => {
+  const testName = "voice-chat-toggle";
+  const logs: string[] = [];
+  let agentLiveKit: AgentLiveKit | null = null;
+
+  const livekitReady = Boolean(
+    process.env.LIVEKIT_URL &&
+      process.env.LIVEKIT_API_KEY &&
+      process.env.LIVEKIT_API_SECRET,
+  );
+  test.skip(!livekitReady, "LIVEKIT_* env vars not set");
+
+  const contextA = await browser.newContext({
+    permissions: ["microphone"],
+  });
+  const contextB = await browser.newContext({
+    permissions: ["microphone"],
+  });
+
+  const pageA = await contextA.newPage();
+  const pageB = await contextB.newPage();
+
+  try {
+    await Promise.all([
+      pageA.goto(SERVER_URL, { waitUntil: "networkidle" }),
+      pageB.goto(SERVER_URL, { waitUntil: "networkidle" }),
+    ]);
+
+    await Promise.all([
+      pageA.waitForFunction(() => {
+        const world = (window as VoiceWindow).world;
+        return world?.livekit?.status?.available === true;
+      }),
+      pageB.waitForFunction(() => {
+        const world = (window as VoiceWindow).world;
+        return world?.livekit?.status?.available === true;
+      }),
+    ]);
+
+    await Promise.all([
+      pageA.waitForSelector("canvas"),
+      pageB.waitForSelector("canvas"),
+    ]);
+
+    const initialA = await pageA.evaluate(() => {
+      const world = (window as VoiceWindow).world;
+      return {
+        voiceEnabled: world?.prefs?.voiceEnabled ?? false,
+        audio: world?.livekit?.status?.audio ?? false,
+      };
+    });
+    logs.push(`[${testName}] Initial A: ${JSON.stringify(initialA)}`);
+    expect(initialA.voiceEnabled).toBe(false);
+    expect(initialA.audio).toBe(false);
+
+    await pageA.click("canvas");
+    await pageA.keyboard.press("V");
+
+    await pageA.waitForFunction(() => {
+      const world = (window as VoiceWindow).world;
+      return world?.livekit?.status?.audio === true;
+    });
+
+    await pageB.waitForFunction(() => {
+      const world = (window as VoiceWindow).world;
+      const voices = world?.livekit?.voices;
+      return Boolean(voices && voices.size > 0);
+    });
+
+    const livekitOptions = await getLiveKitFromSnapshot();
+    if (!livekitOptions) {
+      throw new Error("Failed to retrieve LiveKit snapshot options");
+    }
+
+    agentLiveKit = new AgentLiveKit();
+    const agentReceivePromise = new Promise<void>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        reject(new Error("Agent did not receive remote audio track"));
+      }, 15000);
+      const handler = (_data: { participantId: string }) => {
+        clearTimeout(timeoutId);
+        agentLiveKit?.offAudioEvent("audio", handler);
+        resolve();
+      };
+      agentLiveKit.onAudioEvent("audio", handler);
+    });
+
+    await agentLiveKit.connect(livekitOptions);
+    await agentReceivePromise;
+    logs.push(`[${testName}] ✅ Agent received remote audio track`);
+
+    const voicesBefore = await pageA.evaluate(() => {
+      const world = (window as VoiceWindow).world;
+      return world?.livekit?.voices?.size ?? 0;
+    });
+    const tone = createSineWavePcm(600, 48000, 440);
+    await agentLiveKit.publishAudioStream(tone);
+
+    await pageA.waitForFunction((before) => {
+      const world = (window as VoiceWindow).world;
+      const voices = world?.livekit?.voices;
+      const size = voices ? voices.size : 0;
+      return size > before;
+    }, voicesBefore);
+    logs.push(`[${testName}] ✅ Client subscribed to agent audio`);
+
+    await pageA.keyboard.press("V");
+    await pageA.waitForFunction(() => {
+      const world = (window as VoiceWindow).world;
+      return world?.livekit?.status?.audio === false;
+    });
+
+    logs.push(`[${testName}] ✅ Voice toggle and subscription succeeded`);
+  } catch (error) {
+    logs.push(
+      `[${testName}] ❌ Error: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    throw error;
+  } finally {
+    saveTestLog(testName, logs.join("\n"));
+    if (agentLiveKit) {
+      await agentLiveKit.stop();
+    }
+    await contextA.close();
+    await contextB.close();
+  }
 });

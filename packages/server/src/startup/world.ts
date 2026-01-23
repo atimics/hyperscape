@@ -71,6 +71,18 @@ export async function initializeWorld(
 
   console.log("[World] Creating server world...");
   const world = await createServerWorld();
+  const terrainSeedRaw = process.env.TERRAIN_SEED;
+  const terrainSeed =
+    terrainSeedRaw !== undefined
+      ? Number.parseInt(terrainSeedRaw, 10)
+      : undefined;
+  if (terrainSeed !== undefined && Number.isFinite(terrainSeed)) {
+    const worldWithConfig = world as { config?: { terrainSeed?: number } };
+    worldWithConfig.config = {
+      ...worldWithConfig.config,
+      terrainSeed,
+    };
+  }
 
   // Register server-specific systems
   console.log("[World] Registering server systems...");

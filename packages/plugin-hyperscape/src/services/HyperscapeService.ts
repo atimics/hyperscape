@@ -43,6 +43,7 @@ import {
   resolveLocation,
   parseLocationFromMessage,
 } from "../utils/location-resolver.js";
+import { AgentLiveKit } from "../systems/liveKit.js";
 
 // msgpackr instances for binary packet encoding/decoding
 const packr = new Packr({ structuredClone: true });
@@ -120,6 +121,7 @@ export class HyperscapeService
   private eventHandlers: Map<EventType, Array<(data: unknown) => void>>;
   private reconnectInterval: NodeJS.Timeout | null = null;
   private autoReconnect: boolean = true;
+  private liveKit: AgentLiveKit | null = null;
   private authToken: string | undefined;
   private privyUserId: string | undefined;
   private characterId: string | undefined;
@@ -150,6 +152,7 @@ export class HyperscapeService
     };
 
     this.eventHandlers = new Map();
+    this.liveKit = new AgentLiveKit();
     this.logBuffer = [];
   }
 
@@ -1021,6 +1024,10 @@ Respond with ONLY the action name, nothing else.`;
       this.ws = null;
     }
 
+    if (this.liveKit) {
+      await this.liveKit.stop();
+    }
+
     this.connectionState.connected = false;
     this.connectionState.connecting = false;
 
@@ -1437,6 +1444,16 @@ Respond with ONLY the action name, nothing else.`;
   private async handleSnapshot(snapshotData: any): Promise<void> {
     try {
       logger.info("[HyperscapeService] Processing snapshot...");
+
+      const livekit = snapshotData?.livekit as
+        | { wsUrl?: string; token?: string }
+        | undefined;
+      if (livekit?.wsUrl && livekit?.token) {
+        await this.liveKit?.connect({
+          wsUrl: livekit.wsUrl,
+          token: livekit.token,
+        });
+      }
 
       // CRITICAL FIX: If we already have a characterId from settings, use it directly
       // Don't wait for snapshot to include the character - the server JWT auth already

@@ -105,6 +105,7 @@ import {
   getActorsFromHeader,
   cleanupPxVec3,
   vector3ToPxVec3,
+  setTransformFromMatrix4,
 } from "../../../utils/physics/PhysicsUtils";
 import { getPhysX, waitForPhysX } from "../../../physics/PhysXManager.js";
 import type {
@@ -994,8 +995,11 @@ export class Physics extends SystemBase implements IPhysics {
           }
           return;
         }
-        // Assume toPxTransform extension is available
-        matrix.toPxTransform!(this.transform);
+        if (matrix.toPxTransform) {
+          matrix.toPxTransform(this.transform);
+        } else {
+          setTransformFromMatrix4(this.transform, matrix);
+        }
         if ("setGlobalPose" in actor) {
           (actor as PxRigidDynamic).setGlobalPose(this.transform);
         }

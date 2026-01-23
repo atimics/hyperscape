@@ -24,7 +24,9 @@ import { Accessor, NodeIO } from "@gltf-transform/core";
 import { ALL_EXTENSIONS } from "@gltf-transform/extensions";
 import { MeshoptDecoder, MeshoptEncoder } from "meshoptimizer";
 import * as THREE from "three";
-import { existsSync, mkdirSync, readdirSync } from "fs";
+import { execSync } from "child_process";
+import { createHash } from "crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "fs";
 import { basename, dirname, extname, join, relative, resolve } from "path";
 import { fileURLToPath } from "url";
 
@@ -45,6 +47,7 @@ const options = {
   sampleRate: parseNumberArg("--sample-rate", 60),
   tolerance: parseNumberArg("--tolerance", 0.002),
   skipTokens: parseSkipTokens(),
+  verify: args.includes("--verify"),
 };
 
 if (options.inPlace) {
@@ -162,6 +165,30 @@ function buildNodeInfos(nodes) {
   });
 
   return { nodeInfos, indexByNode };
+}
+
+function getRigIndices(nodeInfos) {
+  const hipsIndex = findNodeIndex(nodeInfos, [
+    "mixamorighips",
+    "hips",
+    "mixamorig:hips",
+    "mixamorighips",
+  ]);
+  const leftFootIndex = findNodeIndex(nodeInfos, [
+    "mixamorigleftfoot",
+    "leftfoot",
+    "lefttoe",
+    "mixamoriglefttoebase",
+    "lefttoebase",
+  ]);
+  const rightFootIndex = findNodeIndex(nodeInfos, [
+    "mixamorigrightfoot",
+    "rightfoot",
+    "righttoe",
+    "mixamorigrighttoebase",
+    "righttoebase",
+  ]);
+  return { hipsIndex, leftFootIndex, rightFootIndex };
 }
 
 function findNodeIndex(nodeInfos, candidates) {
@@ -344,7 +371,8 @@ function buildChannelMap(animation) {
   return channelMap;
 }
 
-function buildLocalTransforms(nodeInfos, channelMap, time, locals) {
+function buildLocalTransforms(nodeInfos, channelMap, time, locals, options) {
+  const ignoreTranslations = options?.ignoreTranslations === true;
   for (let i = 0; i < nodeInfos.length; i++) {
     const info = nodeInfos[i];
     const channels = channelMap.get(info.node);
@@ -356,7 +384,7 @@ function buildLocalTransforms(nodeInfos, channelMap, time, locals) {
     rotation.copy(info.baseRotation);
     scale.copy(info.baseScale);
 
-    if (channels?.translation) {
+    if (!ignoreTranslations && channels?.translation) {
       const data = getChannelData(channels.translation);
       if (data) sampleVec3(data, time, translation);
     }
@@ -429,7 +457,7 @@ function removeTranslationChannels(animation, hipsNodeNameLower) {
 }
 
 function addHipsTranslationChannel(document, animation, hipsNode, times, values) {
-  const sampler = document.createSampler();
+  const sampler = document.createAnimationSampler();
   const input = document
     .createAccessor()
     .setType(Accessor.Type.SCALAR)
@@ -440,8 +468,10 @@ function addHipsTranslationChannel(document, animation, hipsNode, times, values)
     .setArray(values);
   sampler.setInput(input).setOutput(output).setInterpolation("LINEAR");
 
+  animation.addSampler(sampler);
+
   const channel = document
-    .createChannel()
+    .createAnimationChannel()
     .setSampler(sampler)
     .setTargetNode(hipsNode)
     .setTargetPath("translation");
@@ -457,6 +487,7 @@ function processAnimation({
   footIndices,
   sampleRate,
   tolerance,
+  ignoreTranslations,
 }) {
   const duration = computeDuration(animation);
   const times = createSampleTimes(duration, sampleRate);
@@ -465,26 +496,39 @@ function processAnimation({
 
   let minFootY = Infinity;
   let maxFootY = -Infinity;
+  let boundsMinY = Infinity;
+  let boundsMaxY = -Infinity;
   let framesAbove = 0;
   let framesBelow = 0;
 
   const bakedValues = new Float32Array(times.length * 3);
 
   const tempPos = new THREE.Vector3();
+  const footSet = new Set(footIndices);
 
   for (let i = 0; i < times.length; i++) {
     const t = times[i];
-    buildLocalTransforms(nodeInfos, channelMap, t, locals);
+    buildLocalTransforms(nodeInfos, channelMap, t, locals, {
+      ignoreTranslations,
+    });
     buildWorldMatrices(nodeInfos, locals, worlds);
 
     let frameMinFootY = Infinity;
-    for (const footIndex of footIndices) {
-      tempPos.setFromMatrixPosition(worlds[footIndex]);
-      if (tempPos.y < frameMinFootY) frameMinFootY = tempPos.y;
+    let frameMinY = Infinity;
+    let frameMaxY = -Infinity;
+    for (let nodeIndex = 0; nodeIndex < nodeInfos.length; nodeIndex++) {
+      tempPos.setFromMatrixPosition(worlds[nodeIndex]);
+      if (tempPos.y < frameMinY) frameMinY = tempPos.y;
+      if (tempPos.y > frameMaxY) frameMaxY = tempPos.y;
+      if (footSet.has(nodeIndex) && tempPos.y < frameMinFootY) {
+        frameMinFootY = tempPos.y;
+      }
     }
 
     minFootY = Math.min(minFootY, frameMinFootY);
     maxFootY = Math.max(maxFootY, frameMinFootY);
+    boundsMinY = Math.min(boundsMinY, frameMinY);
+    boundsMaxY = Math.max(boundsMaxY, frameMaxY);
     if (frameMinFootY > tolerance) framesAbove += 1;
     if (frameMinFootY < -tolerance) framesBelow += 1;
 
@@ -502,6 +546,8 @@ function processAnimation({
     bakedValues,
     minFootY,
     maxFootY,
+    boundsMinY,
+    boundsMaxY,
     framesAbove,
     framesBelow,
   };
@@ -516,6 +562,143 @@ function summarizeRange(range) {
   return `x[${formatNumber(range.min[0])}, ${formatNumber(range.max[0])}] ` +
     `y[${formatNumber(range.min[1])}, ${formatNumber(range.max[1])}] ` +
     `z[${formatNumber(range.min[2])}, ${formatNumber(range.max[2])}]`;
+}
+
+function getGitRoot(dir) {
+  try {
+    const root = execSync(`git -C "${dir}" rev-parse --show-toplevel`, {
+      encoding: "utf8",
+    });
+    return root.trim();
+  } catch {
+    return null;
+  }
+}
+
+function getGitFileBuffer(gitRoot, relPath) {
+  const normalized = relPath.replace(/\\/g, "/");
+  const pointerBuffer = execSync(
+    `git -C "${gitRoot}" show HEAD:${normalized}`,
+    {
+      encoding: "buffer",
+      maxBuffer: 1024 * 1024 * 200,
+    },
+  );
+
+  const header = pointerBuffer.slice(0, 64).toString("utf8");
+  if (header.startsWith("version https://git-lfs.github.com/spec/v1")) {
+    return execSync(`git -C "${gitRoot}" lfs smudge`, {
+      input: pointerBuffer,
+      encoding: "buffer",
+      maxBuffer: 1024 * 1024 * 200,
+    });
+  }
+
+  return pointerBuffer;
+}
+
+function hashBuffer(buffer) {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+async function verifyFile(filePath, gitRoot) {
+  if (!gitRoot) {
+    log("verify skipped: no git repo found", "warn");
+    return;
+  }
+
+  const relPath = relative(gitRoot, filePath);
+  let oldBuffer;
+  try {
+    oldBuffer = getGitFileBuffer(gitRoot, relPath);
+  } catch (error) {
+    log(`verify skipped: ${relPath} not found in git`, "warn");
+    return;
+  }
+
+  try {
+    const newBuffer = readFileSync(filePath);
+    const oldHash = hashBuffer(oldBuffer);
+    const newHash = hashBuffer(newBuffer);
+    const changed = oldHash !== newHash;
+
+    const oldDoc = await io.readBinary(new Uint8Array(oldBuffer));
+    const newDoc = await io.readBinary(new Uint8Array(newBuffer));
+
+    const oldRoot = oldDoc.getRoot();
+    const newRoot = newDoc.getRoot();
+    const oldNodes = oldRoot.listNodes();
+    const newNodes = newRoot.listNodes();
+    const { nodeInfos: oldInfos } = buildNodeInfos(oldNodes);
+    const { nodeInfos: newInfos } = buildNodeInfos(newNodes);
+
+    const oldRig = getRigIndices(oldInfos);
+    const newRig = getRigIndices(newInfos);
+
+    if (
+      oldRig.hipsIndex === null ||
+      oldRig.leftFootIndex === null ||
+      oldRig.rightFootIndex === null ||
+      newRig.hipsIndex === null ||
+      newRig.leftFootIndex === null ||
+      newRig.rightFootIndex === null
+    ) {
+      log(`verify skipped: missing hips/feet in ${relPath}`, "warn");
+      return;
+    }
+
+    const oldAnimations = oldRoot.listAnimations();
+    const newAnimations = newRoot.listAnimations();
+    const count = Math.min(oldAnimations.length, newAnimations.length);
+
+    log(`verify: ${relPath}`);
+    log(
+      `  changed: ${changed} (old ${oldHash.slice(0, 8)} new ${newHash.slice(0, 8)})`,
+    );
+
+    for (let i = 0; i < count; i++) {
+      const oldAnim = oldAnimations[i];
+      const newAnim = newAnimations[i];
+      const oldChannelMap = buildChannelMap(oldAnim);
+      const newChannelMap = buildChannelMap(newAnim);
+
+      const oldResult = processAnimation({
+        document: oldDoc,
+        animation: oldAnim,
+        nodeInfos: oldInfos,
+        channelMap: oldChannelMap,
+        hipsIndex: oldRig.hipsIndex,
+        footIndices: [oldRig.leftFootIndex, oldRig.rightFootIndex],
+        sampleRate: options.sampleRate,
+        tolerance: options.tolerance,
+        ignoreTranslations: true,
+      });
+
+      const newResult = processAnimation({
+        document: newDoc,
+        animation: newAnim,
+        nodeInfos: newInfos,
+        channelMap: newChannelMap,
+        hipsIndex: newRig.hipsIndex,
+        footIndices: [newRig.leftFootIndex, newRig.rightFootIndex],
+        sampleRate: options.sampleRate,
+        tolerance: options.tolerance,
+        ignoreTranslations: false,
+      });
+
+      const oldTouch = Math.abs(oldResult.boundsMinY) <= options.tolerance;
+      const newTouch = Math.abs(newResult.boundsMinY) <= options.tolerance;
+
+      log(
+        `  anim "${oldAnim.getName() || "clip"}": old minY ${formatNumber(
+          oldResult.boundsMinY,
+        )} -> new minY ${formatNumber(newResult.boundsMinY)} | ` +
+          `touch old=${oldTouch} new=${newTouch}`,
+      );
+    }
+  } catch (error) {
+    log(`verify failed: ${relPath} (${error.message})`, "warn");
+  }
 }
 
 async function processFile(filePath) {
@@ -545,26 +728,8 @@ async function processFile(filePath) {
   const nodes = root.listNodes();
   const { nodeInfos } = buildNodeInfos(nodes);
 
-  const hipsIndex = findNodeIndex(nodeInfos, [
-    "mixamorighips",
-    "hips",
-    "mixamorig:hips",
-    "mixamorighips",
-  ]);
-  const leftFootIndex = findNodeIndex(nodeInfos, [
-    "mixamorigleftfoot",
-    "leftfoot",
-    "lefttoe",
-    "mixamoriglefttoebase",
-    "lefttoebase",
-  ]);
-  const rightFootIndex = findNodeIndex(nodeInfos, [
-    "mixamorigrightfoot",
-    "rightfoot",
-    "righttoe",
-    "mixamorigrighttoebase",
-    "righttoebase",
-  ]);
+  const { hipsIndex, leftFootIndex, rightFootIndex } =
+    getRigIndices(nodeInfos);
 
   if (
     hipsIndex === null ||
@@ -610,6 +775,7 @@ async function processFile(filePath) {
       footIndices,
       sampleRate: options.sampleRate,
       tolerance: options.tolerance,
+      ignoreTranslations: false,
     });
 
     log(
@@ -617,6 +783,8 @@ async function processFile(filePath) {
         result.duration,
       )}s, footY min ${formatNumber(result.minFootY)} max ${formatNumber(
         result.maxFootY,
+      )}, boundsY min ${formatNumber(result.boundsMinY)} max ${formatNumber(
+        result.boundsMaxY,
       )}, above ${result.framesAbove}, below ${result.framesBelow}`,
     );
     log(`  hips range: ${summarizeRange(hipsRange)}`);
@@ -647,6 +815,11 @@ async function processFile(filePath) {
   }
 
   stats.processed += 1;
+
+  if (options.verify) {
+    const gitRoot = getGitRoot(options.inputDir);
+    await verifyFile(filePath, gitRoot);
+  }
 }
 
 async function main() {
@@ -655,6 +828,7 @@ async function main() {
   log(`sample-rate: ${options.sampleRate} fps`);
   log(`tolerance: ${options.tolerance}m`);
   if (options.dryRun) log("dry-run enabled");
+  if (options.verify) log("verify enabled");
   if (options.skipTokens.length > 0) {
     log(`skip: ${options.skipTokens.join(", ")}`);
   }

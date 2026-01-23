@@ -1140,6 +1140,37 @@ export class EntityManager extends SystemBase {
     return this.spawnEntity(itemConfig);
   }
 
+  public getScaledMobStats(
+    mobType: string,
+    level: number,
+  ): {
+    maxHealth: number;
+    attack: number;
+    attackPower: number;
+    defense: number;
+    defenseBonus: number;
+    attackSpeedTicks: number;
+    moveSpeed: number;
+    aggroRange: number;
+    combatRange: number;
+    wanderRadius: number;
+    xpReward: number;
+  } {
+    return {
+      maxHealth: this.getMobMaxHealth(mobType, level),
+      attack: this.getMobAttack(mobType, level),
+      attackPower: this.getMobAttackPower(mobType, level),
+      defense: this.getMobDefense(mobType, level),
+      defenseBonus: this.getMobDefenseBonus(mobType),
+      attackSpeedTicks: this.getMobAttackSpeedTicks(mobType),
+      moveSpeed: this.getMobMoveSpeed(mobType),
+      aggroRange: this.getMobAggroRange(mobType),
+      combatRange: this.getMobCombatRange(mobType),
+      wanderRadius: this.getMobWanderRadius(mobType),
+      xpReward: this.getMobXPReward(mobType, level),
+    };
+  }
+
   // Helper methods for mob stats calculation - NOW DATA-DRIVEN!
   // All values loaded from mobs.json instead of hardcoded
 

@@ -202,6 +202,14 @@ export interface DefaultDropConfig {
   enabled: boolean; // Flag to disable default drop if needed
 }
 
+/**
+ * Level range for scalable NPCs/mobs
+ */
+export type LevelRange = {
+  min: number;
+  max: number;
+};
+
 // ============== UNIFIED NPC DATA STRUCTURE ==============
 
 /**
@@ -220,6 +228,7 @@ export interface NPCDataInput {
 
   // OPTIONAL - Will be filled with defaults by normalizeNPC()
   faction?: string;
+  levelRange?: LevelRange;
   stats?: Partial<NPCStats>;
   combat?: Partial<NPCCombatConfig>;
   movement?: Partial<NPCMovementConfig>;
@@ -389,6 +398,7 @@ export interface NPCData {
   description: string;
   category: NPCCategory; // 'mob' | 'boss' | 'neutral'
   faction: string; // Group affiliation
+  levelRange?: LevelRange;
 
   // ========== STATS (ALL NPCs) ==========
   stats: NPCStats;
@@ -587,6 +597,7 @@ export interface MobSpawnConfig {
   level: number;
   health: number; // OSRS: hitpoints = max HP directly
   description?: string;
+  levelRange?: LevelRange;
   difficultyLevel?: 1 | 2 | 3;
   stats?: {
     attack: number;

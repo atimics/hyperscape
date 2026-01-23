@@ -1199,6 +1199,7 @@ export class DataManager {
     // Ensure required fields have sane defaults
     const defaults: Partial<NPCData> = {
       faction: npc.faction || "unknown",
+      levelRange: npc.levelRange,
       stats: {
         level: npc.stats?.level ?? 1,
         health: npc.stats?.health ?? 10, // OSRS: hitpoints = max HP directly
