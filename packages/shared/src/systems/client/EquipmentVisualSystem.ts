@@ -392,7 +392,8 @@ export class EquipmentVisualSystem extends SystemBase {
         } else {
           // Fallback: Apply relativeMatrix manually if no wrapper found
           const relativeMatrix = new THREE.Matrix4();
-          relativeMatrix.fromArray(attachmentData.relativeMatrix);
+          // Safe to assert: hasValidMatrix guarantees attachmentData.relativeMatrix is valid
+          relativeMatrix.fromArray(attachmentData!.relativeMatrix!);
 
           // Create a wrapper group with the relative transform
           const wrapperGroup = new THREE.Group();
