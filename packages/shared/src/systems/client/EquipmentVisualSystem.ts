@@ -413,15 +413,11 @@ export class EquipmentVisualSystem extends SystemBase {
 
           equipment[slotKey] = wrapperGroup;
           (targetBone as THREE.Object3D).add(wrapperGroup);
-          console.log(
-            `[EquipmentVisual] ✅ V2 equipment (manual matrix) attached to ${targetBoneName}`,
-          );
         }
         return;
       }
 
       // === LEGACY FORMAT (V1): Use old logic with scale hack ===
-      console.log(`[EquipmentVisual] Using legacy V1 format for ${itemId}`);
 
       // Find the EquipmentWrapper child which has the fitting position
       const equipmentWrapper = weaponMesh.children.find(
