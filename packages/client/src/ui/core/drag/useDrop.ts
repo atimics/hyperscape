@@ -48,7 +48,10 @@ export function useDrop(config: DropConfig): DropResult {
   } = config;
 
   const elementRef = useRef<HTMLElement | null>(null);
-  const [dropRect, setDropRect] = useState<Rect | null>(null);
+  // Use ref for rect to avoid setState during ref callback (causes infinite loops)
+  const dropRectRef = useRef<Rect | null>(null);
+  // Only use state for triggering re-renders when needed
+  const [, forceUpdate] = useState(0);
 
   // Get drag state from store
   const isDragging = useDragStore((s) => s.isDragging);
@@ -65,21 +68,22 @@ export function useDrop(config: DropConfig): DropResult {
 
   // Calculate relative position within the drop target
   const relativePosition: Point | null =
-    isOver && dropRect
+    isOver && dropRectRef.current
       ? {
-          x: currentPosition.x - dropRect.x,
-          y: currentPosition.y - dropRect.y,
+          x: currentPosition.x - dropRectRef.current.x,
+          y: currentPosition.y - dropRectRef.current.y,
         }
       : null;
 
   // Ref callback to register/unregister the drop target
+  // IMPORTANT: Do NOT call setState here - it causes infinite loops during React's commit phase
   const setNodeRef = useCallback(
     (node: HTMLElement | null) => {
       elementRef.current = node;
 
       if (node && !disabled) {
         const rect = getElementRect(node);
-        setDropRect(rect);
+        dropRectRef.current = rect;
         dropTargetRegistry.register(id, {
           element: node,
           accepts,
@@ -87,27 +91,31 @@ export function useDrop(config: DropConfig): DropResult {
         });
       } else {
         dropTargetRegistry.unregister(id);
-        setDropRect(null);
+        dropRectRef.current = null;
       }
     },
     [id, accepts, disabled],
   );
 
-  // Update rect on resize
+  // Update rect on resize - safe to use setState here in effect
   useEffect(() => {
     if (!elementRef.current || disabled) return;
 
     const observer = new ResizeObserver(() => {
       if (elementRef.current) {
         const rect = getElementRect(elementRef.current);
-        setDropRect(rect);
+        dropRectRef.current = rect;
         dropTargetRegistry.updateRect(id, rect);
+        // Only force update if we're actively dragging (need position updates)
+        if (isDragging) {
+          forceUpdate((n) => n + 1);
+        }
       }
     });
 
     observer.observe(elementRef.current);
     return () => observer.disconnect();
-  }, [id, disabled]);
+  }, [id, disabled, isDragging]);
 
   // Track enter/leave for callbacks
   const wasOverRef = useRef(false);
