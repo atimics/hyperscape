@@ -143,6 +143,7 @@ export class Environment extends System {
   // Set to true on: viewport resize, camera near/far change, CSM config change
   private needsFrustumUpdate: boolean = true;
   private csmNeedsAttach: boolean = false; // True until CSM shadowNode is attached to light
+  private csmDeferredLogged: boolean = false; // Only log deferred message once
 
   // Ambient lighting for day/night cycle (non-shadow casting)
   private hemisphereLight: THREE.HemisphereLight | null = null;
@@ -661,6 +662,7 @@ export class Environment extends System {
       try {
         this.csmShadowNode.updateFrustums();
         this.needsFrustumUpdate = false;
+        this.csmDeferredLogged = false; // Reset so future issues can be logged
 
         // After successful frustum init, attach shadowNode to light
         // We defer this because CSM shader will crash if frustums aren't initialized
@@ -676,12 +678,11 @@ export class Environment extends System {
       } catch (err) {
         // CSMShadowNode.updateFrustums() can fail if camera projection isn't ready yet
         // Will retry on next update() - this is expected during startup
-        // Log only on first attempt to avoid console spam
-        if (this.csmNeedsAttach) {
-          console.warn(
-            "[Environment] CSM frustum update failed:",
-            err instanceof Error ? err.message : String(err),
+        if (!this.csmDeferredLogged) {
+          console.debug(
+            "[Environment] CSM frustum update deferred - camera not ready (this message will only appear once)",
           );
+          this.csmDeferredLogged = true;
         }
       }
     }

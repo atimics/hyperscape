@@ -18,8 +18,8 @@ export default defineConfig({
   webServer: {
     command: "bun run start",
     port: 5555,
-    timeout: 120 * 1000, // 2 minutes to start
-    reuseExistingServer: !process.env.CI, // In CI, always start fresh server
+    timeout: 180 * 1000, // 3 minutes to start (Docker + world init)
+    reuseExistingServer: true, // Reuse existing server if running
     env: {
       NODE_ENV: "test",
       // In CI, disable Docker and explicitly pass DATABASE_URL

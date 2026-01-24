@@ -106,6 +106,10 @@ import {
 } from "./handlers/prayer";
 import { handleResourceGather } from "./handlers/resources";
 import {
+  handleActionBarSave,
+  handleActionBarLoad,
+} from "./handlers/action-bar";
+import {
   handleBankOpen,
   handleBankDeposit,
   handleBankWithdraw,
@@ -153,7 +157,7 @@ import { PendingGatherManager } from "./PendingGatherManager";
 import { PendingCookManager } from "./PendingCookManager";
 import { FollowManager } from "./FollowManager";
 import { FaceDirectionManager } from "./FaceDirectionManager";
-import { handleFollowPlayer } from "./handlers/player";
+import { handleFollowPlayer, handleChangePlayerName } from "./handlers/player";
 import {
   initHomeTeleportManager,
   getHomeTeleportManager,
@@ -1423,6 +1427,22 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onAltarPray"] = (socket, data) =>
       handleAltarPray(socket, data, this.world);
 
+    // Action bar handlers
+    this.handlers["actionBarSave"] = (socket, data) =>
+      handleActionBarSave(socket, data, this.world);
+
+    this.handlers["actionBarLoad"] = (socket, data) =>
+      handleActionBarLoad(socket, data, this.world);
+
+    // Player name change handler
+    this.handlers["changePlayerName"] = (socket, data) =>
+      handleChangePlayerName(
+        socket,
+        data,
+        this.world,
+        this.broadcastManager.sendToAll.bind(this.broadcastManager),
+      );
+
     // Death/respawn handlers
     this.handlers["onRequestRespawn"] = (socket, _data) => {
       const playerEntity = socket.player;
@@ -1753,8 +1773,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onBankDepositAllEquipment"] = (socket, data) =>
       handleBankDepositAllEquipment(socket, data, this.world);
 
-    // Also register bank handlers without "on" prefix for client compatibility
-    // (matching the pattern used for entityInteract, firemakingRequest, cookingRequest)
+    // Bank handler aliases without "on" prefix for client compatibility
+    // Client sends "bankDeposit", server has "onBankDeposit"
     this.handlers["bankOpen"] = this.handlers["onBankOpen"];
     this.handlers["bankDeposit"] = this.handlers["onBankDeposit"];
     this.handlers["bankWithdraw"] = this.handlers["onBankWithdraw"];

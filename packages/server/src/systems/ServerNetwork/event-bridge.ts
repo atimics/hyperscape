@@ -422,7 +422,13 @@ export class EventBridge {
           type: "info" | "warning" | "error" | "damage" | "system";
         };
 
+        console.log("[EventBridge] UI_MESSAGE received:", data);
+
         if (data.playerId && data.message) {
+          console.log(
+            "[EventBridge] Sending systemMessage to player:",
+            data.playerId,
+          );
           this.broadcast.sendToPlayer(data.playerId, "systemMessage", {
             message: data.message,
             type: data.type || "info",

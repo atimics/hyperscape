@@ -283,6 +283,13 @@ const names = [
   'tradeCompleted',      // Server -> Client: trade successful, items swapped
   'tradeCancelled',      // Server -> Client: trade cancelled (disconnect, decline, etc.)
   'tradeError',          // Server -> Client: trade operation failed with reason
+  // Skill/Spell ability packets
+  'useSkill',            // Client -> Server: activate a skill ability
+  'castSpell',           // Client -> Server: cast a spell (optionally on target)
+  'skillActivated',      // Server -> Client: skill activation acknowledged
+  'spellCast',           // Server -> Client: spell cast acknowledged
+  'abilityCooldown',     // Server -> Client: ability cooldown update (skill or spell)
+  'abilityFailed',       // Server -> Client: ability failed (cooldown, level, resources, etc.)
 ]
 
 const byName: Record<string, PacketInfo> = {};
