@@ -540,8 +540,10 @@ export function getThemedGlassmorphismStyle(
   const alpha = baseOpacity * (1 - transparency / 100);
 
   return {
+    // Use specific pattern to avoid ReDoS: match decimal number before closing paren
+    // Pattern: digits, optionally followed by decimal point and more digits, then )
     backgroundColor: theme.colors.background.glass.replace(
-      /[\d.]+\)$/,
+      /(\d+(?:\.\d+)?)\)$/,
       `${alpha})`,
     ),
     backdropFilter: `blur(${theme.glass.blur}px)`,
