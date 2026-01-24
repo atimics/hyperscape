@@ -1915,10 +1915,13 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       );
 
       // Check if entity has handleInteraction method
-      const interactableEntity = entity as {
+      const interactableEntity = entity as unknown as {
         handleInteraction?: (data: {
           playerId: string;
-          interactionType?: string;
+          entityId: string;
+          interactionType: string;
+          position: { x: number; y: number; z: number };
+          playerPosition: { x: number; y: number; z: number };
         }) => Promise<void>;
       };
 
@@ -1927,9 +1930,16 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           `[ServerNetwork] Calling handleInteraction on ${entity.type} entity`,
         );
         try {
+          // Build full EntityInteractionData
+          const entityPos = entity.position ?? { x: 0, y: 0, z: 0 };
+          const playerPos = playerEntity.position ?? { x: 0, y: 0, z: 0 };
+
           await interactableEntity.handleInteraction({
             playerId: playerEntity.id,
+            entityId: payload.entityId,
             interactionType: payload.interactionType || "interact",
+            position: { x: entityPos.x, y: entityPos.y, z: entityPos.z },
+            playerPosition: { x: playerPos.x, y: playerPos.y, z: playerPos.z },
           });
           console.log(
             `[ServerNetwork] handleInteraction completed for ${entity.type}`,
