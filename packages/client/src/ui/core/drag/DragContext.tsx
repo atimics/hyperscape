@@ -58,6 +58,17 @@ export function DragProvider({
   // Track previous state for detecting transitions
   const wasDraggingRef = useRef(false);
   const prevItemRef = useRef(dragItem);
+  // Save overTargets and delta while dragging so we can use them after endDrag() clears them
+  const savedOverTargetsRef = useRef(overTargets);
+  const savedDeltaRef = useRef(delta);
+
+  // Update saved refs while dragging
+  useEffect(() => {
+    if (isDragging) {
+      savedOverTargetsRef.current = overTargets;
+      savedDeltaRef.current = delta;
+    }
+  }, [isDragging, overTargets, delta]);
 
   // Fire callbacks on drag start/end
   useEffect(() => {
@@ -66,21 +77,26 @@ export function DragProvider({
       onDragStart?.({ active: { id: dragItem.id, data: dragItem.data } });
     }
 
-    // Detect drag end
+    // Detect drag end - use saved refs since store is cleared before this runs
     if (!isDragging && wasDraggingRef.current && prevItemRef.current) {
       const item = prevItemRef.current;
-      const overId = overTargets.length > 0 ? overTargets[0] : null;
+      const savedTargets = savedOverTargetsRef.current;
+      const overId = savedTargets.length > 0 ? savedTargets[0] : null;
 
       onDragEnd?.({
         active: { id: item.id, data: item.data },
         over: overId ? { id: overId } : null,
-        delta,
+        delta: savedDeltaRef.current,
       });
+
+      // Clear saved refs after firing
+      savedOverTargetsRef.current = [];
+      savedDeltaRef.current = { x: 0, y: 0 };
     }
 
     wasDraggingRef.current = isDragging;
     prevItemRef.current = dragItem;
-  }, [isDragging, dragItem, overTargets, delta, onDragStart, onDragEnd]);
+  }, [isDragging, dragItem, onDragStart, onDragEnd]);
 
   // Reset drag state on unmount
   useEffect(() => {

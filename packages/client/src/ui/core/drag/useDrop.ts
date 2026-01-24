@@ -113,6 +113,19 @@ export function useDrop(config: DropConfig): DropResult {
 
   // Track enter/leave for callbacks
   const wasOverRef = useRef(false);
+  // Save the drag item and position so we can use them after endDrag() clears the store
+  const savedDragItemRef = useRef(dragItem);
+  const savedPositionRef = useRef(relativePosition);
+  const savedCanDropRef = useRef(canDrop);
+
+  // Update saved refs while dragging
+  useEffect(() => {
+    if (isDragging && dragItem) {
+      savedDragItemRef.current = dragItem;
+      savedPositionRef.current = relativePosition;
+      savedCanDropRef.current = canDrop;
+    }
+  }, [isDragging, dragItem, relativePosition, canDrop]);
 
   useEffect(() => {
     if (!dragItem || !canDrop) {
@@ -143,18 +156,24 @@ export function useDrop(config: DropConfig): DropResult {
   ]);
 
   // Handle drop when drag ends
+  // Use saved refs because the store clears dragItem before this effect runs
   useEffect(() => {
     if (
       !isDragging &&
       wasOverRef.current &&
-      dragItem &&
-      canDrop &&
-      relativePosition
+      savedDragItemRef.current &&
+      savedCanDropRef.current
     ) {
-      onDrop(dragItem, relativePosition);
+      const item = savedDragItemRef.current;
+      const pos = savedPositionRef.current || { x: 0, y: 0 };
+      onDrop(item, pos);
+      // Clear refs after drop
+      savedDragItemRef.current = null;
+      savedPositionRef.current = null;
+      wasOverRef.current = false;
     }
     // Only run when isDragging changes to false
-  }, [isDragging]);
+  }, [isDragging, onDrop]);
 
   // Cleanup on unmount
   useEffect(() => {
