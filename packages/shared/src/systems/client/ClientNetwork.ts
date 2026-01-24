@@ -838,6 +838,7 @@ export class ClientNetwork extends SystemBase {
   };
 
   onSystemMessage = (data: { message: string; type: string }) => {
+    console.log("[ClientNetwork] systemMessage received:", data);
     // Add system message to chat (from UI_MESSAGE events)
     // These are server-generated messages like equipment requirements, combat info, etc.
     const chatMessage: ChatMessage = {
@@ -849,6 +850,7 @@ export class ClientNetwork extends SystemBase {
       createdAt: new Date().toISOString(),
     };
     this.world.chat.add(chatMessage, false);
+    console.log("[ClientNetwork] Added message to chat:", chatMessage.body);
   };
 
   onEntityAdded = (data: EntityData) => {
