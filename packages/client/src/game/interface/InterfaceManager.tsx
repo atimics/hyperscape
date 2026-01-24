@@ -2419,6 +2419,7 @@ function DesktopInterfaceManager({
                         tabs={windowState.tabs}
                         renderPanel={renderPanel}
                         windowId={windowState.id}
+                        isUnlocked={isUnlocked && editModeEnabled}
                       />
                     ) : null}
                   </Window>
@@ -2806,6 +2807,7 @@ interface WindowContentProps {
     windowId?: string,
   ) => ReactNode;
   windowId?: string;
+  isUnlocked?: boolean;
 }
 
 function WindowContent({
@@ -2813,8 +2815,45 @@ function WindowContent({
   tabs,
   renderPanel,
   windowId,
+  isUnlocked = false,
 }: WindowContentProps): React.ReactElement | null {
   const activeTab = tabs[activeTabIndex];
+  const { moveTab } = useTabDrag();
+
+  // Check if something is being dragged from another window
+  const isDragging = useDragStore((s) => s.isDragging);
+  const dragItem = useDragStore((s) => s.item);
+  const isTabDragging = isDragging && dragItem?.type === "tab";
+  const isWindowDragging = isDragging && dragItem?.type === "window";
+  const draggingSourceWindowId = isTabDragging ? dragItem?.sourceId : null;
+  const draggingWindowId = isWindowDragging ? dragItem?.id : null;
+
+  const isDraggingFromOther =
+    (isTabDragging && draggingSourceWindowId !== windowId) ||
+    (isWindowDragging && draggingWindowId !== windowId);
+
+  const showDropZone = isUnlocked && isDraggingFromOther;
+
+  // Drop zone for entire content area (for multi-tab windows)
+  const { isOver, dropProps } = useDrop({
+    id: `window-content-drop-${windowId}`,
+    accepts: ["tab", "window"],
+    disabled: !showDropZone,
+    onDrop: (item) => {
+      if (item.type === "tab" && item.sourceId && item.sourceId !== windowId) {
+        moveTab(item.id, windowId!);
+      } else if (item.type === "window" && item.id && item.id !== windowId) {
+        // Merge all tabs from source window
+        const sourceWindow = useWindowStore.getState().getWindow(item.id);
+        if (sourceWindow && windowId) {
+          sourceWindow.tabs.forEach((tab) => {
+            useWindowStore.getState().moveTab(tab.id, item.id, windowId);
+          });
+        }
+      }
+    },
+  });
+
   if (!activeTab) return null;
 
   // If content is a string (panel ID), use the renderPanel function
@@ -2828,6 +2867,7 @@ function WindowContent({
     // No overflow: auto here - that creates nested scroll containers
     return (
       <div
+        {...dropProps}
         style={{
           flex: 1,
           display: "flex",
@@ -2835,9 +2875,54 @@ function WindowContent({
           minHeight: 0,
           overflow: "hidden",
           padding: isActionBar ? 0 : 4,
+          position: "relative",
+          // Visual feedback for drop zone
+          outline: isOver
+            ? "2px solid rgba(100, 200, 255, 0.8)"
+            : showDropZone
+              ? "1px dashed rgba(100, 200, 255, 0.4)"
+              : "none",
+          outlineOffset: "-2px",
+          transition: "outline 0.15s ease",
         }}
       >
         {panelContent}
+        {/* Drop indicator overlay */}
+        {showDropZone && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: isOver ? "rgba(100, 200, 255, 0.15)" : "transparent",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 100,
+              pointerEvents: "none",
+              transition: "background 0.15s ease",
+            }}
+          >
+            <span
+              style={{
+                fontSize: 12,
+                color: isOver
+                  ? "rgba(255, 255, 255, 0.95)"
+                  : "rgba(255, 255, 255, 0.7)",
+                textTransform: "uppercase",
+                letterSpacing: 1,
+                fontWeight: 600,
+                backgroundColor: isOver
+                  ? "rgba(0, 0, 0, 0.7)"
+                  : "rgba(0, 0, 0, 0.5)",
+                padding: "6px 12px",
+                borderRadius: 4,
+                textShadow: "0 1px 2px rgba(0,0,0,0.5)",
+              }}
+            >
+              {isOver ? "Release to add tab" : "Drop here"}
+            </span>
+          </div>
+        )}
       </div>
     );
   }
@@ -2865,7 +2950,8 @@ function DraggableContentWrapper({
   isUnlocked,
 }: DraggableContentWrapperProps): React.ReactElement | null {
   const activeTab = tabs[activeTabIndex];
-  const { mergeWindow, isTabDragging, draggingSourceWindowId } = useTabDrag();
+  const { mergeWindow, moveTab, isTabDragging, draggingSourceWindowId } =
+    useTabDrag();
   const destroyWindow = useWindowStore((s) => s.destroyWindow);
 
   // Check if a window is being dragged (for window-to-window merge)
@@ -2874,15 +2960,22 @@ function DraggableContentWrapper({
   const isWindowDragging = isDragging && dragItem?.type === "window";
   const draggingWindowId = isWindowDragging ? dragItem?.id : null;
 
-  // Drop zone for merging windows - accepts tabs AND windows from other windows
+  // Show merge zone when dragging a tab or window from another window
+  const isDraggingFromOther =
+    (isTabDragging && draggingSourceWindowId !== windowId) ||
+    (isWindowDragging && draggingWindowId !== windowId);
+  const showMergeZone = isUnlocked && isDraggingFromOther;
+
+  // Make ENTIRE window body a drop zone (not just the small header)
   const { isOver, dropProps } = useDrop({
-    id: `merge-zone-${windowId}`,
+    id: `window-drop-${windowId}`,
     accepts: ["tab", "window"],
+    disabled: !showMergeZone, // Only accept drops when in edit mode and dragging from elsewhere
     onDrop: (item) => {
       if (item.type === "tab") {
-        // Merge the source window into this window (tab drag)
+        // Move just the tab to this window
         if (item.sourceId && item.sourceId !== windowId) {
-          mergeWindow(item.sourceId, windowId);
+          moveTab(item.id, windowId);
         }
       } else if (item.type === "window") {
         // Merge the dragged window into this window (window drag)
@@ -2893,12 +2986,6 @@ function DraggableContentWrapper({
     },
   });
 
-  // Show merge zone when dragging a tab or window from another window
-  const isDraggingFromOther =
-    (isTabDragging && draggingSourceWindowId !== windowId) ||
-    (isWindowDragging && draggingWindowId !== windowId);
-  const showMergeZone = isUnlocked && isDraggingFromOther;
-
   if (!activeTab) return null;
 
   // Get panel content
@@ -2908,8 +2995,10 @@ function DraggableContentWrapper({
       : activeTab.content;
 
   // Container fills available space, draggable in edit mode
+  // ENTIRE container is now a drop zone when dragging from another window
   return (
     <div
+      {...dropProps}
       style={{
         flex: 1,
         display: "flex",
@@ -2917,52 +3006,52 @@ function DraggableContentWrapper({
         minHeight: 0,
         overflow: "hidden",
         position: "relative",
+        // Highlight entire window when potential drop target
+        outline: isOver
+          ? "2px solid rgba(100, 200, 255, 0.8)"
+          : showMergeZone
+            ? "1px dashed rgba(100, 200, 255, 0.4)"
+            : "none",
+        outlineOffset: "-2px",
+        transition: "outline 0.15s ease",
       }}
     >
-      {/* Merge zone - always rendered for drop detection, visible when dragging */}
-      <div
-        {...dropProps}
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          height: showMergeZone ? 32 : 0,
-          background: isOver
-            ? "linear-gradient(180deg, rgba(100, 200, 255, 0.4) 0%, rgba(100, 200, 255, 0.1) 100%)"
-            : showMergeZone
-              ? "linear-gradient(180deg, rgba(100, 200, 255, 0.2) 0%, transparent 100%)"
-              : "transparent",
-          borderBottom: showMergeZone
-            ? isOver
-              ? "2px solid rgba(100, 200, 255, 0.8)"
-              : "1px dashed rgba(100, 200, 255, 0.4)"
-            : "none",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 10,
-          transition: "all 0.15s ease",
-          pointerEvents: showMergeZone ? "auto" : "none",
-          overflow: "hidden",
-        }}
-      >
-        {showMergeZone && (
+      {/* Drop indicator overlay - covers entire window */}
+      {showMergeZone && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: isOver ? "rgba(100, 200, 255, 0.15)" : "transparent",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 100,
+            pointerEvents: "none", // Let events pass through to the container
+            transition: "background 0.15s ease",
+          }}
+        >
           <span
             style={{
-              fontSize: 11,
+              fontSize: 12,
               color: isOver
-                ? "rgba(255, 255, 255, 0.9)"
-                : "rgba(255, 255, 255, 0.6)",
+                ? "rgba(255, 255, 255, 0.95)"
+                : "rgba(255, 255, 255, 0.7)",
               textTransform: "uppercase",
               letterSpacing: 1,
-              fontWeight: 500,
+              fontWeight: 600,
+              backgroundColor: isOver
+                ? "rgba(0, 0, 0, 0.7)"
+                : "rgba(0, 0, 0, 0.5)",
+              padding: "6px 12px",
+              borderRadius: 4,
+              textShadow: "0 1px 2px rgba(0,0,0,0.5)",
             }}
           >
-            {isOver ? "Release to combine" : "Drop to combine"}
+            {isOver ? "Release to combine" : "Drop here"}
           </span>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Close button - only in edit mode for single-tab windows */}
       {isUnlocked && (

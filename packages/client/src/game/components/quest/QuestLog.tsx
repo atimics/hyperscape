@@ -787,7 +787,7 @@ const CategoryGroup = memo(function CategoryGroup({
     width: isMobile ? "16px" : "12px",
     height: isMobile ? "16px" : "12px",
     color: theme.colors.text.muted,
-    transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)",
+    transform: collapsed ? "rotate(0deg)" : "rotate(90deg)",
     transition: reducedMotion ? "none" : "transform 0.2s ease",
   };
 
@@ -1134,9 +1134,23 @@ export const QuestLog = memo(function QuestLog({
   return (
     <>
       <div className={className} style={containerStyle}>
-        {/* Compact Header with Stats and Toolbar */}
+        {/* Header with Title, Stats and Toolbar */}
         {showHeader && (
           <div style={headerStyle}>
+            {/* Title */}
+            <span
+              style={{
+                color: theme.colors.accent.primary,
+                fontSize: isMobile
+                  ? theme.typography.fontSize.sm
+                  : theme.typography.fontSize.xs,
+                fontWeight: theme.typography.fontWeight.semibold,
+                marginRight: theme.spacing.sm,
+              }}
+            >
+              {title}
+            </span>
+            {/* Quest counts */}
             {questCounts && (
               <div style={statsStyle}>
                 <span style={{ color: STATUS_COLORS.active }}>
@@ -1172,30 +1186,65 @@ export const QuestLog = memo(function QuestLog({
                     <FilterIcon />
                   </button>
                 )}
-              {/* Sort dropdown - inline */}
+              {/* Sort dropdown with direction toggle */}
               {showSort && onSortChange && (
-                <select
-                  value={sortBy}
-                  onChange={(e) =>
-                    onSortChange(e.target.value as QuestSortOption)
-                  }
-                  style={{
-                    padding: "2px 4px",
-                    backgroundColor: theme.colors.background.tertiary,
-                    border: `1px solid ${theme.colors.border.default}`,
-                    borderRadius: `${theme.borderRadius.sm}px`,
-                    color: theme.colors.text.muted,
-                    fontSize: "10px",
-                    cursor: "pointer",
-                    outline: "none",
-                  }}
-                >
-                  {sortOptions.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
+                <>
+                  <select
+                    value={sortBy}
+                    onChange={(e) =>
+                      onSortChange(e.target.value as QuestSortOption)
+                    }
+                    style={{
+                      padding: isMobile ? "4px 6px" : "2px 4px",
+                      backgroundColor: theme.colors.background.tertiary,
+                      border: `1px solid ${theme.colors.border.default}`,
+                      borderRadius: `${theme.borderRadius.sm}px`,
+                      color: theme.colors.text.muted,
+                      fontSize: isMobile ? "11px" : "10px",
+                      cursor: "pointer",
+                      outline: "none",
+                    }}
+                  >
+                    {sortOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  {onSortDirectionChange && (
+                    <button
+                      style={{
+                        ...iconButtonStyle(false),
+                        width: isMobile ? "28px" : "22px",
+                        height: isMobile ? "28px" : "22px",
+                      }}
+                      onClick={() =>
+                        onSortDirectionChange(
+                          sortDirection === "asc" ? "desc" : "asc",
+                        )
+                      }
+                      title={
+                        sortDirection === "asc" ? "Ascending" : "Descending"
+                      }
+                    >
+                      <svg
+                        width="10"
+                        height="10"
+                        viewBox="0 0 12 12"
+                        fill="currentColor"
+                        style={{
+                          transform:
+                            sortDirection === "desc"
+                              ? "rotate(180deg)"
+                              : "rotate(0deg)",
+                          transition: reducedMotion ? "none" : "transform 0.2s",
+                        }}
+                      >
+                        <path d="M6 2l4 4H2l4-4z" />
+                      </svg>
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>
