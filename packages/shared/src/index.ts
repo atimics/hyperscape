@@ -316,6 +316,9 @@ export type {
   SkillUnlocksManifest,
 } from "./data/skill-unlocks";
 
+// Export prayer data provider for UI panels
+export { prayerDataProvider } from "./data/PrayerDataProvider";
+
 // Export world area data for server use
 export { ALL_WORLD_AREAS, STARTER_TOWNS } from "./data/world-areas";
 

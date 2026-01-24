@@ -250,6 +250,7 @@ export class InteractionRouter extends System {
     if (event.defaultPrevented) return;
     if (event.button !== 0) return;
     if (!this.canvas || !this.areControlsEnabled()) return;
+    if (this.isEventFromModal(event)) return;
 
     // Check for entity at click position
     const target = this.raycastService.getEntityAtPosition(
@@ -314,6 +315,7 @@ export class InteractionRouter extends System {
   private onContextMenu = (event: MouseEvent): void => {
     if (!this.areControlsEnabled()) return;
     if (!this.canvas) return;
+    if (this.isEventFromModal(event)) return;
 
     if (DEBUG_INTERACTIONS) console.time("[ContextMenu] Total");
     if (DEBUG_INTERACTIONS) console.time("[ContextMenu] Raycast");
@@ -400,6 +402,9 @@ export class InteractionRouter extends System {
   private onMouseDown = (event: MouseEvent): void => {
     if (!this.areControlsEnabled()) return;
 
+    // Skip if event originated from a modal or UI overlay
+    if (this.isEventFromModal(event)) return;
+
     if (event.button === 2) {
       // Right-click - let onContextMenu handle the menu (avoid duplicate raycast)
       // Just track the mouse state here
@@ -436,6 +441,7 @@ export class InteractionRouter extends System {
 
   private onTouchStart = (event: TouchEvent): void => {
     if (!this.areControlsEnabled()) return;
+    if (this.isEventFromModal(event)) return;
 
     const touch = event.touches[0];
     if (!touch) return;
@@ -647,6 +653,33 @@ export class InteractionRouter extends System {
     }
 
     return true;
+  }
+
+  /**
+   * Check if an event originated from within a modal overlay.
+   * This prevents game interactions when clicking on modal UI elements.
+   */
+  private isEventFromModal(event: MouseEvent | TouchEvent): boolean {
+    const target = event.target as HTMLElement | null;
+    if (!target) return false;
+
+    // Check if the target is inside a modal (role="dialog" or data-modal attribute)
+    const modal = target.closest('[role="dialog"], [data-modal="true"]');
+    if (modal) return true;
+
+    // Check if the target has a high z-index overlay (modal backdrop)
+    // Modals typically use z-index >= 10000
+    let el: HTMLElement | null = target;
+    while (el) {
+      const style = window.getComputedStyle(el);
+      const zIndex = parseInt(style.zIndex, 10);
+      if (!isNaN(zIndex) && zIndex >= 10000) {
+        return true;
+      }
+      el = el.parentElement;
+    }
+
+    return false;
   }
 
   // === Targeting Mode (OSRS "Use X on Y") ===

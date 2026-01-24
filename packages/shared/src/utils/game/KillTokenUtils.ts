@@ -19,18 +19,31 @@
 
 // Lazy-loaded crypto module (Node.js only)
 let cryptoModule: typeof import("crypto") | null = null;
+let cryptoLoadAttempted = false;
+
+/** Type for dynamic require function */
+type RequireFn = (id: string) => unknown;
 
 /**
  * Get the crypto module (lazy load to avoid client-side errors)
  */
 function getCrypto(): typeof import("crypto") | null {
-  if (cryptoModule === null) {
+  if (!cryptoLoadAttempted) {
+    cryptoLoadAttempted = true;
     try {
-      // Dynamic require for Node.js crypto
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      cryptoModule = require("crypto");
+      // Use globalThis to access require in Node.js environment
+      // This avoids ESLint issues while maintaining compatibility
+      const g = globalThis as { require?: RequireFn };
+      const nodeRequire =
+        typeof g !== "undefined" && typeof g.require === "function"
+          ? g.require
+          : null;
+
+      if (nodeRequire) {
+        cryptoModule = nodeRequire("crypto") as typeof import("crypto");
+      }
     } catch {
-      // Not available (running on client)
+      // Not available (running on client or bundled environment)
       cryptoModule = null;
     }
   }

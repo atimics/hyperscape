@@ -2208,6 +2208,19 @@ export class ClientNetwork extends SystemBase {
     this.send("dropItem", { itemId, slot, quantity });
   }
 
+  // Prayer actions
+  togglePrayer(prayerId: string) {
+    this.send("prayerToggle", { prayerId, timestamp: Date.now() });
+  }
+
+  deactivateAllPrayers() {
+    this.send("prayerDeactivateAll", { timestamp: Date.now() });
+  }
+
+  prayAtAltar(altarId: string) {
+    this.send("altarPray", { altarId, timestamp: Date.now() });
+  }
+
   onEntityRemoved = (id: string) => {
     // Remove from interpolation tracking
     this.interpolationStates.delete(id);

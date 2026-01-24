@@ -6,7 +6,7 @@
  * Both context menu selections and left-click primary actions route through here.
  */
 
-import { EventType, uuid, getItem, type ItemData } from "@hyperscape/shared";
+import { EventType, uuid, getItem, type Item } from "@hyperscape/shared";
 import type { ClientWorld } from "../../types";
 
 export interface InventoryActionContext {
@@ -109,7 +109,7 @@ export function dispatchInventoryAction(
 
     case "rub": {
       // Handle XP lamp usage - check if item has useEffect with type "xp_lamp"
-      const lampData = getItem(itemId) as ItemData & {
+      const lampData = getItem(itemId) as Item & {
         useEffect?: { type: string; xpAmount: number };
       };
       if (lampData?.useEffect?.type === "xp_lamp") {

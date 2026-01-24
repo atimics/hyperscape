@@ -495,11 +495,17 @@ export interface ProcessingFiremakingRequestPayload {
 
 /**
  * Cooking request payload (use raw food on fire/range)
+ * Supports both fires (temporary) and ranges (permanent)
  */
 export interface ProcessingCookingRequestPayload {
   playerId: string;
   fishSlot: number;
-  fireId: string;
+  /** Fire entity ID (for campfire cooking) */
+  fireId?: string;
+  /** Range entity ID (for permanent cooking stations) */
+  rangeId?: string;
+  /** Source type - defaults to "fire" for backwards compatibility */
+  sourceType?: "fire" | "range";
 }
 
 /**
