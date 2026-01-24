@@ -995,7 +995,16 @@ export class PlayerSystem extends SystemBase {
     // === MAX HEALTH CHECK ===
     // Similar to prayer points check - notify player if already at max health
     const player = this.players.get(data.playerId);
+    if (player) {
+      console.log("[PlayerSystem] handleItemUsed health check:", {
+        playerId: data.playerId,
+        current: player.health.current,
+        max: player.health.max,
+        isAtMax: player.health.current >= player.health.max,
+      });
+    }
     if (player && player.health.current >= player.health.max) {
+      console.log("[PlayerSystem] Player at max health, sending UI_MESSAGE");
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId: data.playerId,
         message: "You're already at full health.",
