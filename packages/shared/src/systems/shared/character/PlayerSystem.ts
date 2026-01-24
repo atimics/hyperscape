@@ -958,6 +958,11 @@ export class PlayerSystem extends SystemBase {
     slot: number;
     itemData: { id: string; name: string; type: string };
   }): void {
+    // SERVER-SIDE ONLY: Food consumption is validated and processed on server
+    if (!this.world.isServer) {
+      return;
+    }
+
     // === SECURITY: Input Validation (OWASP) ===
     if (!data.playerId || typeof data.playerId !== "string") {
       Logger.systemError("PlayerSystem", "Invalid playerId in handleItemUsed");
