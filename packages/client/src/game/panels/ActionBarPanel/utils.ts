@@ -25,7 +25,7 @@ export const CONTROL_BUTTON_SIZE = parseTokenToNumber(
 ); // 20
 export const CONTROL_BUTTON_GAP = 4; // Gap between control button and slots
 
-// Default keyboard shortcuts for up to 9 slots
+// Default keyboard shortcuts for up to 12 slots (RS3-style: 1-9, 0, -, =)
 export const DEFAULT_KEYBOARD_SHORTCUTS = [
   "1",
   "2",
@@ -36,6 +36,9 @@ export const DEFAULT_KEYBOARD_SHORTCUTS = [
   "7",
   "8",
   "9",
+  "0",
+  "-",
+  "=",
 ];
 
 // Storage keys

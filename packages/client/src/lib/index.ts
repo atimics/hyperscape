@@ -35,3 +35,19 @@ export {
   type RetryResult,
 } from "./retry";
 export { logger } from "./logger";
+// Object pooling for game entities (preferred for MMORPG patterns)
+export {
+  ObjectPool,
+  EntityPool,
+  poolRegistry,
+  createMonitoredPool,
+  type ObjectFactory,
+  type ObjectReset,
+} from "./LRUCache";
+
+// Deprecated: Use ObjectPool instead for game patterns
+export {
+  LRUCache, // Deprecated alias for ObjectPool
+  createMonitoredCache, // Deprecated
+  cacheRegistry, // Deprecated alias for poolRegistry
+} from "./LRUCache";

@@ -588,8 +588,7 @@ export const Window = memo(function Window({
     <div
       className={className}
       style={containerStyle}
-      onClick={bringToFront}
-      onFocus={bringToFront}
+      onMouseDown={isUnlocked ? bringToFront : undefined}
       data-window-id={windowId}
       data-panel={windowId}
       role="dialog"

@@ -339,10 +339,10 @@ export const gameUI = {
   actionBar: {
     /** Minimum number of slots user can configure */
     minSlots: 4,
-    /** Maximum number of slots user can configure */
-    maxSlots: 9,
+    /** Maximum number of slots user can configure (RS3 has 14, we use 12) */
+    maxSlots: 12,
     /** Default number of slots */
-    defaultSlots: 7,
+    defaultSlots: 9,
     /** Slots displayed per page (for paged action panels) */
     slotsPerPage: 7,
     /** Total pages/bars available */

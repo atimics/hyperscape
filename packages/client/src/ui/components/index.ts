@@ -169,4 +169,7 @@ export {
   getSlotStyle,
 } from "../theme/themes";
 
+// Notifications
+export { NotificationContainer } from "./NotificationContainer";
+
 // Note: Animation utilities are exported from ../theme, not here to avoid duplicate exports

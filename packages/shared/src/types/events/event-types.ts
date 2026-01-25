@@ -84,6 +84,9 @@ export enum EventType {
   // Network Communication
   NETWORK_CONNECTED = "network:connected",
   NETWORK_DISCONNECTED = "network:disconnected",
+  NETWORK_RECONNECTING = "network:reconnecting",
+  NETWORK_RECONNECTED = "network:reconnected",
+  NETWORK_RECONNECT_FAILED = "network:reconnect_failed",
   NETWORK_MESSAGE_RECEIVED = "network:message:received",
   NETWORK_ENTITY_UPDATES = "network:entity_updates",
 

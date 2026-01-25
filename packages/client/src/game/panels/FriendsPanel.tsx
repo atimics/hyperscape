@@ -18,32 +18,10 @@ import {
 import { useThemeStore, type Theme } from "@/ui";
 import { breakpoints } from "../../constants";
 import type { ClientWorld } from "../../types";
+import type { Friend, FriendRequest, FriendStatus } from "@hyperscape/shared";
 
 interface FriendsPanelProps {
   world: ClientWorld;
-}
-
-/** Friend status */
-type FriendStatus = "online" | "away" | "busy" | "offline";
-
-/** Friend data */
-interface Friend {
-  id: string;
-  name: string;
-  status: FriendStatus;
-  location?: string;
-  level?: number;
-  lastSeen?: number;
-}
-
-/** Pending friend request */
-interface FriendRequest {
-  id: string;
-  fromId: string;
-  fromName: string;
-  toId: string;
-  toName: string;
-  timestamp: number;
 }
 
 // Status colors - will use theme colors
@@ -72,6 +50,23 @@ export function FriendsPanel({ world }: FriendsPanelProps) {
   const [addFriendName, setAddFriendName] = useState("");
   const [hoveredFriendId, setHoveredFriendId] = useState<string | null>(null);
 
+  // Re-render trigger for friend updates
+  const [updateCounter, forceUpdate] = useState(0);
+
+  // Listen for friend data updates
+  useEffect(() => {
+    const handler = (...args: unknown[]) => {
+      const data = args[0] as { type?: string } | undefined;
+      if (data?.type === "friends_updated") {
+        forceUpdate((n) => n + 1);
+      }
+    };
+    world.on?.("ui:stateChanged", handler);
+    return () => {
+      world.off?.("ui:stateChanged", handler);
+    };
+  }, [world]);
+
   // Mobile responsiveness
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth < breakpoints.md : false,
@@ -85,22 +80,27 @@ export function FriendsPanel({ world }: FriendsPanelProps) {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // Get friends data from world
+  // Get friends data from world - updateCounter in deps ensures re-fetch on updates
   const { friends, requests } = useMemo(() => {
-    const socialSystem = world.getSystem?.("social");
-    if (
-      socialSystem &&
-      typeof socialSystem === "object" &&
-      "getFriends" in socialSystem
-    ) {
-      const getFriends = socialSystem.getFriends as () => {
-        friends: Friend[];
-        requests: FriendRequest[];
-      };
-      return getFriends();
+    try {
+      const socialSystem = world.getSystem?.("social");
+      if (
+        socialSystem &&
+        typeof socialSystem === "object" &&
+        "getFriends" in socialSystem
+      ) {
+        // Call as method to preserve 'this' context
+        return (
+          socialSystem as {
+            getFriends: () => { friends: Friend[]; requests: FriendRequest[] };
+          }
+        ).getFriends();
+      }
+    } catch {
+      // Fall back to sample data if SocialSystem unavailable
     }
     return getSampleSocialData();
-  }, [world]);
+  }, [world, updateCounter]);
 
   // Filter friends by search
   const filteredFriends = useMemo(() => {
@@ -137,7 +137,23 @@ export function FriendsPanel({ world }: FriendsPanelProps) {
   // Handle friend actions
   const handleMessageFriend = useCallback(
     (friend: Friend) => {
-      world.network?.send?.("messagePrivate", { targetId: friend.id });
+      // Prompt for message content
+      const message = window.prompt(`Send a message to ${friend.name}:`);
+      if (message && message.trim()) {
+        // Send via ClientNetwork convenience method if available
+        const network = world.getSystem?.("network") as {
+          sendPrivateMessage?: (targetName: string, content: string) => void;
+          send?: (type: string, data: Record<string, unknown>) => void;
+        };
+        if (network?.sendPrivateMessage) {
+          network.sendPrivateMessage(friend.name, message.trim());
+        } else if (network?.send) {
+          network.send("privateMessage", {
+            targetName: friend.name,
+            content: message.trim(),
+          });
+        }
+      }
     },
     [world],
   );
@@ -617,67 +633,18 @@ function formatTimeAgo(timestamp: number): string {
 }
 
 /**
- * Sample social data for development
+ * Sample social data for development fallback
+ * Returns empty data since real data comes from SocialSystem
  */
 function getSampleSocialData(): {
   friends: Friend[];
   requests: FriendRequest[];
 } {
+  // Return empty data - real data comes from server via SocialSystem
+  // Sample data would require PlayerID branded type casting
   return {
-    friends: [
-      {
-        id: "friend-1",
-        name: "AdventureSeeker",
-        status: "online",
-        location: "Lumbridge",
-        level: 42,
-      },
-      {
-        id: "friend-2",
-        name: "MiningMaster",
-        status: "online",
-        location: "Mining Guild",
-        level: 85,
-      },
-      {
-        id: "friend-3",
-        name: "FishermanJoe",
-        status: "away",
-        location: "Fishing Spot",
-        level: 55,
-      },
-      {
-        id: "friend-4",
-        name: "DarkKnight99",
-        status: "busy",
-        location: "Wilderness",
-        level: 99,
-      },
-      {
-        id: "friend-5",
-        name: "CasualPlayer",
-        status: "offline",
-        level: 23,
-        lastSeen: Date.now() - 3600000,
-      },
-      {
-        id: "friend-6",
-        name: "OldFriend",
-        status: "offline",
-        level: 15,
-        lastSeen: Date.now() - 86400000 * 7,
-      },
-    ],
-    requests: [
-      {
-        id: "req-1",
-        fromId: "player-123",
-        fromName: "NewPlayer2024",
-        toId: "local",
-        toName: "You",
-        timestamp: Date.now() - 300000,
-      },
-    ],
+    friends: [],
+    requests: [],
   };
 }
 

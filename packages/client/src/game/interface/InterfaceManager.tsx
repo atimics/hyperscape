@@ -12,17 +12,14 @@
  * @packageDocumentation
  */
 
-import React, {
-  useEffect,
-  useState,
-  useCallback,
-  useMemo,
-  type ReactNode,
-} from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { EventType, getItem } from "@hyperscape/shared";
 import {
   DndContext as DndKitContext,
   DragOverlay as DndKitDragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
   type DragEndEvent as DndKitDragEndEvent,
   type DragStartEvent as DndKitDragStartEvent,
 } from "@dnd-kit/core";
@@ -56,8 +53,8 @@ import {
   getPanelConfig,
   getDeviceType,
   getResponsivePanelSize,
-  MENUBAR_DIMENSIONS,
   MODAL_PANEL_IDS,
+  MENUBAR_DIMENSIONS,
   type PanelSize,
 } from "./PanelRegistry";
 import {
@@ -82,268 +79,13 @@ import {
   MAX_ACTION_BARS,
   TAB_BAR_HEIGHT,
 } from "./types";
+import {
+  createDefaultWindows,
+  getResponsivePanelSizing,
+} from "./DefaultLayoutFactory";
+import { useViewportResize } from "./useViewportResize";
 
-/**
- * Get responsive panel size based on current viewport
- *
- * @param panelId - The panel ID to get size for
- * @param viewport - Current viewport dimensions
- * @returns Panel size and minSize
- */
-function getResponsivePanelSizing(panelId: string, viewport: PanelSize) {
-  const config = getPanelConfig(panelId);
-  const deviceType = getDeviceType(viewport.width);
-  const size = getResponsivePanelSize(config, deviceType, viewport);
-
-  return {
-    size,
-    minSize: config.minSize,
-    maxSize: config.maxSize,
-  };
-}
-
-/**
- * Create default windows configuration based on current viewport
- * This ensures windows are properly sized for the device
- *
- * Default Layout:
- * - Left side: Settings (below HP bar), Skills/Prayer (middle), Chat (bottom)
- * - Right side: Minimap (top), Stats panel (middle), Inventory (bottom)
- * - Bottom: Action bar (center), Menu bar (right)
- */
-function createDefaultWindows(): WindowConfig[] {
-  const viewport =
-    typeof window !== "undefined"
-      ? { width: window.innerWidth, height: window.innerHeight }
-      : { width: 1920, height: 1080 };
-
-  const minimapSizing = getResponsivePanelSizing("minimap", viewport);
-  const inventorySizing = getResponsivePanelSizing("inventory", viewport);
-  const chatSizing = getResponsivePanelSizing("chat", viewport);
-  const actionbarSizing = getResponsivePanelSizing("actionbar", viewport);
-  const skillsSizing = getResponsivePanelSizing("skills", viewport);
-
-  // Menu bar dimensions (width/height already include padding from calcMenubarHorizontalDimensions)
-  // Add border buffer to match actual window size
-  const menuBarWidth = MENUBAR_DIMENSIONS.width + 4; // 4 = MENUBAR_BORDER_BUFFER
-  const menuBarHeight = MENUBAR_DIMENSIONS.height + 4;
-
-  // Calculate X positions - each panel is flush with right edge (clamped to stay on screen)
-  const menuBarX = Math.max(0, viewport.width - menuBarWidth);
-  const inventoryX = Math.max(0, viewport.width - inventorySizing.size.width);
-  const minimapX = Math.max(0, viewport.width - minimapSizing.size.width);
-
-  // Calculate bottom positions - menu bar is flush with bottom right
-  const menuBarY = Math.max(0, viewport.height - menuBarHeight);
-
-  // Inventory sits directly above menu bar (touching) - clamp to stay on screen
-  // Inventory window has multiple tabs, so add TabBar height to total window height
-  const inventoryTotalHeight = inventorySizing.size.height + TAB_BAR_HEIGHT;
-  const inventoryY = Math.max(0, menuBarY - inventoryTotalHeight);
-
-  // Chat is flush with bottom left - clamp to stay on screen
-  const chatY = Math.max(0, viewport.height - chatSizing.size.height);
-
-  // Skills/Prayer tabbed panel positioned directly above chat (touching) - clamp to stay on screen
-  // Skills/Prayer window has multiple tabs, so add TabBar height to total window height
-  const skillsPrayerTotalHeight = skillsSizing.size.height + TAB_BAR_HEIGHT;
-  const skillsPrayerY = Math.max(0, chatY - skillsPrayerTotalHeight);
-
-  return [
-    // === LEFT SIDE ===
-    // Skills/Prayer tabbed panel - above chat
-    {
-      id: "skills-prayer-window",
-      position: clampPosition(
-        0,
-        skillsPrayerY,
-        skillsSizing.size.width,
-        skillsPrayerTotalHeight,
-        viewport,
-      ),
-      size: {
-        width: skillsSizing.size.width,
-        height: skillsPrayerTotalHeight,
-      },
-      minSize: {
-        width: skillsSizing.minSize.width,
-        height: skillsSizing.minSize.height + TAB_BAR_HEIGHT,
-      },
-      maxSize: skillsSizing.maxSize
-        ? {
-            width: skillsSizing.maxSize.width,
-            height: skillsSizing.maxSize.height + TAB_BAR_HEIGHT,
-          }
-        : undefined,
-      tabs: [
-        {
-          id: "skills",
-          label: "Skills",
-          icon: "⭐",
-          content: "skills",
-          closeable: true,
-        },
-        {
-          id: "prayer",
-          label: "Prayer",
-          icon: "✨",
-          content: "prayer",
-          closeable: true,
-        },
-      ],
-      transparency: 0,
-    },
-    // Chat panel - fully at bottom left (touching edges)
-    {
-      id: "chat-window",
-      position: clampPosition(
-        0,
-        chatY,
-        chatSizing.size.width,
-        chatSizing.size.height,
-        viewport,
-      ),
-      size: chatSizing.size,
-      minSize: chatSizing.minSize,
-      tabs: [
-        {
-          id: "chat",
-          label: "Chat",
-          icon: "💬",
-          content: "chat",
-          closeable: true,
-        },
-      ],
-      transparency: 0,
-    },
-
-    // === RIGHT SIDE (from bottom up, all touching and flush with right edge) ===
-    // Menu bar - fully at bottom right (flush with edges)
-    {
-      id: "menubar-window",
-      position: clampPosition(
-        menuBarX,
-        menuBarY,
-        menuBarWidth,
-        menuBarHeight,
-        viewport,
-      ),
-      size: {
-        width: menuBarWidth,
-        height: menuBarHeight,
-      },
-      minSize: {
-        width: MENUBAR_DIMENSIONS.minWidth,
-        height: MENUBAR_DIMENSIONS.minHeight,
-      },
-      maxSize: {
-        width: MENUBAR_DIMENSIONS.maxWidth,
-        height: MENUBAR_DIMENSIONS.maxHeight,
-      },
-      tabs: [
-        {
-          id: "menubar",
-          label: "Menu",
-          icon: "📋",
-          content: "menubar",
-          closeable: false,
-        },
-      ],
-      transparency: 0,
-    },
-    // Inventory - directly above menu bar (touching, flush with right edge)
-    {
-      id: "inventory-window",
-      position: clampPosition(
-        inventoryX,
-        inventoryY,
-        inventorySizing.size.width,
-        inventoryTotalHeight,
-        viewport,
-      ),
-      size: {
-        width: inventorySizing.size.width,
-        height: inventoryTotalHeight,
-      },
-      minSize: {
-        width: inventorySizing.minSize.width,
-        height: inventorySizing.minSize.height + TAB_BAR_HEIGHT,
-      },
-      maxSize: inventorySizing.maxSize
-        ? {
-            width: inventorySizing.maxSize.width,
-            height: inventorySizing.maxSize.height + TAB_BAR_HEIGHT,
-          }
-        : undefined,
-      tabs: [
-        {
-          id: "inventory",
-          label: "Inventory",
-          icon: "🎒",
-          content: "inventory",
-          closeable: true,
-        },
-        {
-          id: "equipment",
-          label: "Equipment",
-          icon: "🎽",
-          content: "equipment",
-          closeable: true,
-        },
-      ],
-      transparency: 0,
-    },
-    // Minimap - top right (touching top and right edges)
-    {
-      id: "minimap-window",
-      position: clampPosition(
-        minimapX,
-        0,
-        minimapSizing.size.width,
-        minimapSizing.size.height,
-        viewport,
-      ),
-      size: minimapSizing.size,
-      minSize: minimapSizing.minSize,
-      tabs: [
-        {
-          id: "minimap",
-          label: "Minimap",
-          icon: "🗺️",
-          content: "minimap",
-          closeable: false,
-        },
-      ],
-      transparency: 0,
-    },
-
-    // === BOTTOM CENTER ===
-    // Action bar - bottom center (touching bottom edge)
-    {
-      id: "actionbar-0-window",
-      position: clampPosition(
-        Math.floor(viewport.width / 2 - actionbarSizing.size.width / 2),
-        Math.max(0, viewport.height - actionbarSizing.size.height),
-        actionbarSizing.size.width,
-        actionbarSizing.size.height,
-        viewport,
-      ),
-      size: actionbarSizing.size,
-      minSize: actionbarSizing.minSize,
-      maxSize: actionbarSizing.maxSize,
-      tabs: [
-        {
-          id: "actionbar-0",
-          label: "Action Bar",
-          icon: "⚡",
-          content: "actionbar-0",
-          closeable: false,
-        },
-      ],
-      transparency: 0,
-    },
-  ];
-}
+// getResponsivePanelSizing and createDefaultWindows are now imported from DefaultLayoutFactory
 
 /**
  * Main interface manager component
@@ -1120,6 +862,16 @@ function DesktopInterfaceManager({
     data: Record<string, unknown>;
   } | null>(null);
 
+  // Configure dnd-kit sensors with activation distance to prevent click interference
+  // Without this, dnd-kit's default sensors capture all pointer events and prevent clicks
+  const dndKitSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // Must move 8 pixels before drag starts
+      },
+    }),
+  );
+
   // @dnd-kit drag start handler for item dragging
   const handleDndKitDragStart = useCallback((event: DndKitDragStartEvent) => {
     const { active } = event;
@@ -1514,6 +1266,7 @@ function DesktopInterfaceManager({
 
         {/* @dnd-kit context for cross-panel item dragging */}
         <DndKitContext
+          sensors={dndKitSensors}
           onDragStart={handleDndKitDragStart}
           onDragEnd={handleDndKitDragEnd}
         >

@@ -184,6 +184,7 @@ function PrayerIcon({
   prayer,
   playerLevel,
   onClick,
+  onContextMenu,
   onMouseEnter,
   onMouseMove,
   onMouseLeave,
@@ -192,6 +193,7 @@ function PrayerIcon({
   prayer: PrayerUI;
   playerLevel: number;
   onClick: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
   onMouseEnter: (e: React.MouseEvent) => void;
   onMouseMove: (e: React.MouseEvent) => void;
   onMouseLeave: () => void;
@@ -208,13 +210,14 @@ function PrayerIcon({
   const pointerStartPosRef = useRef<{ x: number; y: number } | null>(null);
 
   // Make prayer draggable for action bar
+  // Pass the display icon (emoji) not the raw icon ID so it shows correctly in action bar
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `prayer-${prayer.id}`,
     data: {
       prayer: {
         id: prayer.id,
         name: prayer.name,
-        icon: prayer.icon,
+        icon: getPrayerDisplayIcon(prayer.icon),
         level: prayer.level,
       },
       source: "prayer",
@@ -290,6 +293,7 @@ function PrayerIcon({
     <button
       ref={setNodeRef}
       onClick={handleClick}
+      onContextMenu={onContextMenu}
       onMouseEnter={onMouseEnter}
       onMouseMove={onMouseMove}
       onMouseLeave={onMouseLeave}
@@ -360,6 +364,14 @@ function getPrayerDefinitions(): readonly PrayerDefinition[] {
   return prayerDataProvider.getAllPrayers();
 }
 
+/** Prayer context menu state */
+interface PrayerContextMenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+  prayer: PrayerUI | null;
+}
+
 export function PrayerPanel({ stats, world }: PrayerPanelProps) {
   const theme = useThemeStore((s) => s.theme);
   const { shouldUseMobileUI } = useMobileLayout();
@@ -371,8 +383,16 @@ export function PrayerPanel({ stats, world }: PrayerPanelProps) {
   );
   // Track when prayer data is loaded (manifest might load after component mounts)
   const [prayerDataVersion, setPrayerDataVersion] = useState(0);
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<PrayerContextMenuState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    prayer: null,
+  });
   const prayerTooltipRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
 
   // Use prayer points directly from stats prop (same pattern as StatusBars)
   // This ensures a single source of truth - no local state that can get out of sync
@@ -546,6 +566,39 @@ export function PrayerPanel({ stats, world }: PrayerPanelProps) {
     [prayers, playerPrayerLevel, world],
   );
 
+  // Handle prayer context menu (right-click)
+  const handlePrayerContextMenu = useCallback(
+    (e: React.MouseEvent, prayer: PrayerUI) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setContextMenu({
+        visible: true,
+        x: e.clientX,
+        y: e.clientY,
+        prayer,
+      });
+    },
+    [],
+  );
+
+  // Close context menu on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        contextMenuRef.current &&
+        !contextMenuRef.current.contains(e.target as Node)
+      ) {
+        setContextMenu((prev) => ({ ...prev, visible: false }));
+      }
+    };
+    if (contextMenu.visible) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [contextMenu.visible]);
+
   // Deactivate all prayers
   const deactivateAll = useCallback(() => {
     if (activePrayers.size === 0) return;
@@ -700,6 +753,7 @@ export function PrayerPanel({ stats, world }: PrayerPanelProps) {
               prayer={prayer}
               playerLevel={playerPrayerLevel}
               onClick={() => togglePrayer(prayer.id)}
+              onContextMenu={(e) => handlePrayerContextMenu(e, prayer)}
               onMouseEnter={(e) => {
                 setHoveredPrayer(prayer);
                 setMousePos({ x: e.clientX, y: e.clientY });
@@ -880,6 +934,103 @@ export function PrayerPanel({ stats, world }: PrayerPanelProps) {
                     Currently Active
                   </div>
                 )}
+              </div>
+            );
+          })(),
+          document.body,
+        )}
+
+      {/* Prayer Context Menu */}
+      {contextMenu.visible &&
+        contextMenu.prayer &&
+        createPortal(
+          (() => {
+            const prayer = contextMenu.prayer!;
+            const isUnlocked = playerPrayerLevel >= prayer.level;
+            const actionText = prayer.active ? "Deactivate" : "Activate";
+
+            // Calculate position to show above cursor
+            const padding = 4;
+            const menuHeight = isUnlocked ? 64 : 40; // Approximate height
+            let top = contextMenu.y - menuHeight - padding;
+            if (top < padding) top = contextMenu.y + padding;
+            const left = Math.max(
+              padding,
+              Math.min(contextMenu.x, window.innerWidth - 120 - padding),
+            );
+
+            return (
+              <div
+                ref={contextMenuRef}
+                className="fixed z-[9999]"
+                style={{ left, top }}
+              >
+                <div
+                  style={{
+                    background: theme.colors.background.secondary,
+                    border: `1px solid ${theme.colors.border.default}`,
+                    borderRadius: 4,
+                    boxShadow: theme.shadows.lg,
+                    overflow: "hidden",
+                    minWidth: 100,
+                  }}
+                >
+                  {/* Activate/Deactivate option */}
+                  {isUnlocked && (
+                    <button
+                      onClick={() => {
+                        togglePrayer(prayer.id);
+                        setContextMenu((prev) => ({ ...prev, visible: false }));
+                      }}
+                      className="w-full text-left transition-colors duration-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-amber-400/60"
+                      style={{
+                        padding: "4px 8px",
+                        fontSize: 10,
+                        background: "transparent",
+                        border: "none",
+                        cursor: "pointer",
+                        display: "block",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = `${theme.colors.accent.secondary}1F`;
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent";
+                      }}
+                    >
+                      <span style={{ color: "#fff" }}>{actionText} </span>
+                      <span style={{ color: theme.colors.status.prayer }}>
+                        {prayer.name}
+                      </span>
+                    </button>
+                  )}
+                  {/* Cancel option */}
+                  <button
+                    onClick={() => {
+                      setContextMenu((prev) => ({ ...prev, visible: false }));
+                    }}
+                    className="w-full text-left transition-colors duration-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-amber-400/60"
+                    style={{
+                      padding: "4px 8px",
+                      fontSize: 10,
+                      background: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      display: "block",
+                      borderTop: isUnlocked
+                        ? `1px solid ${theme.colors.border.default}26`
+                        : "none",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = `${theme.colors.accent.secondary}1F`;
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "transparent";
+                    }}
+                  >
+                    <span style={{ color: "#fff" }}>Cancel</span>
+                  </button>
+                </div>
               </div>
             );
           })(),

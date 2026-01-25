@@ -39,6 +39,7 @@ const STATUS_COLORS: Record<string, string> = {
  *
  * Displays detailed quest information in a separate window.
  * Reads the selected quest from the quest selection store.
+ * Auto-closes when no quest is selected - the panel should never show empty.
  */
 export function QuestDetailPanel({ world, onClose }: QuestDetailPanelProps) {
   const selectedQuest = useQuestSelectionStore((s) => s.selectedQuest);
@@ -56,6 +57,19 @@ export function QuestDetailPanel({ world, onClose }: QuestDetailPanelProps) {
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  // Auto-close the panel when no quest is selected
+  // The panel should never show an empty state
+  // Use a small delay to ensure the window system is ready
+  useEffect(() => {
+    if (!selectedQuest && onClose) {
+      // Small delay to ensure window is fully mounted before destroy
+      const timer = setTimeout(() => {
+        onClose();
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [selectedQuest, onClose]);
 
   // Quest actions
   const handleAcceptQuest = useCallback(
@@ -84,43 +98,10 @@ export function QuestDetailPanel({ world, onClose }: QuestDetailPanelProps) {
     onClose?.();
   }, [setSelectedQuest, onClose]);
 
-  // If no quest is selected, show empty state
+  // If no quest is selected, don't render anything
+  // The useEffect above will trigger onClose to destroy the window
   if (!selectedQuest) {
-    return (
-      <div
-        style={{
-          height: "100%",
-          minHeight: "200px",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          background: COLORS.BG_SECONDARY,
-          color: COLORS.TEXT_PRIMARY,
-          padding: spacing.lg,
-          textAlign: "center",
-        }}
-      >
-        <span style={{ fontSize: "48px", marginBottom: spacing.md }}>📜</span>
-        <div
-          style={{
-            fontSize: typography.fontSize.base,
-            color: COLORS.TEXT_SECONDARY,
-          }}
-        >
-          Select a quest from the Quest Log
-        </div>
-        <div
-          style={{
-            fontSize: typography.fontSize.sm,
-            color: COLORS.TEXT_MUTED,
-            marginTop: spacing.xs,
-          }}
-        >
-          Click on any quest to view details
-        </div>
-      </div>
-    );
+    return null;
   }
 
   const progress = calculateQuestProgress(selectedQuest);

@@ -30,7 +30,7 @@ export interface UseActionBarDragDropResult {
 }
 
 export function useActionBarDragDrop({
-  slots,
+  slots: _slots,
   setSlots,
 }: UseActionBarDragDropOptions): UseActionBarDragDropResult {
   const [draggedSlot, setDraggedSlot] = useState<ActionBarSlotContent | null>(

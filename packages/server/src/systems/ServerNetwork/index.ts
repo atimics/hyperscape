@@ -174,6 +174,15 @@ import {
   handleTradeCancelAccept,
   handleTradeCancel,
 } from "./handlers/trade";
+import {
+  handleFriendRequest,
+  handleFriendAccept,
+  handleFriendDecline,
+  handleFriendRemove,
+  handleIgnoreAdd,
+  handleIgnoreRemove,
+  handlePrivateMessage,
+} from "./handlers/friends";
 import { TradingSystem } from "../TradingSystem";
 import { getDatabase } from "./handlers/common";
 
@@ -2102,6 +2111,39 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     this.handlers["tradeCancel"] = (socket, data) =>
       handleTradeCancel(socket, data as { tradeId: string }, this.world);
+
+    // Friend/Social handlers
+    this.handlers["onFriendRequest"] = (socket, data) =>
+      handleFriendRequest(socket, data as { targetName: string }, this.world);
+    this.handlers["friendRequest"] = this.handlers["onFriendRequest"];
+
+    this.handlers["onFriendAccept"] = (socket, data) =>
+      handleFriendAccept(socket, data as { requestId: string }, this.world);
+    this.handlers["friendAccept"] = this.handlers["onFriendAccept"];
+
+    this.handlers["onFriendDecline"] = (socket, data) =>
+      handleFriendDecline(socket, data as { requestId: string }, this.world);
+    this.handlers["friendDecline"] = this.handlers["onFriendDecline"];
+
+    this.handlers["onFriendRemove"] = (socket, data) =>
+      handleFriendRemove(socket, data as { friendId: string }, this.world);
+    this.handlers["friendRemove"] = this.handlers["onFriendRemove"];
+
+    this.handlers["onIgnoreAdd"] = (socket, data) =>
+      handleIgnoreAdd(socket, data as { targetName: string }, this.world);
+    this.handlers["ignoreAdd"] = this.handlers["onIgnoreAdd"];
+
+    this.handlers["onIgnoreRemove"] = (socket, data) =>
+      handleIgnoreRemove(socket, data as { ignoredId: string }, this.world);
+    this.handlers["ignoreRemove"] = this.handlers["onIgnoreRemove"];
+
+    this.handlers["onPrivateMessage"] = (socket, data) =>
+      handlePrivateMessage(
+        socket,
+        data as { targetName: string; content: string },
+        this.world,
+      );
+    this.handlers["privateMessage"] = this.handlers["onPrivateMessage"];
   }
 
   async init(options: WorldOptions): Promise<void> {

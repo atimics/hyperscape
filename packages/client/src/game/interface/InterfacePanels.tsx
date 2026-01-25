@@ -19,7 +19,6 @@ import {
   useWindowStore,
   useTheme,
 } from "@/ui";
-import type { ClientWorld } from "../../types";
 import type {
   WindowContentProps,
   DraggableContentWrapperProps,

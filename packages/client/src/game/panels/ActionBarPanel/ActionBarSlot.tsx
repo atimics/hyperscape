@@ -16,6 +16,10 @@ export interface ActionBarSlotProps {
   isHovered: boolean;
   isActive: boolean;
   isLocked: boolean;
+  /** RS3-style: Whether item is available in inventory (for item slots) */
+  isAvailable?: boolean;
+  /** Current quantity in inventory (for item slots) */
+  inventoryQuantity?: number;
   onHover: () => void;
   onLeave: () => void;
   onClick: () => void;
@@ -30,6 +34,8 @@ export const ActionBarSlot = memo(function ActionBarSlot({
   isHovered,
   isActive,
   isLocked,
+  isAvailable = true,
+  inventoryQuantity,
   onHover,
   onLeave,
   onClick,
@@ -38,6 +44,9 @@ export const ActionBarSlot = memo(function ActionBarSlot({
   const theme = useTheme();
   const isEmpty = slot.type === "empty";
   const isPrayer = slot.type === "prayer";
+  const isItem = slot.type === "item";
+  // RS3 behavior: Items are dimmed when not available in inventory
+  const isUnavailable = isItem && !isAvailable;
 
   const {
     attributes,
@@ -155,17 +164,20 @@ export const ActionBarSlot = memo(function ActionBarSlot({
               : `linear-gradient(180deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.primary} 100%)`,
       border: isEmpty
         ? `1px solid ${theme.colors.border.default}66`
-        : isPrayer && isActive
-          ? `1px solid ${theme.colors.accent.primary}B3`
-          : isOver
-            ? `2px solid ${theme.colors.accent.primary}B3`
-            : isHovered
-              ? `1px solid ${theme.colors.accent.primary}80`
-              : `1px solid ${theme.colors.border.default}`,
+        : isUnavailable
+          ? `1px solid ${theme.colors.state.danger}40`
+          : isPrayer && isActive
+            ? `1px solid ${theme.colors.accent.primary}B3`
+            : isOver
+              ? `2px solid ${theme.colors.accent.primary}B3`
+              : isHovered
+                ? `1px solid ${theme.colors.accent.primary}80`
+                : `1px solid ${theme.colors.border.default}`,
       borderRadius: 4,
       cursor:
         isEmpty || isLocked ? "default" : isDragging ? "grabbing" : "grab",
-      opacity: isDragging ? 0.3 : 1,
+      // RS3 behavior: dim unavailable items
+      opacity: isDragging ? 0.3 : isUnavailable ? 0.5 : 1,
       transform: isOver
         ? "scale(1.05)"
         : isDragging
@@ -189,6 +201,7 @@ export const ActionBarSlot = memo(function ActionBarSlot({
       isHovered,
       isDragging,
       isLocked,
+      isUnavailable,
       slotSize,
       theme,
     ],
@@ -205,7 +218,9 @@ export const ActionBarSlot = memo(function ActionBarSlot({
       title={
         isEmpty
           ? `Empty slot (${shortcut})`
-          : `${slot.label || slot.itemId || slot.skillId || "Unknown"} (${shortcut})`
+          : isUnavailable
+            ? `${slot.label || slot.itemId || "Unknown"} - Not in inventory (${shortcut})`
+            : `${slot.label || slot.itemId || slot.skillId || "Unknown"} (${shortcut})`
       }
       style={slotStyle}
       {...attributes}
@@ -224,26 +239,36 @@ export const ActionBarSlot = memo(function ActionBarSlot({
         </div>
       )}
 
-      {/* Quantity Badge */}
-      {slot.type === "item" && slot.quantity && slot.quantity > 1 && (
-        <div
-          className="absolute font-bold"
-          style={{
-            bottom: 1,
-            right: 1,
-            background: theme.colors.background.overlay,
-            color: theme.colors.text.primary,
-            fontSize: 8,
-            padding: "0px 2px",
-            borderRadius: 2,
-            lineHeight: 1.1,
-          }}
-        >
-          {slot.quantity > 999
-            ? `${Math.floor(slot.quantity / 1000)}K`
-            : slot.quantity}
-        </div>
-      )}
+      {/* Quantity Badge - RS3 style: shows actual inventory quantity */}
+      {slot.type === "item" &&
+        (() => {
+          // Use inventory quantity if provided, otherwise fall back to slot quantity
+          const qty = inventoryQuantity ?? slot.quantity ?? 0;
+          if (qty <= 0) return null;
+          return (
+            <div
+              className="absolute font-bold"
+              style={{
+                bottom: 1,
+                right: 1,
+                background: theme.colors.background.overlay,
+                color: isUnavailable
+                  ? theme.colors.state.danger
+                  : theme.colors.text.primary,
+                fontSize: 8,
+                padding: "0px 2px",
+                borderRadius: 2,
+                lineHeight: 1.1,
+              }}
+            >
+              {qty > 999999
+                ? `${Math.floor(qty / 1000000)}M`
+                : qty > 999
+                  ? `${Math.floor(qty / 1000)}K`
+                  : qty}
+            </div>
+          );
+        })()}
 
       {/* Shortcut Key */}
       <div

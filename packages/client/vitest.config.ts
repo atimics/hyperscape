@@ -16,7 +16,12 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "html"],
-      include: ["src/game/panels/BankPanel/**/*.{ts,tsx}"],
+      include: [
+        "src/game/panels/**/*.{ts,tsx}",
+        "src/lib/**/*.{ts,tsx}",
+        "src/utils/**/*.{ts,tsx}",
+        "src/hooks/**/*.{ts,tsx}",
+      ],
       exclude: ["**/*.test.{ts,tsx}", "**/index.ts"],
     },
     // Timeout for async operations

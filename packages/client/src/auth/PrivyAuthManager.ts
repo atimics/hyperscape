@@ -4,6 +4,7 @@
  */
 
 import type { User } from "@privy-io/react-auth";
+import { clearCsrfToken } from "../lib/api-client";
 
 /**
  * Privy authentication state
@@ -138,6 +139,7 @@ export class PrivyAuthManager {
    * Clears all authentication state
    *
    * Removes auth data from memory and localStorage. Called on logout.
+   * Also clears CSRF token cache for security.
    *
    * @public
    */
@@ -154,6 +156,9 @@ export class PrivyAuthManager {
     localStorage.removeItem("privy_auth_token");
     localStorage.removeItem("privy_user_id");
     localStorage.removeItem("farcaster_fid");
+
+    // Clear CSRF token cache
+    clearCsrfToken();
   }
 
   /**

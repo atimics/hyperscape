@@ -68,6 +68,12 @@ export interface UseActionBarStateOptions {
   useParentDndContext: boolean;
 }
 
+/** Inventory item data for action bar availability tracking */
+export interface InventoryItemInfo {
+  itemId: string;
+  quantity: number;
+}
+
 export interface UseActionBarStateResult {
   // State
   slotCount: number;
@@ -76,6 +82,8 @@ export interface UseActionBarStateResult {
   activePrayers: Set<string>;
   isLocked: boolean;
   keyboardShortcuts: string[];
+  /** RS3-style: Map of itemId -> quantity in inventory */
+  inventoryItems: Map<string, number>;
 
   // State setters
   setSlots: React.Dispatch<React.SetStateAction<ActionBarSlotContent[]>>;
@@ -87,6 +95,11 @@ export interface UseActionBarStateResult {
   handleToggleLock: () => void;
   handleClearAll: () => void;
   handleUseSlot: (slot: ActionBarSlotContent, index: number) => void;
+  /** RS3-style: Get item availability and quantity for a slot */
+  getItemAvailability: (itemId: string) => {
+    available: boolean;
+    quantity: number;
+  };
 }
 
 export function useActionBarState({
@@ -109,6 +122,10 @@ export function useActionBarState({
   const [hoveredSlot, setHoveredSlot] = useState<number | null>(null);
   const [activePrayers, setActivePrayers] = useState<Set<string>>(new Set());
   const [isLocked, setIsLocked] = useState<boolean>(() => loadLockState(barId));
+  // RS3-style: Track inventory items for availability display
+  const [inventoryItems, setInventoryItems] = useState<Map<string, number>>(
+    new Map(),
+  );
 
   // Track if we've loaded from server
   const serverLoadedRef = useRef(false);
@@ -347,11 +364,11 @@ export function useActionBarState({
           slot: invItem.slot,
         });
       } else if (slot.type === "skill" && slot.skillId) {
-        console.debug(
-          "[ActionBar] Skill clicked:",
-          slot.skillId,
-          "- opens skill panel",
-        );
+        // Open the skills panel when a skill slot is clicked (RS3 behavior)
+        // Emit event to open the pane with the skills tab focused
+        world.emit(EventType.UI_OPEN_PANE, {
+          pane: "skills",
+        });
       } else if (slot.type === "spell" && slot.spellId) {
         const network = world.network;
         if (network && "castSpell" in network) {
@@ -406,6 +423,57 @@ export function useActionBarState({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [slots, keyboardShortcuts, handleUseSlot]);
 
+  // RS3-style: Track inventory items for availability display
+  useEffect(() => {
+    if (!world) return;
+
+    const updateInventoryItems = () => {
+      const player = world.getPlayer();
+      if (!player) return;
+
+      const network = world.network as {
+        lastInventoryByPlayerId?: Record<
+          string,
+          { items: Array<{ slot: number; itemId: string; quantity: number }> }
+        >;
+      };
+      const inventory = network?.lastInventoryByPlayerId?.[player.id];
+      if (!inventory) return;
+
+      // Build map of itemId -> total quantity
+      const itemMap = new Map<string, number>();
+      for (const item of inventory.items) {
+        if (item.quantity > 0) {
+          const current = itemMap.get(item.itemId) || 0;
+          itemMap.set(item.itemId, current + item.quantity);
+        }
+      }
+      setInventoryItems(itemMap);
+    };
+
+    // Update on inventory sync event
+    const handleInventorySync = () => {
+      updateInventoryItems();
+    };
+
+    // Initial update
+    updateInventoryItems();
+
+    world.on(EventType.INVENTORY_UPDATED, handleInventorySync);
+    return () => {
+      world.off(EventType.INVENTORY_UPDATED, handleInventorySync);
+    };
+  }, [world]);
+
+  // RS3-style: Get item availability and quantity
+  const getItemAvailability = useCallback(
+    (itemId: string): { available: boolean; quantity: number } => {
+      const quantity = inventoryItems.get(itemId) || 0;
+      return { available: quantity > 0, quantity };
+    },
+    [inventoryItems],
+  );
+
   return {
     slotCount,
     slots,
@@ -413,6 +481,7 @@ export function useActionBarState({
     activePrayers,
     isLocked,
     keyboardShortcuts,
+    inventoryItems,
     setSlots,
     setHoveredSlot,
     handleIncreaseSlots,
@@ -420,5 +489,6 @@ export function useActionBarState({
     handleToggleLock,
     handleClearAll,
     handleUseSlot,
+    getItemAvailability,
   };
 }

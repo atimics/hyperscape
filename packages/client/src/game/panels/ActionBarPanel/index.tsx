@@ -83,6 +83,7 @@ export function ActionBarPanel({
     handleToggleLock,
     handleClearAll,
     handleUseSlot,
+    getItemAvailability,
   } = useActionBarState({
     world,
     barId,
@@ -209,26 +210,38 @@ export function ActionBarPanel({
             boxShadow: `inset 0 2px 8px rgba(0, 0, 0, 0.5), ${theme.shadows.md}`,
           }}
         >
-          {slots.map((slot, index) => (
-            <ActionBarSlot
-              key={`${barId}-${index}`}
-              slot={slot}
-              slotIndex={index}
-              slotSize={SLOT_SIZE}
-              shortcut={keyboardShortcuts[index] || ""}
-              isHovered={hoveredSlot === index}
-              isActive={
-                slot.type === "prayer" && slot.prayerId
-                  ? activePrayers.has(slot.prayerId)
-                  : false
-              }
-              isLocked={isLocked}
-              onHover={() => setHoveredSlot(index)}
-              onLeave={() => setHoveredSlot(null)}
-              onClick={() => handleUseSlot(slot, index)}
-              onContextMenu={(e) => handleContextMenu(e, slot, index)}
-            />
-          ))}
+          {slots.map((slot, index) => {
+            // RS3-style: Check item availability for item slots
+            const itemAvailability =
+              slot.type === "item" && slot.itemId
+                ? getItemAvailability(slot.itemId)
+                : { available: true, quantity: 0 };
+
+            return (
+              <ActionBarSlot
+                key={`${barId}-${index}`}
+                slot={slot}
+                slotIndex={index}
+                slotSize={SLOT_SIZE}
+                shortcut={keyboardShortcuts[index] || ""}
+                isHovered={hoveredSlot === index}
+                isActive={
+                  slot.type === "prayer" && slot.prayerId
+                    ? activePrayers.has(slot.prayerId)
+                    : false
+                }
+                isLocked={isLocked}
+                isAvailable={itemAvailability.available}
+                inventoryQuantity={
+                  slot.type === "item" ? itemAvailability.quantity : undefined
+                }
+                onHover={() => setHoveredSlot(index)}
+                onLeave={() => setHoveredSlot(null)}
+                onClick={() => handleUseSlot(slot, index)}
+                onContextMenu={(e) => handleContextMenu(e, slot, index)}
+              />
+            );
+          })}
         </div>
 
         {/* Rubbish bin */}

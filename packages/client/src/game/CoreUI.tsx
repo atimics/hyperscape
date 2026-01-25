@@ -21,6 +21,8 @@ import { StatusBars } from "./hud/StatusBars";
 import { XPProgressOrb } from "./hud/XPProgressOrb";
 import { LevelUpNotification } from "./hud/level-up";
 import { EscapeMenu } from "./hud/EscapeMenu";
+import { ConnectionIndicator } from "./hud/ConnectionIndicator";
+import { NotificationContainer } from "@/ui/components";
 import {
   COLORS,
   spacing,
@@ -400,6 +402,8 @@ export function CoreUI({ world }: { world: ClientWorld }) {
       >
         {disconnected && <Disconnected />}
         {<Toast world={world} />}
+        {<ConnectionIndicator world={world} />}
+        {<NotificationContainer />}
         {ready && uiVisible && <ActionsBlock world={world} />}
         {ready && uiVisible && <StatusBars stats={playerStats} />}
         {ready && uiVisible && <XPProgressOrb world={world} />}

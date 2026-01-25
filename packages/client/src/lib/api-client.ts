@@ -4,6 +4,11 @@
  * Provides fetch wrappers that automatically add Authorization headers
  * for authenticated API calls. Uses the Privy auth token from localStorage.
  *
+ * Security features:
+ * - CSRF token support for state-changing requests
+ * - Automatic credential inclusion for cookie-based auth
+ * - Token refresh handling
+ *
  * @example
  * ```typescript
  * import { apiClient } from "@/lib/api-client";
@@ -21,6 +26,11 @@
 
 import { GAME_API_URL } from "./api-config";
 
+/** CSRF token cache */
+let csrfToken: string | null = null;
+let csrfTokenExpiry: number = 0;
+const CSRF_TOKEN_TTL = 300000; // 5 minutes
+
 /**
  * Get the current auth token from localStorage
  * Returns null if not authenticated
@@ -32,6 +42,54 @@ function getAuthToken(): string | null {
     // localStorage may not be available (SSR, etc.)
     return null;
   }
+}
+
+/**
+ * Fetch or return cached CSRF token
+ * CSRF tokens are used for state-changing requests (POST, PUT, DELETE, PATCH)
+ */
+async function getCsrfToken(): Promise<string | null> {
+  const now = Date.now();
+
+  // Return cached token if still valid
+  if (csrfToken && csrfTokenExpiry > now) {
+    return csrfToken;
+  }
+
+  try {
+    // Fetch new CSRF token from server
+    const response = await fetch(`${GAME_API_URL}/api/csrf-token`, {
+      method: "GET",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (response.ok) {
+      const data = (await response.json()) as { csrfToken?: string };
+      if (data.csrfToken) {
+        csrfToken = data.csrfToken;
+        csrfTokenExpiry = now + CSRF_TOKEN_TTL;
+        return csrfToken;
+      }
+    }
+  } catch {
+    // CSRF endpoint may not exist yet - gracefully degrade
+    console.debug(
+      "[API Client] CSRF token fetch failed, continuing without CSRF protection",
+    );
+  }
+
+  return null;
+}
+
+/**
+ * Clear cached CSRF token (call on logout)
+ */
+export function clearCsrfToken(): void {
+  csrfToken = null;
+  csrfTokenExpiry = 0;
 }
 
 /**
@@ -79,6 +137,10 @@ async function apiFetch<T = unknown>(
     ...fetchOptions
   } = options;
 
+  // Determine if this is a state-changing request that needs CSRF protection
+  const method = (fetchOptions.method || "GET").toUpperCase();
+  const needsCsrf = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
+
   // Build headers
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -93,6 +155,14 @@ async function apiFetch<T = unknown>(
     }
   }
 
+  // Add CSRF token for state-changing requests
+  if (needsCsrf) {
+    const csrf = await getCsrfToken();
+    if (csrf) {
+      headers["X-CSRF-Token"] = csrf;
+    }
+  }
+
   // Build full URL
   const url = endpoint.startsWith("http")
     ? endpoint
@@ -102,6 +172,7 @@ async function apiFetch<T = unknown>(
     const response = await fetch(url, {
       ...fetchOptions,
       headers,
+      credentials: "include", // Always include credentials for cookie-based auth
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
 
