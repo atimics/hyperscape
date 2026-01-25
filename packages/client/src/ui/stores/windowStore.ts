@@ -963,6 +963,12 @@ export const useWindowStore = create<WindowStoreState>()(
               : 1080,
         };
 
+        // Detect mobile/desktop mode change between saved and current viewport
+        const MOBILE_BREAKPOINT = 768;
+        const savedWasMobile = savedViewport.width < MOBILE_BREAKPOINT;
+        const currentIsMobile = currentViewport.width < MOBILE_BREAKPOINT;
+        const modeChanged = savedWasMobile !== currentIsMobile;
+
         // Calculate scale factors for proportional positioning
         const scaleX = currentViewport.width / savedViewport.width;
         const scaleY = currentViewport.height / savedViewport.height;
@@ -970,8 +976,13 @@ export const useWindowStore = create<WindowStoreState>()(
         debugLog(
           `[WindowStore] Loading layout - saved viewport: ${savedViewport.width}x${savedViewport.height}, ` +
             `current: ${currentViewport.width}x${currentViewport.height}, ` +
-            `scale: ${scaleX.toFixed(2)}x${scaleY.toFixed(2)}`,
+            `scale: ${scaleX.toFixed(2)}x${scaleY.toFixed(2)}, ` +
+            `modeChanged: ${modeChanged} (${savedWasMobile ? "mobile" : "desktop"} -> ${currentIsMobile ? "mobile" : "desktop"})`,
         );
+
+        // If transitioning between mobile and desktop, use responsive repositioning
+        // instead of scaling (mobile and desktop use completely different layouts)
+        const shouldReposition = modeChanged && !currentIsMobile;
 
         // Get persisted version (default to 1 for pre-versioning data)
         const storedVersion = persistedState.version ?? 1;
@@ -1075,22 +1086,55 @@ export const useWindowStore = create<WindowStoreState>()(
         // Third pass: scale positions proportionally and clamp to current viewport
         // This handles cases where the viewport has changed since the layout was saved
         const clampedWindowsMap = new Map<string, WindowState>();
-        for (const [id, windowState] of windowsMap) {
-          // Apply proportional scaling to position based on viewport ratio
-          const scaledPosition = {
-            x: Math.round(windowState.position.x * scaleX),
-            y: Math.round(windowState.position.y * scaleY),
-          };
+        const windowsArray = Array.from(windowsMap.entries());
 
-          // Then clamp to ensure window is visible in current viewport
-          const clampedPosition = clampToViewport(
-            scaledPosition,
-            windowState.size,
-          );
+        for (let index = 0; index < windowsArray.length; index++) {
+          const [id, windowState] = windowsArray[index];
+          let newPosition: { x: number; y: number };
+
+          if (shouldReposition) {
+            // Mobile -> Desktop transition: reposition windows using a grid layout
+            // because mobile positions are fundamentally incompatible with desktop
+            const horizontalSpacing = currentViewport.width > 2560 ? 520 : 480;
+            const topMargin = 80;
+            const leftMargin = 0;
+            const col = index % 3;
+            const row = Math.floor(index / 3);
+
+            newPosition = {
+              x: Math.max(
+                0,
+                Math.min(
+                  leftMargin + col * horizontalSpacing,
+                  currentViewport.width - windowState.size.width - 40,
+                ),
+              ),
+              y: Math.max(
+                topMargin,
+                Math.min(
+                  topMargin + row * 620,
+                  currentViewport.height - windowState.size.height - 80,
+                ),
+              ),
+            };
+
+            debugLog(
+              `[WindowStore] Repositioning window ${id} from mobile layout to desktop grid position`,
+            );
+          } else {
+            // Normal case: apply proportional scaling to position based on viewport ratio
+            const scaledPosition = {
+              x: Math.round(windowState.position.x * scaleX),
+              y: Math.round(windowState.position.y * scaleY),
+            };
+
+            // Then clamp to ensure window is visible in current viewport
+            newPosition = clampToViewport(scaledPosition, windowState.size);
+          }
 
           clampedWindowsMap.set(id, {
             ...windowState,
-            position: clampedPosition,
+            position: newPosition,
           });
         }
 

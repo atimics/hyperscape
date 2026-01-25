@@ -9,6 +9,9 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useWindowStore } from "@/ui";
 
+/** Mobile breakpoint threshold */
+const MOBILE_BREAKPOINT = 768;
+
 /**
  * Hook for handling viewport resize and window repositioning
  *
@@ -17,7 +20,9 @@ import { useWindowStore } from "@/ui";
 export function useViewportResize() {
   // UI state - detect mobile viewport
   const [isMobile, setIsMobile] = useState<boolean>(
-    typeof window !== "undefined" ? window.innerWidth < 768 : false,
+    typeof window !== "undefined"
+      ? window.innerWidth < MOBILE_BREAKPOINT
+      : false,
   );
 
   // Track previous viewport size for responsive repositioning
@@ -25,6 +30,13 @@ export function useViewportResize() {
     width: typeof window !== "undefined" ? window.innerWidth : 1920,
     height: typeof window !== "undefined" ? window.innerHeight : 1080,
   });
+
+  // Track previous mobile state to detect mobile <-> desktop transitions
+  const wasMobileRef = useRef<boolean>(
+    typeof window !== "undefined"
+      ? window.innerWidth < MOBILE_BREAKPOINT
+      : false,
+  );
 
   // Viewport resize handling
   useEffect(() => {
@@ -35,12 +47,61 @@ export function useViewportResize() {
       const newHeight = window.innerHeight;
       const prevWidth = prevViewportRef.current.width;
       const prevHeight = prevViewportRef.current.height;
+      const wasMobile = wasMobileRef.current;
+      const nowMobile = newWidth < MOBILE_BREAKPOINT;
 
-      setIsMobile(newWidth < 768);
+      setIsMobile(nowMobile);
 
       // Debounce the window repositioning
       if (resizeTimeout) clearTimeout(resizeTimeout);
       resizeTimeout = setTimeout(() => {
+        // Detect mobile <-> desktop UI mode transition
+        const transitionedFromMobile = wasMobile && !nowMobile;
+        const transitionedToMobile = !wasMobile && nowMobile;
+
+        // Update mobile state tracking
+        wasMobileRef.current = nowMobile;
+
+        // On mobile <-> desktop transition, reset windows to default positions
+        // because the mobile and desktop UIs use completely different layouts
+        if (transitionedFromMobile || transitionedToMobile) {
+          const allWindows = useWindowStore.getState().getAllWindows();
+          const windowStoreUpdate = useWindowStore.getState().updateWindow;
+
+          if (transitionedFromMobile) {
+            // Transitioning from mobile to desktop - reposition windows for desktop
+            // Use responsive positioning based on new viewport size
+            const horizontalSpacing = newWidth > 2560 ? 520 : 480;
+            const topMargin = 80;
+            const leftMargin = 0;
+
+            allWindows.forEach((win, index) => {
+              // Distribute windows in a grid pattern
+              const col = index % 3;
+              const row = Math.floor(index / 3);
+              const newX = Math.min(
+                leftMargin + col * horizontalSpacing,
+                newWidth - win.size.width - 40,
+              );
+              const newY = Math.min(
+                topMargin + row * 620,
+                newHeight - win.size.height - 80,
+              );
+
+              windowStoreUpdate(win.id, {
+                position: {
+                  x: Math.max(0, newX),
+                  y: Math.max(topMargin, newY),
+                },
+              });
+            });
+          }
+
+          // Update tracked viewport size
+          prevViewportRef.current = { width: newWidth, height: newHeight };
+          return;
+        }
+
         // Skip if viewport hasn't actually changed
         if (newWidth === prevWidth && newHeight === prevHeight) return;
 
