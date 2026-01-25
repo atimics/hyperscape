@@ -77,6 +77,7 @@ import {
   createDefaultWindows,
   getResponsivePanelSizing,
 } from "./DefaultLayoutFactory";
+import { useViewportResize } from "./useViewportResize";
 
 // getResponsivePanelSizing and createDefaultWindows are now imported from DefaultLayoutFactory
 
@@ -126,14 +127,9 @@ function DesktopInterfaceManager({
   const { loadFromStorage } = usePresetStore();
   const windowStoreUpdate = useWindowStore((s) => s.updateWindow);
 
-  // UI state - detect mobile viewport (legacy, kept for feature gating)
-  const [isMobile, setIsMobile] = useState<boolean>(false);
-
-  // Track previous viewport size for responsive repositioning
-  const prevViewportRef = React.useRef<{ width: number; height: number }>({
-    width: typeof window !== "undefined" ? window.innerWidth : 1920,
-    height: typeof window !== "undefined" ? window.innerHeight : 1080,
-  });
+  // Viewport resize handling with proportional scaling (extracted to hook)
+  // This hook handles all window repositioning on viewport resize
+  const { isMobile } = useViewportResize();
 
   // Player data from shared hook
   const {
@@ -194,93 +190,8 @@ function DesktopInterfaceManager({
     },
   );
 
-  // Viewport resize handling
-  useEffect(() => {
-    let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
-
-    const handleResize = () => {
-      const newWidth = window.innerWidth;
-      const newHeight = window.innerHeight;
-      const prevWidth = prevViewportRef.current.width;
-      const prevHeight = prevViewportRef.current.height;
-
-      setIsMobile(newWidth < 768);
-
-      // Debounce the window repositioning
-      if (resizeTimeout) clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(() => {
-        // Skip if viewport hasn't actually changed
-        if (newWidth === prevWidth && newHeight === prevHeight) return;
-
-        // Get all windows and reposition them based on viewport change
-        const allWindows = useWindowStore.getState().getAllWindows();
-        const minVisible = 50;
-
-        allWindows.forEach((win) => {
-          let newX = win.position.x;
-          let newY = win.position.y;
-          let needsUpdate = false;
-
-          // Check if window was aligned to right edge (within 20px of old right edge)
-          const wasRightAligned =
-            win.position.x + win.size.width >= prevWidth - 20;
-          // Check if window was aligned to bottom edge (within 20px of old bottom edge)
-          const wasBottomAligned =
-            win.position.y + win.size.height >= prevHeight - 20;
-
-          if (wasRightAligned) {
-            // Keep window aligned to right edge
-            newX = newWidth - win.size.width;
-            needsUpdate = true;
-          }
-
-          if (wasBottomAligned) {
-            // Keep window aligned to bottom edge
-            newY = newHeight - win.size.height;
-            needsUpdate = true;
-          }
-
-          // Clamp to viewport bounds (ensure at least minVisible pixels visible)
-          const clampedX = Math.max(
-            minVisible - win.size.width,
-            Math.min(newX, newWidth - minVisible),
-          );
-          const clampedY = Math.max(0, Math.min(newY, newHeight - minVisible));
-
-          if (clampedX !== newX || clampedY !== newY) {
-            newX = clampedX;
-            newY = clampedY;
-            needsUpdate = true;
-          }
-
-          // Snap to grid for consistency
-          const snappedX = snapToGrid(newX);
-          const snappedY = snapToGrid(newY);
-          if (snappedX !== newX || snappedY !== newY) {
-            newX = snappedX;
-            newY = snappedY;
-            needsUpdate = true;
-          }
-
-          if (needsUpdate) {
-            windowStoreUpdate(win.id, {
-              position: { x: newX, y: newY },
-            });
-          }
-        });
-
-        // Update previous viewport ref
-        prevViewportRef.current = { width: newWidth, height: newHeight };
-      }, 100); // 100ms debounce
-    };
-
-    handleResize();
-    window.addEventListener("resize", handleResize);
-    return () => {
-      window.removeEventListener("resize", handleResize);
-      if (resizeTimeout) clearTimeout(resizeTimeout);
-    };
-  }, [windowStoreUpdate]);
+  // Note: Viewport resize handling is now done by useViewportResize hook above
+  // which provides proportional scaling for all windows on viewport change
 
   // Feature gating based on complexity mode
   const presetHotkeysEnabled = useFeatureEnabled("presetHotkeys");

@@ -44,56 +44,70 @@ export function useViewportResize() {
         // Skip if viewport hasn't actually changed
         if (newWidth === prevWidth && newHeight === prevHeight) return;
 
+        // Calculate proportional scale factors
+        const scaleX = newWidth / prevWidth;
+        const scaleY = newHeight / prevHeight;
+
         // Get all windows and reposition them based on viewport change
         const allWindows = useWindowStore.getState().getAllWindows();
         const windowStoreUpdate = useWindowStore.getState().updateWindow;
         const minVisible = 50;
 
         allWindows.forEach((win) => {
-          let newX = win.position.x;
-          let newY = win.position.y;
-          let needsUpdate = false;
-
-          // Check if window was aligned to right edge (within 20px of old right edge)
+          // Check if window was aligned to edges (within 20px threshold)
           const wasRightAligned =
             win.position.x + win.size.width >= prevWidth - 20;
-          // Check if window was aligned to bottom edge (within 20px of old bottom edge)
           const wasBottomAligned =
             win.position.y + win.size.height >= prevHeight - 20;
+          const wasLeftAligned = win.position.x <= 20;
+          const wasTopAligned = win.position.y <= 80; // Account for header/toolbar
 
+          let newX: number;
+          let newY: number;
+
+          // Handle edge-aligned windows specially to maintain their edge alignment
           if (wasRightAligned) {
             // Keep window aligned to right edge
             newX = newWidth - win.size.width;
-            needsUpdate = true;
+          } else if (wasLeftAligned) {
+            // Keep window aligned to left edge
+            newX = win.position.x;
+          } else {
+            // Scale position proportionally for windows in the middle
+            newX = win.position.x * scaleX;
           }
 
           if (wasBottomAligned) {
             // Keep window aligned to bottom edge
             newY = newHeight - win.size.height;
-            needsUpdate = true;
+          } else if (wasTopAligned) {
+            // Keep window aligned to top
+            newY = win.position.y;
+          } else {
+            // Scale position proportionally for windows in the middle
+            newY = win.position.y * scaleY;
           }
 
-          // Ensure window is still visible (at least minVisible pixels)
+          // Clamp to ensure window is still visible (at least minVisible pixels)
           if (newX + win.size.width < minVisible) {
             newX = minVisible - win.size.width + 100;
-            needsUpdate = true;
           }
           if (newX > newWidth - minVisible) {
             newX = newWidth - minVisible;
-            needsUpdate = true;
           }
           if (newY + win.size.height < minVisible) {
             newY = minVisible - win.size.height + 100;
-            needsUpdate = true;
           }
           if (newY > newHeight - minVisible) {
             newY = newHeight - minVisible;
-            needsUpdate = true;
           }
 
-          if (needsUpdate) {
+          // Always update positions to ensure proper scaling
+          const roundedX = Math.round(newX);
+          const roundedY = Math.round(newY);
+          if (roundedX !== win.position.x || roundedY !== win.position.y) {
             windowStoreUpdate(win.id, {
-              position: { x: Math.round(newX), y: Math.round(newY) },
+              position: { x: roundedX, y: roundedY },
             });
           }
         });

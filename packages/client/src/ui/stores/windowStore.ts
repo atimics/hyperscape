@@ -916,11 +916,22 @@ export const useWindowStore = create<WindowStoreState>()(
     {
       name: STORAGE_KEY,
       storage: createJSONStorage(() => localStorage),
-      // Custom serialization to handle Map - includes schema version
+      // Custom serialization to handle Map - includes schema version and viewport size
       partialize: (state) => ({
         version: SCHEMA_VERSION,
         windows: Array.from(state.windows.entries()),
         nextZIndex: state.nextZIndex,
+        // Store viewport size for proportional scaling on different screen sizes
+        savedViewportSize: {
+          width:
+            typeof globalThis.window !== "undefined"
+              ? globalThis.window.innerWidth
+              : 1920,
+          height:
+            typeof globalThis.window !== "undefined"
+              ? globalThis.window.innerHeight
+              : 1080,
+        },
       }),
       // Custom deserialization to restore Map with versioned migrations
       merge: (persisted, current) => {
@@ -929,11 +940,38 @@ export const useWindowStore = create<WindowStoreState>()(
               version?: number;
               windows?: [string, WindowState][];
               nextZIndex?: number;
+              savedViewportSize?: { width: number; height: number };
             }
           | undefined;
         if (!persistedState?.windows) {
           return current;
         }
+
+        // Get saved viewport size for proportional scaling
+        const savedViewport = persistedState.savedViewportSize || {
+          width: 1920,
+          height: 1080,
+        };
+        const currentViewport = {
+          width:
+            typeof globalThis.window !== "undefined"
+              ? globalThis.window.innerWidth
+              : 1920,
+          height:
+            typeof globalThis.window !== "undefined"
+              ? globalThis.window.innerHeight
+              : 1080,
+        };
+
+        // Calculate scale factors for proportional positioning
+        const scaleX = currentViewport.width / savedViewport.width;
+        const scaleY = currentViewport.height / savedViewport.height;
+
+        debugLog(
+          `[WindowStore] Loading layout - saved viewport: ${savedViewport.width}x${savedViewport.height}, ` +
+            `current: ${currentViewport.width}x${currentViewport.height}, ` +
+            `scale: ${scaleX.toFixed(2)}x${scaleY.toFixed(2)}`,
+        );
 
         // Get persisted version (default to 1 for pre-versioning data)
         const storedVersion = persistedState.version ?? 1;
@@ -1034,14 +1072,22 @@ export const useWindowStore = create<WindowStoreState>()(
           windowsMap = runMigrations(windowsMap, storedVersion);
         }
 
-        // Third pass: clamp all window positions to current viewport
+        // Third pass: scale positions proportionally and clamp to current viewport
         // This handles cases where the viewport has changed since the layout was saved
         const clampedWindowsMap = new Map<string, WindowState>();
         for (const [id, windowState] of windowsMap) {
+          // Apply proportional scaling to position based on viewport ratio
+          const scaledPosition = {
+            x: Math.round(windowState.position.x * scaleX),
+            y: Math.round(windowState.position.y * scaleY),
+          };
+
+          // Then clamp to ensure window is visible in current viewport
           const clampedPosition = clampToViewport(
-            windowState.position,
+            scaledPosition,
             windowState.size,
           );
+
           clampedWindowsMap.set(id, {
             ...windowState,
             position: clampedPosition,
