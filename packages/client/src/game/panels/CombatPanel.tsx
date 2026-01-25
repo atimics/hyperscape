@@ -8,15 +8,157 @@ import type {
   PlayerHealth,
 } from "../../types";
 
-/** Icons for attack styles */
-const STYLE_ICONS: Record<string, string> = {
-  accurate: "🎯",
-  aggressive: "💥",
-  defensive: "🛡️",
-  controlled: "⚖️",
+/** SVG Icons for attack styles - clean vector icons */
+const StyleIcon = ({
+  style,
+  size = 16,
+  color = "currentColor",
+}: {
+  style: string;
+  size?: number;
+  color?: string;
+}) => {
+  switch (style) {
+    case "accurate":
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="12" cy="12" r="10" />
+          <circle cx="12" cy="12" r="6" />
+          <circle cx="12" cy="12" r="2" />
+        </svg>
+      );
+    case "aggressive":
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M14.5 4l7.5 7.5-7.5 7.5" />
+          <path d="M5.5 4l7.5 7.5-7.5 7.5" />
+        </svg>
+      );
+    case "defensive":
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        </svg>
+      );
+    case "controlled":
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <line x1="12" y1="2" x2="12" y2="22" />
+          <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+        </svg>
+      );
+    default:
+      return null;
+  }
 };
 
-/** Compact combat stats row - inline horizontal layout */
+/** Stat icons as SVG */
+const StatIcon = ({
+  stat,
+  size = 14,
+  color = "currentColor",
+}: {
+  stat: "attack" | "strength" | "defense";
+  size?: number;
+  color?: string;
+}) => {
+  switch (stat) {
+    case "attack":
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="m14.5 12.5-8 8a2.119 2.119 0 1 1-3-3l8-8" />
+          <path d="m16 16 6-6" />
+          <path d="m8 8 6-6" />
+          <path d="m9 7 8 8" />
+          <path d="m21 11-8-8" />
+        </svg>
+      );
+    case "strength":
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M18.36 2.64a9 9 0 0 1 3 3" />
+          <path d="M15 6.5v11" />
+          <path d="M9 6.5v11" />
+          <path d="M4 11a9 9 0 0 1 3-3" />
+          <path d="M2.64 18.36a9 9 0 0 0 3 3" />
+          <path d="M20 13a9 9 0 0 1-3 3" />
+          <path d="M21.36 5.64a9 9 0 0 0-3 3" />
+          <path d="M4 13a9 9 0 0 0 3 3" />
+        </svg>
+      );
+    case "defense":
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        </svg>
+      );
+  }
+};
+
+/** Combat stats row with SVG icons */
 const CombatStatsRow = React.memo(function CombatStatsRow({
   attackLevel,
   strengthLevel,
@@ -29,37 +171,55 @@ const CombatStatsRow = React.memo(function CombatStatsRow({
   isMobile: boolean;
 }) {
   const theme = useThemeStore((s) => s.theme);
-  const stats = [
-    { key: "attack", icon: "⚔️", value: attackLevel },
-    { key: "strength", icon: "💪", value: strengthLevel },
-    { key: "defense", icon: "🛡️", value: defenseLevel },
+  const stats: Array<{
+    key: "attack" | "strength" | "defense";
+    value: number;
+    color: string;
+  }> = [
+    { key: "attack", value: attackLevel, color: "#ef4444" },
+    { key: "strength", value: strengthLevel, color: "#22c55e" },
+    { key: "defense", value: defenseLevel, color: "#3b82f6" },
   ];
 
   return (
-    <div className="flex gap-1">
-      {stats.map((stat) => (
-        <div
-          key={stat.key}
-          className="flex-1 flex items-center justify-center gap-1 rounded"
-          style={{
-            background: theme.colors.slot.filled,
-            border: `1px solid ${theme.colors.border.default}60`,
-            padding: isMobile ? "6px 4px" : "4px 3px",
-          }}
-        >
-          <span style={{ fontSize: isMobile ? "12px" : "11px" }}>
-            {stat.icon}
-          </span>
-          <span
-            style={{
-              fontSize: isMobile ? "13px" : "12px",
-              color: theme.colors.text.accent,
-              fontWeight: 700,
-            }}
-          >
-            {stat.value}
-          </span>
-        </div>
+    <div
+      className="flex items-center justify-center gap-3"
+      style={{
+        padding: isMobile ? "8px 12px" : "6px 10px",
+        background: theme.colors.background.secondary,
+        borderRadius: "6px",
+        border: `1px solid ${theme.colors.border.default}50`,
+      }}
+    >
+      {stats.map((stat, index) => (
+        <React.Fragment key={stat.key}>
+          <div className="flex items-center gap-1.5">
+            <StatIcon
+              stat={stat.key}
+              size={isMobile ? 16 : 14}
+              color={stat.color}
+            />
+            <span
+              style={{
+                fontSize: isMobile ? "15px" : "14px",
+                color: stat.color,
+                fontWeight: 700,
+                fontFamily: "var(--font-mono, monospace)",
+              }}
+            >
+              {stat.value}
+            </span>
+          </div>
+          {index < stats.length - 1 && (
+            <div
+              style={{
+                width: "1px",
+                height: "16px",
+                background: `${theme.colors.border.default}40`,
+              }}
+            />
+          )}
+        </React.Fragment>
       ))}
     </div>
   );
@@ -372,11 +532,36 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
     label: string;
     xp: string;
     color: string;
+    bgColor: string;
   }> = [
-    { id: "accurate", label: "Accurate", xp: "Attack", color: "#ef4444" },
-    { id: "aggressive", label: "Aggressive", xp: "Strength", color: "#f59e0b" },
-    { id: "defensive", label: "Defensive", xp: "Defense", color: "#3b82f6" },
-    { id: "controlled", label: "Controlled", xp: "All", color: "#a855f7" },
+    {
+      id: "accurate",
+      label: "Accurate",
+      xp: "Attack",
+      color: "#ef4444",
+      bgColor: "rgba(239, 68, 68, 0.12)",
+    },
+    {
+      id: "aggressive",
+      label: "Aggressive",
+      xp: "Strength",
+      color: "#22c55e",
+      bgColor: "rgba(34, 197, 94, 0.12)",
+    },
+    {
+      id: "defensive",
+      label: "Defensive",
+      xp: "Defense",
+      color: "#3b82f6",
+      bgColor: "rgba(59, 130, 246, 0.12)",
+    },
+    {
+      id: "controlled",
+      label: "Controlled",
+      xp: "All",
+      color: "#a855f7",
+      bgColor: "rgba(168, 85, 247, 0.12)",
+    },
   ];
 
   // Filter styles based on equipped weapon (OSRS-accurate restrictions)
@@ -397,8 +582,8 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
 
   // Responsive padding/sizing
   const p = shouldUseMobileUI
-    ? { outer: 4, inner: 6, gap: 4 }
-    : { outer: 3, inner: 4, gap: 3 };
+    ? { outer: 8, inner: 10, gap: 8 }
+    : { outer: 6, inner: 8, gap: 6 };
 
   return (
     <div
@@ -409,35 +594,48 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
       <style>{`
         @keyframes combat-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
         .combat-pulse { animation: combat-pulse 1.5s ease-in-out infinite; }
+        .style-btn:hover:not(:disabled) { transform: translateY(-1px); }
+        .style-btn:active:not(:disabled) { transform: translateY(0); }
       `}</style>
 
       {/* HP + Combat Level Row */}
       <div
-        className="rounded"
         style={{
-          background: theme.colors.slot.filled,
+          background: theme.colors.background.secondary,
           border: inCombat
-            ? `1px solid ${theme.colors.state.danger}60`
-            : `1px solid ${theme.colors.border.default}60`,
+            ? `1px solid ${theme.colors.state.danger}50`
+            : `1px solid ${theme.colors.border.default}40`,
+          borderRadius: "8px",
           padding: `${p.inner}px`,
           boxShadow: inCombat
-            ? `0 0 8px ${theme.colors.state.danger}20`
+            ? `0 0 12px ${theme.colors.state.danger}15`
             : "none",
         }}
       >
         {/* HP Header Row */}
         <div
           className="flex items-center justify-between"
-          style={{ marginBottom: "4px" }}
+          style={{ marginBottom: "6px" }}
         >
-          <div className="flex items-center gap-1.5">
-            <span style={{ fontSize: shouldUseMobileUI ? "14px" : "12px" }}>
-              ❤️
-            </span>
+          <div className="flex items-center gap-2">
+            <svg
+              width={shouldUseMobileUI ? 18 : 16}
+              height={shouldUseMobileUI ? 18 : 16}
+              viewBox="0 0 24 24"
+              fill={
+                healthPercent > 50
+                  ? "#22c55e"
+                  : healthPercent > 25
+                    ? "#f59e0b"
+                    : "#ef4444"
+              }
+            >
+              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" />
+            </svg>
             <span
               style={{
-                fontSize: shouldUseMobileUI ? "12px" : "11px",
-                color: theme.colors.text.accent,
+                fontSize: shouldUseMobileUI ? "13px" : "12px",
+                color: theme.colors.text.primary,
                 fontWeight: 600,
               }}
             >
@@ -447,22 +645,21 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
               <span
                 className="combat-pulse"
                 style={{
-                  fontSize: "9px",
+                  fontSize: "10px",
                   color: theme.colors.state.danger,
                   fontWeight: 600,
                   background: `${theme.colors.state.danger}20`,
-                  padding: "1px 4px",
-                  borderRadius: "3px",
-                  marginLeft: "2px",
+                  padding: "2px 6px",
+                  borderRadius: "4px",
                 }}
               >
-                ⚔️
+                IN COMBAT
               </span>
             )}
           </div>
           <span
             style={{
-              fontSize: shouldUseMobileUI ? "12px" : "11px",
+              fontSize: shouldUseMobileUI ? "14px" : "13px",
               color:
                 healthPercent > 50
                   ? theme.colors.state.success
@@ -470,7 +667,7 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
                     ? theme.colors.state.warning
                     : theme.colors.state.danger,
               fontWeight: 700,
-              fontFamily: theme.typography.fontFamily.mono,
+              fontFamily: "var(--font-mono, monospace)",
             }}
           >
             {health.current}/{health.max}
@@ -481,18 +678,18 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
         <div
           style={{
             width: "100%",
-            height: shouldUseMobileUI ? "10px" : "8px",
+            height: shouldUseMobileUI ? "12px" : "10px",
             background: theme.colors.background.primary,
-            borderRadius: "4px",
+            borderRadius: "5px",
             overflow: "hidden",
-            border: `1px solid ${theme.colors.border.default}40`,
+            border: `1px solid ${theme.colors.border.default}30`,
           }}
         >
           <div
             style={{
               height: "100%",
               width: `${healthPercent}%`,
-              borderRadius: "3px",
+              borderRadius: "4px",
               transition: "width 0.2s ease",
               background:
                 healthPercent > 50
@@ -508,24 +705,25 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
         <div
           className="flex items-center justify-between"
           style={{
-            marginTop: "6px",
-            paddingTop: "6px",
-            borderTop: `1px solid ${theme.colors.border.default}30`,
+            marginTop: "8px",
+            paddingTop: "8px",
+            borderTop: `1px solid ${theme.colors.border.default}25`,
           }}
         >
           <span
             style={{
-              fontSize: shouldUseMobileUI ? "11px" : "10px",
-              color: theme.colors.text.muted,
+              fontSize: shouldUseMobileUI ? "12px" : "11px",
+              color: theme.colors.text.secondary,
             }}
           >
-            Combat Lvl
+            Combat Level
           </span>
           <span
             style={{
-              fontSize: shouldUseMobileUI ? "14px" : "13px",
-              color: theme.colors.state.danger,
+              fontSize: shouldUseMobileUI ? "16px" : "15px",
+              color: "#f59e0b",
               fontWeight: 700,
+              fontFamily: "var(--font-mono, monospace)",
             }}
           >
             {combatLevel}
@@ -536,20 +734,20 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
       {/* Target (only when in combat) */}
       {targetName && targetHealth && (
         <div
-          className="rounded"
           style={{
-            background: `${theme.colors.state.danger}10`,
-            border: `1px solid ${theme.colors.state.danger}30`,
+            background: `${theme.colors.state.danger}08`,
+            border: `1px solid ${theme.colors.state.danger}25`,
+            borderRadius: "8px",
             padding: `${p.inner}px`,
           }}
         >
           <div
             className="flex items-center justify-between"
-            style={{ marginBottom: "3px" }}
+            style={{ marginBottom: "4px" }}
           >
             <span
               style={{
-                fontSize: shouldUseMobileUI ? "11px" : "10px",
+                fontSize: shouldUseMobileUI ? "12px" : "11px",
                 color: theme.colors.state.danger,
                 fontWeight: 600,
               }}
@@ -558,9 +756,10 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
             </span>
             <span
               style={{
-                fontSize: shouldUseMobileUI ? "11px" : "10px",
+                fontSize: shouldUseMobileUI ? "12px" : "11px",
                 color: theme.colors.state.danger,
                 fontWeight: 700,
+                fontFamily: "var(--font-mono, monospace)",
               }}
             >
               {targetHealth.current}/{targetHealth.max}
@@ -595,125 +794,145 @@ export function CombatPanel({ world, stats, equipment }: CombatPanelProps) {
         isMobile={shouldUseMobileUI}
       />
 
-      {/* Attack Styles - 2 column grid */}
+      {/* Attack Styles - Clean 2x2 grid */}
       <div
-        className="rounded"
         style={{
-          background: theme.colors.slot.filled,
-          border: `1px solid ${theme.colors.border.default}60`,
-          padding: `${p.inner}px`,
+          display: "grid",
+          gridTemplateColumns: "repeat(2, 1fr)",
+          gap: shouldUseMobileUI ? "8px" : "6px",
         }}
       >
-        <div
-          className="grid gap-1.5"
-          style={{ gridTemplateColumns: "repeat(2, 1fr)" }}
-        >
-          {styles.map((s) => {
-            const isActive = style === s.id;
-            return (
-              <button
-                key={s.id}
-                onClick={() => changeStyle(s.id)}
-                disabled={cooldown > 0}
-                aria-pressed={isActive}
-                className="rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-400/60"
+        {styles.map((s) => {
+          const isActive = style === s.id;
+          return (
+            <button
+              key={s.id}
+              onClick={() => changeStyle(s.id)}
+              disabled={cooldown > 0}
+              aria-pressed={isActive}
+              className="style-btn focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/50"
+              style={{
+                padding: shouldUseMobileUI ? "12px 8px" : "10px 6px",
+                cursor: cooldown > 0 ? "not-allowed" : "pointer",
+                transition: "all 0.15s ease",
+                fontSize: shouldUseMobileUI ? "12px" : "11px",
+                fontWeight: isActive ? 600 : 500,
+                background: isActive
+                  ? s.bgColor
+                  : theme.colors.background.secondary,
+                border: isActive
+                  ? `2px solid ${s.color}60`
+                  : `1px solid ${theme.colors.border.default}40`,
+                borderRadius: "8px",
+                color: isActive ? s.color : theme.colors.text.secondary,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: shouldUseMobileUI ? "6px" : "4px",
+                touchAction: "manipulation",
+                opacity: cooldown > 0 ? 0.5 : 1,
+                boxShadow: isActive
+                  ? `0 0 12px ${s.color}20, inset 0 1px 0 ${s.color}15`
+                  : "none",
+              }}
+            >
+              <StyleIcon
+                style={s.id}
+                size={shouldUseMobileUI ? 20 : 18}
+                color={isActive ? s.color : theme.colors.text.muted}
+              />
+              <span style={{ fontWeight: 600 }}>{s.label}</span>
+              <span
                 style={{
-                  padding: shouldUseMobileUI ? "8px 6px" : "6px 5px",
-                  minHeight: shouldUseMobileUI ? "40px" : "36px",
-                  cursor: cooldown > 0 ? "not-allowed" : "pointer",
-                  transition: "all 0.1s ease",
-                  fontSize: shouldUseMobileUI ? "12px" : "11px",
-                  fontWeight: isActive ? 600 : 500,
-                  background: isActive
-                    ? `${s.color}20`
-                    : theme.colors.slot.empty,
-                  border: isActive
-                    ? `2px solid ${s.color}70`
-                    : `1px solid ${theme.colors.border.default}50`,
-                  color: isActive ? s.color : theme.colors.text.secondary,
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "2px",
-                  touchAction: "manipulation",
-                  opacity: cooldown > 0 ? 0.5 : 1,
+                  fontSize: shouldUseMobileUI ? "10px" : "9px",
+                  opacity: 0.7,
+                  color: isActive ? s.color : theme.colors.text.muted,
                 }}
               >
-                <div className="flex items-center gap-1">
-                  <span
-                    style={{ fontSize: shouldUseMobileUI ? "12px" : "11px" }}
-                  >
-                    {STYLE_ICONS[s.id]}
-                  </span>
-                  <span>{s.label}</span>
-                </div>
-                <span style={{ fontSize: "9px", opacity: 0.7 }}>+{s.xp}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {cooldown > 0 && (
-          <div
-            className="text-center"
-            style={{
-              marginTop: "4px",
-              fontSize: "10px",
-              color: theme.colors.state.warning,
-              background: `${theme.colors.state.warning}15`,
-              padding: "2px 6px",
-              borderRadius: "3px",
-            }}
-          >
-            ⏱️ {Math.ceil(cooldown / 1000)}s
-          </div>
-        )}
+                +{s.xp}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
-      {/* Auto Retaliate - compact toggle */}
+      {cooldown > 0 && (
+        <div
+          style={{
+            textAlign: "center",
+            fontSize: "11px",
+            color: theme.colors.state.warning,
+            background: `${theme.colors.state.warning}12`,
+            padding: "6px 10px",
+            borderRadius: "6px",
+            border: `1px solid ${theme.colors.state.warning}25`,
+          }}
+        >
+          ⏱️ Cooldown: {Math.ceil(cooldown / 1000)}s
+        </div>
+      )}
+
+      {/* Auto Retaliate - Clean toggle */}
       <button
         onClick={toggleAutoRetaliate}
-        className="rounded w-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-400/60"
+        className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/50"
         style={{
-          padding: shouldUseMobileUI ? "8px 10px" : "6px 8px",
-          minHeight: shouldUseMobileUI ? "40px" : "34px",
+          padding: shouldUseMobileUI ? "10px 12px" : "8px 10px",
           cursor: "pointer",
-          transition: "all 0.1s ease",
+          transition: "all 0.15s ease",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           fontSize: shouldUseMobileUI ? "12px" : "11px",
           touchAction: "manipulation",
+          borderRadius: "8px",
           background: autoRetaliate
-            ? `${theme.colors.state.success}15`
-            : theme.colors.slot.filled,
+            ? "rgba(34, 197, 94, 0.08)"
+            : theme.colors.background.secondary,
           border: autoRetaliate
-            ? `1px solid ${theme.colors.state.success}40`
-            : `1px solid ${theme.colors.border.default}60`,
+            ? "1px solid rgba(34, 197, 94, 0.3)"
+            : `1px solid ${theme.colors.border.default}40`,
           color: autoRetaliate
             ? theme.colors.state.success
-            : theme.colors.text.muted,
+            : theme.colors.text.secondary,
         }}
       >
-        <div className="flex items-center gap-1.5">
-          <span style={{ fontSize: shouldUseMobileUI ? "12px" : "11px" }}>
-            {autoRetaliate ? "🔄" : "🚫"}
-          </span>
+        <div className="flex items-center gap-2">
+          <svg
+            width={shouldUseMobileUI ? 16 : 14}
+            height={shouldUseMobileUI ? 16 : 14}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke={autoRetaliate ? "#22c55e" : theme.colors.text.muted}
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            {autoRetaliate ? (
+              <>
+                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+              </>
+            ) : (
+              <>
+                <circle cx="12" cy="12" r="10" />
+                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+              </>
+            )}
+          </svg>
           <span style={{ fontWeight: 500 }}>Auto Retaliate</span>
         </div>
         <span
           style={{
-            padding: "2px 8px",
-            borderRadius: "3px",
-            fontSize: "10px",
+            padding: shouldUseMobileUI ? "4px 10px" : "3px 8px",
+            borderRadius: "4px",
+            fontSize: shouldUseMobileUI ? "11px" : "10px",
             fontWeight: 700,
             background: autoRetaliate
-              ? `${theme.colors.state.success}30`
-              : `${theme.colors.state.danger}25`,
-            color: autoRetaliate
-              ? theme.colors.state.success
-              : theme.colors.state.danger,
+              ? "rgba(34, 197, 94, 0.2)"
+              : "rgba(239, 68, 68, 0.15)",
+            color: autoRetaliate ? "#22c55e" : "#ef4444",
           }}
         >
           {autoRetaliate ? "ON" : "OFF"}
