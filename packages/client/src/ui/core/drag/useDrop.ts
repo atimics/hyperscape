@@ -91,6 +91,25 @@ export function useDrop(config: DropConfig): DropResult {
     [id, accepts, disabled],
   );
 
+  // Re-register when disabled changes (the ref callback doesn't re-run when only disabled changes)
+  useEffect(() => {
+    const node = elementRef.current;
+    if (!node) return;
+
+    if (!disabled) {
+      const rect = getElementRect(node);
+      dropRectRef.current = rect;
+      dropTargetRegistry.register(id, {
+        element: node,
+        accepts,
+        rect,
+      });
+    } else {
+      dropTargetRegistry.unregister(id);
+      dropRectRef.current = null;
+    }
+  }, [id, accepts, disabled]);
+
   // Update rect on resize - safe to use setState here in effect
   useEffect(() => {
     if (!elementRef.current || disabled) return;
@@ -117,19 +136,27 @@ export function useDrop(config: DropConfig): DropResult {
   const savedDragItemRef = useRef(dragItem);
   const savedPositionRef = useRef(relativePosition);
   const savedCanDropRef = useRef(canDrop);
+  // Track if we were dragging to detect drag end
+  const wasDraggingRef = useRef(false);
 
-  // Update saved refs while dragging
+  // Update saved refs while dragging - also track wasOver state
   useEffect(() => {
-    if (isDragging && dragItem) {
+    if (isDragging && dragItem && canDrop) {
       savedDragItemRef.current = dragItem;
       savedPositionRef.current = relativePosition;
       savedCanDropRef.current = canDrop;
+      // Track wasOver while dragging - this is the critical state for drop detection
+      if (isOver) {
+        wasOverRef.current = true;
+      }
     }
-  }, [isDragging, dragItem, relativePosition, canDrop]);
+    wasDraggingRef.current = isDragging;
+  }, [isDragging, dragItem, relativePosition, canDrop, isOver]);
 
+  // Handle enter/leave callbacks during drag (not for drop detection)
   useEffect(() => {
-    if (!dragItem || !canDrop) {
-      wasOverRef.current = false;
+    // Only process enter/leave while actively dragging
+    if (!isDragging || !dragItem || !canDrop) {
       return;
     }
 
@@ -146,6 +173,7 @@ export function useDrop(config: DropConfig): DropResult {
       onDragOver?.(dragItem, relativePosition);
     }
   }, [
+    isDragging,
     isOver,
     dragItem,
     canDrop,
@@ -158,8 +186,10 @@ export function useDrop(config: DropConfig): DropResult {
   // Handle drop when drag ends
   // Use saved refs because the store clears dragItem before this effect runs
   useEffect(() => {
+    // Detect transition from dragging to not dragging
     if (
       !isDragging &&
+      wasDraggingRef.current &&
       wasOverRef.current &&
       savedDragItemRef.current &&
       savedCanDropRef.current
@@ -167,12 +197,15 @@ export function useDrop(config: DropConfig): DropResult {
       const item = savedDragItemRef.current;
       const pos = savedPositionRef.current || { x: 0, y: 0 };
       onDrop(item, pos);
-      // Clear refs after drop
+    }
+    // Always clear refs when drag ends (whether dropped here or not)
+    if (!isDragging && wasDraggingRef.current) {
       savedDragItemRef.current = null;
       savedPositionRef.current = null;
+      savedCanDropRef.current = false;
       wasOverRef.current = false;
+      wasDraggingRef.current = false;
     }
-    // Only run when isDragging changes to false
   }, [isDragging, onDrop]);
 
   // Cleanup on unmount
