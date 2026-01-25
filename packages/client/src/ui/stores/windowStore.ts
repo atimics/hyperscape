@@ -12,6 +12,7 @@ import { useEditStore } from "./editStore";
 import {
   repositionWindowForViewport,
   getDefaultAnchor,
+  getDefaultPositionForAnchor,
   type Viewport,
 } from "./anchorUtils";
 
@@ -992,9 +993,16 @@ export const useWindowStore = create<WindowStoreState>()(
               : 1080,
         };
 
+        // Detect mobile/desktop mode change between saved and current viewport
+        const MOBILE_BREAKPOINT = 768;
+        const savedWasMobile = savedViewport.width < MOBILE_BREAKPOINT;
+        const currentIsMobile = currentViewport.width < MOBILE_BREAKPOINT;
+        const isMobileToDesktopTransition = savedWasMobile && !currentIsMobile;
+
         debugLog(
           `[WindowStore] Loading layout - saved viewport: ${savedViewport.width}x${savedViewport.height}, ` +
-            `current: ${currentViewport.width}x${currentViewport.height}`,
+            `current: ${currentViewport.width}x${currentViewport.height}, ` +
+            `transition: ${isMobileToDesktopTransition ? "mobile->desktop" : "none"}`,
         );
 
         // Get persisted version (default to 1 for pre-versioning data)
@@ -1105,20 +1113,33 @@ export const useWindowStore = create<WindowStoreState>()(
           const anchor: WindowAnchor =
             windowState.anchor ?? getDefaultAnchor(id);
 
-          // Use anchor-based repositioning for all viewport changes
-          // This works for both mobile->desktop transitions and normal resizes
-          const newPosition = repositionWindowForViewport(
-            windowState.position,
-            windowState.size,
-            anchor,
-            savedViewport,
-            currentViewport,
-          );
+          let newPosition: { x: number; y: number };
 
-          debugLog(
-            `[WindowStore] Repositioning window ${id} using anchor ${anchor}: ` +
-              `(${windowState.position.x}, ${windowState.position.y}) -> (${newPosition.x}, ${newPosition.y})`,
-          );
+          if (isMobileToDesktopTransition) {
+            // For mobile->desktop transition, use default anchor positions
+            // Mobile positions are meaningless for desktop layout
+            newPosition = getDefaultPositionForAnchor(
+              windowState.size,
+              anchor,
+              currentViewport,
+            );
+            debugLog(
+              `[WindowStore] Reset window ${id} to anchor ${anchor} default position: (${newPosition.x}, ${newPosition.y})`,
+            );
+          } else {
+            // Normal resize: preserve offset from anchor
+            newPosition = repositionWindowForViewport(
+              windowState.position,
+              windowState.size,
+              anchor,
+              savedViewport,
+              currentViewport,
+            );
+            debugLog(
+              `[WindowStore] Repositioning window ${id} using anchor ${anchor}: ` +
+                `(${windowState.position.x}, ${windowState.position.y}) -> (${newPosition.x}, ${newPosition.y})`,
+            );
+          }
 
           clampedWindowsMap.set(id, {
             ...windowState,

@@ -400,3 +400,33 @@ export function repositionWindowForViewport(
   // Clamp to ensure window stays visible
   return clampPositionToViewport(newPosition, size, newViewport);
 }
+
+/**
+ * Calculate the default position for a window based on its anchor.
+ *
+ * This places the window flush against its anchor edge with zero offset.
+ * Used when resetting layouts or transitioning between mobile/desktop
+ * where old positions are meaningless.
+ *
+ * @param size - Window size
+ * @param anchor - Window's anchor point
+ * @param viewport - Target viewport dimensions
+ * @returns Default position for the window
+ */
+export function getDefaultPositionForAnchor(
+  size: Size,
+  anchor: WindowAnchor,
+  viewport: Viewport,
+): Point {
+  // Use zero offset to place window flush with its anchor
+  const zeroOffset: AnchorOffset = { x: 0, y: 0 };
+  const position = calculatePositionFromAnchor(
+    zeroOffset,
+    size,
+    anchor,
+    viewport,
+  );
+
+  // Clamp to ensure window stays visible
+  return clampPositionToViewport(position, size, viewport);
+}

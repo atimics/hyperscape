@@ -13,6 +13,7 @@ import {
   repositionWindowForViewport,
   detectNearestAnchor,
   getDefaultAnchor,
+  getDefaultPositionForAnchor,
 } from "@/ui/stores/anchorUtils";
 
 /** Mobile breakpoint threshold */
@@ -68,27 +69,23 @@ export function useViewportResize() {
         // Update mobile state tracking
         wasMobileRef.current = nowMobile;
 
-        // On mobile <-> desktop transition, reposition windows using their anchors
-        // Mobile and desktop use different viewports, but anchors ensure proper positioning
+        // On mobile <-> desktop transition, reset windows to their default anchor positions
+        // Mobile and desktop use completely different layouts, so we can't preserve offsets
         if (transitionedFromMobile || transitionedToMobile) {
           const allWindows = useWindowStore.getState().getAllWindows();
           const windowStoreUpdate = useWindowStore.getState().updateWindow;
           const newViewport = { width: newWidth, height: newHeight };
 
-          // For mobile->desktop transition, we use anchors to position properly
-          // Each window's anchor determines which edge/corner it snaps to
+          // For mobile->desktop transition, place each window at its default anchor position
+          // This means flush with the anchor edge (zero offset from anchor)
           allWindows.forEach((win) => {
             // Get anchor from window or determine from ID
             const anchor = win.anchor ?? getDefaultAnchor(win.id);
 
-            // Calculate position based on anchor in new viewport
-            // For transitions, we use a "zero offset" from anchor to get edge-snapped position
-            const newPosition = repositionWindowForViewport(
-              win.position,
+            // Get the default position for this anchor (flush with edge)
+            const newPosition = getDefaultPositionForAnchor(
               win.size,
               anchor,
-              // Use a reference viewport for transition (assume positions need recalculating)
-              { width: newWidth, height: newHeight },
               newViewport,
             );
 
