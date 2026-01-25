@@ -315,25 +315,23 @@ export const TabBar = memo(function TabBar({
             style={draggingTabId === tab.id ? { opacity: 0.4 } : undefined}
           />
         ))}
-        {/* Preview tab when dragging over from another window */}
+        {/* Preview tab when dragging over from another window (icon only) */}
         {isOver && canDrop && draggedTabInfo && (
           <div
             style={{
-              padding: "4px 12px",
-              fontSize: theme.typography.fontSize.xs,
+              padding: "4px 8px",
+              fontSize: theme.typography.fontSize.sm,
               color: theme.colors.text.secondary,
               backgroundColor: theme.colors.accent.primary,
               borderRadius: `${theme.borderRadius.sm}px`,
               opacity: 0.8,
               display: "flex",
               alignItems: "center",
-              gap: 4,
+              justifyContent: "center",
               marginLeft: 2,
-              whiteSpace: "nowrap",
             }}
           >
-            {draggedTabInfo.icon && <span>{draggedTabInfo.icon}</span>}
-            <span>+ {draggedTabInfo.label}</span>
+            {draggedTabInfo.icon || draggedTabInfo.label?.charAt(0) || "+"}
           </div>
         )}
       </div>

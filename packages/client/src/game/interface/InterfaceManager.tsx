@@ -2882,23 +2882,24 @@ function DraggableContentWrapper({
   const isWindowDragging = isDragging && dragItem?.type === "window";
   const draggingWindowId = isWindowDragging ? dragItem?.id : null;
 
-  // Get the dragged tab/window info for preview
-  const draggedTabLabel = React.useMemo(() => {
+  // Get the dragged tab/window info for preview (icon and label)
+  const draggedTabInfo = React.useMemo(() => {
     if (!dragItem) return null;
     if (dragItem.type === "tab") {
-      // Find the tab's label from the source window
       const sourceWindowId = dragItem.sourceId;
       if (sourceWindowId) {
         const sourceWindow = useWindowStore
           .getState()
           .getWindow(sourceWindowId);
         const tab = sourceWindow?.tabs.find((t) => t.id === dragItem.id);
-        return tab?.label || dragItem.id;
+        return { label: tab?.label || dragItem.id, icon: tab?.icon };
       }
     } else if (dragItem.type === "window") {
-      // For window drag, get its first tab's label
       const sourceWindow = useWindowStore.getState().getWindow(dragItem.id);
-      return sourceWindow?.tabs[0]?.label || dragItem.id;
+      return {
+        label: sourceWindow?.tabs[0]?.label || dragItem.id,
+        icon: sourceWindow?.tabs[0]?.icon,
+      };
     }
     return null;
   }, [dragItem]);
@@ -2967,55 +2968,54 @@ function DraggableContentWrapper({
         }}
       >
         {/* Tab preview when hovering */}
-        {isOver && draggedTabLabel ? (
-          // Show combined tabs preview
-          <div style={{ display: "flex", flex: 1 }}>
-            {/* Current tab */}
+        {isOver && draggedTabInfo ? (
+          // Show combined tabs preview (icons only)
+          <div style={{ display: "flex", flex: 1, gap: 4, padding: "0 8px" }}>
+            {/* Current tab icon */}
             <div
               style={{
-                padding: "4px 12px",
-                fontSize: theme.typography.fontSize.xs,
+                padding: "4px 8px",
+                fontSize: theme.typography.fontSize.sm,
                 color: theme.colors.text.primary,
                 backgroundColor: theme.colors.background.tertiary,
-                borderRight: `1px solid ${theme.colors.border.default}`,
+                borderRadius: theme.borderRadius.sm,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
               }}
             >
-              {activeTab.icon && (
-                <span style={{ marginRight: 4 }}>{activeTab.icon}</span>
-              )}
-              {activeTab.label}
+              {activeTab.icon || activeTab.label.charAt(0)}
             </div>
-            {/* Incoming tab (preview) */}
+            {/* Incoming tab icon (preview) */}
             <div
               style={{
-                padding: "4px 12px",
-                fontSize: theme.typography.fontSize.xs,
+                padding: "4px 8px",
+                fontSize: theme.typography.fontSize.sm,
                 color: theme.colors.text.secondary,
                 backgroundColor: theme.colors.background.secondary,
-                borderRight: `1px solid ${theme.colors.border.default}`,
+                borderRadius: theme.borderRadius.sm,
                 opacity: 0.8,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
               }}
             >
-              + {draggedTabLabel}
+              {draggedTabInfo.icon || draggedTabInfo.label?.charAt(0) || "+"}
             </div>
           </div>
         ) : (
-          // Normal header with current tab
+          // Normal header with current tab (icon only)
           <div
             style={{
               padding: "4px 12px",
-              fontSize: theme.typography.fontSize.xs,
+              fontSize: theme.typography.fontSize.sm,
               color: theme.colors.text.primary,
               flex: 1,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
+              display: "flex",
+              alignItems: "center",
             }}
           >
-            {activeTab.icon && (
-              <span style={{ marginRight: 4 }}>{activeTab.icon}</span>
-            )}
-            {activeTab.label}
+            {activeTab.icon || activeTab.label.charAt(0)}
           </div>
         )}
       </div>
