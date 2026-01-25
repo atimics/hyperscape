@@ -18,6 +18,7 @@ import React, {
   useRef,
   useState,
   useEffect,
+  useMemo,
   useCallback,
 } from "react";
 import type {
@@ -39,6 +40,7 @@ import {
   AccessibilityPanel,
   useWindowStore,
   useThemeStore,
+  useEditStore,
 } from "@/ui";
 
 /** Size dimensions type */
@@ -206,42 +208,57 @@ const MENUBAR_GRID_COLUMNS = 2;
 
 /**
  * Calculate menubar dimensions for horizontal layout (1 row x N columns)
+ * Based on visible controls (like ActionBarPanel)
  */
 function calcMenubarHorizontalDimensions(
   buttonCount: number,
-  includeControls = true,
+  options: { isEditMode?: boolean } = {},
 ): {
   width: number;
   height: number;
 } {
-  const controlWidth = includeControls
-    ? MENUBAR_CONTROL_SIZE + MENUBAR_CONTROL_GAP
+  const { isEditMode = false } = options;
+
+  // Buttons grid width: buttons + gaps + padding
+  const buttonsWidth =
+    buttonCount * MENUBAR_BUTTON_SIZE +
+    (buttonCount - 1) * MENUBAR_BUTTON_GAP +
+    MENUBAR_PADDING * 2;
+
+  // Left side: - button only in edit mode
+  const leftWidth = isEditMode ? MENUBAR_CONTROL_SIZE + MENUBAR_CONTROL_GAP : 0;
+
+  // Right side: + button only in edit mode
+  const rightWidth = isEditMode
+    ? MENUBAR_CONTROL_GAP + MENUBAR_CONTROL_SIZE
     : 0;
+
   return {
-    width:
-      buttonCount * MENUBAR_BUTTON_SIZE +
-      (buttonCount - 1) * MENUBAR_BUTTON_GAP +
-      MENUBAR_PADDING * 2 +
-      controlWidth * 2,
+    width: leftWidth + buttonsWidth + rightWidth,
     height: MENUBAR_BUTTON_SIZE + MENUBAR_PADDING * 2,
   };
 }
 
 /**
  * Calculate menubar dimensions for grid layout (2 columns x N rows)
+ * Based on visible controls (like ActionBarPanel)
  */
 function calcMenubarGridDimensions(
   buttonCount: number,
-  includeControls = true,
+  options: { isEditMode?: boolean } = {},
 ): {
   width: number;
   height: number;
   rows: number;
 } {
+  const { isEditMode = false } = options;
   const rows = Math.ceil(buttonCount / MENUBAR_GRID_COLUMNS);
-  const controlHeight = includeControls
+
+  // Top/bottom controls only in edit mode
+  const controlHeight = isEditMode
     ? MENUBAR_CONTROL_SIZE + MENUBAR_CONTROL_GAP
     : 0;
+
   return {
     width:
       MENUBAR_GRID_COLUMNS * MENUBAR_BUTTON_SIZE +
@@ -260,7 +277,9 @@ function calcMenubarGridDimensions(
 const MENUBAR_BORDER_BUFFER = 4;
 
 // Pre-calculate grid dimensions for min size (allows resizing to grid layout)
-const gridDims = calcMenubarGridDimensions(MENUBAR_MAX_BUTTONS, false);
+const gridDims = calcMenubarGridDimensions(MENUBAR_MAX_BUTTONS, {
+  isEditMode: false,
+});
 
 /** Exported menubar dimensions for panel config (supports both layouts) */
 export const MENUBAR_DIMENSIONS = {
@@ -273,17 +292,19 @@ export const MENUBAR_DIMENSIONS = {
   controlSize: MENUBAR_CONTROL_SIZE,
   controlGap: MENUBAR_CONTROL_GAP,
   gridColumns: MENUBAR_GRID_COLUMNS,
-  // Default horizontal layout (9 buttons)
-  ...calcMenubarHorizontalDimensions(MENUBAR_DEFAULT_BUTTONS, false),
+  // Default horizontal layout (9 buttons) - normal mode (no edit controls)
+  ...calcMenubarHorizontalDimensions(MENUBAR_DEFAULT_BUTTONS, {
+    isEditMode: false,
+  }),
   // Minimum size: grid layout (2 columns) - allows collapsing to vertical
   minWidth: gridDims.width + MENUBAR_BORDER_BUFFER,
   minHeight:
-    calcMenubarHorizontalDimensions(MENUBAR_MIN_BUTTONS, false).height +
-    MENUBAR_BORDER_BUFFER,
-  // Maximum size (9-button horizontal layout)
+    calcMenubarHorizontalDimensions(MENUBAR_MIN_BUTTONS, { isEditMode: false })
+      .height + MENUBAR_BORDER_BUFFER,
+  // Maximum size (9-button horizontal layout in edit mode)
   maxWidth:
-    calcMenubarHorizontalDimensions(MENUBAR_MAX_BUTTONS, false).width +
-    MENUBAR_BORDER_BUFFER,
+    calcMenubarHorizontalDimensions(MENUBAR_MAX_BUTTONS, { isEditMode: true })
+      .width + MENUBAR_BORDER_BUFFER,
   maxHeight: gridDims.height + MENUBAR_BORDER_BUFFER,
 };
 
@@ -906,193 +927,111 @@ const ALL_MENU_BUTTONS: Array<{
   { panelId: "settings", iconName: "settings", label: "Settings" },
 ];
 
-// Storage key for menubar button count persistence
-const MENUBAR_STORAGE_KEY = "menubar-button-count";
+// Storage keys for menubar state
+const MENUBAR_LAYOUT_KEY = "menubar-layout";
 
-// Load button count from localStorage
-function loadMenuBarButtonCount(): number {
-  if (typeof window === "undefined") return MENUBAR_DEFAULT_BUTTONS;
+// Load layout from localStorage (1, 2, or 3 rows)
+function loadMenuBarLayout(): 1 | 2 | 3 {
+  if (typeof window === "undefined") return 1;
   try {
-    const saved = localStorage.getItem(MENUBAR_STORAGE_KEY);
-    if (saved) {
-      const count = parseInt(saved, 10);
-      if (count >= MENUBAR_MIN_BUTTONS && count <= MENUBAR_MAX_BUTTONS) {
-        return count;
-      }
-    }
-  } catch (error) {
-    if (import.meta.env.DEV) {
-      console.warn(
-        "[MenuBar] Failed to load button count from localStorage:",
-        error,
-      );
-    }
+    const saved = localStorage.getItem(MENUBAR_LAYOUT_KEY);
+    if (saved === "2") return 2;
+    if (saved === "3") return 3;
+  } catch {
+    /* ignore */
   }
-  return MENUBAR_DEFAULT_BUTTONS;
+  return 1;
 }
 
-// Save button count to localStorage
-function saveMenuBarButtonCount(count: number) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(MENUBAR_STORAGE_KEY, String(count));
-  } catch (error) {
-    if (import.meta.env.DEV) {
-      console.warn(
-        "[MenuBar] Failed to save button count to localStorage:",
-        error,
-      );
-    }
-  }
-}
-
-/** Menu bar panel that displays navigation buttons with dynamic layout */
+/** Menu bar panel that displays all navigation buttons with snap-to-content sizing */
 function MenuBarPanel({
   onPanelClick,
-  isEditMode = false,
   windowId,
 }: {
   onPanelClick?: (panelId: string) => void;
-  isEditMode?: boolean;
   windowId?: string;
 }): React.ReactElement {
   const theme = useThemeStore((s) => s.theme);
-  const [buttonCount, setButtonCount] = useState(() =>
-    loadMenuBarButtonCount(),
-  );
   const updateWindow = useWindowStore((s) => s.updateWindow);
-  const containerRef = useRef<HTMLDivElement>(null);
 
-  // Track container size for responsive layout
-  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  // Layout: 1 = 1 row, 2 = 2 rows, 3 = 3 rows (loaded from localStorage for saved preference)
+  const layout = useMemo(() => loadMenuBarLayout(), []);
 
-  // Observe container size changes
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+  // Always show all buttons
+  const buttonCount = ALL_MENU_BUTTONS.length;
 
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setContainerSize({
-          width: entry.contentRect.width,
-          height: entry.contentRect.height,
-        });
-      }
-    });
+  // Get grid size for proper alignment
+  const gridSize = useEditStore((s) => s.gridSize);
 
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, []);
+  // Helper to snap to grid
+  const snapToGrid = useCallback(
+    (value: number) => Math.ceil(value / gridSize) * gridSize,
+    [gridSize],
+  );
 
-  // Determine layout based on container width
-  // If container is narrow (less than horizontal layout width), use grid
-  const horizontalWidth =
-    buttonCount * MENUBAR_BUTTON_SIZE +
-    (buttonCount - 1) * MENUBAR_BUTTON_GAP +
-    MENUBAR_PADDING * 2;
-  const useGridLayout =
-    containerSize.width > 0 && containerSize.width < horizontalWidth - 10;
+  // Calculate dimensions for each layout
+  const layoutDims = useMemo(() => {
+    const calc = (rows: number) => {
+      const cols = Math.ceil(buttonCount / rows);
+      return {
+        cols,
+        rows,
+        width:
+          cols * MENUBAR_BUTTON_SIZE +
+          (cols - 1) * MENUBAR_BUTTON_GAP +
+          MENUBAR_PADDING * 2,
+        height:
+          rows * MENUBAR_BUTTON_SIZE +
+          (rows - 1) * MENUBAR_BUTTON_GAP +
+          MENUBAR_PADDING * 2,
+      };
+    };
+    return {
+      1: calc(1),
+      2: calc(2),
+      3: calc(3),
+    };
+  }, [buttonCount]);
 
-  // Calculate grid columns based on available width
-  const gridColumns = useGridLayout ? MENUBAR_GRID_COLUMNS : buttonCount;
+  // Current layout dimensions
+  const currentDims = layoutDims[layout];
 
-  // Set window constraints on mount
+  // Set window size to exactly match content (snap to content)
   useEffect(() => {
     if (!windowId) return;
 
-    // Allow resizing between grid (2-column) and horizontal layouts
-    const gridDims = calcMenubarGridDimensions(buttonCount, false);
-    const horizDims = calcMenubarHorizontalDimensions(buttonCount, false);
+    const width = snapToGrid(currentDims.width + MENUBAR_BORDER_BUFFER);
+    const height = snapToGrid(currentDims.height + MENUBAR_BORDER_BUFFER);
 
+    // Lock size to content - min = max = size
     updateWindow(windowId, {
-      minSize: {
-        width: gridDims.width + MENUBAR_BORDER_BUFFER,
-        height: horizDims.height + MENUBAR_BORDER_BUFFER,
-      },
-      maxSize: {
-        width: horizDims.width + MENUBAR_BORDER_BUFFER,
-        height: gridDims.height + MENUBAR_BORDER_BUFFER,
-      },
+      minSize: { width, height },
+      maxSize: { width, height },
+      size: { width, height },
     });
-  }, [windowId, buttonCount, updateWindow]);
-
-  // Handle button count changes (via +/- buttons in edit mode)
-  const handleIncreaseButtons = useCallback(() => {
-    if (buttonCount < MENUBAR_MAX_BUTTONS) {
-      const newCount = buttonCount + 1;
-      setButtonCount(newCount);
-      saveMenuBarButtonCount(newCount);
-    }
-  }, [buttonCount]);
-
-  const handleDecreaseButtons = useCallback(() => {
-    if (buttonCount > MENUBAR_MIN_BUTTONS) {
-      const newCount = buttonCount - 1;
-      setButtonCount(newCount);
-      saveMenuBarButtonCount(newCount);
-    }
-  }, [buttonCount]);
-
-  // Get visible buttons based on count
-  const visibleButtons = ALL_MENU_BUTTONS.slice(0, buttonCount);
+  }, [windowId, currentDims, updateWindow, snapToGrid]);
 
   // Use compact size for smaller buttons
   const buttonSize: "compact" | "small" | "normal" = "compact";
 
-  // Control button styles (for edit mode +/- buttons)
-  const controlButtonStyle = (isDisabled: boolean): React.CSSProperties => ({
-    width: MENUBAR_CONTROL_SIZE,
-    height: MENUBAR_CONTROL_SIZE,
-    minWidth: MENUBAR_CONTROL_SIZE,
-    minHeight: MENUBAR_CONTROL_SIZE,
-    background: isDisabled
-      ? theme.colors.slot.disabled
-      : theme.colors.background.tertiary,
-    border: `1px solid ${isDisabled ? theme.colors.border.default + "33" : theme.colors.border.decorative + "80"}`,
-    borderRadius: 3,
-    color: isDisabled ? theme.colors.text.disabled : theme.colors.text.accent,
-    fontSize: 12,
-    fontWeight: "bold" as const,
-    cursor: isDisabled ? "not-allowed" : "pointer",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    transition: theme.transitions.fast,
-    flexShrink: 0,
-  });
-
   return (
     <div
-      ref={containerRef}
       style={{
         position: "absolute",
         inset: 0,
         display: "flex",
-        flexDirection: useGridLayout ? "column" : "row",
+        flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        gap: MENUBAR_CONTROL_GAP,
+        gap: 4,
         overflow: "hidden",
       }}
     >
-      {/* Decrease button (-) - only in edit mode */}
-      {isEditMode && (
-        <button
-          onClick={handleDecreaseButtons}
-          disabled={buttonCount <= MENUBAR_MIN_BUTTONS}
-          title={`Remove button (${buttonCount}/${MENUBAR_MAX_BUTTONS})`}
-          className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60"
-          style={controlButtonStyle(buttonCount <= MENUBAR_MIN_BUTTONS)}
-        >
-          −
-        </button>
-      )}
-
-      {/* Buttons container - responsive grid layout */}
+      {/* Buttons container - grid layout */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: `repeat(${gridColumns}, ${MENUBAR_BUTTON_SIZE}px)`,
+          gridTemplateColumns: `repeat(${currentDims.cols}, ${MENUBAR_BUTTON_SIZE}px)`,
           justifyContent: "center",
           alignContent: "center",
           padding: MENUBAR_PADDING,
@@ -1103,7 +1042,7 @@ function MenuBarPanel({
           boxShadow: `inset 0 2px 8px rgba(0, 0, 0, 0.5), ${theme.shadows.md}`,
         }}
       >
-        {visibleButtons.map((button) => (
+        {ALL_MENU_BUTTONS.map((button) => (
           <MenuButton
             key={button.panelId}
             iconName={button.iconName}
@@ -1114,19 +1053,6 @@ function MenuBarPanel({
           />
         ))}
       </div>
-
-      {/* Increase button (+) - only in edit mode */}
-      {isEditMode && (
-        <button
-          onClick={handleIncreaseButtons}
-          disabled={buttonCount >= MENUBAR_MAX_BUTTONS}
-          title={`Add button (${buttonCount}/${MENUBAR_MAX_BUTTONS})`}
-          className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60"
-          style={controlButtonStyle(buttonCount >= MENUBAR_MAX_BUTTONS)}
-        >
-          +
-        </button>
-      )}
     </div>
   );
 }
@@ -1413,13 +1339,7 @@ export function createPanelRenderer(
         return <MinimapPanel world={world} />;
 
       case "menubar":
-        return (
-          <MenuBarPanel
-            onPanelClick={onPanelClick}
-            isEditMode={isEditMode}
-            windowId={windowId}
-          />
-        );
+        return <MenuBarPanel onPanelClick={onPanelClick} windowId={windowId} />;
 
       // Bank is typically opened as a modal/overlay, not a regular panel
       // but we include a placeholder for now

@@ -22,6 +22,12 @@ import React, {
 import { EventType, getItem } from "@hyperscape/shared";
 import type { PlayerStats } from "@hyperscape/shared";
 import {
+  DndContext as DndKitContext,
+  DragOverlay as DndKitDragOverlay,
+  type DragEndEvent as DndKitDragEndEvent,
+  type DragStartEvent as DndKitDragStartEvent,
+} from "@dnd-kit/core";
+import {
   DndProvider,
   useWindowManager,
   useEditMode,
@@ -2288,6 +2294,337 @@ function DesktopInterfaceManager({
     [splitTab, inventory, world],
   );
 
+  // State for @dnd-kit item dragging (cross-panel drag-drop)
+  const [dndKitActiveItem, setDndKitActiveItem] = useState<{
+    id: string;
+    data: Record<string, unknown>;
+  } | null>(null);
+
+  // @dnd-kit drag start handler for item dragging
+  const handleDndKitDragStart = useCallback((event: DndKitDragStartEvent) => {
+    const { active } = event;
+    setDndKitActiveItem({
+      id: String(active.id),
+      data: (active.data.current as Record<string, unknown>) || {},
+    });
+  }, []);
+
+  // @dnd-kit drag end handler for item dragging between panels
+  const handleDndKitDragEnd = useCallback(
+    (event: DndKitDragEndEvent) => {
+      const { active, over } = event;
+      setDndKitActiveItem(null);
+
+      const activeId = String(active.id);
+      const activeData = active.data.current as
+        | Record<string, unknown>
+        | undefined;
+
+      console.log("[InterfaceManager] @dnd-kit Drag end:", {
+        activeId,
+        overId: over?.id,
+        activeData,
+      });
+
+      // Handle drag-out removal for action bar slots (dropped outside any drop zone)
+      if (!over) {
+        if (
+          activeId.startsWith("actionbar-slot-") &&
+          activeData?.source === "actionbar"
+        ) {
+          const slotIndex = activeData.slotIndex as number | undefined;
+          if (slotIndex !== undefined && world) {
+            console.log(
+              "[InterfaceManager] @dnd-kit 🗑️ ActionBar drag-out removal:",
+              {
+                slotIndex,
+              },
+            );
+            // Emit event to clear the action bar slot
+            world.emit(EventType.ACTION_BAR_SLOT_UPDATE, {
+              barId: 0, // Default to bar 0
+              slotIndex,
+              slot: {
+                type: "empty",
+                id: `empty-${slotIndex}`,
+              },
+            });
+          }
+        }
+        return;
+      }
+
+      const overId = String(over.id);
+      const overData = over.data.current as Record<string, unknown> | undefined;
+
+      // Handle action bar → rubbish bin drops
+      if (
+        activeId.startsWith("actionbar-slot-") &&
+        (overId === "actionbar-rubbish-bin" ||
+          overData?.target === "rubbish-bin")
+      ) {
+        const slotIndex = activeData?.slotIndex as number | undefined;
+        if (slotIndex !== undefined && world) {
+          console.log(
+            "[InterfaceManager] @dnd-kit 🗑️ ActionBar to rubbish bin:",
+            {
+              slotIndex,
+            },
+          );
+          // Emit event to clear the action bar slot
+          world.emit(EventType.ACTION_BAR_SLOT_UPDATE, {
+            barId: 0, // Default to bar 0
+            slotIndex,
+            slot: {
+              type: "empty",
+              id: `empty-${slotIndex}`,
+            },
+          });
+        }
+        return;
+      }
+
+      // Handle action bar → action bar reordering
+      if (
+        activeId.startsWith("actionbar-slot-") &&
+        overId.startsWith("actionbar-drop-")
+      ) {
+        const fromIndex = activeData?.slotIndex as number | undefined;
+        const slotMatch = overId.match(/actionbar-drop-(\d+)/);
+        const toIndex = slotMatch ? parseInt(slotMatch[1], 10) : undefined;
+
+        if (
+          fromIndex !== undefined &&
+          toIndex !== undefined &&
+          fromIndex !== toIndex &&
+          world
+        ) {
+          console.log("[InterfaceManager] @dnd-kit 🔄 ActionBar reorder:", {
+            fromIndex,
+            toIndex,
+          });
+          // Emit event to swap action bar slots
+          world.emit(EventType.ACTION_BAR_SLOT_SWAP, {
+            barId: 0,
+            fromIndex,
+            toIndex,
+          });
+        }
+        return;
+      }
+
+      // Handle inventory → action bar drops
+      if (
+        activeId.startsWith("inventory-") &&
+        overId.startsWith("actionbar-drop-")
+      ) {
+        const inventoryIndex = parseInt(activeId.replace("inventory-", ""), 10);
+        const slotMatch = overId.match(/actionbar-drop-(\d+)/);
+        const slotIndex = slotMatch ? parseInt(slotMatch[1], 10) : undefined;
+
+        // Try to get item from props first, then from drag data
+        const itemFromProps = inventory[inventoryIndex];
+        const itemFromDragData = activeData?.item as
+          | { itemId: string; quantity: number }
+          | undefined;
+        const item = itemFromProps || itemFromDragData;
+
+        if (item && slotIndex !== undefined && world) {
+          console.log(
+            "[InterfaceManager] @dnd-kit 📦→⚡ Inventory to ActionBar drop:",
+            {
+              itemId: item.itemId,
+              inventoryIndex,
+              slotIndex,
+            },
+          );
+          // Emit event to update the action bar slot
+          world.emit(EventType.ACTION_BAR_SLOT_UPDATE, {
+            barId: 0, // Default to bar 0
+            slotIndex,
+            slot: {
+              type: "item",
+              id: `item-${item.itemId}-${Date.now()}`,
+              itemId: item.itemId,
+              quantity: item.quantity,
+              label: item.itemId,
+            },
+          });
+        }
+        return;
+      }
+
+      // Handle inventory → inventory drops (reordering)
+      if (
+        activeId.startsWith("inventory-") &&
+        (overId.startsWith("inventory-drop-") ||
+          overId.startsWith("inventory-"))
+      ) {
+        const fromSlot = parseInt(activeId.replace("inventory-", ""), 10);
+        const toSlot = overId.startsWith("inventory-drop-")
+          ? parseInt(overId.replace("inventory-drop-", ""), 10)
+          : parseInt(overId.replace("inventory-", ""), 10);
+
+        // Don't swap with self
+        if (fromSlot === toSlot) return;
+
+        if (world) {
+          console.log("[InterfaceManager] @dnd-kit 🎒→🎒 Inventory move:", {
+            fromSlot,
+            toSlot,
+          });
+          // Send move request to server
+          world.network?.send?.("moveItem", { fromSlot, toSlot });
+        }
+        return;
+      }
+
+      // Handle prayer → action bar drops
+      if (
+        activeId.startsWith("prayer-") &&
+        overId.startsWith("actionbar-drop-")
+      ) {
+        const slotMatch = overId.match(/actionbar-drop-(\d+)/);
+        const slotIndex = slotMatch ? parseInt(slotMatch[1], 10) : undefined;
+        const prayerData = activeData?.prayer as
+          | {
+              id: string;
+              name: string;
+              icon: string;
+              level: number;
+            }
+          | undefined;
+
+        if (prayerData && slotIndex !== undefined && world) {
+          console.log(
+            "[InterfaceManager] @dnd-kit 🙏→⚡ Prayer to ActionBar drop:",
+            {
+              prayerId: prayerData.id,
+              slotIndex,
+            },
+          );
+          // Emit event to update the action bar slot
+          world.emit(EventType.ACTION_BAR_SLOT_UPDATE, {
+            barId: 0, // Default to bar 0
+            slotIndex,
+            slot: {
+              type: "prayer",
+              id: `prayer-${prayerData.id}-${Date.now()}`,
+              prayerId: prayerData.id,
+              icon: prayerData.icon,
+              label: prayerData.name,
+            },
+          });
+        }
+        return;
+      }
+
+      // Handle skill → action bar drops
+      if (
+        activeId.startsWith("skill-") &&
+        overId.startsWith("actionbar-drop-")
+      ) {
+        const slotMatch = overId.match(/actionbar-drop-(\d+)/);
+        const slotIndex = slotMatch ? parseInt(slotMatch[1], 10) : undefined;
+        const skillData = activeData?.skill as
+          | {
+              id: string;
+              name: string;
+              icon: string;
+              level: number;
+            }
+          | undefined;
+
+        if (skillData && slotIndex !== undefined && world) {
+          console.log(
+            "[InterfaceManager] @dnd-kit 📊→⚡ Skill to ActionBar drop:",
+            {
+              skillId: skillData.id,
+              slotIndex,
+            },
+          );
+          // Emit event to update the action bar slot
+          world.emit(EventType.ACTION_BAR_SLOT_UPDATE, {
+            barId: 0, // Default to bar 0
+            slotIndex,
+            slot: {
+              type: "skill",
+              id: `skill-${skillData.id}-${Date.now()}`,
+              skillId: skillData.id,
+              icon: skillData.icon,
+              label: skillData.name,
+            },
+          });
+        }
+        return;
+      }
+
+      // Handle inventory → equipment drops (with full validation)
+      if (
+        activeId.startsWith("inventory-") &&
+        overId.startsWith("equipment-")
+      ) {
+        const inventoryIndex = parseInt(activeId.replace("inventory-", ""), 10);
+        const equipmentSlot = overId.replace("equipment-", "");
+        const item = inventory[inventoryIndex];
+
+        if (item && world) {
+          const localPlayer = world.getPlayer();
+          if (localPlayer) {
+            // Get item data to check if it can be equipped in this slot
+            const itemData = getItem(item.itemId);
+
+            // Client-side validation for better UX (server will also validate)
+            if (itemData) {
+              const itemEquipSlot = itemData.equipSlot;
+
+              // Map 2h weapons to weapon slot
+              const normalizedItemSlot =
+                itemEquipSlot === "2h" ? "weapon" : itemEquipSlot;
+
+              // Check if item can be equipped in this slot
+              // Allow if: exact match, or if item has no equipSlot (server will reject if invalid)
+              if (normalizedItemSlot && normalizedItemSlot !== equipmentSlot) {
+                console.log(
+                  "[InterfaceManager] @dnd-kit ❌ Item cannot be equipped in this slot:",
+                  {
+                    itemId: item.itemId,
+                    itemSlot: normalizedItemSlot,
+                    targetSlot: equipmentSlot,
+                  },
+                );
+                // Show feedback to user
+                world.emit(EventType.UI_MESSAGE, {
+                  message: `Cannot equip ${itemData.name || item.itemId} in ${equipmentSlot} slot`,
+                  type: "error",
+                });
+                return;
+              }
+            }
+
+            console.log(
+              "[InterfaceManager] @dnd-kit 📦→🎽 Inventory to Equipment drop:",
+              {
+                itemId: item.itemId,
+                inventorySlot: inventoryIndex,
+                equipmentSlot,
+              },
+            );
+            // Send equip request to server with equipment slot
+            world.network?.send("equipItem", {
+              playerId: localPlayer.id,
+              itemId: item.itemId,
+              inventorySlot: inventoryIndex,
+              equipmentSlot,
+            });
+          }
+        }
+        return;
+      }
+    },
+    [inventory, world],
+  );
+
   if (!enabled) {
     return <>{children}</>;
   }
@@ -2397,75 +2734,159 @@ function DesktopInterfaceManager({
         {/* Drag overlay for ghost during drag */}
         <DragOverlay />
 
-        {/* Windows container - positioned for absolute windows */}
-        {/* In normal mode: z-300 (below minimap at z-998) */}
-        {/* In edit mode: z-600 (above minimap at z-200 so windows can be dragged) */}
-        <div
-          className="fixed inset-0 pointer-events-none"
-          style={{ zIndex: isUnlocked && editModeEnabled ? 600 : 300 }}
+        {/* @dnd-kit context for cross-panel item dragging */}
+        <DndKitContext
+          onDragStart={handleDndKitDragStart}
+          onDragEnd={handleDndKitDragEnd}
         >
-          {(() => {
-            const visibleWindows = windows.filter((w) => w.visible);
+          {/* Windows container - positioned for absolute windows */}
+          {/* In normal mode: z-300 (below minimap at z-998) */}
+          {/* In edit mode: z-600 (above minimap at z-200 so windows can be dragged) */}
+          <div
+            className="fixed inset-0 pointer-events-none"
+            style={{ zIndex: isUnlocked && editModeEnabled ? 600 : 300 }}
+          >
+            {(() => {
+              const visibleWindows = windows.filter((w) => w.visible);
 
-            return visibleWindows.map((windowState) => {
-              // Action bar windows don't have tabs - render content directly with drag handle
-              const isActionBar = windowState.id.startsWith("actionbar-");
-              // Minimap window has no tab bar - just the content
-              const isMinimap = windowState.id === "minimap-window";
-              // Only show TabBar for multi-tab windows
-              const hasMultipleTabs = windowState.tabs.length > 1;
-              const showTabBar = !isActionBar && !isMinimap && hasMultipleTabs;
-              // Single-tab windows need draggable content wrapper in edit mode
-              const needsDraggableWrapper =
-                !isActionBar && !isMinimap && !hasMultipleTabs;
+              return visibleWindows.map((windowState) => {
+                // Action bar windows don't have tabs - render content directly with drag handle
+                const isActionBar = windowState.id.startsWith("actionbar-");
+                // Menu bar window - entire content is draggable (no header)
+                const isMenuBar = windowState.id === "menubar-window";
+                // Minimap window has no tab bar - just the content
+                const isMinimap = windowState.id === "minimap-window";
+                // Only show TabBar for multi-tab windows
+                const hasMultipleTabs = windowState.tabs.length > 1;
+                const showTabBar =
+                  !isActionBar && !isMenuBar && !isMinimap && hasMultipleTabs;
+                // Single-tab windows need draggable content wrapper in edit mode
+                const needsDraggableWrapper =
+                  !isActionBar && !isMenuBar && !isMinimap && !hasMultipleTabs;
 
-              return (
-                <div key={windowState.id} style={{ pointerEvents: "auto" }}>
-                  <Window
-                    windowId={windowState.id}
-                    windowState={windowState}
-                    isUnlocked={isUnlocked && editModeEnabled}
-                    windowCombiningEnabled={windowCombiningEnabled}
+                return (
+                  <div key={windowState.id} style={{ pointerEvents: "auto" }}>
+                    <Window
+                      windowId={windowState.id}
+                      windowState={windowState}
+                      isUnlocked={isUnlocked && editModeEnabled}
+                      windowCombiningEnabled={windowCombiningEnabled}
+                    >
+                      {isActionBar ? (
+                        <ActionBarWrapper
+                          activeTabIndex={windowState.activeTabIndex}
+                          tabs={windowState.tabs}
+                          renderPanel={renderPanel}
+                          windowId={windowState.id}
+                        />
+                      ) : isMenuBar ? (
+                        <MenuBarWrapper
+                          activeTabIndex={windowState.activeTabIndex}
+                          tabs={windowState.tabs}
+                          renderPanel={renderPanel}
+                          windowId={windowState.id}
+                          isUnlocked={isUnlocked && editModeEnabled}
+                        />
+                      ) : isMinimap ? (
+                        // Minimap gets its own wrapper that passes drag props for the border drag handles
+                        <MinimapWrapper
+                          world={world}
+                          isUnlocked={isUnlocked && editModeEnabled}
+                        />
+                      ) : showTabBar ? (
+                        <TabBar windowId={windowState.id} />
+                      ) : null}
+                      {!isActionBar &&
+                      !isMenuBar &&
+                      !isMinimap &&
+                      needsDraggableWrapper ? (
+                        <DraggableContentWrapper
+                          windowId={windowState.id}
+                          activeTabIndex={windowState.activeTabIndex}
+                          tabs={windowState.tabs}
+                          renderPanel={renderPanel}
+                          isUnlocked={isUnlocked && editModeEnabled}
+                        />
+                      ) : !isActionBar && !isMenuBar && !isMinimap ? (
+                        <WindowContent
+                          activeTabIndex={windowState.activeTabIndex}
+                          tabs={windowState.tabs}
+                          renderPanel={renderPanel}
+                          windowId={windowState.id}
+                          isUnlocked={isUnlocked && editModeEnabled}
+                        />
+                      ) : null}
+                    </Window>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+
+          {/* @dnd-kit Drag overlay for item dragging visual feedback */}
+          <DndKitDragOverlay dropAnimation={null}>
+            {dndKitActiveItem &&
+              (() => {
+                const { id, data } = dndKitActiveItem;
+                const slotSize = 36;
+
+                // Determine what we're dragging and get appropriate icon/content
+                let icon: React.ReactNode = "📦";
+                let label = "";
+
+                if (id.startsWith("inventory-")) {
+                  // Inventory item - get from inventory array or drag data
+                  const index = parseInt(id.replace("inventory-", ""), 10);
+                  const item =
+                    inventory[index] ||
+                    (data?.item as { itemId: string } | undefined);
+                  if (item) {
+                    const itemData = getItem(item.itemId);
+                    icon = itemData?.iconPath || "📦";
+                    label = itemData?.name || item.itemId;
+                  }
+                } else if (id.startsWith("prayer-")) {
+                  // Prayer
+                  const prayerData = data?.prayer as
+                    | { icon?: string; name?: string }
+                    | undefined;
+                  icon = prayerData?.icon || "🙏";
+                  label = prayerData?.name || "";
+                } else if (id.startsWith("skill-")) {
+                  // Skill
+                  const skillData = data?.skill as
+                    | { icon?: string; name?: string }
+                    | undefined;
+                  icon = skillData?.icon || "📊";
+                  label = skillData?.name || "";
+                }
+
+                return (
+                  <div
+                    style={{
+                      width: slotSize,
+                      height: slotSize,
+                      background:
+                        "linear-gradient(180deg, #4a4a4a 0%, #2a2a2a 100%)",
+                      border: "2px solid #d4a853",
+                      borderRadius: 4,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      boxShadow:
+                        "0 4px 12px rgba(0, 0, 0, 0.4), 0 0 8px rgba(212, 168, 83, 0.3)",
+                      pointerEvents: "none",
+                      fontSize: 18,
+                      position: "relative",
+                    }}
+                    title={label}
                   >
-                    {isActionBar ? (
-                      <ActionBarWrapper
-                        activeTabIndex={windowState.activeTabIndex}
-                        tabs={windowState.tabs}
-                        renderPanel={renderPanel}
-                        windowId={windowState.id}
-                      />
-                    ) : isMinimap ? (
-                      // Minimap gets its own wrapper that passes drag props for the border drag handles
-                      <MinimapWrapper
-                        world={world}
-                        isUnlocked={isUnlocked && editModeEnabled}
-                      />
-                    ) : showTabBar ? (
-                      <TabBar windowId={windowState.id} />
-                    ) : null}
-                    {!isActionBar && !isMinimap && needsDraggableWrapper ? (
-                      <DraggableContentWrapper
-                        windowId={windowState.id}
-                        activeTabIndex={windowState.activeTabIndex}
-                        tabs={windowState.tabs}
-                        renderPanel={renderPanel}
-                        isUnlocked={isUnlocked && editModeEnabled}
-                      />
-                    ) : !isActionBar && !isMinimap ? (
-                      <WindowContent
-                        activeTabIndex={windowState.activeTabIndex}
-                        tabs={windowState.tabs}
-                        renderPanel={renderPanel}
-                        windowId={windowState.id}
-                        isUnlocked={isUnlocked && editModeEnabled}
-                      />
-                    ) : null}
-                  </Window>
-                </div>
-              );
-            });
-          })()}
-        </div>
+                    {icon}
+                  </div>
+                );
+              })()}
+          </DndKitDragOverlay>
+        </DndKitContext>
 
         {/* Modal Panels */}
         {lootWindowData && (
@@ -3086,6 +3507,48 @@ function ActionBarWrapper({
   isUnlocked,
   windowId,
 }: ActionBarWrapperProps): React.ReactElement | null {
+  const activeTab = tabs[activeTabIndex];
+  if (!activeTab) return null;
+
+  const panelContent =
+    typeof activeTab.content === "string"
+      ? renderPanel(activeTab.content, undefined, windowId)
+      : activeTab.content;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "flex-start",
+        cursor: isUnlocked ? "move" : "default",
+        touchAction: isUnlocked ? "none" : "auto",
+        overflow: "hidden",
+      }}
+      onPointerDown={isUnlocked ? dragHandleProps?.onPointerDown : undefined}
+    >
+      {panelContent}
+    </div>
+  );
+}
+
+/** Menu bar wrapper that makes the entire content area draggable */
+interface MenuBarWrapperProps extends WindowContentProps {
+  dragHandleProps?: {
+    onPointerDown: (e: React.PointerEvent) => void;
+    style: React.CSSProperties;
+  };
+  isUnlocked?: boolean;
+}
+
+function MenuBarWrapper({
+  activeTabIndex,
+  tabs,
+  renderPanel,
+  dragHandleProps,
+  isUnlocked,
+  windowId,
+}: MenuBarWrapperProps): React.ReactElement | null {
   const activeTab = tabs[activeTabIndex];
   if (!activeTab) return null;
 

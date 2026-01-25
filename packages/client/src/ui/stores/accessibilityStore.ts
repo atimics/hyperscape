@@ -9,6 +9,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { useShallow } from "zustand/react/shallow";
 import type {
   AccessibilitySettings,
   ColorblindMode,
@@ -217,9 +218,10 @@ export const useAccessibilityStore = create<AccessibilityStoreState>()(
 
 /**
  * Hook to get current accessibility settings
+ * Uses useShallow for shallow comparison to prevent unnecessary re-renders
  */
 export function useAccessibility(): AccessibilitySettings {
-  return useAccessibilityStore((s) => s.getSettings());
+  return useAccessibilityStore(useShallow((s) => s.getSettings()));
 }
 
 /**

@@ -432,7 +432,9 @@ function App() {
   if (privyEnabled && !isAuthenticated && !authState.isAuthenticated) {
     return (
       <div ref={appRef} data-component="app-root">
-        <LoginScreen onAuthenticated={handleAuthenticated} />
+        <ErrorBoundary>
+          <LoginScreen onAuthenticated={handleAuthenticated} />
+        </ErrorBoundary>
       </div>
     );
   }
@@ -446,7 +448,11 @@ function App() {
   ) {
     return (
       <div ref={appRef} data-component="app-root">
-        <UsernameSelectionScreen onUsernameSelected={handleUsernameSelected} />
+        <ErrorBoundary>
+          <UsernameSelectionScreen
+            onUsernameSelected={handleUsernameSelected}
+          />
+        </ErrorBoundary>
       </div>
     );
   }
@@ -455,16 +461,18 @@ function App() {
   if (showCharacterPage && privyEnabled && hasUsername === true) {
     return (
       <div ref={appRef} data-component="app-root">
-        <CharacterSelectScreen
-          wsUrl={wsUrl}
-          onPlay={(id) => {
-            if (id) {
-              localStorage.setItem("selectedCharacterId", id);
-            }
-            setShowCharacterPage(false);
-          }}
-          onLogout={handleLogout}
-        />
+        <ErrorBoundary>
+          <CharacterSelectScreen
+            wsUrl={wsUrl}
+            onPlay={(id) => {
+              if (id) {
+                localStorage.setItem("selectedCharacterId", id);
+              }
+              setShowCharacterPage(false);
+            }}
+            onLogout={handleLogout}
+          />
+        </ErrorBoundary>
       </div>
     );
   }
@@ -486,7 +494,9 @@ function App() {
   // The client will automatically send enterWorld without characterId for dev mode
   return (
     <div ref={appRef} data-component="app-root">
-      <GameClient wsUrl={wsUrl} onSetup={handleSetup} />
+      <ErrorBoundary>
+        <GameClient wsUrl={wsUrl} onSetup={handleSetup} />
+      </ErrorBoundary>
     </div>
   );
 }

@@ -169,7 +169,7 @@ function DraggableInventorySlot({
     isDragging,
   } = useDraggable({
     id: `inventory-${index}`,
-    data: { item, index },
+    data: { item, index, source: "inventory" },
     disabled: isDragDisabled,
   });
 

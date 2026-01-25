@@ -265,7 +265,9 @@ export function useWorldMap(options: WorldMapOptions = {}): WorldMapResult {
     resizeObserver.observe(element);
 
     return () => resizeObserver.disconnect();
-  }, [isReady]);
+    // Note: isReady is set inside this effect, so we intentionally exclude it
+    // from dependencies to avoid recreating the ResizeObserver unnecessarily
+  }, []);
 
   // Notify on viewport change
   useEffect(() => {

@@ -204,6 +204,9 @@ export function useDialog(options: UseDialogOptions = {}): UseDialogResult {
 
   // Refs for animation frame and typing
   const typingIntervalRef = useRef<number | null>(null);
+  const autoContinueTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const currentCharIndexRef = useRef(0);
   const pendingActionsRef = useRef<DialogAction[]>([]);
 
@@ -212,6 +215,14 @@ export function useDialog(options: UseDialogOptions = {}): UseDialogResult {
     if (typingIntervalRef.current !== null) {
       clearInterval(typingIntervalRef.current);
       typingIntervalRef.current = null;
+    }
+  }, []);
+
+  // Cleanup auto-continue timeout
+  const clearAutoContinue = useCallback(() => {
+    if (autoContinueTimeoutRef.current !== null) {
+      clearTimeout(autoContinueTimeoutRef.current);
+      autoContinueTimeoutRef.current = null;
     }
   }, []);
 
@@ -311,6 +322,9 @@ export function useDialog(options: UseDialogOptions = {}): UseDialogResult {
       tree: DialogTree,
       context: DialogContext,
     ) => {
+      // Clear any pending auto-continue from previous node
+      clearAutoContinue();
+
       if (!node) {
         // End of dialog
         onClose?.(tree);
@@ -360,7 +374,9 @@ export function useDialog(options: UseDialogOptions = {}): UseDialogResult {
 
           // Handle auto-continue
           if (textNode.autoContinue) {
-            setTimeout(() => {
+            // Clear any previous auto-continue timeout
+            clearAutoContinue();
+            autoContinueTimeoutRef.current = setTimeout(() => {
               setState((prev) => {
                 // Only auto-continue if still on same node
                 if (prev.currentNode?.id === node.id && prev.isTypingComplete) {
@@ -452,6 +468,7 @@ export function useDialog(options: UseDialogOptions = {}): UseDialogResult {
       typingSpeed,
       startTyping,
       stopTyping,
+      clearAutoContinue,
       processActions,
       onNodeChange,
       onVoiceLine,
@@ -482,6 +499,7 @@ export function useDialog(options: UseDialogOptions = {}): UseDialogResult {
   // Close dialog
   const close = useCallback(() => {
     stopTyping();
+    clearAutoContinue();
     if (state.tree) {
       onClose?.(state.tree);
     }
@@ -489,7 +507,7 @@ export function useDialog(options: UseDialogOptions = {}): UseDialogResult {
       ...initialState,
       context: prev.context,
     }));
-  }, [stopTyping, state.tree, onClose]);
+  }, [stopTyping, clearAutoContinue, state.tree, onClose]);
 
   // Continue to next node
   const continueDialog = useCallback(() => {
@@ -585,8 +603,9 @@ export function useDialog(options: UseDialogOptions = {}): UseDialogResult {
   useEffect(() => {
     return () => {
       stopTyping();
+      clearAutoContinue();
     };
-  }, [stopTyping]);
+  }, [stopTyping, clearAutoContinue]);
 
   // Computed values
   const canContinue = useMemo(() => {

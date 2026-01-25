@@ -9,6 +9,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { useShallow } from "zustand/react/shallow";
 import type { ComplexityMode, ComplexityFeatures } from "../types/complexity";
 import { COMPLEXITY_MODE_CONFIGS } from "../types/complexity";
 
@@ -174,7 +175,8 @@ export function useComplexityMode(): ComplexityMode {
 
 /**
  * Hook to get all current features
+ * Uses useShallow for shallow comparison to prevent unnecessary re-renders
  */
 export function useComplexityFeatures(): ComplexityFeatures {
-  return useComplexityStore((s) => s.getFeatures());
+  return useComplexityStore(useShallow((s) => s.getFeatures()));
 }

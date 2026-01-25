@@ -150,6 +150,9 @@ export const CharacterEditorScreen: React.FC = () => {
       setAgentId(agentIdParam);
     }
 
+    // AbortController for cleanup on unmount
+    const abortController = new AbortController();
+
     // Fetch existing agent and credentials securely
     const fetchExistingAgent = async () => {
       const accountId = localStorage.getItem("privy_user_id");
@@ -162,7 +165,9 @@ export const CharacterEditorScreen: React.FC = () => {
         console.log(
           "[CharacterEditor] Fetching existing agent from ElizaOS...",
         );
-        const response = await fetch(`${ELIZAOS_API}/agents`);
+        const response = await fetch(`${ELIZAOS_API}/agents`, {
+          signal: abortController.signal,
+        });
 
         if (response.ok) {
           const data = await response.json();
@@ -279,7 +284,10 @@ export const CharacterEditorScreen: React.FC = () => {
             console.log(
               "[CharacterEditor] ✅ Merged agent with template defaults",
             );
-            setCharacter(loadedAgent);
+            // Only set state if not aborted
+            if (!abortController.signal.aborted) {
+              setCharacter(loadedAgent);
+            }
             return;
           }
         }
@@ -317,10 +325,18 @@ export const CharacterEditorScreen: React.FC = () => {
         );
       }
 
-      setCharacter(template);
+      // Only set state if not aborted
+      if (!abortController.signal.aborted) {
+        setCharacter(template);
+      }
     };
 
     fetchExistingAgent();
+
+    // Cleanup: abort fetch on unmount
+    return () => {
+      abortController.abort();
+    };
   }, [authChecked]);
 
   const handleSave = async () => {

@@ -33,6 +33,7 @@ import {
   useFeatureEnabled,
   useWindowStore,
   useTheme,
+  useEditStore,
 } from "@/ui";
 import { CONTEXT_MENU_COLORS, EventType } from "@hyperscape/shared";
 import type { ClientWorld, InventorySlotItem } from "../../types";
@@ -107,37 +108,58 @@ const PADDING = parseTokenToNumber(PADDING_TOKEN); // 4
 const CONTROL_BUTTON_SIZE = parseTokenToNumber(CONTROL_BUTTON_SIZE_TOKEN); // 20
 const CONTROL_BUTTON_GAP = 4; // Gap between control button and slots
 
-/** Calculate dimensions for horizontal layout (slotCount x 1) with optional control buttons */
+/** Calculate dimensions for horizontal layout (slotCount x 1) based on visible controls */
 function calcHorizontalDimensions(
   slotCount: number,
-  includeControls = true,
+  options: {
+    isEditMode?: boolean;
+    isLocked?: boolean;
+  } = {},
 ): { width: number; height: number } {
-  // Control buttons appear on left and right sides
-  const controlWidth = includeControls
-    ? CONTROL_BUTTON_SIZE + CONTROL_BUTTON_GAP
-    : 0;
+  const { isEditMode = false, isLocked = false } = options;
+
+  // Slots grid width: slots + gaps + padding
+  const slotsWidth =
+    slotCount * SLOT_SIZE + (slotCount - 1) * SLOT_GAP + PADDING * 2;
+
+  // Left side: - button only in edit mode
+  const leftWidth = isEditMode ? CONTROL_BUTTON_SIZE + CONTROL_BUTTON_GAP : 0;
+
+  // Right side: rubbish bin (only when unlocked) + lock button + (+ button only in edit mode)
+  const rubbishWidth = !isLocked ? SLOT_SIZE + CONTROL_BUTTON_GAP : 0;
+  const lockWidth = CONTROL_BUTTON_SIZE;
+  const plusWidth = isEditMode ? CONTROL_BUTTON_GAP + CONTROL_BUTTON_SIZE : 0;
+  const rightWidth = rubbishWidth + lockWidth + plusWidth;
+
+  // Total width with gap between sections
+  const totalGap =
+    (leftWidth > 0 ? CONTROL_BUTTON_GAP : 0) + CONTROL_BUTTON_GAP;
+
   return {
-    width:
-      slotCount * SLOT_SIZE +
-      (slotCount - 1) * SLOT_GAP +
-      PADDING * 2 +
-      controlWidth * 2,
+    width: leftWidth + slotsWidth + totalGap + rightWidth,
     height: SLOT_SIZE + PADDING * 2,
   };
 }
 
-// Default dimensions based on default slot count (7)
-const defaultDims = calcHorizontalDimensions(DEFAULT_SLOT_COUNT);
+// Default dimensions based on default slot count (7) - locked state (most common)
+const defaultDims = calcHorizontalDimensions(DEFAULT_SLOT_COUNT, {
+  isLocked: true,
+});
 const HORIZONTAL_WIDTH = defaultDims.width;
 const HORIZONTAL_HEIGHT = defaultDims.height;
 
-// Maximum size: 9-slot horizontal layout
-const maxHorizontalDims = calcHorizontalDimensions(MAX_SLOT_COUNT);
+// Maximum size: 9-slot horizontal layout with all controls visible (edit mode, unlocked)
+const maxHorizontalDims = calcHorizontalDimensions(MAX_SLOT_COUNT, {
+  isEditMode: true,
+  isLocked: false,
+});
 const MAX_WIDTH = maxHorizontalDims.width;
 const MAX_HEIGHT = maxHorizontalDims.height;
 
-// Minimum size: smallest valid layout (4-slot horizontal)
-const minHorizontalDims = calcHorizontalDimensions(MIN_SLOT_COUNT);
+// Minimum size: smallest valid layout (4-slot horizontal) - locked state
+const minHorizontalDims = calcHorizontalDimensions(MIN_SLOT_COUNT, {
+  isLocked: true,
+});
 // Add buffer for borders (1px each side = 2px) and box-shadow visual expansion
 const BORDER_BUFFER = 4;
 const MIN_WIDTH = minHorizontalDims.width + BORDER_BUFFER;
@@ -371,6 +393,7 @@ const DraggableSlot = memo(function DraggableSlot({
   shortcut,
   isHovered,
   isActive,
+  isLocked,
   onHover,
   onLeave,
   onClick,
@@ -382,6 +405,7 @@ const DraggableSlot = memo(function DraggableSlot({
   shortcut: string;
   isHovered: boolean;
   isActive: boolean;
+  isLocked: boolean;
   onHover: () => void;
   onLeave: () => void;
   onClick: () => void;
@@ -399,7 +423,7 @@ const DraggableSlot = memo(function DraggableSlot({
   } = useDraggable({
     id: `actionbar-slot-${slotIndex}`,
     data: { slot, slotIndex, source: "actionbar" },
-    disabled: isEmpty,
+    disabled: isEmpty || isLocked,
   });
 
   const { setNodeRef: setDropRef, isOver } = useDroppable({
@@ -525,7 +549,8 @@ const DraggableSlot = memo(function DraggableSlot({
               ? `1px solid ${theme.colors.accent.primary}80`
               : `1px solid ${theme.colors.border.default}`,
       borderRadius: 4,
-      cursor: isEmpty ? "default" : isDragging ? "grabbing" : "grab",
+      cursor:
+        isEmpty || isLocked ? "default" : isDragging ? "grabbing" : "grab",
       opacity: isDragging ? 0.3 : 1,
       transform: isOver
         ? "scale(1.05)"
@@ -549,6 +574,7 @@ const DraggableSlot = memo(function DraggableSlot({
       isOver,
       isHovered,
       isDragging,
+      isLocked,
       slotSize,
       theme,
     ],
@@ -624,6 +650,82 @@ const DraggableSlot = memo(function DraggableSlot({
   );
 });
 
+/** Rubbish bin component for drag-to-delete functionality */
+const RubbishBin = memo(function RubbishBin({
+  onContextMenu,
+  isDragging,
+}: {
+  onContextMenu: (e: React.MouseEvent) => void;
+  isDragging: boolean;
+}) {
+  const theme = useTheme();
+  const { setNodeRef, isOver } = useDroppable({
+    id: "actionbar-rubbish-bin",
+    data: { target: "rubbish-bin" },
+  });
+
+  return (
+    <button
+      ref={setNodeRef}
+      onContextMenu={onContextMenu}
+      title="Drag items here to remove them"
+      className="relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60"
+      style={{
+        width: SLOT_SIZE,
+        height: SLOT_SIZE,
+        background: isOver
+          ? `radial-gradient(ellipse at center, ${theme.colors.state.danger}4D 0%, ${theme.colors.background.secondary} 70%)`
+          : isDragging
+            ? `linear-gradient(180deg, ${theme.colors.background.tertiary || theme.colors.background.secondary} 0%, ${theme.colors.background.primary} 100%)`
+            : `linear-gradient(180deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.primary} 100%)`,
+        border: isOver
+          ? `2px solid ${theme.colors.state.danger}B3`
+          : isDragging
+            ? `1px dashed ${theme.colors.state.warning}80`
+            : `1px solid ${theme.colors.border.default}66`,
+        borderRadius: 4,
+        cursor: "default",
+        opacity: isDragging ? 1 : 0.6,
+        transform: isOver ? "scale(1.1)" : "scale(1)",
+        transition: "all 0.15s ease",
+        boxShadow: isOver
+          ? `0 0 12px ${theme.colors.state.danger}80, inset 0 0 15px ${theme.colors.state.danger}33`
+          : `inset 0 2px 4px rgba(0, 0, 0, 0.4)`,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 14,
+      }}
+    >
+      🗑️
+    </button>
+  );
+});
+
+// Storage key for lock state
+const getLockStorageKey = (barId: number) => `actionbar-locked-${barId}`;
+
+// Load lock state from localStorage
+function loadLockState(barId: number): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const saved = localStorage.getItem(getLockStorageKey(barId));
+    return saved === "true";
+  } catch {
+    return false;
+  }
+}
+
+// Save lock state to localStorage
+function saveLockState(barId: number, locked: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(getLockStorageKey(barId), String(locked));
+  } catch {
+    // Ignore localStorage errors
+  }
+}
+
 export function ActionBarPanel({
   world,
   barId = 0,
@@ -645,6 +747,7 @@ export function ActionBarPanel({
     null,
   );
   const [activePrayers, setActivePrayers] = useState<Set<string>>(new Set());
+  const [isLocked, setIsLocked] = useState<boolean>(() => loadLockState(barId));
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -657,14 +760,23 @@ export function ActionBarPanel({
 
   // Update window size, minSize, and maxSize when slot count changes
   // Always include control button space to keep consistent size regardless of edit mode
+  // Get grid size from edit store for proper alignment
+  const gridSize = useEditStore((s) => s.gridSize);
+
+  // Helper to snap to grid
+  const snapToGrid = useCallback(
+    (value: number) => Math.ceil(value / gridSize) * gridSize,
+    [gridSize],
+  );
+
   useEffect(() => {
     if (!windowId) return;
 
-    // Calculate dimensions for current slot count (horizontal layout only)
-    // Always include control space so panel doesn't shift when toggling edit mode
-    const dims = calcHorizontalDimensions(slotCount, true);
-    const width = dims.width + BORDER_BUFFER;
-    const height = dims.height + BORDER_BUFFER;
+    // Calculate dimensions based on current state (slot count, edit mode, lock state)
+    const dims = calcHorizontalDimensions(slotCount, { isEditMode, isLocked });
+    // Snap dimensions to grid for proper alignment
+    const width = snapToGrid(dims.width + BORDER_BUFFER);
+    const height = snapToGrid(dims.height + BORDER_BUFFER);
 
     // Set min, max, and size to same values - window locks to content size
     updateWindow(windowId, {
@@ -672,7 +784,7 @@ export function ActionBarPanel({
       maxSize: { width, height },
       size: { width, height },
     });
-  }, [windowId, slotCount, updateWindow]);
+  }, [windowId, slotCount, isEditMode, isLocked, updateWindow, snapToGrid]);
 
   // Handle slot count changes
   const handleIncreaseSlots = useCallback(() => {
@@ -697,6 +809,20 @@ export function ActionBarPanel({
       setSlots((prev) => prev.slice(0, newCount));
     }
   }, [slotCount, barId]);
+
+  // Toggle lock state
+  const handleToggleLock = useCallback(() => {
+    setIsLocked((prev) => {
+      const newValue = !prev;
+      saveLockState(barId, newValue);
+      return newValue;
+    });
+  }, [barId]);
+
+  // Clear all slots
+  const handleClearAll = useCallback(() => {
+    setSlots(createEmptySlots(slotCount));
+  }, [slotCount]);
 
   // Listen for prayer state changes to highlight active prayers
   useEffect(() => {
@@ -814,9 +940,32 @@ export function ActionBarPanel({
       });
     };
 
+    // Handle slot swap events (reordering within action bar)
+    const handleSlotSwap = (payload: unknown) => {
+      const data = payload as {
+        barId: number;
+        fromIndex: number;
+        toIndex: number;
+      };
+      // Only handle swaps for this bar
+      if (data.barId !== barId) return;
+
+      setSlots((prev) => {
+        const newSlots = [...prev];
+        // Swap the slots
+        [newSlots[data.fromIndex], newSlots[data.toIndex]] = [
+          newSlots[data.toIndex],
+          newSlots[data.fromIndex],
+        ];
+        return newSlots;
+      });
+    };
+
     world.on(EventType.ACTION_BAR_SLOT_UPDATE, handleSlotUpdate);
+    world.on(EventType.ACTION_BAR_SLOT_SWAP, handleSlotSwap);
     return () => {
       world.off(EventType.ACTION_BAR_SLOT_UPDATE, handleSlotUpdate);
+      world.off(EventType.ACTION_BAR_SLOT_SWAP, handleSlotSwap);
     };
   }, [world, barId, useParentDndContext]);
 
@@ -954,11 +1103,8 @@ export function ActionBarPanel({
   // Handle drag start - track what's being dragged for visual overlay
   const handleDragStart = (event: DragStartEvent) => {
     const { active } = event;
-    // @dnd-kit: access data via active.data.current.data
-    const activeDataWrapper = active.data.current as
-      | { data?: Record<string, unknown> }
-      | undefined;
-    const dragData = activeDataWrapper?.data as
+    // @dnd-kit: access data via active.data.current
+    const dragData = active.data.current as
       | { slot?: ActionBarSlotContent }
       | undefined;
     setDraggedSlot(dragData?.slot || null);
@@ -969,13 +1115,8 @@ export function ActionBarPanel({
     const { active, over } = event;
     setDraggedSlot(null);
 
-    if (!over) return;
-
-    // @dnd-kit: access data via active.data.current.data
-    const activeDataWrapper = active.data.current as
-      | { data?: Record<string, unknown> }
-      | undefined;
-    const activeData = activeDataWrapper?.data as {
+    // @dnd-kit: access data via active.data.current
+    const activeData = active.data.current as {
       slot?: ActionBarSlotContent;
       slotIndex?: number;
       source?: string;
@@ -995,16 +1136,55 @@ export function ActionBarPanel({
         level: number;
       };
     } | null;
-    // @dnd-kit: access data via over.data.current
-    const overDataCurrent = over.data.current as {
+
+    // Handle drag-out removal: if actionbar item dropped outside any drop zone, remove it
+    if (!over) {
+      if (
+        activeData?.source === "actionbar" &&
+        activeData.slotIndex !== undefined
+      ) {
+        // Item was dragged out of action bar - remove it
+        setSlots((prev) => {
+          const newSlots = [...prev];
+          newSlots[activeData.slotIndex!] = {
+            type: "empty",
+            id: `empty-${activeData.slotIndex}`,
+          };
+          return newSlots;
+        });
+      }
+      return;
+    }
+
+    // Get the over id and check for specific drop targets
+    const overId = String(over.id);
+    const overData = over.data.current as {
       slotIndex?: number;
       target?: string;
     } | null;
+    const isRubbishBin =
+      overId === "actionbar-rubbish-bin" || overData?.target === "rubbish-bin";
+    const targetSlotIndex = overData?.slotIndex;
+
+    // Handle drop on rubbish bin - remove the item
+    if (isRubbishBin && activeData?.source === "actionbar") {
+      const slotIndex = activeData.slotIndex;
+      if (slotIndex !== undefined) {
+        setSlots((prev) => {
+          const newSlots = [...prev];
+          newSlots[slotIndex] = {
+            type: "empty",
+            id: `empty-${slotIndex}`,
+          };
+          return newSlots;
+        });
+      }
+      return;
+    }
 
     // Check if this is a drop from inventory
     if (activeData?.source === "inventory" && activeData.item) {
-      const targetIndex = overDataCurrent?.slotIndex;
-      if (targetIndex !== undefined) {
+      if (targetSlotIndex !== undefined) {
         // Create new slot content from inventory item
         const newSlot: ActionBarSlotContent = {
           type: "item",
@@ -1015,7 +1195,7 @@ export function ActionBarPanel({
         };
         setSlots((prev) => {
           const newSlots = [...prev];
-          newSlots[targetIndex] = newSlot;
+          newSlots[targetSlotIndex] = newSlot;
           return newSlots;
         });
       }
@@ -1024,8 +1204,7 @@ export function ActionBarPanel({
 
     // Check if this is a drop from prayer panel
     if (activeData?.source === "prayer" && activeData.prayer) {
-      const targetIndex = overDataCurrent?.slotIndex;
-      if (targetIndex !== undefined) {
+      if (targetSlotIndex !== undefined) {
         // Create new slot content from prayer
         const newSlot: ActionBarSlotContent = {
           type: "prayer",
@@ -1036,7 +1215,7 @@ export function ActionBarPanel({
         };
         setSlots((prev) => {
           const newSlots = [...prev];
-          newSlots[targetIndex] = newSlot;
+          newSlots[targetSlotIndex] = newSlot;
           return newSlots;
         });
       }
@@ -1045,8 +1224,7 @@ export function ActionBarPanel({
 
     // Check if this is a drop from skill panel
     if (activeData?.source === "skill" && activeData.skill) {
-      const targetIndex = overDataCurrent?.slotIndex;
-      if (targetIndex !== undefined) {
+      if (targetSlotIndex !== undefined) {
         const skillData = activeData.skill as {
           id: string;
           name: string;
@@ -1063,7 +1241,7 @@ export function ActionBarPanel({
         };
         setSlots((prev) => {
           const newSlots = [...prev];
-          newSlots[targetIndex] = newSlot;
+          newSlots[targetSlotIndex] = newSlot;
           return newSlots;
         });
       }
@@ -1071,23 +1249,15 @@ export function ActionBarPanel({
     }
 
     // Reordering within action bar
-    if (
-      activeData?.source === "actionbar" &&
-      overDataCurrent?.target === "actionbar"
-    ) {
+    if (activeData?.source === "actionbar" && targetSlotIndex !== undefined) {
       const fromIndex = activeData.slotIndex;
-      const toIndex = overDataCurrent.slotIndex;
 
-      if (
-        fromIndex !== undefined &&
-        toIndex !== undefined &&
-        fromIndex !== toIndex
-      ) {
+      if (fromIndex !== undefined && fromIndex !== targetSlotIndex) {
         setSlots((prev) => {
           const newSlots = [...prev];
           // Swap slots
-          [newSlots[fromIndex], newSlots[toIndex]] = [
-            newSlots[toIndex],
+          [newSlots[fromIndex], newSlots[targetSlotIndex]] = [
+            newSlots[targetSlotIndex],
             newSlots[fromIndex],
           ];
           return newSlots;
@@ -1185,12 +1355,51 @@ export function ActionBarPanel({
           };
           return newSlots;
         });
+      } else if (menuItem.id === "clearAll") {
+        // Clear all slots
+        handleClearAll();
       }
 
       setContextMenu((prev) => ({ ...prev, visible: false }));
     },
-    [contextMenu.targetSlot, contextMenu.targetIndex, handleUseSlot],
+    [
+      contextMenu.targetSlot,
+      contextMenu.targetIndex,
+      handleUseSlot,
+      handleClearAll,
+    ],
   );
+
+  // Handle rubbish bin context menu (right-click for Clear All)
+  const handleRubbishBinContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const menuItems: ContextMenuItem[] = [
+      {
+        id: "clearAll",
+        label: "Clear All",
+        styledLabel: [
+          { text: "Clear ", color: "#fff" },
+          { text: "All", color: "#ef4444" },
+        ],
+      },
+      {
+        id: "cancel",
+        label: "Cancel",
+        styledLabel: [{ text: "Cancel", color: "#fff" }],
+      },
+    ];
+
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      items: menuItems,
+      targetSlot: null,
+      targetIndex: -1,
+    });
+  }, []);
 
   // Horizontal layout only: slotCount columns x 1 row
 
@@ -1288,6 +1497,7 @@ export function ActionBarPanel({
                   ? activePrayers.has(slot.prayerId)
                   : false
               }
+              isLocked={isLocked}
               onHover={() => setHoveredSlot(index)}
               onLeave={() => setHoveredSlot(null)}
               onClick={() => handleUseSlot(slot, index)}
@@ -1295,6 +1505,38 @@ export function ActionBarPanel({
             />
           ))}
         </div>
+
+        {/* Rubbish bin - visible when not locked */}
+        {!isLocked && (
+          <RubbishBin
+            onContextMenu={handleRubbishBinContextMenu}
+            isDragging={draggedSlot !== null}
+          />
+        )}
+
+        {/* Lock toggle button */}
+        <button
+          onClick={handleToggleLock}
+          title={isLocked ? "Unlock action bar" : "Lock action bar"}
+          className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60"
+          style={{
+            ...getControlButtonStyle(false),
+            opacity: isLocked ? 1 : 0.6,
+            color: isLocked
+              ? theme.colors.state.warning
+              : theme.colors.text.secondary,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = `linear-gradient(180deg, ${theme.colors.accent.secondary}22 0%, ${theme.colors.background.primary} 100%)`;
+            e.currentTarget.style.borderColor = theme.colors.accent.primary;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = `linear-gradient(180deg, ${theme.colors.background.secondary} 0%, ${theme.colors.background.primary} 100%)`;
+            e.currentTarget.style.borderColor = theme.colors.border.default;
+          }}
+        >
+          {isLocked ? "🔒" : "🔓"}
+        </button>
 
         {/* Increase slot count button (+) - only rendered in edit mode */}
         {isEditMode && (
@@ -1326,7 +1568,7 @@ export function ActionBarPanel({
         )}
       </div>
 
-      {/* Drag Overlay for slot dragging (only when using own provider) */}
+      {/* Drag Overlay for slot dragging (only when using own context) */}
       {!useParentDndContext && (
         <DragOverlay>
           {draggedSlot && (
@@ -1365,7 +1607,7 @@ export function ActionBarPanel({
           justifyContent: "center",
         }}
       >
-        {/* When using parent context, don't wrap with DndProvider */}
+        {/* When using parent context, don't wrap with DndContext */}
         {useParentDndContext ? (
           actionBarContent
         ) : (

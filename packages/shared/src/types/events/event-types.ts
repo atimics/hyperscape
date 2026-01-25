@@ -629,6 +629,7 @@ export enum EventType {
 
   // Action Bar System
   ACTION_BAR_SLOT_UPDATE = "actionbar:slot:update",
+  ACTION_BAR_SLOT_SWAP = "actionbar:slot:swap",
 
   // Trading System
   TRADE_REQUEST = "trade:request",

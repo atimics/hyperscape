@@ -1,5 +1,5 @@
 import { GAME_API_URL } from "@/lib/api-config";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { DashboardLayout } from "../game/dashboard/DashboardLayout";
 import { AgentChat } from "../game/dashboard/AgentChat";
 import { AgentViewportChat } from "../game/dashboard/AgentViewportChat";
@@ -56,6 +56,15 @@ export const DashboardScreen: React.FC = () => {
     null,
   );
   const [viewportAgentId, setViewportAgentId] = useState<string | null>(null);
+
+  // Ref to track if component is mounted (prevents state updates after unmount)
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // Get user's main account ID from Privy localStorage
   useEffect(() => {
@@ -132,16 +141,21 @@ export const DashboardScreen: React.FC = () => {
           console.warn("[Dashboard] No userAccountId - showing all agents");
         }
 
-        setAgents(filteredAgents);
-        // Select first agent if none selected
-        if (!selectedAgentId && filteredAgents.length > 0) {
-          setSelectedAgentId(filteredAgents[0].id);
+        // Only update state if component is still mounted
+        if (isMountedRef.current) {
+          setAgents(filteredAgents);
+          // Select first agent if none selected
+          if (!selectedAgentId && filteredAgents.length > 0) {
+            setSelectedAgentId(filteredAgents[0].id);
+          }
         }
       }
     } catch (err) {
       console.error("Failed to load agents:", err);
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
   };
 

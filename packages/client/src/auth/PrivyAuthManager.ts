@@ -43,6 +43,17 @@ export interface PrivyAuthState {
  * This is a singleton that manages Privy-specific authentication separately
  * from the PlayerTokenManager (which handles in-game identity).
  *
+ * @security
+ * SECURITY NOTE: Tokens stored in localStorage are accessible to JavaScript and
+ * potentially vulnerable to XSS attacks. For enhanced security in production:
+ * 1. Consider using httpOnly cookies set by the server for sensitive tokens
+ * 2. Use Privy SDK's getAccessToken() for API calls instead of cached tokens
+ * 3. Implement CSP headers to mitigate XSS risks
+ * 4. The Privy SDK handles its own secure token storage and refresh
+ *
+ * Current implementation stores tokens for quick synchronous access patterns,
+ * but relies on Privy SDK for actual token refresh and validation.
+ *
  * @public
  */
 export class PrivyAuthManager {
