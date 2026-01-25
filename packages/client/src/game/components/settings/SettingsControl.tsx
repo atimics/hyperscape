@@ -7,7 +7,7 @@
  * @packageDocumentation
  */
 
-import React from "react";
+import React, { memo } from "react";
 import { useTheme } from "@/ui";
 import type { SettingDefinition } from "@/game/systems/settings";
 import {
@@ -52,7 +52,8 @@ export interface SettingsControlProps {
  * />
  * ```
  */
-export function SettingsControl({
+// Wrapped with memo to prevent unnecessary re-renders from parent updates
+export const SettingsControl = memo(function SettingsControl({
   setting,
   value,
   onChange,
@@ -208,7 +209,7 @@ export function SettingsControl({
       <div style={controlContainerStyle}>{renderControl()}</div>
     </div>
   );
-}
+});
 
 /** Simple number input component */
 function NumberInput({

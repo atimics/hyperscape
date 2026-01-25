@@ -3,13 +3,17 @@
  * Modern MMORPG-style inventory interface with drag-and-drop functionality
  */
 
-import { useEffect, useState, useRef, useMemo, useCallback } from "react";
+import { useEffect, useState, useRef, useMemo, useCallback, memo } from "react";
 import { createPortal } from "react-dom";
 import {
   DndContext,
   useDraggable,
   useDroppable,
   DragOverlay,
+  useSensors,
+  useSensor,
+  PointerSensor,
+  KeyboardSensor,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
@@ -139,8 +143,8 @@ function formatQuantity(qty: number): { text: string; color: string } {
  * hs-kit version - adjustToPointer on ComposableDragOverlay handles this.
  */
 // Note: hs-kit's ComposableDragOverlay uses adjustToPointer=true by default
-
-function DraggableInventorySlot({
+// Memoized to prevent re-renders of all 28 slots when any slot changes
+const DraggableInventorySlot = memo(function DraggableInventorySlot({
   item,
   index,
   onShiftClick,
@@ -632,7 +636,7 @@ function DraggableInventorySlot({
       )}
     </button>
   );
-}
+});
 
 /**
  * Pending move operation for rollback tracking
@@ -799,6 +803,17 @@ export function InventoryPanel({
 }: InventoryPanelProps & { useParentDndContext?: boolean }) {
   const theme = useThemeStore((s) => s.theme);
   const { shouldUseMobileUI } = useMobileLayout();
+
+  // Configure sensors for accessibility (keyboard + pointer support)
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // Require 8px movement before drag starts
+      },
+    }),
+    useSensor(KeyboardSensor),
+  );
+
   const [activeId, setActiveId] = useState<string | null>(null);
   const [dragSlotSize, setDragSlotSize] = useState<number | null>(null);
   const [slotItems, setSlotItems] = useState<(InventorySlotViewItem | null)[]>(
@@ -1475,7 +1490,11 @@ export function InventoryPanel({
       {useParentDndContext ? (
         inventoryContent
       ) : (
-        <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <DndContext
+          sensors={sensors}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+        >
           {inventoryContent}
         </DndContext>
       )}

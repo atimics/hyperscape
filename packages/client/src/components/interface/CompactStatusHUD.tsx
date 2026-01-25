@@ -93,25 +93,22 @@ function StatusOrb({
     transition: "height 0.3s ease-out",
   };
 
-  // Small icon at top of orb
   const iconStyle: CSSProperties = {
-    position: "absolute",
-    top: size * 0.08,
-    fontSize: size * 0.2,
+    fontSize: size * 0.32,
     color: fillColor,
     textShadow: `0 1px 2px rgba(0, 0, 0, 0.8)`,
-    zIndex: 2,
+    zIndex: 1,
     lineHeight: 1,
   };
 
-  // Large centered value
   const valueStyle: CSSProperties = {
-    fontSize: size * 0.34,
+    fontSize: size * 0.26,
     fontWeight: theme.typography.fontWeight.bold,
     color: theme.colors.text.primary,
-    textShadow: "0 1px 3px rgba(0, 0, 0, 0.9)",
-    zIndex: 2,
+    textShadow: "0 1px 2px rgba(0, 0, 0, 0.9)",
+    zIndex: 1,
     lineHeight: 1,
+    marginTop: 1,
   };
 
   return (

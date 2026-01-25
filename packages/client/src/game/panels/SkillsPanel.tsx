@@ -5,7 +5,7 @@
  * Supports drag-drop to action bar
  */
 
-import React, { useState, useRef, useMemo } from "react";
+import React, { useState, useRef, useMemo, memo } from "react";
 import { createPortal } from "react-dom";
 import { useDraggable } from "@dnd-kit/core";
 import {
@@ -49,7 +49,8 @@ function calculateCombatLevel(stats: Partial<Skills>): number {
 }
 
 /** Draggable skill card component for action bar drag-drop */
-function DraggableSkillCard({
+// Memoized to prevent re-renders of all skill cards when any changes
+const DraggableSkillCard = memo(function DraggableSkillCard({
   skill,
   isHovered,
   isMobile,
@@ -113,7 +114,7 @@ function DraggableSkillCard({
       {...listeners}
     >
       {/* Unified layout: Icon + Level inline - compact but readable */}
-      <div className="flex items-center gap-1 w-full">
+      <div className="flex items-center justify-center gap-1 w-full">
         <span
           style={{
             fontSize: isMobile ? "14px" : "13px",
@@ -184,7 +185,7 @@ function DraggableSkillCard({
       </div>
     </div>
   );
-}
+});
 
 export function SkillsPanel({ stats }: SkillsPanelProps) {
   const theme = useThemeStore((s) => s.theme);

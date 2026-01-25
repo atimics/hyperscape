@@ -6,7 +6,7 @@
  * @packageDocumentation
  */
 
-import React, { useState } from "react";
+import React, { useState, memo } from "react";
 import { useTheme } from "@/ui";
 import {
   type SettingCategory,
@@ -63,7 +63,8 @@ function isSettingEnabled(
  * />
  * ```
  */
-export function SettingsCategory({
+// Wrapped with memo to prevent unnecessary re-renders from parent updates
+export const SettingsCategory = memo(function SettingsCategory({
   category,
   values,
   onChange,
@@ -255,4 +256,4 @@ export function SettingsCategory({
       )}
     </div>
   );
-}
+});

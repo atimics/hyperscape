@@ -16,7 +16,7 @@
  * - Acceptance resets if either offer changes
  */
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, memo } from "react";
 import { createPortal } from "react-dom";
 import {
   DndContext,
@@ -24,6 +24,10 @@ import {
   useDroppable,
   DragOverlay,
   pointerWithin,
+  useSensors,
+  useSensor,
+  PointerSensor,
+  KeyboardSensor,
   type DragStartEvent,
   type DragEndEvent,
 } from "@dnd-kit/core";
@@ -96,8 +100,9 @@ function formatQuantity(qty: number): { text: string; color: string } {
 
 /**
  * Individual trade slot displaying an item or empty slot
+ * Memoized to prevent re-renders of all slots when any changes
  */
-function TradeSlot({
+const TradeSlot = memo(function TradeSlot({
   item,
   slotIndex,
   side,
@@ -168,7 +173,7 @@ function TradeSlot({
       )}
     </div>
   );
-}
+});
 
 /**
  * Draggable inventory item for the trade panel
@@ -302,6 +307,17 @@ export function TradePanel({
   onCancel,
 }: TradePanelProps) {
   const theme = useThemeStore((s) => s.theme);
+
+  // Configure sensors for accessibility (keyboard + pointer support)
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // Require 8px movement before drag starts
+      },
+    }),
+    useSensor(KeyboardSensor),
+  );
+
   const [draggedItem, setDraggedItem] = useState<{
     slot: number;
     itemId: string;
@@ -385,6 +401,7 @@ export function TradePanel({
       style={{ background: theme.colors.background.overlay }}
     >
       <DndContext
+        sensors={sensors}
         collisionDetection={pointerWithin}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}

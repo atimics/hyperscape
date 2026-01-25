@@ -25,6 +25,10 @@ import {
   useDraggable,
   useDroppable,
   DragOverlay,
+  useSensors,
+  useSensor,
+  PointerSensor,
+  KeyboardSensor,
   type DragStartEvent,
   type DragEndEvent,
 } from "@dnd-kit/core";
@@ -735,6 +739,17 @@ export function ActionBarPanel({
 }: ActionBarPanelProps): React.ReactElement {
   const theme = useTheme();
   const updateWindow = useWindowStore((s) => s.updateWindow);
+
+  // Configure sensors for accessibility (keyboard + pointer support)
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // Require 8px movement before drag starts
+      },
+    }),
+    useSensor(KeyboardSensor),
+  );
+
   // Slot count state (persisted to localStorage)
   const [slotCount, setSlotCount] = useState<number>(() =>
     loadSlotCount(barId),
@@ -1611,7 +1626,11 @@ export function ActionBarPanel({
         {useParentDndContext ? (
           actionBarContent
         ) : (
-          <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+          <DndContext
+            sensors={sensors}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+          >
             {actionBarContent}
           </DndContext>
         )}

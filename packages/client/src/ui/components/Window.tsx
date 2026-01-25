@@ -464,9 +464,18 @@ export const Window = memo(function Window({
     position: "relative", // Allow absolute positioning of children
   };
 
-  // Resize handles (only in edit mode)
+  // Check if window is resizable (minSize !== maxSize)
+  const isResizable = useMemo(() => {
+    if (!windowState.maxSize) return true; // No maxSize = resizable
+    return (
+      windowState.minSize.width !== windowState.maxSize.width ||
+      windowState.minSize.height !== windowState.maxSize.height
+    );
+  }, [windowState.minSize, windowState.maxSize]);
+
+  // Resize handles (only in edit mode and only if resizable)
   const renderResizeHandles = () => {
-    if (!isUnlocked) return null;
+    if (!isUnlocked || !isResizable) return null;
 
     const handles: Array<{
       direction: "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";

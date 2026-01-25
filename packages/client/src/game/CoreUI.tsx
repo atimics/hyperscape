@@ -158,8 +158,11 @@ export function CoreUI({ world }: { world: ClientWorld }) {
     world.on(EventType.UI_DEATH_SCREEN, handleDeathScreen);
     world.on(EventType.UI_DEATH_SCREEN_CLOSE, handleDeathScreenClose);
     // Character selection flow (server-flagged)
-    world.on("character:list", () => setCharacterFlowActive(true));
-    world.on("character:selected", () => setCharacterFlowActive(false));
+    // Define named handlers for proper cleanup (anonymous functions don't work with off())
+    const handleCharacterList = (): void => setCharacterFlowActive(true);
+    const handleCharacterSelected = (): void => setCharacterFlowActive(false);
+    world.on("character:list", handleCharacterList);
+    world.on("character:selected", handleCharacterSelected);
     // If the packet arrived before UI mounted, consult network cache
     const network = world.network as { lastCharacterList?: unknown[] };
     if (network.lastCharacterList) setCharacterFlowActive(true);
@@ -180,8 +183,8 @@ export function CoreUI({ world }: { world: ClientWorld }) {
       world.off(EventType.NETWORK_DISCONNECTED, handleDisconnected);
       world.off(EventType.UI_DEATH_SCREEN, handleDeathScreen);
       world.off(EventType.UI_DEATH_SCREEN_CLOSE, handleDeathScreenClose);
-      world.off("character:list", () => setCharacterFlowActive(true));
-      world.off("character:selected", () => setCharacterFlowActive(false));
+      world.off("character:list", handleCharacterList);
+      world.off("character:selected", handleCharacterSelected);
     };
   }, []);
 
@@ -868,7 +871,8 @@ function PositionedToast({
 function ToastMsg({ text }: { text: string }) {
   const [visible, setVisible] = useState(true);
   useEffect(() => {
-    setTimeout(() => setVisible(false), 3000); // Show for 3 seconds
+    const timer = setTimeout(() => setVisible(false), 3000); // Show for 3 seconds
+    return () => clearTimeout(timer);
   }, []);
   return (
     <div

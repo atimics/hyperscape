@@ -11,6 +11,7 @@ import type {
   UserRole,
 } from "@/game/systems";
 import type { Theme } from "@/ui/theme/themes";
+import { InputValidator } from "@/utils/InputValidator";
 
 /** Props for ChatMessage component */
 export interface ChatMessageProps {
@@ -91,48 +92,59 @@ function parseContent(
   onLinkClick?: (url: string) => void,
   linkStyle?: React.CSSProperties,
 ): React.ReactNode[] {
+  // SECURITY: Sanitize content to prevent XSS attacks
+  const sanitizedContent = InputValidator.sanitizeHtml(content);
+
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
   const regex = new RegExp(URL_PATTERN);
 
-  while ((match = regex.exec(content)) !== null) {
+  while ((match = regex.exec(sanitizedContent)) !== null) {
     // Add text before the match
     if (match.index > lastIndex) {
-      parts.push(content.slice(lastIndex, match.index));
+      parts.push(sanitizedContent.slice(lastIndex, match.index));
     }
 
-    // Add the link
+    // Add the link - validate URL to prevent javascript: and other dangerous protocols
     const url = match[0];
     const href = url.startsWith("www.") ? `https://${url}` : url;
-    parts.push(
-      <a
-        key={`link-${match.index}`}
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        style={linkStyle}
-        onClick={(e) => {
-          if (onLinkClick) {
-            e.preventDefault();
-            onLinkClick(href);
-          }
-        }}
-      >
-        {url}
-      </a>,
-    );
+
+    // SECURITY: Validate URL protocol before rendering
+    const urlValidation = InputValidator.sanitizeUrl(href);
+    if (urlValidation.isValid) {
+      parts.push(
+        <a
+          key={`link-${match.index}`}
+          href={urlValidation.sanitizedValue as string}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={linkStyle}
+          onClick={(e) => {
+            if (onLinkClick) {
+              e.preventDefault();
+              onLinkClick(urlValidation.sanitizedValue as string);
+            }
+          }}
+        >
+          {url}
+        </a>,
+      );
+    } else {
+      // Invalid URL - render as plain text
+      parts.push(url);
+    }
 
     lastIndex = regex.lastIndex;
   }
 
   // Add remaining text
-  if (lastIndex < content.length) {
-    parts.push(content.slice(lastIndex));
+  if (lastIndex < sanitizedContent.length) {
+    parts.push(sanitizedContent.slice(lastIndex));
   }
 
-  return parts.length > 0 ? parts : [content];
+  return parts.length > 0 ? parts : [sanitizedContent];
 }
 
 /**

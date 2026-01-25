@@ -112,9 +112,13 @@ export const AgentActivityPanel: React.FC<AgentActivityPanelProps> = ({
         }
         setError(null);
       }
-    } catch (_err) {
+    } catch (err) {
       // Activity endpoint might not exist yet - that's okay
       // We'll track local activities instead
+      console.debug(
+        "[AgentActivityPanel] Activity endpoint not available:",
+        err,
+      );
     }
   };
 

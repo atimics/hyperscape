@@ -11,6 +11,10 @@ import {
   useDraggable,
   useDroppable,
   DragOverlay,
+  useSensors,
+  useSensor,
+  PointerSensor,
+  KeyboardSensor,
   type DragStartEvent,
   type DragEndEvent,
 } from "@dnd-kit/core";
@@ -226,6 +230,17 @@ export function ActionPanel({
 }: ActionPanelProps) {
   const isVertical = orientation === "vertical";
   const theme = useThemeStore((s) => s.theme);
+
+  // Configure sensors for accessibility (keyboard + pointer support)
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // Require 8px movement before drag starts
+      },
+    }),
+    useSensor(KeyboardSensor),
+  );
+
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth < breakpoints.md : false,
   );
@@ -548,7 +563,11 @@ export function ActionPanel({
 
   return (
     <>
-      <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+      <DndContext
+        sensors={sensors}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
         <div
           className={
             isVertical ? "flex flex-col items-center" : "flex items-center"

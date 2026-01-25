@@ -9,6 +9,7 @@ import React, {
   useState,
   useCallback,
   useMemo,
+  memo,
 } from "react";
 import { useTheme } from "@/ui";
 import { ChatMessage } from "./ChatMessage";
@@ -123,7 +124,8 @@ export interface ChatBoxRef {
  * ```
  */
 // React 19: ref is now a regular prop, no forwardRef needed
-export function ChatBox({
+// Wrapped with memo to prevent unnecessary re-renders from parent updates
+export const ChatBox = memo(function ChatBox({
   currentUsername,
   currentRole = "default",
   onSend,
@@ -332,7 +334,7 @@ export function ChatBox({
       <ChatInput chatInput={chatInput} autoFocus={autoFocus} />
     </div>
   );
-}
+});
 
 // Re-export hooks for convenience
 export { useChatState, useChatInput, useChatFilters };

@@ -470,7 +470,9 @@ export function CharacterSelectScreen({
     ws.binaryType = "arraybuffer";
     preWsRef.current = ws;
     setWsReady(false);
-    ws.addEventListener("open", () => {
+
+    // Define named handlers for proper cleanup
+    const handleOpen = (): void => {
       console.log(
         "[CharacterSelect] ✅ WebSocket opened with authenticated user:",
         currentUser.id,
@@ -485,14 +487,17 @@ export function CharacterSelectScreen({
         ws.send(writePacket("characterCreate", { name: pending.name }));
         pendingActionRef.current = null;
       }
-    });
-    ws.addEventListener("error", (err) => {
+    };
+
+    const handleError = (err: Event): void => {
       console.error("[CharacterSelect] ❌ WebSocket ERROR:", err);
-    });
-    ws.addEventListener("close", (_e) => {
+    };
+
+    const handleClose = (_e: CloseEvent): void => {
       setWsReady(false);
-    });
-    ws.addEventListener("message", (e) => {
+    };
+
+    const handleMessage = (e: MessageEvent): void => {
       const result = readPacket(e.data);
       if (!result) {
         console.warn("[CharacterSelect] ⚠️ readPacket returned null/undefined");
@@ -808,8 +813,20 @@ export function CharacterSelectScreen({
         // These are real-time position/rotation/velocity updates that happen in the world
         // Silently ignore them
       }
-    });
+    };
+
+    // Add event listeners with named handlers for proper cleanup
+    ws.addEventListener("open", handleOpen);
+    ws.addEventListener("error", handleError);
+    ws.addEventListener("close", handleClose);
+    ws.addEventListener("message", handleMessage);
+
     return () => {
+      // Remove all event listeners before closing
+      ws.removeEventListener("open", handleOpen);
+      ws.removeEventListener("error", handleError);
+      ws.removeEventListener("close", handleClose);
+      ws.removeEventListener("message", handleMessage);
       ws.close();
       if (preWsRef.current === ws) preWsRef.current = null;
     };
