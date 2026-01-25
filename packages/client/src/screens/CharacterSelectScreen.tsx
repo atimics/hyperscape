@@ -894,7 +894,7 @@ export function CharacterSelectScreen({
                 );
               }
 
-              window.location.href = `/?page=character-editor&characterId=${id}&name=${character.name}&wallet=${character.wallet || ""}&avatar=${encodeURIComponent(avatarUrl)}`;
+              window.location.href = `/?page=character-editor&characterId=${id}&name=${encodeURIComponent(character.name)}&wallet=${encodeURIComponent(character.wallet || "")}&avatar=${encodeURIComponent(avatarUrl)}`;
             }
           } else {
             // ElizaOS not responding - show error

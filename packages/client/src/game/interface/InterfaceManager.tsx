@@ -56,9 +56,26 @@ import { MobileInterfaceManager } from "./MobileInterfaceManager";
 import type { ClientWorld, PlayerEquipmentItems } from "../../types";
 import type { InventoryItem } from "@hyperscape/shared";
 import type { RawEquipmentData, InventorySlotViewItem } from "../types";
-// Note: usePlayerData and useModalPanels hooks are available for future refactoring
-// InterfaceManager currently uses UI_UPDATE component-based dispatching which differs from the hooks
-// TODO: Migrate to hooks when InterfaceManager is split into smaller components
+/**
+ * REFACTORING PLAN: Split InterfaceManager into smaller modules
+ *
+ * The following hooks are available in @/hooks for migration:
+ * - usePlayerData: Player inventory, equipment, stats, prayer state
+ * - useModalPanels: Bank, store, dialogue, smelting, smithing, loot, quest modals
+ *
+ * Recommended split structure:
+ * 1. InterfaceManager.tsx (~500 lines) - Core orchestration, event routing
+ * 2. useInterfaceState.ts - State management (inventory, equipment, coins, etc.)
+ * 3. useInterfaceEvents.ts - Event subscription and handling
+ * 4. InterfaceModals.tsx - Modal panel rendering (bank, store, dialogue, etc.)
+ * 5. InterfacePanels.tsx - Regular panel window rendering
+ *
+ * Migration steps:
+ * 1. Replace inline state with usePlayerData hook
+ * 2. Replace modal state with useModalPanels hook
+ * 3. Extract modal rendering to InterfaceModals component
+ * 4. Extract panel rendering to InterfacePanels component
+ */
 import { HintProvider } from "@/ui";
 import {
   createPanelRenderer,

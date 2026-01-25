@@ -1359,7 +1359,9 @@ export function InventoryPanel({
         >
           {slotItems.map((item, index) => (
             <DraggableInventorySlot
-              key={index}
+              key={
+                item?.itemId ? `${item.slot}-${item.itemId}` : `empty-${index}`
+              }
               item={item}
               index={index}
               targetingState={embeddedMode ? undefined : targetingState}

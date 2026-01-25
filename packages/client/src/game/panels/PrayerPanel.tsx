@@ -126,6 +126,59 @@ interface PrayerPanelProps {
   world: ClientWorld;
 }
 
+/**
+ * Map prayer icon IDs from manifest to display icons.
+ * Uses emoji fallbacks until actual prayer icon assets are added.
+ * Icon IDs follow pattern: prayer_{snake_case_name}
+ */
+const PRAYER_ICON_MAP: Record<string, string> = {
+  // Defense prayers
+  prayer_thick_skin: "🛡️",
+  prayer_rock_skin: "🪨",
+  prayer_steel_skin: "🔩",
+  // Strength prayers
+  prayer_burst_of_strength: "💪",
+  prayer_superhuman_strength: "⚡",
+  prayer_ultimate_strength: "🔥",
+  // Attack prayers
+  prayer_clarity_of_thought: "🎯",
+  prayer_improved_reflexes: "⚔️",
+  prayer_incredible_reflexes: "⚡",
+  // Ranged prayers
+  prayer_sharp_eye: "👁️",
+  prayer_hawk_eye: "🦅",
+  prayer_eagle_eye: "🎯",
+  // Magic prayers
+  prayer_mystic_will: "✨",
+  prayer_mystic_lore: "📖",
+  prayer_mystic_might: "🌟",
+  // Protection prayers
+  prayer_protect_from_magic: "🔮",
+  prayer_protect_from_missiles: "🏹",
+  prayer_protect_from_melee: "🗡️",
+  // Utility prayers
+  prayer_rapid_restore: "💚",
+  prayer_rapid_heal: "❤️",
+  prayer_protect_item: "🔒",
+  prayer_retribution: "💀",
+  prayer_redemption: "💖",
+  prayer_smite: "⚡",
+  prayer_preserve: "⏳",
+  // High-level prayers
+  prayer_chivalry: "🏰",
+  prayer_piety: "⚜️",
+  prayer_rigour: "🏹",
+  prayer_augury: "🌙",
+};
+
+/**
+ * Get display icon for a prayer icon ID.
+ * Returns the mapped emoji or falls back to a default prayer icon.
+ */
+function getPrayerDisplayIcon(iconId: string): string {
+  return PRAYER_ICON_MAP[iconId] ?? "✨";
+}
+
 /** Prayer icon component with OSRS-style glow effect and drag support */
 function PrayerIcon({
   prayer,
@@ -238,7 +291,7 @@ function PrayerIcon({
           zIndex: 1,
         }}
       >
-        {prayer.icon}
+        {getPrayerDisplayIcon(prayer.icon)}
       </span>
 
       {/* Lock overlay for unavailable prayers */}
@@ -278,6 +331,8 @@ export function PrayerPanel({ stats, world }: PrayerPanelProps) {
   const [containerWidth, setContainerWidth] = useState(
     PRAYER_PANEL_DIMENSIONS.defaultWidth,
   );
+  // Track when prayer data is loaded (manifest might load after component mounts)
+  const [prayerDataVersion, setPrayerDataVersion] = useState(0);
   const prayerTooltipRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -324,8 +379,33 @@ export function PrayerPanel({ stats, world }: PrayerPanelProps) {
     return calculateColumns(containerWidth);
   }, [containerWidth, shouldUseMobileUI]);
 
+  // Poll for prayer data availability (manifest may load after component mounts)
+  useEffect(() => {
+    const prayers = prayerDataProvider.getAllPrayers();
+    if (prayers.length > 0) {
+      // Prayers already loaded
+      setPrayerDataVersion((v) => v + 1);
+      return;
+    }
+
+    // Poll until prayers are loaded (manifest loading is async)
+    const interval = setInterval(() => {
+      const loaded = prayerDataProvider.getAllPrayers();
+      if (loaded.length > 0) {
+        setPrayerDataVersion((v) => v + 1);
+        clearInterval(interval);
+      }
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, []);
+
   // Get prayer definitions from manifest-loaded provider (includes proper conflict data)
-  const prayerDefinitions = useMemo(() => getPrayerDefinitions(), []);
+  // Re-fetch when prayerDataVersion changes (after manifest loads)
+  const prayerDefinitions = useMemo(
+    () => getPrayerDefinitions(),
+    [prayerDataVersion],
+  );
 
   // Sync active prayers with server prayer state
   // Note: Prayer POINTS now come from stats prop (single source of truth)
@@ -679,7 +759,9 @@ export function PrayerPanel({ stats, world }: PrayerPanelProps) {
                     marginBottom: 6,
                   }}
                 >
-                  <span style={{ fontSize: 22 }}>{hoveredPrayer.icon}</span>
+                  <span style={{ fontSize: 22 }}>
+                    {getPrayerDisplayIcon(hoveredPrayer.icon)}
+                  </span>
                   <div>
                     <div
                       style={{

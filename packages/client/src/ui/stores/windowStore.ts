@@ -44,15 +44,20 @@ function generateTabId(): string {
   return `tab_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
 }
 
-/** Default window configuration */
-const DEFAULT_WINDOW_CONFIG: Required<Omit<WindowConfig, "id" | "tabs">> & {
+/** Default window configuration - uses Pick to allow optional fields to remain undefined */
+const DEFAULT_WINDOW_CONFIG: Pick<
+  WindowConfig,
+  "position" | "size" | "minSize" | "transparency"
+> & {
   tabs: TabConfig[];
+  maxSize: Size | undefined;
+  aspectRatio: number | undefined;
 } = {
   position: { x: 100, y: 100 },
   size: { width: 400, height: 300 },
   minSize: { width: 200, height: 150 },
-  maxSize: undefined as unknown as Size,
-  aspectRatio: undefined as unknown as number,
+  maxSize: undefined,
+  aspectRatio: undefined,
   transparency: 0,
   tabs: [],
 };
@@ -575,8 +580,10 @@ export const useWindowStore = create<WindowStoreState>()(
           content: tabConfig.content,
         }));
 
-        const size = config?.size || DEFAULT_WINDOW_CONFIG.size;
-        const rawPosition = config?.position || DEFAULT_WINDOW_CONFIG.position;
+        const size = config?.size ??
+          DEFAULT_WINDOW_CONFIG.size ?? { width: 400, height: 300 };
+        const rawPosition = config?.position ??
+          DEFAULT_WINDOW_CONFIG.position ?? { x: 100, y: 100 };
         // Clamp position to viewport bounds
         const position = clampToViewport(rawPosition, size);
 
@@ -584,13 +591,14 @@ export const useWindowStore = create<WindowStoreState>()(
           id,
           position,
           size,
-          minSize: config?.minSize || DEFAULT_WINDOW_CONFIG.minSize,
+          minSize: config?.minSize ??
+            DEFAULT_WINDOW_CONFIG.minSize ?? { width: 200, height: 150 },
           maxSize: config?.maxSize,
           aspectRatio: config?.aspectRatio,
           tabs,
           activeTabIndex: 0,
           transparency:
-            config?.transparency ?? DEFAULT_WINDOW_CONFIG.transparency,
+            config?.transparency ?? DEFAULT_WINDOW_CONFIG.transparency ?? 0,
           visible: true,
           zIndex: get().nextZIndex,
           locked: false,

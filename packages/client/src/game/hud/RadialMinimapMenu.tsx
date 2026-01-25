@@ -41,6 +41,9 @@ import { Minimap } from "./Minimap";
 import { MinimapStaminaOrb } from "./MinimapStaminaBar";
 import { MinimapHomeTeleportOrb } from "./MinimapHomeTeleportOrb";
 
+/** Pre-allocated vector for compass yaw calculation - avoids GC pressure in RAF loop */
+const _tempCompassForward = new THREE.Vector3();
+
 /** Radial button configuration */
 interface RadialButtonConfig {
   id: string;
@@ -349,16 +352,16 @@ export function RadialMinimapMenu({
   useEffect(() => {
     if (!world?.camera) return;
 
-    const tempForward = new THREE.Vector3();
     let animationId: number;
 
     const updateYaw = () => {
       if (world.camera) {
-        world.camera.getWorldDirection(tempForward);
-        tempForward.y = 0;
-        if (tempForward.lengthSq() > 0.0001) {
-          tempForward.normalize();
-          const yaw = Math.atan2(tempForward.x, tempForward.z);
+        // Reuse pre-allocated vector to avoid GC pressure in RAF loop
+        world.camera.getWorldDirection(_tempCompassForward);
+        _tempCompassForward.y = 0;
+        if (_tempCompassForward.lengthSq() > 0.0001) {
+          _tempCompassForward.normalize();
+          const yaw = Math.atan2(_tempCompassForward.x, _tempCompassForward.z);
           const newYawDeg = THREE.MathUtils.radToDeg(yaw);
           setYawDeg((prev) =>
             Math.abs(prev - newYawDeg) > 0.5 ? newYawDeg : prev,

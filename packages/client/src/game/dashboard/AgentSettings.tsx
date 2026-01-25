@@ -1,7 +1,27 @@
-import React from "react";
-import { Save, RefreshCw, Trash2, Key, Eye, EyeOff } from "lucide-react";
+import React, { useState, useCallback } from "react";
+import {
+  Save,
+  RefreshCw,
+  Trash2,
+  Key,
+  Eye,
+  EyeOff,
+  CheckCircle,
+  XCircle,
+  AlertCircle,
+} from "lucide-react";
 import type { Agent } from "./types";
 import { ELIZAOS_API } from "@/lib/api-config";
+
+/** Status notification type */
+type StatusType = "success" | "error" | "warning";
+
+/** Status notification state */
+interface StatusNotification {
+  message: string;
+  type: StatusType;
+  id: number;
+}
 
 interface AgentSettingsProps {
   agent: Agent;
@@ -26,19 +46,32 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
   agent,
   onDelete,
 }) => {
-  const [settings, setSettings] = React.useState<AgentSettingsData | null>(
-    null,
-  );
-  const [secrets, setSecrets] = React.useState<SecretsData>({});
-  const [loading, setLoading] = React.useState(true);
-  const [saving, setSaving] = React.useState(false);
-  const [savingSecrets, setSavingSecrets] = React.useState(false);
-  const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
-  const [deleting, setDeleting] = React.useState(false);
-  const [activeTab, setActiveTab] = React.useState("Basic");
-  const [showSecrets, setShowSecrets] = React.useState<Record<string, boolean>>(
-    {},
-  );
+  const [settings, setSettings] = useState<AgentSettingsData | null>(null);
+  const [secrets, setSecrets] = useState<SecretsData>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [savingSecrets, setSavingSecrets] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [activeTab, setActiveTab] = useState("Basic");
+  const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+  const [notifications, setNotifications] = useState<StatusNotification[]>([]);
+  const notificationIdRef = React.useRef(0);
+
+  // Show a status notification
+  const showNotification = useCallback((message: string, type: StatusType) => {
+    const id = ++notificationIdRef.current;
+    setNotifications((prev) => [...prev, { message, type, id }]);
+    // Auto-dismiss after 5 seconds
+    setTimeout(() => {
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+    }, 5000);
+  }, []);
+
+  // Dismiss a notification
+  const dismissNotification = useCallback((id: number) => {
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  }, []);
 
   const tabs = ["Basic", "Content", "Style", "API Keys"] as const;
 
@@ -126,17 +159,18 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
       });
       if (response.ok) {
         console.log("[AgentSettings] ✅ Settings updated successfully");
-        window.alert("Settings saved successfully!");
+        showNotification("Settings saved successfully!", "success");
       } else {
         const errorData = await response.json().catch(() => ({}));
         console.error("[AgentSettings] ❌ Failed to save settings:", errorData);
-        window.alert(
+        showNotification(
           `Failed to save settings: ${errorData.error || response.statusText}`,
+          "error",
         );
       }
     } catch (error) {
       console.error("[AgentSettings] ❌ Error saving settings:", error);
-      window.alert("Error saving settings.");
+      showNotification("Error saving settings.", "error");
     } finally {
       setSaving(false);
     }
@@ -154,7 +188,10 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
       }
 
       if (Object.keys(secretsToSave).length === 0) {
-        window.alert("No API keys to save. Please enter at least one API key.");
+        showNotification(
+          "No API keys to save. Please enter at least one API key.",
+          "warning",
+        );
         setSavingSecrets(false);
         return;
       }
@@ -172,19 +209,21 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
 
       if (response.ok) {
         console.log("[AgentSettings] ✅ API keys saved successfully");
-        window.alert(
+        showNotification(
           "API keys saved successfully! Restart the agent for changes to take effect.",
+          "success",
         );
       } else {
         const errorData = await response.json().catch(() => ({}));
         console.error("[AgentSettings] ❌ Failed to save API keys:", errorData);
-        window.alert(
+        showNotification(
           `Failed to save API keys: ${errorData.error || response.statusText}`,
+          "error",
         );
       }
     } catch (error) {
       console.error("[AgentSettings] ❌ Error saving API keys:", error);
-      window.alert("Error saving API keys.");
+      showNotification("Error saving API keys.", "error");
     } finally {
       setSavingSecrets(false);
     }
@@ -199,7 +238,7 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
       // Navigation will happen automatically when agent is removed from list
     } catch (error) {
       console.error("[AgentSettings] ❌ Error deleting agent:", error);
-      window.alert("Failed to delete agent. Please try again.");
+      showNotification("Failed to delete agent. Please try again.", "error");
       setDeleting(false);
       setShowDeleteConfirm(false);
     }
@@ -215,7 +254,65 @@ export const AgentSettings: React.FC<AgentSettingsProps> = ({
     return <div className="p-6 text-red-400">Failed to load settings.</div>;
 
   return (
-    <div className="flex flex-col h-full bg-[#0b0a15]/50 backdrop-blur-sm overflow-hidden">
+    <div className="flex flex-col h-full bg-[#0b0a15]/50 backdrop-blur-sm overflow-hidden relative">
+      {/* Notification Toast Container */}
+      {notifications.length > 0 && (
+        <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
+          {notifications.map((notification) => (
+            <div
+              key={notification.id}
+              className="flex items-center gap-3 p-3 rounded-lg shadow-lg animate-[slideIn_0.3s_ease-out]"
+              style={{
+                backgroundColor:
+                  notification.type === "success"
+                    ? "#065f46"
+                    : notification.type === "error"
+                      ? "#7f1d1d"
+                      : "#78350f",
+                border: `1px solid ${
+                  notification.type === "success"
+                    ? "#10b981"
+                    : notification.type === "error"
+                      ? "#ef4444"
+                      : "#f59e0b"
+                }`,
+              }}
+            >
+              {notification.type === "success" && (
+                <CheckCircle
+                  className="text-emerald-400 flex-shrink-0"
+                  size={18}
+                />
+              )}
+              {notification.type === "error" && (
+                <XCircle className="text-red-400 flex-shrink-0" size={18} />
+              )}
+              {notification.type === "warning" && (
+                <AlertCircle
+                  className="text-amber-400 flex-shrink-0"
+                  size={18}
+                />
+              )}
+              <span className="text-white text-sm flex-1">
+                {notification.message}
+              </span>
+              <button
+                onClick={() => dismissNotification(notification.id)}
+                className="text-white/60 hover:text-white transition-colors"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <style>{`
+        @keyframes slideIn {
+          from { opacity: 0; transform: translateX(100%); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+      `}</style>
+
       {/* Header */}
       <div className="p-6 border-b border-[#8b4513]/30 bg-[#0b0a15]/80">
         <h2 className="font-bold text-[#f2d08a] text-2xl mb-2">

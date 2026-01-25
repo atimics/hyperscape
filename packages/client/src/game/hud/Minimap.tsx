@@ -419,6 +419,9 @@ export function Minimap({
 
       // Clear scene reference (we don't own it, just borrowed from world)
       sceneRef.current = null;
+
+      // Clear entity cache to prevent memory retention
+      entityCacheRef.current.clear();
     };
   }, []);
 

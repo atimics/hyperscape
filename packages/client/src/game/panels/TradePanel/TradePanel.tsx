@@ -208,17 +208,14 @@ function DraggableInventoryItem({
       title={itemData?.name || ""}
     >
       {iconUrl && (
-        <img
-          src={iconUrl}
-          alt={itemData?.name || "Item"}
+        <span
           style={{
-            width: "32px",
-            height: "32px",
-            objectFit: "contain",
-            imageRendering: "pixelated",
+            fontSize: "20px",
+            filter: "drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5))",
           }}
-          draggable={false}
-        />
+        >
+          {iconUrl}
+        </span>
       )}
       {qtyDisplay && (
         <span
@@ -622,18 +619,11 @@ export function TradePanel({
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
+                  fontSize: "20px",
+                  filter: "drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5))",
                 }}
               >
-                <img
-                  src={draggedItemIcon}
-                  alt=""
-                  style={{
-                    width: "32px",
-                    height: "32px",
-                    objectFit: "contain",
-                    imageRendering: "pixelated",
-                  }}
-                />
+                {draggedItemIcon}
               </div>
             )}
           </DragOverlay>

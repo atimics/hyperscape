@@ -1,7 +1,8 @@
-import React from "react";
-import { ExternalLink } from "lucide-react";
+import React, { useMemo } from "react";
+import { ExternalLink, AlertTriangle } from "lucide-react";
 import type { AgentPanel } from "./types";
 import { ELIZAOS_URL } from "@/lib/api-config";
+import { InputValidator } from "@/utils/InputValidator";
 
 interface AgentDynamicPanelProps {
   panel: AgentPanel;
@@ -12,10 +13,19 @@ export const AgentDynamicPanel: React.FC<AgentDynamicPanelProps> = ({
   panel,
   agentId: _agentId,
 }) => {
-  // Construct full URL for the panel
-  const panelUrl = panel.url.startsWith("http")
-    ? panel.url
-    : `${ELIZAOS_URL}${panel.url}`;
+  // Construct and validate URL for the panel
+  const { panelUrl, isValidUrl } = useMemo(() => {
+    const rawUrl = panel.url.startsWith("http")
+      ? panel.url
+      : `${ELIZAOS_URL}${panel.url}`;
+
+    // Validate URL to prevent javascript:, data:, and other dangerous protocols
+    const validation = InputValidator.sanitizeUrl(rawUrl);
+    return {
+      panelUrl: validation.isValid ? String(validation.sanitizedValue) : "",
+      isValidUrl: validation.isValid,
+    };
+  }, [panel.url]);
 
   return (
     <div className="flex flex-col h-full bg-[#0b0a15]/50 backdrop-blur-sm">
@@ -31,29 +41,44 @@ export const AgentDynamicPanel: React.FC<AgentDynamicPanelProps> = ({
               </p>
             </div>
           </div>
-          <a
-            href={panelUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-2 hover:bg-[#f2d08a]/10 rounded-lg text-[#f2d08a] transition-colors"
-            title="Open in new tab"
-          >
-            <ExternalLink size={18} />
-          </a>
+          {isValidUrl && (
+            <a
+              href={panelUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-2 hover:bg-[#f2d08a]/10 rounded-lg text-[#f2d08a] transition-colors"
+              title="Open in new tab"
+            >
+              <ExternalLink size={18} />
+            </a>
+          )}
         </div>
       </div>
 
       {/* iframe Container */}
       <div className="flex-1 overflow-hidden relative bg-[#1a1005]">
-        <iframe
-          src={panelUrl}
-          title={panel.name}
-          className="w-full h-full border-none"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-          style={{
-            colorScheme: "dark",
-          }}
-        />
+        {isValidUrl ? (
+          <iframe
+            src={panelUrl}
+            title={panel.name}
+            className="w-full h-full border-none"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            style={{
+              colorScheme: "dark",
+            }}
+          />
+        ) : (
+          <div className="flex flex-col items-center justify-center h-full gap-4 p-8">
+            <AlertTriangle className="text-red-400" size={48} />
+            <div className="text-center">
+              <h3 className="text-red-400 font-bold mb-2">Invalid Panel URL</h3>
+              <p className="text-[#f2d08a]/60 text-sm">
+                The panel URL could not be validated. Please check the plugin
+                configuration.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Overlay for Hyperscape theme hint */}
         <div className="absolute inset-0 pointer-events-none border-4 border-[#f2d08a]/5 rounded-lg" />
