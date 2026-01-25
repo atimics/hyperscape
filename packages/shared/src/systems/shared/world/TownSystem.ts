@@ -2,6 +2,7 @@
  * TownSystem - Procedural Town Generation
  * Generates 25 deterministic towns with flatness-based placement.
  * Towns are safe zones with bank/store/anvil buildings.
+ * Configuration can be loaded from world-config.json via DataManager.
  */
 
 import { System } from "../infrastructure/System";
@@ -14,15 +15,27 @@ import type {
 } from "../../../types/world/world-types";
 import { NoiseGenerator } from "../../../utils/NoiseGenerator";
 import { Logger } from "../../../utils/Logger";
+import { DataManager } from "../../../data/DataManager";
 
-const TOWN_COUNT = 25;
-const WORLD_SIZE = 10000;
-const MIN_TOWN_SPACING = 800;
-const FLATNESS_SAMPLE_RADIUS = 40;
-const FLATNESS_SAMPLE_COUNT = 16;
-const WATER_THRESHOLD = 5.4;
-const OPTIMAL_WATER_DISTANCE_MIN = 30;
-const OPTIMAL_WATER_DISTANCE_MAX = 150;
+// Default constants - can be overridden by world-config.json
+const DEFAULT_TOWN_COUNT = 25;
+const DEFAULT_WORLD_SIZE = 10000;
+const DEFAULT_MIN_TOWN_SPACING = 800;
+const DEFAULT_FLATNESS_SAMPLE_RADIUS = 40;
+const DEFAULT_FLATNESS_SAMPLE_COUNT = 16;
+const DEFAULT_WATER_THRESHOLD = 5.4;
+const DEFAULT_OPTIMAL_WATER_DISTANCE_MIN = 30;
+const DEFAULT_OPTIMAL_WATER_DISTANCE_MAX = 150;
+
+// Runtime config values (set from world-config.json or defaults)
+let TOWN_COUNT = DEFAULT_TOWN_COUNT;
+let WORLD_SIZE = DEFAULT_WORLD_SIZE;
+let MIN_TOWN_SPACING = DEFAULT_MIN_TOWN_SPACING;
+let FLATNESS_SAMPLE_RADIUS = DEFAULT_FLATNESS_SAMPLE_RADIUS;
+let FLATNESS_SAMPLE_COUNT = DEFAULT_FLATNESS_SAMPLE_COUNT;
+let WATER_THRESHOLD = DEFAULT_WATER_THRESHOLD;
+let OPTIMAL_WATER_DISTANCE_MIN = DEFAULT_OPTIMAL_WATER_DISTANCE_MIN;
+let OPTIMAL_WATER_DISTANCE_MAX = DEFAULT_OPTIMAL_WATER_DISTANCE_MAX;
 
 const dist2D = (x1: number, z1: number, x2: number, z2: number): number =>
   Math.sqrt((x2 - x1) ** 2 + (z2 - z1) ** 2);
@@ -169,6 +182,67 @@ export class TownSystem extends System {
           getBiomeAtWorldPosition?(x: number, z: number): string;
         }
       | undefined;
+
+    // Load configuration from world-config.json if available
+    const configManifest = DataManager.getWorldConfig();
+    if (configManifest?.towns) {
+      const tc = configManifest.towns;
+      TOWN_COUNT = tc.townCount ?? DEFAULT_TOWN_COUNT;
+      MIN_TOWN_SPACING = tc.minTownSpacing ?? DEFAULT_MIN_TOWN_SPACING;
+      FLATNESS_SAMPLE_RADIUS =
+        tc.flatnessSampleRadius ?? DEFAULT_FLATNESS_SAMPLE_RADIUS;
+      FLATNESS_SAMPLE_COUNT =
+        tc.flatnessSampleCount ?? DEFAULT_FLATNESS_SAMPLE_COUNT;
+      WATER_THRESHOLD = tc.waterThreshold ?? DEFAULT_WATER_THRESHOLD;
+      OPTIMAL_WATER_DISTANCE_MIN =
+        tc.optimalWaterDistanceMin ?? DEFAULT_OPTIMAL_WATER_DISTANCE_MIN;
+      OPTIMAL_WATER_DISTANCE_MAX =
+        tc.optimalWaterDistanceMax ?? DEFAULT_OPTIMAL_WATER_DISTANCE_MAX;
+
+      // Update town size config if provided
+      if (tc.townSizes) {
+        if (tc.townSizes.hamlet) {
+          TOWN_SIZE_CONFIG.hamlet = {
+            buildingCount: {
+              min: tc.townSizes.hamlet.minBuildings,
+              max: tc.townSizes.hamlet.maxBuildings,
+            },
+            radius: tc.townSizes.hamlet.radius,
+            safeZoneRadius: tc.townSizes.hamlet.safeZoneRadius,
+          };
+        }
+        if (tc.townSizes.village) {
+          TOWN_SIZE_CONFIG.village = {
+            buildingCount: {
+              min: tc.townSizes.village.minBuildings,
+              max: tc.townSizes.village.maxBuildings,
+            },
+            radius: tc.townSizes.village.radius,
+            safeZoneRadius: tc.townSizes.village.safeZoneRadius,
+          };
+        }
+        if (tc.townSizes.town) {
+          TOWN_SIZE_CONFIG.town = {
+            buildingCount: {
+              min: tc.townSizes.town.minBuildings,
+              max: tc.townSizes.town.maxBuildings,
+            },
+            radius: tc.townSizes.town.radius,
+            safeZoneRadius: tc.townSizes.town.safeZoneRadius,
+          };
+        }
+      }
+
+      // Update biome suitability if provided
+      if (tc.biomeSuitability) {
+        Object.assign(BIOME_SUITABILITY, tc.biomeSuitability);
+      }
+
+      Logger.system(
+        "TownSystem",
+        `Loaded config: ${TOWN_COUNT} towns, ${MIN_TOWN_SPACING}m spacing`,
+      );
+    }
 
     this.initialized = true;
   }

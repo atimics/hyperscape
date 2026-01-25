@@ -68,11 +68,20 @@ const getAllTreasureLocations = () => TREASURE_LOCATIONS;
 const getTreasureLocationsByDifficulty = (_difficulty: number) =>
   TREASURE_LOCATIONS;
 
+const NPC_MODEL_ARCHETYPES: Record<NPCModelArchetype, string> = {
+  goblin: "asset://models/goblin/goblin.vrm",
+  human: "asset://avatars/avatar-male-01.vrm",
+  thug: "asset://avatars/avatar-male-01.vrm",
+  troll: "asset://avatars/avatar-male-01.vrm",
+  imp: "asset://models/goblin/goblin.vrm",
+};
+
 import type {
   Item,
   NPCData,
   NPCDataInput,
   NPCCategory,
+  NPCModelArchetype,
   TreasureLocation,
   StoreData,
   BiomeData,
@@ -80,6 +89,7 @@ import type {
 import type { DataValidationResult } from "../types/core/validation-types";
 import type { MobSpawnPoint, NPCLocation, WorldArea } from "./world-areas";
 import { WeaponType, EquipmentSlotName, AttackType } from "../types/core/core";
+import type { WorldConfigManifest } from "../types/world/world-types";
 
 /**
  * Gathering Tool Data - derived from items.json where item.tool is defined
@@ -190,9 +200,25 @@ export class DataManager {
   private isInitialized = false;
   private validationResult: DataValidationResult | null = null;
   private worldAssetsDir: string | null = null;
+  private static worldConfig: WorldConfigManifest | null = null;
 
   private constructor() {
     // Private constructor for singleton pattern
+  }
+
+  /**
+   * Get the loaded world configuration manifest
+   * Returns null if not yet loaded
+   */
+  public static getWorldConfig(): WorldConfigManifest | null {
+    return DataManager.worldConfig;
+  }
+
+  /**
+   * Set the world configuration (for testing or runtime updates)
+   */
+  public static setWorldConfig(config: WorldConfigManifest): void {
+    DataManager.worldConfig = config;
   }
 
   /**
@@ -363,6 +389,20 @@ export class DataManager {
       const biomeList = (await biomesRes.json()) as Array<BiomeData>;
       for (const biome of biomeList) {
         BIOMES[biome.id] = biome;
+      }
+
+      // Load world config manifest for terrain/town/road generation
+      try {
+        const worldConfigRes = await fetch(`${baseUrl}/world-config.json`);
+        if (worldConfigRes.ok) {
+          const worldConfigData =
+            (await worldConfigRes.json()) as WorldConfigManifest;
+          DataManager.worldConfig = worldConfigData;
+        }
+      } catch {
+        console.warn(
+          "[DataManager] world-config.json not found, using default world generation parameters",
+        );
       }
 
       // zones.json removed - use world-areas.json instead
@@ -552,6 +592,20 @@ export class DataManager {
         BIOMES[biome.id] = biome;
       }
 
+      // Load world config manifest for terrain/town/road generation
+      const worldConfigPath = path.join(manifestsDir, "world-config.json");
+      try {
+        const worldConfigData = await fs.readFile(worldConfigPath, "utf-8");
+        const worldConfigManifest = JSON.parse(
+          worldConfigData,
+        ) as WorldConfigManifest;
+        DataManager.worldConfig = worldConfigManifest;
+      } catch {
+        console.warn(
+          "[DataManager] world-config.json not found, using default world generation parameters",
+        );
+      }
+
       // Load stores
       const storesPath = path.join(manifestsDir, "stores.json");
       const storesData = await fs.readFile(storesPath, "utf-8");
@@ -677,7 +731,8 @@ export class DataManager {
     const attackType = item.attackType ?? null;
 
     // Validate: weapons with equipSlot "weapon" should have equippedModelPath
-    if (equipSlot === "weapon" && !item.equippedModelPath) {
+    const equippedModelPath = item.equippedModelPath;
+    if (equipSlot === "weapon" && equippedModelPath === undefined) {
       console.warn(
         `[DataManager] Weapon "${item.id}" missing equippedModelPath - will use convention fallback`,
       );
@@ -1197,8 +1252,18 @@ export class DataManager {
 
   private normalizeNPC(npc: NPCDataInput): NPCData {
     // Ensure required fields have sane defaults
+    const archetypeModel = npc.modelArchetype
+      ? NPC_MODEL_ARCHETYPES[npc.modelArchetype]
+      : undefined;
+    const fallbackModel =
+      npc.category === "neutral" || npc.category === "quest"
+        ? NPC_MODEL_ARCHETYPES.human
+        : NPC_MODEL_ARCHETYPES.goblin;
     const defaults: Partial<NPCData> = {
       faction: npc.faction || "unknown",
+      spawnCategory:
+        npc.spawnCategory ?? (npc.category === "boss" ? "world" : undefined),
+      modelArchetype: npc.modelArchetype,
       levelRange: npc.levelRange,
       stats: {
         level: npc.stats?.level ?? 1,
@@ -1258,7 +1323,7 @@ export class DataManager {
         config: npc.behavior?.config,
       },
       appearance: {
-        modelPath: npc.appearance?.modelPath ?? "",
+        modelPath: npc.appearance?.modelPath ?? archetypeModel ?? fallbackModel,
         iconPath: npc.appearance?.iconPath,
         scale: npc.appearance?.scale ?? 1.0,
         tint: npc.appearance?.tint,
@@ -1368,6 +1433,68 @@ export class DataManager {
               `Area ${areaId} references unknown NPC: ${mobSpawn.mobId}`,
             );
           }
+        }
+      }
+    }
+
+    // Validate NPC level ranges
+    for (const npc of ALL_NPCS.values()) {
+      const range = npc.levelRange;
+      if (range) {
+        const min = range.min;
+        const max = range.max;
+        if (!Number.isFinite(min) || !Number.isFinite(max)) {
+          errors.push(`NPC ${npc.id} has non-finite levelRange values`);
+          continue;
+        }
+        if (min < 1) {
+          errors.push(`NPC ${npc.id} levelRange.min must be >= 1`);
+        }
+        if (max < min) {
+          errors.push(`NPC ${npc.id} levelRange.max must be >= min`);
+        }
+        if (max > 1000) {
+          errors.push(`NPC ${npc.id} levelRange.max must be <= 1000`);
+        }
+        if (npc.stats.level < min || npc.stats.level > max) {
+          errors.push(
+            `NPC ${npc.id} stats.level must be within levelRange (${min}-${max})`,
+          );
+        }
+      } else if (npc.category === "mob" || npc.category === "boss") {
+        errors.push(`NPC ${npc.id} is missing levelRange`);
+      }
+    }
+
+    // Validate biome mob definitions
+    for (const biome of Object.values(BIOMES)) {
+      const mobTypes = biome.mobTypes || [];
+      const mobs = biome.mobs || [];
+      const mobTypeSet = new Set(mobTypes);
+      const mobsSet = new Set(mobs);
+
+      if (mobTypes.length !== mobs.length) {
+        errors.push(`Biome ${biome.id} has mismatched mobs vs mobTypes length`);
+      }
+
+      for (const mobId of mobTypes) {
+        if (!mobsSet.has(mobId)) {
+          errors.push(
+            `Biome ${biome.id} mobTypes includes ${mobId} missing from mobs`,
+          );
+        }
+        if (!ALL_NPCS.has(mobId)) {
+          errors.push(
+            `Biome ${biome.id} mobTypes references unknown NPC: ${mobId}`,
+          );
+        }
+      }
+
+      for (const mobId of mobs) {
+        if (!mobTypeSet.has(mobId)) {
+          errors.push(
+            `Biome ${biome.id} mobs includes ${mobId} missing from mobTypes`,
+          );
         }
       }
     }

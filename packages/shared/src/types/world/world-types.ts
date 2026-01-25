@@ -657,3 +657,127 @@ export interface RoadNetwork {
   /** Generation timestamp */
   generatedAt: number;
 }
+
+// ============== WORLD CONFIG MANIFEST TYPES ==============
+
+/**
+ * Terrain configuration from world-config.json
+ */
+export interface TerrainConfigManifest {
+  /** Size of each terrain tile in meters (default: 100) */
+  tileSize: number;
+  /** World grid size in tiles (default: 100 = 10km x 10km) */
+  worldSize: number;
+  /** Vertices per tile for mesh resolution (default: 64) */
+  tileResolution: number;
+  /** Maximum terrain height variation in meters (default: 30) */
+  maxHeight: number;
+  /** Height threshold below which water appears (default: 5.4) */
+  waterThreshold: number;
+  /** Scale multiplier for biome noise generation (default: 1.0) */
+  biomeScale: number;
+  /** Near fog distance in meters (default: 150) */
+  fogNear: number;
+  /** Far fog distance in meters (default: 350) */
+  fogFar: number;
+  /** Camera far plane distance in meters (default: 400) */
+  cameraFar: number;
+}
+
+/**
+ * Town size configuration
+ */
+export interface TownSizeConfigManifest {
+  minBuildings: number;
+  maxBuildings: number;
+  radius: number;
+  safeZoneRadius: number;
+}
+
+/**
+ * Building type configuration
+ */
+export interface BuildingTypeConfigManifest {
+  width: number;
+  depth: number;
+  priority: number;
+}
+
+/**
+ * Town generation configuration from world-config.json
+ */
+export interface TownConfigManifest {
+  /** Number of towns to generate (default: 25) */
+  townCount: number;
+  /** Minimum spacing between towns in meters (default: 800) */
+  minTownSpacing: number;
+  /** Radius for flatness sampling (default: 40) */
+  flatnessSampleRadius: number;
+  /** Number of points to sample for flatness (default: 16) */
+  flatnessSampleCount: number;
+  /** Water threshold for town placement (default: 5.4) */
+  waterThreshold: number;
+  /** Minimum optimal distance from water (default: 30) */
+  optimalWaterDistanceMin: number;
+  /** Maximum optimal distance from water (default: 150) */
+  optimalWaterDistanceMax: number;
+  /** Configuration for each town size category */
+  townSizes: {
+    hamlet: TownSizeConfigManifest;
+    village: TownSizeConfigManifest;
+    town: TownSizeConfigManifest;
+  };
+  /** Configuration for each building type */
+  buildingTypes: Record<string, BuildingTypeConfigManifest>;
+  /** Biome suitability scores for town placement (0-1) */
+  biomeSuitability: Record<string, number>;
+}
+
+/**
+ * Road generation configuration from world-config.json
+ */
+export interface RoadConfigManifest {
+  /** Road width in meters (default: 4) */
+  roadWidth: number;
+  /** Step size for A* pathfinding (default: 20) */
+  pathStepSize: number;
+  /** Maximum iterations for path search (default: 10000) */
+  maxPathIterations: number;
+  /** Ratio of extra connections beyond MST (default: 0.25) */
+  extraConnectionsRatio: number;
+  /** Chaikin smoothing iterations (default: 2) */
+  smoothingIterations: number;
+  /** Noise scale for path displacement (default: 0.01) */
+  noiseDisplacementScale: number;
+  /** Noise strength for path displacement (default: 3) */
+  noiseDisplacementStrength: number;
+  /** Minimum spacing between path points (default: 4) */
+  minPointSpacing: number;
+  /** Biome cost multipliers for pathfinding */
+  costBiomeMultipliers: Record<string, number>;
+  /** Base movement cost (default: 1.0) */
+  costBase: number;
+  /** Slope penalty multiplier (default: 5.0) */
+  costSlopeMultiplier: number;
+  /** Water crossing penalty (default: 1000) */
+  costWaterPenalty: number;
+  /** A* heuristic weight (default: 2.5) */
+  heuristicWeight: number;
+}
+
+/**
+ * Complete world configuration manifest
+ * Loaded from assets/manifests/world-config.json
+ */
+export interface WorldConfigManifest {
+  /** Manifest version for compatibility checking */
+  version: number;
+  /** Terrain generation configuration */
+  terrain: TerrainConfigManifest;
+  /** Town generation configuration */
+  towns: TownConfigManifest;
+  /** Road generation configuration */
+  roads: RoadConfigManifest;
+  /** World seed for procedural generation */
+  seed: number;
+}

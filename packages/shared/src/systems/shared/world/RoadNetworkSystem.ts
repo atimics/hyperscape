@@ -1,6 +1,7 @@
 /**
  * RoadNetworkSystem - Procedural Road Generation
  * Uses MST + A* pathfinding + Chaikin smoothing for organic roads.
+ * Configuration can be loaded from world-config.json via DataManager.
  */
 
 import { System } from "../infrastructure/System";
@@ -16,15 +17,36 @@ import { NoiseGenerator } from "../../../utils/NoiseGenerator";
 import type { TownSystem } from "./TownSystem";
 import { EventType } from "../../../types/events";
 import { Logger } from "../../../utils/Logger";
+import { DataManager } from "../../../data/DataManager";
 
-const ROAD_WIDTH = 4;
-const PATH_STEP_SIZE = 12;
-const MAX_PATH_ITERATIONS = 10000;
-const EXTRA_CONNECTIONS_RATIO = 0.25;
+// Default constants - can be overridden by world-config.json
+const DEFAULT_ROAD_WIDTH = 4;
+const DEFAULT_PATH_STEP_SIZE = 20;
+const DEFAULT_MAX_PATH_ITERATIONS = 10000;
+const DEFAULT_EXTRA_CONNECTIONS_RATIO = 0.25;
+const DEFAULT_COST_BASE = 1.0;
+const DEFAULT_COST_SLOPE_MULTIPLIER = 5.0;
+const DEFAULT_COST_WATER_PENALTY = 1000;
+const DEFAULT_SMOOTHING_ITERATIONS = 2;
+const DEFAULT_NOISE_DISPLACEMENT_SCALE = 0.01;
+const DEFAULT_NOISE_DISPLACEMENT_STRENGTH = 3;
+const DEFAULT_MIN_POINT_SPACING = 4;
+const DEFAULT_HEURISTIC_WEIGHT = 2.5;
 
-const COST_BASE = 1.0;
-const COST_SLOPE_MULTIPLIER = 5.0;
-const COST_WATER_PENALTY = 1000;
+// Runtime config values (set from world-config.json or defaults)
+let ROAD_WIDTH = DEFAULT_ROAD_WIDTH;
+let PATH_STEP_SIZE = DEFAULT_PATH_STEP_SIZE;
+let MAX_PATH_ITERATIONS = DEFAULT_MAX_PATH_ITERATIONS;
+let EXTRA_CONNECTIONS_RATIO = DEFAULT_EXTRA_CONNECTIONS_RATIO;
+let COST_BASE = DEFAULT_COST_BASE;
+let COST_SLOPE_MULTIPLIER = DEFAULT_COST_SLOPE_MULTIPLIER;
+let COST_WATER_PENALTY = DEFAULT_COST_WATER_PENALTY;
+let SMOOTHING_ITERATIONS = DEFAULT_SMOOTHING_ITERATIONS;
+let NOISE_DISPLACEMENT_SCALE = DEFAULT_NOISE_DISPLACEMENT_SCALE;
+let NOISE_DISPLACEMENT_STRENGTH = DEFAULT_NOISE_DISPLACEMENT_STRENGTH;
+let MIN_POINT_SPACING = DEFAULT_MIN_POINT_SPACING;
+let HEURISTIC_WEIGHT = DEFAULT_HEURISTIC_WEIGHT;
+
 const COST_BIOME_MULTIPLIER: Record<string, number> = {
   plains: 1.0,
   valley: 1.0,
@@ -36,10 +58,6 @@ const COST_BIOME_MULTIPLIER: Record<string, number> = {
   lakes: 100,
 };
 
-const SMOOTHING_ITERATIONS = 2;
-const NOISE_DISPLACEMENT_SCALE = 0.01;
-const NOISE_DISPLACEMENT_STRENGTH = 3;
-const MIN_POINT_SPACING = 4;
 const TILE_SIZE = 100;
 const WATER_THRESHOLD = 5.4;
 
@@ -53,9 +71,6 @@ const DIRECTIONS = [
   { dx: -PATH_STEP_SIZE, dz: PATH_STEP_SIZE },
   { dx: -PATH_STEP_SIZE, dz: -PATH_STEP_SIZE },
 ];
-
-// Weighted A* - higher weight makes search more greedy (faster but less optimal)
-const HEURISTIC_WEIGHT = 1.5;
 
 const dist2D = (x1: number, z1: number, x2: number, z2: number): number =>
   Math.sqrt((x2 - x1) ** 2 + (z2 - z1) ** 2);
@@ -185,6 +200,39 @@ export class RoadNetworkSystem extends System {
         }
       | undefined;
     this.townSystem = this.world.getSystem("towns") as TownSystem | undefined;
+
+    // Load configuration from world-config.json if available
+    const configManifest = DataManager.getWorldConfig();
+    if (configManifest?.roads) {
+      const rc = configManifest.roads;
+      ROAD_WIDTH = rc.roadWidth ?? DEFAULT_ROAD_WIDTH;
+      PATH_STEP_SIZE = rc.pathStepSize ?? DEFAULT_PATH_STEP_SIZE;
+      MAX_PATH_ITERATIONS = rc.maxPathIterations ?? DEFAULT_MAX_PATH_ITERATIONS;
+      EXTRA_CONNECTIONS_RATIO =
+        rc.extraConnectionsRatio ?? DEFAULT_EXTRA_CONNECTIONS_RATIO;
+      SMOOTHING_ITERATIONS =
+        rc.smoothingIterations ?? DEFAULT_SMOOTHING_ITERATIONS;
+      NOISE_DISPLACEMENT_SCALE =
+        rc.noiseDisplacementScale ?? DEFAULT_NOISE_DISPLACEMENT_SCALE;
+      NOISE_DISPLACEMENT_STRENGTH =
+        rc.noiseDisplacementStrength ?? DEFAULT_NOISE_DISPLACEMENT_STRENGTH;
+      MIN_POINT_SPACING = rc.minPointSpacing ?? DEFAULT_MIN_POINT_SPACING;
+      COST_BASE = rc.costBase ?? DEFAULT_COST_BASE;
+      COST_SLOPE_MULTIPLIER =
+        rc.costSlopeMultiplier ?? DEFAULT_COST_SLOPE_MULTIPLIER;
+      COST_WATER_PENALTY = rc.costWaterPenalty ?? DEFAULT_COST_WATER_PENALTY;
+      HEURISTIC_WEIGHT = rc.heuristicWeight ?? DEFAULT_HEURISTIC_WEIGHT;
+
+      // Update biome cost multipliers if provided
+      if (rc.costBiomeMultipliers) {
+        Object.assign(COST_BIOME_MULTIPLIER, rc.costBiomeMultipliers);
+      }
+
+      Logger.system(
+        "RoadNetworkSystem",
+        `Loaded config: ${ROAD_WIDTH}m roads, ${EXTRA_CONNECTIONS_RATIO} extra connections`,
+      );
+    }
   }
 
   async start(): Promise<void> {
