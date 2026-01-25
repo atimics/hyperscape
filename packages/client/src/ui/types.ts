@@ -202,6 +202,22 @@ export interface DropResult {
 // Window System Types
 // ============================================================================
 
+/**
+ * Anchor points for window positioning relative to viewport.
+ * Based on Unity/Unreal UI best practices, windows maintain their position
+ * relative to their anchor point when the viewport resizes.
+ */
+export type WindowAnchor =
+  | "top-left"
+  | "top-center"
+  | "top-right"
+  | "left-center"
+  | "center"
+  | "right-center"
+  | "bottom-left"
+  | "bottom-center"
+  | "bottom-right";
+
 /** State of a single tab */
 export interface TabState {
   /** Unique identifier */
@@ -258,6 +274,8 @@ export interface WindowState {
   zIndex: number;
   /** Whether window is locked (not draggable in locked mode) */
   locked: boolean;
+  /** Anchor point for viewport-relative positioning (defaults to top-left if not set) */
+  anchor?: WindowAnchor;
 }
 
 /** Configuration for creating a new window */
@@ -278,6 +296,8 @@ export interface WindowConfig {
   tabs?: TabConfig[];
   /** Initial transparency (0-100) */
   transparency?: number;
+  /** Anchor point for viewport-relative positioning */
+  anchor?: WindowAnchor;
 }
 
 // ============================================================================

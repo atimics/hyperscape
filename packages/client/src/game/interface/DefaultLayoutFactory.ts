@@ -185,6 +185,7 @@ function createSkillsPrayerWindow(
       },
     ],
     transparency: 0,
+    anchor: "bottom-left",
   };
 }
 
@@ -214,6 +215,7 @@ function createChatWindow(
       },
     ],
     transparency: 0,
+    anchor: "bottom-left",
   };
 }
 
@@ -246,6 +248,7 @@ function createMenuBarWindow(
       },
     ],
     transparency: 0,
+    anchor: "bottom-right",
   };
 }
 
@@ -287,6 +290,7 @@ function createInventoryWindow(
       },
     ],
     transparency: 0,
+    anchor: "bottom-right",
   };
 }
 
@@ -316,6 +320,7 @@ function createMinimapWindow(
       },
     ],
     transparency: 0,
+    anchor: "top-right",
   };
 }
 
@@ -345,5 +350,6 @@ function createActionBarWindow(
       },
     ],
     transparency: 0,
+    anchor: "bottom-center",
   };
 }

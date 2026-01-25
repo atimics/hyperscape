@@ -6,8 +6,14 @@ import type {
   TabState,
   TabConfig,
   Size,
+  WindowAnchor,
 } from "../types";
 import { useEditStore } from "./editStore";
+import {
+  repositionWindowForViewport,
+  getDefaultAnchor,
+  type Viewport,
+} from "./anchorUtils";
 
 /** Whether to log debug messages (disabled in production) */
 const DEBUG =
@@ -178,8 +184,9 @@ const STORAGE_KEY = "hyperscape-window-layout";
  * - 10: Reset menubar constraints for dynamic sizing (minSize = maxSize = content size)
  * - 11: New default layout - clear all windows to apply new layout (Settings+Chat left, Minimap+Stats+Inventory right, Menu bottom-right)
  * - 12: Fix default layout - Stats panel without Skills tab, force clean reset
+ * - 13: Add anchor property to windows for responsive viewport scaling
  */
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 
 /** Panel ID to icon mapping for tab display migration */
 const PANEL_ICONS: Record<string, string> = {
@@ -535,6 +542,27 @@ const migrations: Record<number, MigrationFn> = {
     // Return empty map - InterfaceManager will create new defaults on mount
     return new Map<string, WindowState>();
   },
+
+  /**
+   * Migration 12 → 13: Add anchor property to windows
+   * Sets appropriate anchor based on window ID for responsive viewport scaling.
+   * This enables proper edge-snapping when resizing between different screen sizes.
+   */
+  13: (windows) => {
+    const migrated = new Map<string, WindowState>();
+    for (const [id, windowState] of windows) {
+      // Set anchor based on window ID if not already set
+      const anchor = windowState.anchor ?? getDefaultAnchor(id);
+      debugLog(
+        `[WindowStore Migration v13] Setting anchor for ${id}: ${anchor}`,
+      );
+      migrated.set(id, {
+        ...windowState,
+        anchor,
+      });
+    }
+    return migrated;
+  },
 };
 
 /**
@@ -602,6 +630,7 @@ export const useWindowStore = create<WindowStoreState>()(
           visible: true,
           zIndex: get().nextZIndex,
           locked: false,
+          anchor: config?.anchor ?? getDefaultAnchor(id),
         };
 
         set((state) => {
@@ -963,26 +992,10 @@ export const useWindowStore = create<WindowStoreState>()(
               : 1080,
         };
 
-        // Detect mobile/desktop mode change between saved and current viewport
-        const MOBILE_BREAKPOINT = 768;
-        const savedWasMobile = savedViewport.width < MOBILE_BREAKPOINT;
-        const currentIsMobile = currentViewport.width < MOBILE_BREAKPOINT;
-        const modeChanged = savedWasMobile !== currentIsMobile;
-
-        // Calculate scale factors for proportional positioning
-        const scaleX = currentViewport.width / savedViewport.width;
-        const scaleY = currentViewport.height / savedViewport.height;
-
         debugLog(
           `[WindowStore] Loading layout - saved viewport: ${savedViewport.width}x${savedViewport.height}, ` +
-            `current: ${currentViewport.width}x${currentViewport.height}, ` +
-            `scale: ${scaleX.toFixed(2)}x${scaleY.toFixed(2)}, ` +
-            `modeChanged: ${modeChanged} (${savedWasMobile ? "mobile" : "desktop"} -> ${currentIsMobile ? "mobile" : "desktop"})`,
+            `current: ${currentViewport.width}x${currentViewport.height}`,
         );
-
-        // If transitioning between mobile and desktop, use responsive repositioning
-        // instead of scaling (mobile and desktop use completely different layouts)
-        const shouldReposition = modeChanged && !currentIsMobile;
 
         // Get persisted version (default to 1 for pre-versioning data)
         const storedVersion = persistedState.version ?? 1;
@@ -1083,58 +1096,34 @@ export const useWindowStore = create<WindowStoreState>()(
           windowsMap = runMigrations(windowsMap, storedVersion);
         }
 
-        // Third pass: scale positions proportionally and clamp to current viewport
-        // This handles cases where the viewport has changed since the layout was saved
+        // Third pass: reposition windows using anchor-based positioning
+        // This ensures windows maintain their position relative to their anchor point
         const clampedWindowsMap = new Map<string, WindowState>();
-        const windowsArray = Array.from(windowsMap.entries());
 
-        for (let index = 0; index < windowsArray.length; index++) {
-          const [id, windowState] = windowsArray[index];
-          let newPosition: { x: number; y: number };
+        for (const [id, windowState] of windowsMap) {
+          // Get anchor from window state or determine from ID
+          const anchor: WindowAnchor =
+            windowState.anchor ?? getDefaultAnchor(id);
 
-          if (shouldReposition) {
-            // Mobile -> Desktop transition: reposition windows using a grid layout
-            // because mobile positions are fundamentally incompatible with desktop
-            const horizontalSpacing = currentViewport.width > 2560 ? 520 : 480;
-            const topMargin = 80;
-            const leftMargin = 0;
-            const col = index % 3;
-            const row = Math.floor(index / 3);
+          // Use anchor-based repositioning for all viewport changes
+          // This works for both mobile->desktop transitions and normal resizes
+          const newPosition = repositionWindowForViewport(
+            windowState.position,
+            windowState.size,
+            anchor,
+            savedViewport,
+            currentViewport,
+          );
 
-            newPosition = {
-              x: Math.max(
-                0,
-                Math.min(
-                  leftMargin + col * horizontalSpacing,
-                  currentViewport.width - windowState.size.width - 40,
-                ),
-              ),
-              y: Math.max(
-                topMargin,
-                Math.min(
-                  topMargin + row * 620,
-                  currentViewport.height - windowState.size.height - 80,
-                ),
-              ),
-            };
-
-            debugLog(
-              `[WindowStore] Repositioning window ${id} from mobile layout to desktop grid position`,
-            );
-          } else {
-            // Normal case: apply proportional scaling to position based on viewport ratio
-            const scaledPosition = {
-              x: Math.round(windowState.position.x * scaleX),
-              y: Math.round(windowState.position.y * scaleY),
-            };
-
-            // Then clamp to ensure window is visible in current viewport
-            newPosition = clampToViewport(scaledPosition, windowState.size);
-          }
+          debugLog(
+            `[WindowStore] Repositioning window ${id} using anchor ${anchor}: ` +
+              `(${windowState.position.x}, ${windowState.position.y}) -> (${newPosition.x}, ${newPosition.y})`,
+          );
 
           clampedWindowsMap.set(id, {
             ...windowState,
             position: newPosition,
+            anchor, // Ensure anchor is saved
           });
         }
 

@@ -1,13 +1,19 @@
 /**
  * useViewportResize - Handle viewport resize and window repositioning
  *
- * Extracted from InterfaceManager to reduce file size and improve testability.
+ * Uses anchor-based positioning (like Unity/Unreal) where windows maintain
+ * their position relative to a specific viewport edge/corner.
  *
  * @packageDocumentation
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useWindowStore } from "@/ui";
+import {
+  repositionWindowForViewport,
+  detectNearestAnchor,
+  getDefaultAnchor,
+} from "@/ui/stores/anchorUtils";
 
 /** Mobile breakpoint threshold */
 const MOBILE_BREAKPOINT = 768;
@@ -62,40 +68,38 @@ export function useViewportResize() {
         // Update mobile state tracking
         wasMobileRef.current = nowMobile;
 
-        // On mobile <-> desktop transition, reset windows to default positions
-        // because the mobile and desktop UIs use completely different layouts
+        // On mobile <-> desktop transition, reposition windows using their anchors
+        // Mobile and desktop use different viewports, but anchors ensure proper positioning
         if (transitionedFromMobile || transitionedToMobile) {
           const allWindows = useWindowStore.getState().getAllWindows();
           const windowStoreUpdate = useWindowStore.getState().updateWindow;
+          const newViewport = { width: newWidth, height: newHeight };
 
-          if (transitionedFromMobile) {
-            // Transitioning from mobile to desktop - reposition windows for desktop
-            // Use responsive positioning based on new viewport size
-            const horizontalSpacing = newWidth > 2560 ? 520 : 480;
-            const topMargin = 80;
-            const leftMargin = 0;
+          // For mobile->desktop transition, we use anchors to position properly
+          // Each window's anchor determines which edge/corner it snaps to
+          allWindows.forEach((win) => {
+            // Get anchor from window or determine from ID
+            const anchor = win.anchor ?? getDefaultAnchor(win.id);
 
-            allWindows.forEach((win, index) => {
-              // Distribute windows in a grid pattern
-              const col = index % 3;
-              const row = Math.floor(index / 3);
-              const newX = Math.min(
-                leftMargin + col * horizontalSpacing,
-                newWidth - win.size.width - 40,
-              );
-              const newY = Math.min(
-                topMargin + row * 620,
-                newHeight - win.size.height - 80,
-              );
+            // Calculate position based on anchor in new viewport
+            // For transitions, we use a "zero offset" from anchor to get edge-snapped position
+            const newPosition = repositionWindowForViewport(
+              win.position,
+              win.size,
+              anchor,
+              // Use a reference viewport for transition (assume positions need recalculating)
+              { width: newWidth, height: newHeight },
+              newViewport,
+            );
 
-              windowStoreUpdate(win.id, {
-                position: {
-                  x: Math.max(0, newX),
-                  y: Math.max(topMargin, newY),
-                },
-              });
+            windowStoreUpdate(win.id, {
+              position: {
+                x: Math.round(newPosition.x),
+                y: Math.round(newPosition.y),
+              },
+              anchor,
             });
-          }
+          });
 
           // Update tracked viewport size
           prevViewportRef.current = { width: newWidth, height: newHeight };
@@ -105,70 +109,37 @@ export function useViewportResize() {
         // Skip if viewport hasn't actually changed
         if (newWidth === prevWidth && newHeight === prevHeight) return;
 
-        // Calculate proportional scale factors
-        const scaleX = newWidth / prevWidth;
-        const scaleY = newHeight / prevHeight;
-
-        // Get all windows and reposition them based on viewport change
+        // Get all windows and reposition them using anchor-based positioning
         const allWindows = useWindowStore.getState().getAllWindows();
         const windowStoreUpdate = useWindowStore.getState().updateWindow;
-        const minVisible = 50;
+
+        const oldViewport = { width: prevWidth, height: prevHeight };
+        const newViewport = { width: newWidth, height: newHeight };
 
         allWindows.forEach((win) => {
-          // Check if window was aligned to edges (within 20px threshold)
-          const wasRightAligned =
-            win.position.x + win.size.width >= prevWidth - 20;
-          const wasBottomAligned =
-            win.position.y + win.size.height >= prevHeight - 20;
-          const wasLeftAligned = win.position.x <= 20;
-          const wasTopAligned = win.position.y <= 80; // Account for header/toolbar
+          // Use window's anchor if set, otherwise detect from position or use default
+          const anchor =
+            win.anchor ??
+            detectNearestAnchor(win.position, win.size, oldViewport) ??
+            getDefaultAnchor(win.id);
 
-          let newX: number;
-          let newY: number;
+          // Reposition window using anchor-based calculation
+          const newPosition = repositionWindowForViewport(
+            win.position,
+            win.size,
+            anchor,
+            oldViewport,
+            newViewport,
+          );
 
-          // Handle edge-aligned windows specially to maintain their edge alignment
-          if (wasRightAligned) {
-            // Keep window aligned to right edge
-            newX = newWidth - win.size.width;
-          } else if (wasLeftAligned) {
-            // Keep window aligned to left edge
-            newX = win.position.x;
-          } else {
-            // Scale position proportionally for windows in the middle
-            newX = win.position.x * scaleX;
-          }
-
-          if (wasBottomAligned) {
-            // Keep window aligned to bottom edge
-            newY = newHeight - win.size.height;
-          } else if (wasTopAligned) {
-            // Keep window aligned to top
-            newY = win.position.y;
-          } else {
-            // Scale position proportionally for windows in the middle
-            newY = win.position.y * scaleY;
-          }
-
-          // Clamp to ensure window is still visible (at least minVisible pixels)
-          if (newX + win.size.width < minVisible) {
-            newX = minVisible - win.size.width + 100;
-          }
-          if (newX > newWidth - minVisible) {
-            newX = newWidth - minVisible;
-          }
-          if (newY + win.size.height < minVisible) {
-            newY = minVisible - win.size.height + 100;
-          }
-          if (newY > newHeight - minVisible) {
-            newY = newHeight - minVisible;
-          }
-
-          // Always update positions to ensure proper scaling
-          const roundedX = Math.round(newX);
-          const roundedY = Math.round(newY);
+          // Only update if position actually changed
+          const roundedX = Math.round(newPosition.x);
+          const roundedY = Math.round(newPosition.y);
           if (roundedX !== win.position.x || roundedY !== win.position.y) {
             windowStoreUpdate(win.id, {
               position: { x: roundedX, y: roundedY },
+              // Also save the anchor if it wasn't already set
+              ...(win.anchor === undefined ? { anchor } : {}),
             });
           }
         });
