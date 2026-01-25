@@ -1033,20 +1033,25 @@ async function executeTradeSwap(
           }
 
           // Calculate free slots for each player
-          const initiatorUsedSlots = new Set(
-            initiatorInventory.map((i) => i.slotIndex),
-          );
-          const recipientUsedSlots = new Set(
-            recipientInventory.map((i) => i.slotIndex),
-          );
+          // Note: Direct iteration avoids intermediate array allocations from .map()
+          const initiatorUsedSlots = new Set<number>();
+          for (const item of initiatorInventory) {
+            initiatorUsedSlots.add(item.slotIndex);
+          }
+          const recipientUsedSlots = new Set<number>();
+          for (const item of recipientInventory) {
+            recipientUsedSlots.add(item.slotIndex);
+          }
 
           // Slots being freed by offered items
-          const initiatorOfferSlots = new Set(
-            session.initiator.offeredItems.map((i) => i.inventorySlot),
-          );
-          const recipientOfferSlots = new Set(
-            session.recipient.offeredItems.map((i) => i.inventorySlot),
-          );
+          const initiatorOfferSlots = new Set<number>();
+          for (const offer of session.initiator.offeredItems) {
+            initiatorOfferSlots.add(offer.inventorySlot);
+          }
+          const recipientOfferSlots = new Set<number>();
+          for (const offer of session.recipient.offeredItems) {
+            recipientOfferSlots.add(offer.inventorySlot);
+          }
 
           // After removing offered items, check if there's space for incoming items
           const initiatorFreeSlots = countFreeSlots(
@@ -1079,8 +1084,15 @@ async function executeTradeSwap(
           // ===== EXECUTE THE SWAP =====
 
           // Track used slots for finding free slots during the swap
-          const recipientTrackingSlots = new Set(recipientUsedSlots);
-          const initiatorTrackingSlots = new Set(initiatorUsedSlots);
+          // Note: Direct copy avoids spread operator allocation
+          const recipientTrackingSlots = new Set<number>();
+          for (const slot of recipientUsedSlots) {
+            recipientTrackingSlots.add(slot);
+          }
+          const initiatorTrackingSlots = new Set<number>();
+          for (const slot of initiatorUsedSlots) {
+            initiatorTrackingSlots.add(slot);
+          }
 
           // 1. Remove items from initiator and add to recipient
           for (const offer of session.initiator.offeredItems) {
