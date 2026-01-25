@@ -107,6 +107,28 @@ export const TabBar = memo(function TabBar({
   const isDraggingFromOther =
     isDraggingFromOtherWindow || isDraggingWindowFromOther;
 
+  // Get the dragged tab/window label for preview
+  const draggedTabInfo = React.useMemo(() => {
+    if (!dragItem) return null;
+    if (dragItem.type === "tab") {
+      const sourceWindowId = dragItem.sourceId;
+      if (sourceWindowId) {
+        const sourceWindow = useWindowStore
+          .getState()
+          .getWindow(sourceWindowId);
+        const tab = sourceWindow?.tabs.find((t) => t.id === dragItem.id);
+        return { label: tab?.label || dragItem.id, icon: tab?.icon };
+      }
+    } else if (dragItem.type === "window") {
+      const sourceWindow = useWindowStore.getState().getWindow(dragItem.id);
+      return {
+        label: sourceWindow?.tabs[0]?.label || dragItem.id,
+        icon: sourceWindow?.tabs[0]?.icon,
+      };
+    }
+    return null;
+  }, [dragItem]);
+
   // Accept tab AND window drops (for merging single-tab windows into multi-tab)
   const { isOver, canDrop, relativePosition, dropProps } = useDrop({
     id: `tabbar-${windowId}`,
@@ -293,6 +315,27 @@ export const TabBar = memo(function TabBar({
             style={draggingTabId === tab.id ? { opacity: 0.4 } : undefined}
           />
         ))}
+        {/* Preview tab when dragging over from another window */}
+        {isOver && canDrop && draggedTabInfo && (
+          <div
+            style={{
+              padding: "4px 12px",
+              fontSize: theme.typography.fontSize.xs,
+              color: theme.colors.text.secondary,
+              backgroundColor: theme.colors.accent.primary,
+              borderRadius: `${theme.borderRadius.sm}px`,
+              opacity: 0.8,
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              marginLeft: 2,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {draggedTabInfo.icon && <span>{draggedTabInfo.icon}</span>}
+            <span>+ {draggedTabInfo.label}</span>
+          </div>
+        )}
       </div>
 
       {/* Right scroll arrow */}

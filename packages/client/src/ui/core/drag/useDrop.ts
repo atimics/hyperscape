@@ -146,12 +146,12 @@ export function useDrop(config: DropConfig): DropResult {
       savedPositionRef.current = relativePosition;
       savedCanDropRef.current = canDrop;
       // Track wasOver while dragging - this is the critical state for drop detection
-      if (isOver) {
+      if (isOver && !wasOverRef.current) {
         wasOverRef.current = true;
       }
     }
     wasDraggingRef.current = isDragging;
-  }, [isDragging, dragItem, relativePosition, canDrop, isOver]);
+  }, [isDragging, dragItem, relativePosition, canDrop, isOver, id]);
 
   // Handle enter/leave callbacks during drag (not for drop detection)
   useEffect(() => {
@@ -206,7 +206,7 @@ export function useDrop(config: DropConfig): DropResult {
       wasOverRef.current = false;
       wasDraggingRef.current = false;
     }
-  }, [isDragging, onDrop]);
+  }, [isDragging, onDrop, id, disabled]);
 
   // Cleanup on unmount
   useEffect(() => {

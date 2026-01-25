@@ -171,8 +171,7 @@ export const Window = memo(function Window({
       const dragState = useDragStore.getState();
       const wasDroppedOnMergeTarget = dragState.overTargets.some(
         (targetId) =>
-          (targetId.startsWith("window-drop-") ||
-            targetId.startsWith("window-content-drop-") ||
+          (targetId.startsWith("window-header-drop-") ||
             targetId.startsWith("tabbar-")) &&
           !targetId.includes(windowId),
       );

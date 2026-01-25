@@ -35,6 +35,7 @@ import {
   initializeAccessibility,
   useMobileLayout,
   useThemeStore,
+  useTheme,
   type WindowConfig,
   type DragEndEvent,
   type WindowState,
@@ -2222,8 +2223,7 @@ function DesktopInterfaceManager({
         // Check all window drop zone types
         if (
           overId.startsWith("tabbar-") ||
-          overId.startsWith("window-drop-") ||
-          overId.startsWith("window-content-drop-")
+          overId.startsWith("window-header-drop-")
         ) {
           console.log(
             "[InterfaceManager] Tab dropped on window zone, useDrop handles it",
@@ -2819,44 +2819,8 @@ function WindowContent({
   tabs,
   renderPanel,
   windowId,
-  isUnlocked = false,
 }: WindowContentProps): React.ReactElement | null {
   const activeTab = tabs[activeTabIndex];
-  const { moveTab } = useTabDrag();
-
-  // Check if something is being dragged from another window
-  const isDragging = useDragStore((s) => s.isDragging);
-  const dragItem = useDragStore((s) => s.item);
-  const isTabDragging = isDragging && dragItem?.type === "tab";
-  const isWindowDragging = isDragging && dragItem?.type === "window";
-  const draggingSourceWindowId = isTabDragging ? dragItem?.sourceId : null;
-  const draggingWindowId = isWindowDragging ? dragItem?.id : null;
-
-  const isDraggingFromOther =
-    (isTabDragging && draggingSourceWindowId !== windowId) ||
-    (isWindowDragging && draggingWindowId !== windowId);
-
-  const showDropZone = isUnlocked && isDraggingFromOther;
-
-  // Drop zone for entire content area (for multi-tab windows)
-  const { isOver, dropProps } = useDrop({
-    id: `window-content-drop-${windowId}`,
-    accepts: ["tab", "window"],
-    disabled: !showDropZone,
-    onDrop: (item) => {
-      if (item.type === "tab" && item.sourceId && item.sourceId !== windowId) {
-        moveTab(item.id, windowId!);
-      } else if (item.type === "window" && item.id && item.id !== windowId) {
-        // Merge all tabs from source window
-        const sourceWindow = useWindowStore.getState().getWindow(item.id);
-        if (sourceWindow && windowId) {
-          sourceWindow.tabs.forEach((tab) => {
-            useWindowStore.getState().moveTab(tab.id, item.id, windowId);
-          });
-        }
-      }
-    },
-  });
 
   if (!activeTab) return null;
 
@@ -2868,10 +2832,9 @@ function WindowContent({
     const isActionBar = activeTab.content.startsWith("actionbar-");
 
     // Container fills available space, panels handle their own scrolling
-    // No overflow: auto here - that creates nested scroll containers
+    // Multi-tab windows use TabBar for drop zones, not the content area
     return (
       <div
-        {...dropProps}
         style={{
           flex: 1,
           display: "flex",
@@ -2879,54 +2842,9 @@ function WindowContent({
           minHeight: 0,
           overflow: "hidden",
           padding: isActionBar ? 0 : 4,
-          position: "relative",
-          // Visual feedback for drop zone
-          outline: isOver
-            ? "2px solid rgba(100, 200, 255, 0.8)"
-            : showDropZone
-              ? "1px dashed rgba(100, 200, 255, 0.4)"
-              : "none",
-          outlineOffset: "-2px",
-          transition: "outline 0.15s ease",
         }}
       >
         {panelContent}
-        {/* Drop indicator overlay */}
-        {showDropZone && (
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              background: isOver ? "rgba(100, 200, 255, 0.15)" : "transparent",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              zIndex: 100,
-              pointerEvents: "none",
-              transition: "background 0.15s ease",
-            }}
-          >
-            <span
-              style={{
-                fontSize: 12,
-                color: isOver
-                  ? "rgba(255, 255, 255, 0.95)"
-                  : "rgba(255, 255, 255, 0.7)",
-                textTransform: "uppercase",
-                letterSpacing: 1,
-                fontWeight: 600,
-                backgroundColor: isOver
-                  ? "rgba(0, 0, 0, 0.7)"
-                  : "rgba(0, 0, 0, 0.5)",
-                padding: "6px 12px",
-                borderRadius: 4,
-                textShadow: "0 1px 2px rgba(0,0,0,0.5)",
-              }}
-            >
-              {isOver ? "Release to add tab" : "Drop here"}
-            </span>
-          </div>
-        )}
       </div>
     );
   }
@@ -2956,7 +2874,7 @@ function DraggableContentWrapper({
   const activeTab = tabs[activeTabIndex];
   const { mergeWindow, moveTab, isTabDragging, draggingSourceWindowId } =
     useTabDrag();
-  const destroyWindow = useWindowStore((s) => s.destroyWindow);
+  const theme = useTheme();
 
   // Check if a window is being dragged (for window-to-window merge)
   const isDragging = useDragStore((s) => s.isDragging);
@@ -2964,25 +2882,44 @@ function DraggableContentWrapper({
   const isWindowDragging = isDragging && dragItem?.type === "window";
   const draggingWindowId = isWindowDragging ? dragItem?.id : null;
 
+  // Get the dragged tab/window info for preview
+  const draggedTabLabel = React.useMemo(() => {
+    if (!dragItem) return null;
+    if (dragItem.type === "tab") {
+      // Find the tab's label from the source window
+      const sourceWindowId = dragItem.sourceId;
+      if (sourceWindowId) {
+        const sourceWindow = useWindowStore
+          .getState()
+          .getWindow(sourceWindowId);
+        const tab = sourceWindow?.tabs.find((t) => t.id === dragItem.id);
+        return tab?.label || dragItem.id;
+      }
+    } else if (dragItem.type === "window") {
+      // For window drag, get its first tab's label
+      const sourceWindow = useWindowStore.getState().getWindow(dragItem.id);
+      return sourceWindow?.tabs[0]?.label || dragItem.id;
+    }
+    return null;
+  }, [dragItem]);
+
   // Show merge zone when dragging a tab or window from another window
   const isDraggingFromOther =
     (isTabDragging && draggingSourceWindowId !== windowId) ||
     (isWindowDragging && draggingWindowId !== windowId);
   const showMergeZone = isUnlocked && isDraggingFromOther;
 
-  // Make ENTIRE window body a drop zone (not just the small header)
+  // Header drop zone - only the top header area accepts drops
   const { isOver, dropProps } = useDrop({
-    id: `window-drop-${windowId}`,
+    id: `window-header-drop-${windowId}`,
     accepts: ["tab", "window"],
-    disabled: !showMergeZone, // Only accept drops when in edit mode and dragging from elsewhere
+    disabled: !showMergeZone,
     onDrop: (item) => {
       if (item.type === "tab") {
-        // Move just the tab to this window
         if (item.sourceId && item.sourceId !== windowId) {
           moveTab(item.id, windowId);
         }
       } else if (item.type === "window") {
-        // Merge the dragged window into this window (window drag)
         if (item.id && item.id !== windowId) {
           mergeWindow(item.id, windowId);
         }
@@ -2998,118 +2935,99 @@ function DraggableContentWrapper({
       ? renderPanel(activeTab.content, undefined, windowId)
       : activeTab.content;
 
-  // Container fills available space, draggable in edit mode
-  // ENTIRE container is now a drop zone when dragging from another window
+  // Header height matches TabBar
+  const headerHeight = 28;
+
   return (
     <div
-      {...dropProps}
       style={{
         flex: 1,
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
         overflow: "hidden",
-        position: "relative",
-        // Highlight entire window when potential drop target
-        outline: isOver
-          ? "2px solid rgba(100, 200, 255, 0.8)"
-          : showMergeZone
-            ? "1px dashed rgba(100, 200, 255, 0.4)"
-            : "none",
-        outlineOffset: "-2px",
-        transition: "outline 0.15s ease",
       }}
     >
-      {/* Drop indicator overlay - covers entire window */}
-      {showMergeZone && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            background: isOver ? "rgba(100, 200, 255, 0.15)" : "transparent",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 100,
-            pointerEvents: "none", // Let events pass through to the container
-            transition: "background 0.15s ease",
-          }}
-        >
-          <span
+      {/* Header drop zone - this is where tabs can be combined */}
+      <div
+        {...dropProps}
+        {...(isUnlocked && dragHandleProps ? dragHandleProps : {})}
+        style={{
+          height: headerHeight,
+          minHeight: headerHeight,
+          display: "flex",
+          alignItems: "center",
+          backgroundColor: isOver
+            ? theme.colors.accent.primary
+            : theme.colors.background.secondary,
+          borderBottom: `1px solid ${theme.colors.border.default}`,
+          cursor: isUnlocked ? "grab" : "default",
+          transition: "background-color 0.15s ease",
+          overflow: "hidden",
+        }}
+      >
+        {/* Tab preview when hovering */}
+        {isOver && draggedTabLabel ? (
+          // Show combined tabs preview
+          <div style={{ display: "flex", flex: 1 }}>
+            {/* Current tab */}
+            <div
+              style={{
+                padding: "4px 12px",
+                fontSize: theme.typography.fontSize.xs,
+                color: theme.colors.text.primary,
+                backgroundColor: theme.colors.background.tertiary,
+                borderRight: `1px solid ${theme.colors.border.default}`,
+              }}
+            >
+              {activeTab.icon && (
+                <span style={{ marginRight: 4 }}>{activeTab.icon}</span>
+              )}
+              {activeTab.label}
+            </div>
+            {/* Incoming tab (preview) */}
+            <div
+              style={{
+                padding: "4px 12px",
+                fontSize: theme.typography.fontSize.xs,
+                color: theme.colors.text.secondary,
+                backgroundColor: theme.colors.background.secondary,
+                borderRight: `1px solid ${theme.colors.border.default}`,
+                opacity: 0.8,
+              }}
+            >
+              + {draggedTabLabel}
+            </div>
+          </div>
+        ) : (
+          // Normal header with current tab
+          <div
             style={{
-              fontSize: 12,
-              color: isOver
-                ? "rgba(255, 255, 255, 0.95)"
-                : "rgba(255, 255, 255, 0.7)",
-              textTransform: "uppercase",
-              letterSpacing: 1,
-              fontWeight: 600,
-              backgroundColor: isOver
-                ? "rgba(0, 0, 0, 0.7)"
-                : "rgba(0, 0, 0, 0.5)",
-              padding: "6px 12px",
-              borderRadius: 4,
-              textShadow: "0 1px 2px rgba(0,0,0,0.5)",
+              padding: "4px 12px",
+              fontSize: theme.typography.fontSize.xs,
+              color: theme.colors.text.primary,
+              flex: 1,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
             }}
           >
-            {isOver ? "Release to combine" : "Drop here"}
-          </span>
-        </div>
-      )}
-
-      {/* Close button - only in edit mode for single-tab windows */}
-      {isUnlocked && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            destroyWindow(windowId);
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
-          style={{
-            position: "absolute",
-            top: 4,
-            right: 4,
-            width: 20,
-            height: 20,
-            background: "rgba(255, 100, 100, 0.2)",
-            border: "1px solid rgba(255, 100, 100, 0.4)",
-            borderRadius: 3,
-            color: "rgba(255, 100, 100, 0.8)",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 12,
-            fontWeight: "bold",
-            zIndex: 20,
-            transition: "all 0.15s ease",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "rgba(255, 100, 100, 0.4)";
-            e.currentTarget.style.color = "rgba(255, 255, 255, 0.9)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "rgba(255, 100, 100, 0.2)";
-            e.currentTarget.style.color = "rgba(255, 100, 100, 0.8)";
-          }}
-          title="Close panel"
-        >
-          ×
-        </button>
-      )}
-
-      {/* Actual content */}
+            {activeTab.icon && (
+              <span style={{ marginRight: 4 }}>{activeTab.icon}</span>
+            )}
+            {activeTab.label}
+          </div>
+        )}
+      </div>
+      {/* Panel content */}
       <div
         style={{
           flex: 1,
           display: "flex",
           flexDirection: "column",
           minHeight: 0,
-          padding: 4,
-          cursor: isUnlocked ? "move" : "default",
-          touchAction: isUnlocked ? "none" : "auto",
+          overflow: "hidden",
         }}
-        onPointerDown={isUnlocked ? dragHandleProps?.onPointerDown : undefined}
       >
         {panelContent}
       </div>
