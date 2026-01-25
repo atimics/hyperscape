@@ -19,8 +19,8 @@ import type {
   Entities as HyperscapeEntities,
 } from "@hyperscape/shared";
 
-// Import additional types that may not be in the built package
-import type { PlayerInput, PlayerStats } from "@hyperscape/shared";
+// Import additional types from hyperscape shared package
+import type { PlayerInput, PlayerStats, ChatMessage } from "@hyperscape/shared";
 
 // Define missing types locally
 export interface RigidBody {
@@ -46,26 +46,9 @@ export interface ChatListener {
   (messages: ChatMessage[]): void;
 }
 
-// Remove duplicate definitions - these are defined in other type files
-
-// Define ChatMessage interface locally since it's not exported from the built package
-export interface ChatMessage {
-  id: string;
-  from: string;
-  fromId?: string;
-  userId?: string;
-  userName?: string;
-  username?: string;
-  body: string;
-  text: string;
-  message?: string; // For backward compatibility
-  timestamp: number;
-  createdAt: string;
-  avatar?: string;
-  entityId?: string;
-  playerId?: string;
-  playerName?: string;
-}
+// ChatMessage is now imported from @hyperscape/shared - no local definition needed
+// Re-export for convenience
+export type { ChatMessage };
 
 // Re-export hyperscape classes and types for plugin use
 export { System, World };

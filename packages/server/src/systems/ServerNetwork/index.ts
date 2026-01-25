@@ -1428,11 +1428,13 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       handleAltarPray(socket, data, this.world);
 
     // Action bar handlers
-    this.handlers["actionBarSave"] = (socket, data) =>
+    this.handlers["onActionBarSave"] = (socket, data) =>
       handleActionBarSave(socket, data, this.world);
+    this.handlers["actionBarSave"] = this.handlers["onActionBarSave"];
 
-    this.handlers["actionBarLoad"] = (socket, data) =>
+    this.handlers["onActionBarLoad"] = (socket, data) =>
       handleActionBarLoad(socket, data, this.world);
+    this.handlers["actionBarLoad"] = this.handlers["onActionBarLoad"];
 
     // Player name change handler
     this.handlers["changePlayerName"] = (socket, data) =>

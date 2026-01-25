@@ -21,7 +21,13 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
-import { useEditMode, useSnap, useThemeStore, useMobileLayout } from "@/ui";
+import {
+  useEditMode,
+  useSnap,
+  useThemeStore,
+  useMobileLayout,
+  StatusOrb,
+} from "@/ui";
 import type { PlayerStats } from "../../types";
 
 /** Display mode type */
@@ -318,30 +324,8 @@ export function StatusBars({
   // Orb size based on container
   const orbSize = ORB_SIZE_PRESETS[config.sizePreset];
 
-  // Render orb mode - compact circular orbs with fill
+  // Render orb mode - using shared StatusOrb from @/ui
   const renderOrbMode = () => {
-    // Orb configurations
-    const orbs = [
-      {
-        id: "hp",
-        value: health.current,
-        percent: hpPercent,
-        fillColor: "#dc2626",
-        darkColor: "#7f1d1d",
-        icon: "♥",
-        title: `Hitpoints: ${health.current}/${health.max}`,
-      },
-      {
-        id: "prayer",
-        value: prayerPoints.current,
-        percent: prayerPercent,
-        fillColor: "#0ea5e9",
-        darkColor: "#0c4a6e",
-        icon: "✦",
-        title: `Prayer: ${prayerPoints.current}/${prayerPoints.max}`,
-      },
-    ];
-
     return (
       <div
         style={{
@@ -351,80 +335,23 @@ export function StatusBars({
           gap: 4,
         }}
       >
-        {orbs.map((orb) => (
-          <div
-            key={orb.id}
-            style={{
-              width: orbSize,
-              height: orbSize,
-              borderRadius: "50%",
-              background: theme.colors.slot.filled,
-              padding: 1,
-              boxShadow: `0 1px 3px rgba(0, 0, 0, 0.4)`,
-              position: "relative",
-            }}
-            title={orb.title}
-          >
-            {/* Inner orb */}
-            <div
-              style={{
-                width: "100%",
-                height: "100%",
-                borderRadius: "50%",
-                position: "relative",
-                background: theme.colors.slot.empty,
-                overflow: "hidden",
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                border: `1px solid ${theme.colors.border.default}30`,
-                boxShadow: "inset 0 1px 2px rgba(0, 0, 0, 0.3)",
-              }}
-            >
-              {/* Fill from bottom */}
-              <div
-                style={{
-                  position: "absolute",
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  height: `${orb.percent}%`,
-                  background: `linear-gradient(to top, ${orb.fillColor} 0%, ${orb.darkColor} 100%)`,
-                  transition: "height 0.2s ease-out",
-                }}
-              />
-              {/* Icon */}
-              <span
-                style={{
-                  fontSize: orbSize * 0.36,
-                  color: orb.fillColor,
-                  textShadow: `0 0 4px ${orb.fillColor}, 0 1px 1px rgba(0, 0, 0, 0.8)`,
-                  zIndex: 1,
-                  lineHeight: 1,
-                  filter: "brightness(1.2)",
-                }}
-              >
-                {orb.icon}
-              </span>
-              {/* Value */}
-              {config.showLabels && (
-                <span
-                  style={{
-                    fontSize: orbSize * 0.26,
-                    fontWeight: 600,
-                    color: theme.colors.text.primary,
-                    textShadow: "0 1px 1px rgba(0, 0, 0, 0.8)",
-                    zIndex: 1,
-                    marginTop: 0,
-                  }}
-                >
-                  {orb.value}
-                </span>
-              )}
-            </div>
-          </div>
-        ))}
+        <StatusOrb
+          type="hp"
+          current={health.current}
+          max={health.max}
+          size={orbSize}
+          icon="♥"
+          showValue={config.showLabels}
+          dynamicLabelColor
+        />
+        <StatusOrb
+          type="prayer"
+          current={prayerPoints.current}
+          max={prayerPoints.max}
+          size={orbSize}
+          icon="✦"
+          showValue={config.showLabels}
+        />
       </div>
     );
   };

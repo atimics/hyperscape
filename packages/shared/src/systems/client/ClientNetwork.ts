@@ -2341,10 +2341,18 @@ export class ClientNetwork extends SystemBase {
     });
   };
 
-  onShowToast = (data: { playerId: string; message: string; type: string }) => {
-    // Only show toast for local player
+  onShowToast = (data: {
+    playerId?: string;
+    message: string;
+    type: string;
+  }) => {
+    // If playerId is provided, only show toast for local player
+    // If playerId is NOT provided, show toast anyway (server sent directly to us)
     const localPlayer = this.world.getPlayer();
-    if (localPlayer && localPlayer.id === data.playerId) {
+    const shouldShow =
+      !data.playerId || (localPlayer && localPlayer.id === data.playerId);
+
+    if (shouldShow) {
       // Forward to local event system for toast display
       this.world.emit(EventType.UI_TOAST, {
         message: data.message,
@@ -3061,6 +3069,81 @@ export class ClientNetwork extends SystemBase {
         entity.data.emote = "idle";
       }
     }
+  };
+
+  // --- Action Bar State Handler ---
+  // Cache action bar state so UI can hydrate even if it mounts late
+  lastActionBarState: {
+    barId: string;
+    slotCount: number;
+    slots: Array<{ slotIndex: number; itemId?: string; actionId?: string }>;
+  } | null = null;
+
+  onActionBarState = (data: {
+    barId: string;
+    slotCount: number;
+    slots: Array<{ slotIndex: number; itemId?: string; actionId?: string }>;
+  }) => {
+    // Cache for late-mounting UI
+    this.lastActionBarState = data;
+
+    // Emit UI event for ActionBarPanel to handle
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "actionBar",
+      data,
+    });
+  };
+
+  // --- Player Name Changed Handler ---
+  onPlayerNameChanged = (data: { name: string }) => {
+    // Update local player name if applicable
+    const localPlayer = this.world.getPlayer();
+    if (localPlayer) {
+      // Update player data
+      if (localPlayer.data) {
+        localPlayer.data.name = data.name;
+      }
+      // Emit event for UI to update
+      this.world.emit(EventType.UI_UPDATE, {
+        component: "playerName",
+        data: { name: data.name },
+      });
+    }
+  };
+
+  // --- Loot Result Handler ---
+  // Handles loot transaction results from server for optimistic update reconciliation
+  onLootResult = (data: {
+    transactionId: string;
+    success: boolean;
+    itemId?: string;
+    quantity?: number;
+    reason?: string;
+    timestamp: number;
+  }) => {
+    // Emit event for LootWindowPanel to handle transaction result
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "lootResult",
+      data,
+    });
+  };
+
+  // --- Smelting Close Handler ---
+  // Server sends this when player walks away from furnace or smelting completes
+  onSmeltingClose = (data: { reason?: string }) => {
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "smeltingClose",
+      data,
+    });
+  };
+
+  // --- Smithing Close Handler ---
+  // Server sends this when player walks away from anvil or smithing completes
+  onSmithingClose = (data: { reason?: string }) => {
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "smithingClose",
+      data,
+    });
   };
 
   onClose = (code: CloseEvent) => {

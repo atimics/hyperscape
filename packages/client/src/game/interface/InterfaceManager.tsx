@@ -54,25 +54,11 @@ import {
 } from "@/ui";
 import { MobileInterfaceManager } from "./MobileInterfaceManager";
 import type { ClientWorld, PlayerEquipmentItems } from "../../types";
-import type { InventoryItem, Item } from "@hyperscape/shared";
-
-/** Raw equipment slot format from server network cache */
-type RawEquipmentSlot = { item: Item | null; itemId?: string } | null;
-
-/** Raw equipment data structure from server network cache */
-type RawEquipmentData = {
-  weapon?: RawEquipmentSlot;
-  shield?: RawEquipmentSlot;
-  helmet?: RawEquipmentSlot;
-  body?: RawEquipmentSlot;
-  legs?: RawEquipmentSlot;
-  boots?: RawEquipmentSlot;
-  gloves?: RawEquipmentSlot;
-  cape?: RawEquipmentSlot;
-  amulet?: RawEquipmentSlot;
-  ring?: RawEquipmentSlot;
-  arrows?: RawEquipmentSlot;
-};
+import type { InventoryItem } from "@hyperscape/shared";
+import type { RawEquipmentData, InventorySlotViewItem } from "../types";
+// Note: usePlayerData and useModalPanels hooks are available for future refactoring
+// InterfaceManager currently uses UI_UPDATE component-based dispatching which differs from the hooks
+// TODO: Migrate to hooks when InterfaceManager is split into smaller components
 import { HintProvider } from "@/ui";
 import {
   createPanelRenderer,
@@ -95,12 +81,7 @@ import { QuestStartPanel } from "../../game/panels/QuestStartPanel";
 import { QuestCompletePanel } from "../../game/panels/QuestCompletePanel";
 import { XpLampPanel } from "../../game/panels/XpLampPanel";
 
-/** Inventory slot view item (simplified) */
-type InventorySlotViewItem = {
-  slot: number;
-  itemId: string;
-  quantity: number;
-};
+// InventorySlotViewItem imported from ../types
 
 /** Panel ID to icon mapping for tab display */
 const PANEL_ICONS: Record<string, string> = {
@@ -1745,6 +1726,51 @@ function DesktopInterfaceManager({
       }
     };
 
+    // Handle prayer points changes (from potions, altars, drain, etc.)
+    const onPrayerPointsChanged = (raw: unknown) => {
+      const data = raw as {
+        playerId: string;
+        points: number;
+        maxPoints: number;
+      };
+      const localId = world.entities?.player?.id;
+      if (!localId || data.playerId === localId) {
+        setPlayerStats((prev) =>
+          prev
+            ? {
+                ...prev,
+                prayerPoints: { current: data.points, max: data.maxPoints },
+              }
+            : ({
+                prayerPoints: { current: data.points, max: data.maxPoints },
+              } as PlayerStats),
+        );
+      }
+    };
+
+    // Handle full prayer state sync (initial load, altar pray, etc.)
+    const onPrayerStateSync = (raw: unknown) => {
+      const data = raw as {
+        playerId: string;
+        points: number;
+        maxPoints: number;
+        active: string[];
+      };
+      const localId = world.entities?.player?.id;
+      if (!localId || data.playerId === localId) {
+        setPlayerStats((prev) =>
+          prev
+            ? {
+                ...prev,
+                prayerPoints: { current: data.points, max: data.maxPoints },
+              }
+            : ({
+                prayerPoints: { current: data.points, max: data.maxPoints },
+              } as PlayerStats),
+        );
+      }
+    };
+
     const onCorpseClick = (raw: unknown) => {
       const data = raw as {
         corpseId: string;
@@ -1845,6 +1871,8 @@ function DesktopInterfaceManager({
     world.on(EventType.INVENTORY_UPDATED, onInventory);
     world.on(EventType.INVENTORY_UPDATE_COINS, onCoins);
     world.on(EventType.SKILLS_UPDATED, onSkillsUpdate);
+    world.on(EventType.PRAYER_POINTS_CHANGED, onPrayerPointsChanged);
+    world.on(EventType.PRAYER_STATE_SYNC, onPrayerStateSync);
     world.on(EventType.CORPSE_CLICK, onCorpseClick);
     world.on(EventType.QUEST_START_CONFIRM, onQuestStartConfirm);
     world.on(EventType.QUEST_COMPLETED, onQuestCompleted);
@@ -1884,6 +1912,32 @@ function DesktopInterfaceManager({
           };
           setEquipment(mappedEquipment);
         }
+        // Load cached prayer state for status bars
+        const networkWithPrayer = world.network as {
+          lastPrayerStateByPlayerId?: Record<
+            string,
+            { points: number; maxPoints: number; active: string[] }
+          >;
+        };
+        const cachedPrayer = networkWithPrayer?.lastPrayerStateByPlayerId?.[lp];
+        if (cachedPrayer) {
+          setPlayerStats((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  prayerPoints: {
+                    current: cachedPrayer.points,
+                    max: cachedPrayer.maxPoints,
+                  },
+                }
+              : ({
+                  prayerPoints: {
+                    current: cachedPrayer.points,
+                    max: cachedPrayer.maxPoints,
+                  },
+                } as PlayerStats),
+          );
+        }
         world.emit(EventType.INVENTORY_REQUEST, { playerId: lp });
         return true;
       }
@@ -1901,6 +1955,8 @@ function DesktopInterfaceManager({
       world.off(EventType.INVENTORY_UPDATED, onInventory);
       world.off(EventType.INVENTORY_UPDATE_COINS, onCoins);
       world.off(EventType.SKILLS_UPDATED, onSkillsUpdate);
+      world.off(EventType.PRAYER_POINTS_CHANGED, onPrayerPointsChanged);
+      world.off(EventType.PRAYER_STATE_SYNC, onPrayerStateSync);
       world.off(EventType.CORPSE_CLICK, onCorpseClick);
       world.off(EventType.QUEST_START_CONFIRM, onQuestStartConfirm);
       world.off(EventType.QUEST_COMPLETED, onQuestCompleted);

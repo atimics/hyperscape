@@ -2,127 +2,21 @@
  * Compact Status HUD
  *
  * Mobile-optimized HP and Prayer display using themed orbs.
- * Uses the dark theme colors from the theme store.
+ * Uses the shared StatusOrb component from @/ui.
  *
  * @packageDocumentation
  */
 
 import React, { useMemo, type CSSProperties } from "react";
-import { useMobileLayout, useThemeStore } from "@/ui";
+import { useMobileLayout, StatusOrb } from "@/ui";
 import { getMobileUISizes } from "./mobileUISizes";
-
-interface StatusValue {
-  current?: number;
-  max?: number;
-}
+import type { StatusValue } from "../types";
 
 interface CompactStatusHUDProps {
   /** Health points */
   health: StatusValue | null | undefined;
   /** Prayer points */
   prayerPoints: StatusValue | null | undefined;
-}
-
-/**
- * Status Orb - Dark themed circular orb
- */
-function StatusOrb({
-  type,
-  value,
-  max,
-  size,
-}: {
-  type: "hp" | "prayer";
-  value: number;
-  max: number;
-  size: number;
-}) {
-  const theme = useThemeStore((s) => s.theme);
-
-  const percent = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
-
-  // Use theme colors
-  const fillColor =
-    type === "hp" ? theme.colors.status.hp : theme.colors.status.prayer;
-  const bgColor =
-    type === "hp"
-      ? theme.colors.status.hpBackground
-      : theme.colors.status.prayerBackground;
-
-  // Icons
-  const icon = type === "hp" ? "♥" : "✦";
-
-  // Outer ring using theme border
-  const outerStyle: CSSProperties = {
-    width: size,
-    height: size,
-    borderRadius: "50%",
-    background: theme.colors.background.tertiary,
-    padding: 2,
-    boxShadow: `
-      0 2px 6px rgba(0, 0, 0, 0.5),
-      inset 0 1px 0 rgba(255, 255, 255, 0.05)
-    `,
-  };
-
-  // Inner orb with theme background
-  const innerStyle: CSSProperties = {
-    width: "100%",
-    height: "100%",
-    borderRadius: "50%",
-    position: "relative",
-    background: `linear-gradient(180deg, ${theme.colors.background.secondary} 0%, ${bgColor} 100%)`,
-    overflow: "hidden",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    border: `1px solid ${theme.colors.border.default}`,
-    boxShadow: `inset 0 2px 4px rgba(0, 0, 0, 0.4)`,
-  };
-
-  // Fill from bottom based on percentage
-  const fillStyle: CSSProperties = {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: `${percent}%`,
-    background: `linear-gradient(to top, ${fillColor} 0%, ${fillColor}80 100%)`,
-    opacity: 0.6,
-    transition: "height 0.3s ease-out",
-  };
-
-  // Small icon at top of orb
-  const iconStyle: CSSProperties = {
-    position: "absolute",
-    top: size * 0.08,
-    fontSize: size * 0.2,
-    color: fillColor,
-    textShadow: `0 1px 2px rgba(0, 0, 0, 0.8)`,
-    zIndex: 2,
-    lineHeight: 1,
-  };
-
-  // Large centered value
-  const valueStyle: CSSProperties = {
-    fontSize: size * 0.34,
-    fontWeight: theme.typography.fontWeight.bold,
-    color: theme.colors.text.primary,
-    textShadow: "0 1px 3px rgba(0, 0, 0, 0.9)",
-    zIndex: 2,
-    lineHeight: 1,
-  };
-
-  return (
-    <div style={outerStyle}>
-      <div style={innerStyle}>
-        <div style={fillStyle} />
-        <span style={iconStyle}>{icon}</span>
-        <span style={valueStyle}>{value}</span>
-      </div>
-    </div>
-  );
 }
 
 /**
@@ -161,12 +55,22 @@ export function CompactStatusHUD({
 
   return (
     <div style={containerStyle}>
-      <StatusOrb type="hp" value={hp.current} max={hp.max} size={orbSize} />
+      <StatusOrb
+        type="hp"
+        current={hp.current}
+        max={hp.max}
+        size={orbSize}
+        icon="♥"
+        showValue
+        dynamicLabelColor
+      />
       <StatusOrb
         type="prayer"
-        value={prayer.current}
+        current={prayer.current}
         max={prayer.max}
         size={orbSize}
+        icon="✦"
+        showValue
       />
     </div>
   );

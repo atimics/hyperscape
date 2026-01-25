@@ -340,14 +340,39 @@ export function CoreUI({ world }: { world: ClientWorld }) {
       }
     };
 
+    // Handle full prayer state sync (initial load, altar pray, etc.)
+    const onPrayerStateSync = (raw: unknown) => {
+      const data = raw as {
+        playerId: string;
+        points: number;
+        maxPoints: number;
+        active: string[];
+      };
+      const localId = world.entities?.player?.id;
+      if (!localId || data.playerId === localId) {
+        setPlayerStats((prev) =>
+          prev
+            ? {
+                ...prev,
+                prayerPoints: { current: data.points, max: data.maxPoints },
+              }
+            : ({
+                prayerPoints: { current: data.points, max: data.maxPoints },
+              } as PlayerStats),
+        );
+      }
+    };
+
     world.on(EventType.UI_UPDATE, onUIUpdate);
     world.on(EventType.SKILLS_UPDATED, onSkillsUpdate);
     world.on(EventType.PRAYER_POINTS_CHANGED, onPrayerPointsChanged);
+    world.on(EventType.PRAYER_STATE_SYNC, onPrayerStateSync);
 
     return () => {
       world.off(EventType.UI_UPDATE, onUIUpdate);
       world.off(EventType.SKILLS_UPDATED, onSkillsUpdate);
       world.off(EventType.PRAYER_POINTS_CHANGED, onPrayerPointsChanged);
+      world.off(EventType.PRAYER_STATE_SYNC, onPrayerStateSync);
     };
   }, [world]);
 

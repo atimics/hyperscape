@@ -134,6 +134,8 @@ const names = [
   'processingSmithing', // Client -> Server: player selected item to smith from UI
   'smeltingInterfaceOpen', // Server -> Client: show smelting interface with available bars
   'smithingInterfaceOpen', // Server -> Client: show smithing interface with available recipes
+  'smeltingClose',         // Server -> Client: close smelting interface (walked away, etc.)
+  'smithingClose',         // Server -> Client: close smithing interface (walked away, etc.)
   // Combat packets
   'attackMob',
   'attackPlayer',  // PvP attack
@@ -172,6 +174,7 @@ const names = [
   'playerRespawned',
   // Loot packets
   'corpseLoot',
+  'lootResult',            // Server -> Client: loot transaction result (success/failure)
   // Attack style packets
   'attackStyleChanged',
   'attackStyleUpdate',
@@ -179,6 +182,11 @@ const names = [
   'combatDamageDealt',
   // Player state packets
   'playerUpdated',
+  'playerNameChanged',     // Server -> Client: player name change confirmed
+  // Action bar packets
+  'actionBarSave',         // Client -> Server: save action bar configuration
+  'actionBarLoad',         // Client -> Server: load action bar configuration
+  'actionBarState',        // Server -> Client: action bar state response
   // Character selection packets (feature-flagged usage)
   'characterListRequest',
   'characterCreate',
