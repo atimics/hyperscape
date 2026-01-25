@@ -8,6 +8,99 @@ import { useTheme } from "@/ui";
 import type { ActionBarSlotContent } from "./types";
 import { getSlotIcon, SLOT_SIZE } from "./utils";
 
+/** Combat style SVG icons for action bar - distinct visual for each style */
+const CombatStyleIcon = ({
+  styleId,
+  size = 18,
+  isActive,
+}: {
+  styleId: string;
+  size?: number;
+  isActive?: boolean;
+}) => {
+  // Use active colors when the style is currently selected
+  const activeColors: Record<string, string> = {
+    accurate: "#ef4444", // red
+    aggressive: "#22c55e", // green
+    defensive: "#3b82f6", // blue
+    controlled: "#a855f7", // purple
+  };
+  const color = isActive ? activeColors[styleId] || "#fbbf24" : "currentColor";
+
+  switch (styleId) {
+    case "accurate":
+      // Target/bullseye - concentric circles
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="12" cy="12" r="10" />
+          <circle cx="12" cy="12" r="6" />
+          <circle cx="12" cy="12" r="2" fill={color} />
+        </svg>
+      );
+    case "aggressive":
+      // Double swords crossing - attack power
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M14.5 4l7.5 7.5-7.5 7.5" />
+          <path d="M5.5 4l7.5 7.5-7.5 7.5" />
+        </svg>
+      );
+    case "defensive":
+      // Shield - protection
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        </svg>
+      );
+    case "controlled":
+      // Balance scale - balanced training
+      return (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <line x1="12" y1="2" x2="12" y2="22" />
+          <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+        </svg>
+      );
+    default:
+      return <span>⚔️</span>;
+  }
+};
+
 export interface ActionBarSlotProps {
   slot: ActionBarSlotContent;
   slotIndex: number;
@@ -238,7 +331,15 @@ export const ActionBarSlot = memo(function ActionBarSlot({
             filter: "drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5))",
           }}
         >
-          {icon}
+          {isCombatStyle && slot.combatStyleId ? (
+            <CombatStyleIcon
+              styleId={slot.combatStyleId}
+              size={18}
+              isActive={isActive}
+            />
+          ) : (
+            icon
+          )}
         </div>
       )}
 
