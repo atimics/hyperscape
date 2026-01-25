@@ -9,6 +9,7 @@ import { useAlignmentGuides } from "../core/edit/useAlignmentGuides";
 import { useTabDrag } from "../core/tabs/useTabDrag";
 import { useTheme } from "../stores/themeStore";
 import { useEditStore } from "../stores/editStore";
+import { useDragStore } from "../stores/dragStore";
 import {
   restrictToWindowEdgesFully,
   snapToGridModifier,
@@ -165,6 +166,23 @@ export const Window = memo(function Window({
 
   const handleDragEnd = useCallback(
     (_item: unknown, delta: { x: number; y: number }) => {
+      // Check if dropped on another window's drop zone (for merging)
+      // Note: useDrag.onDragEnd fires BEFORE endDrag() clears overTargets
+      const dragState = useDragStore.getState();
+      const wasDroppedOnMergeTarget = dragState.overTargets.some(
+        (targetId) =>
+          (targetId.startsWith("window-drop-") ||
+            targetId.startsWith("window-content-drop-") ||
+            targetId.startsWith("tabbar-")) &&
+          !targetId.includes(windowId),
+      );
+
+      if (wasDroppedOnMergeTarget) {
+        // Skip position update - the merge handler will take care of it
+        setDraggingWindowId(null);
+        return;
+      }
+
       // Use the captured start position, not the current windowState.position
       const startPos = dragStartPositionRef.current;
       let newPosition = {
@@ -237,6 +255,7 @@ export const Window = memo(function Window({
       setDraggingWindowId(null);
     },
     [
+      windowId,
       windowState.size,
       updatePosition,
       snapToGuide,

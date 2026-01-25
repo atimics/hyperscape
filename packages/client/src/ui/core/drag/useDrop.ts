@@ -202,6 +202,10 @@ export interface DragEndEvent {
   /** The draggable that was dropped */
   active: {
     id: string;
+    /** The type of draggable (e.g., "tab", "window", "item") */
+    type: string;
+    /** The source container ID (e.g., windowId for tabs) */
+    sourceId: string | null;
     data: unknown;
   };
   /** The drop target (if any) */
@@ -467,7 +471,12 @@ export function useDndMonitor(handlers: {
       const overId = overTargets.length > 0 ? overTargets[0] : null;
 
       onDragEnd?.({
-        active: { id: item.id, data: item.data },
+        active: {
+          id: item.id,
+          type: item.type,
+          sourceId: item.sourceId,
+          data: item.data,
+        },
         over: overId ? { id: overId } : null,
         delta,
       });

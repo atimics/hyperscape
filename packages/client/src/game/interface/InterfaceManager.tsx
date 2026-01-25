@@ -2197,13 +2197,17 @@ function DesktopInterfaceManager({
       }
 
       // Only handle tab drags for the remaining logic
-      const tabData = active.data as
-        | { type?: string; sourceId?: string }
-        | undefined;
-      if (tabData?.type !== "tab") return;
+      // Type and sourceId are now on the active object directly (not in active.data)
+      const activeItem = active as {
+        id: string;
+        type?: string;
+        sourceId?: string | null;
+        data?: unknown;
+      };
+      if (activeItem.type !== "tab") return;
 
       // Get source window ID from the drag item
-      const sourceWindowId = tabData?.sourceId;
+      const sourceWindowId = activeItem.sourceId;
 
       // Debug logging
       console.log("[InterfaceManager] Tab drag end:", {
@@ -2213,19 +2217,19 @@ function DesktopInterfaceManager({
         hasOver: Boolean(over),
       });
 
-      // If dropped on a DIFFERENT window's tab bar, the TabBar's useDrop handles it
-      if (over) {
-        const targetWindowId = overId?.replace("tabbar-", "");
-        // If dropped on a different window, TabBar handles it
-        if (targetWindowId && targetWindowId !== sourceWindowId) {
+      // If dropped on any window drop zone, the useDrop handlers will process it
+      if (over && overId) {
+        // Check all window drop zone types
+        if (
+          overId.startsWith("tabbar-") ||
+          overId.startsWith("window-drop-") ||
+          overId.startsWith("window-content-drop-")
+        ) {
           console.log(
-            "[InterfaceManager] Tab dropped on different window, TabBar handles it",
+            "[InterfaceManager] Tab dropped on window zone, useDrop handles it",
           );
           return;
         }
-        // If dropped on same window's tab bar, that's just reordering - do nothing
-        console.log("[InterfaceManager] Tab dropped on same window, ignoring");
-        return;
       }
 
       // Tab was dropped outside of any window - create new window

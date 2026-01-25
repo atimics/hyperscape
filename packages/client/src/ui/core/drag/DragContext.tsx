@@ -84,7 +84,12 @@ export function DragProvider({
       const overId = savedTargets.length > 0 ? savedTargets[0] : null;
 
       onDragEnd?.({
-        active: { id: item.id, data: item.data },
+        active: {
+          id: item.id,
+          type: item.type,
+          sourceId: item.sourceId,
+          data: item.data,
+        },
         over: overId ? { id: overId } : null,
         delta: savedDeltaRef.current,
       });
