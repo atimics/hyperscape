@@ -785,10 +785,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
       // Broadcast position update to all other clients so they see the teleport
       // This is critical for duel arena - both players need to see each other teleport
-      this.broadcastManager.sendToAllExcept(
+      // Use socket.id to exclude the teleporting player (they already got playerTeleport)
+      this.broadcastManager.sendToAll(
         "entityModified",
         { id: playerId, changes: { p: [position.x, position.y, position.z] } },
-        playerId,
+        socket?.id,
       );
     });
 
