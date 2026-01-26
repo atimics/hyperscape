@@ -17,6 +17,7 @@ import { useCallback, type CSSProperties } from "react";
 import { ModalWindow, useThemeStore } from "@/ui";
 import { RulesScreen } from "./RulesScreen";
 import { StakesScreen } from "./StakesScreen";
+import { ConfirmScreen } from "./ConfirmScreen";
 import type { DuelRules, EquipmentSlot } from "@hyperscape/shared";
 
 // ============================================================================
@@ -101,6 +102,7 @@ export function DuelPanel({
   onAddStake,
   onRemoveStake,
   onAcceptStakes,
+  onAcceptFinal,
   onCancel,
 }: DuelPanelProps) {
   const theme = useThemeStore((s) => s.theme);
@@ -168,27 +170,18 @@ export function DuelPanel({
         );
 
       case "CONFIRMING":
-        // Placeholder for Phase 5
         return (
-          <div style={{ textAlign: "center", padding: theme.spacing.lg }}>
-            <p style={{ color: theme.colors.text.secondary }}>
-              Confirmation screen coming in Phase 5
-            </p>
-            <button
-              onClick={onCancel}
-              style={{
-                marginTop: theme.spacing.md,
-                padding: `${theme.spacing.sm}px ${theme.spacing.md}px`,
-                background: theme.colors.state.danger,
-                color: "#fff",
-                border: "none",
-                borderRadius: theme.borderRadius.md,
-                cursor: "pointer",
-              }}
-            >
-              Cancel Duel
-            </button>
-          </div>
+          <ConfirmScreen
+            rules={state.rules}
+            equipmentRestrictions={state.equipmentRestrictions}
+            myStakes={state.myStakes}
+            opponentStakes={state.opponentStakes}
+            myAccepted={state.myAccepted}
+            opponentAccepted={state.opponentAccepted}
+            opponentName={state.opponentName}
+            onAccept={onAcceptFinal || (() => {})}
+            onCancel={onCancel}
+          />
         );
 
       default:
@@ -196,8 +189,13 @@ export function DuelPanel({
     }
   };
 
-  // Stakes screen needs more width for three panels
-  const modalWidth = state.screenState === "STAKES" ? 650 : 450;
+  // Stakes screen needs more width for three panels, confirm screen for two columns
+  const modalWidth =
+    state.screenState === "STAKES"
+      ? 650
+      : state.screenState === "CONFIRMING"
+        ? 520
+        : 450;
 
   return (
     <ModalWindow

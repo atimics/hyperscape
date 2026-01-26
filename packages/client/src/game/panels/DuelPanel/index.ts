@@ -6,9 +6,7 @@
  * - DuelPanel: Main duel interface with screen switching
  * - RulesScreen: Rules negotiation screen
  * - StakesScreen: Stakes negotiation screen
- *
- * Future components (to be added in later phases):
- * - ConfirmScreen: Final confirmation
+ * - ConfirmScreen: Final confirmation screen
  */
 
 export {
@@ -26,3 +24,5 @@ export {
 export { RulesScreen } from "./RulesScreen";
 
 export { StakesScreen } from "./StakesScreen";
+
+export { ConfirmScreen } from "./ConfirmScreen";

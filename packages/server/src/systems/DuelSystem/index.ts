@@ -35,6 +35,7 @@ import {
   DuelErrorCode,
 } from "@hyperscape/shared";
 import { PendingDuelManager } from "./PendingDuelManager";
+import { ArenaPoolManager } from "./ArenaPoolManager";
 
 // ============================================================================
 // Types
@@ -69,6 +70,9 @@ export class DuelSystem {
   /** Manager for pending duel challenges */
   public readonly pendingDuels: PendingDuelManager;
 
+  /** Manager for arena pool */
+  public readonly arenaPool: ArenaPoolManager;
+
   /** All active duel sessions by ID */
   private duelSessions: DuelSessionMap = new Map();
 
@@ -81,6 +85,7 @@ export class DuelSystem {
   constructor(world: World) {
     this.world = world;
     this.pendingDuels = new PendingDuelManager(world);
+    this.arenaPool = new ArenaPoolManager();
   }
 
   /**
@@ -318,6 +323,11 @@ export class DuelSystem {
 
     // Return staked items to both players
     this.returnStakedItems(session);
+
+    // Release arena if one was reserved
+    if (session.arenaId !== null) {
+      this.releaseArena(session.arenaId);
+    }
 
     // Clean up session
     this.duelSessions.delete(duelId);
@@ -722,6 +732,125 @@ export class DuelSystem {
   }
 
   // ============================================================================
+  // Public API - Confirmation
+  // ============================================================================
+
+  /**
+   * Accept final confirmation to start the duel
+   */
+  acceptFinal(
+    duelId: string,
+    playerId: string,
+  ): DuelOperationResult & { arenaId?: number } {
+    const session = this.duelSessions.get(duelId);
+    if (!session) {
+      return {
+        success: false,
+        error: "Duel not found.",
+        errorCode: DuelErrorCode.DUEL_NOT_FOUND,
+      };
+    }
+
+    if (session.state !== "CONFIRMING") {
+      return {
+        success: false,
+        error: "Cannot confirm at this stage.",
+        errorCode: DuelErrorCode.INVALID_STATE,
+      };
+    }
+
+    // Set acceptance
+    if (playerId === session.challengerId) {
+      session.challengerAccepted = true;
+    } else if (playerId === session.targetId) {
+      session.targetAccepted = true;
+    } else {
+      return {
+        success: false,
+        error: "You're not in this duel.",
+        errorCode: DuelErrorCode.NOT_PARTICIPANT,
+      };
+    }
+
+    // Check if both accepted
+    if (session.challengerAccepted && session.targetAccepted) {
+      // Try to reserve an arena
+      const arenaId = this.reserveArena(duelId);
+      if (arenaId === null) {
+        // Reset acceptance - no arena available
+        session.challengerAccepted = false;
+        session.targetAccepted = false;
+
+        return {
+          success: false,
+          error: "No arena available. Please try again.",
+          errorCode: DuelErrorCode.NO_ARENA_AVAILABLE,
+        };
+      }
+
+      // Arena reserved - start countdown
+      session.arenaId = arenaId;
+      session.state = "COUNTDOWN";
+      session.countdownStartedAt = Date.now();
+
+      this.world.emit("duel:countdown:start", {
+        duelId,
+        arenaId,
+        challengerId: session.challengerId,
+        targetId: session.targetId,
+      });
+
+      return { success: true, arenaId };
+    } else {
+      this.world.emit("duel:acceptance:updated", {
+        duelId,
+        challengerAccepted: session.challengerAccepted,
+        targetAccepted: session.targetAccepted,
+      });
+    }
+
+    return { success: true };
+  }
+
+  // ============================================================================
+  // Public API - Arena Management
+  // ============================================================================
+
+  /**
+   * Reserve an available arena for a duel
+   * Returns arena ID or null if none available
+   */
+  reserveArena(duelId: string): number | null {
+    return this.arenaPool.reserveArena(duelId);
+  }
+
+  /**
+   * Release an arena back to the pool
+   */
+  releaseArena(arenaId: number): void {
+    this.arenaPool.releaseArena(arenaId);
+    this.world.emit("duel:arena:released", { arenaId });
+  }
+
+  /**
+   * Get spawn points for an arena
+   */
+  getArenaSpawnPoints(
+    arenaId: number,
+  ):
+    | [{ x: number; y: number; z: number }, { x: number; y: number; z: number }]
+    | undefined {
+    return this.arenaPool.getSpawnPoints(arenaId);
+  }
+
+  /**
+   * Get arena bounds for movement validation
+   */
+  getArenaBounds(arenaId: number) {
+    return this.arenaPool.getArenaBounds(arenaId);
+  }
+
+  // ============================================================================
   // Private Methods
   // ============================================================================
 
@@ -851,7 +980,7 @@ export class DuelSystem {
 
     // Release arena
     if (session.arenaId !== null) {
-      this.world.emit("duel:arena:release", { arenaId: session.arenaId });
+      this.releaseArena(session.arenaId);
     }
 
     // Clean up
