@@ -1007,10 +1007,26 @@ export class DuelSystem {
   }
 
   /**
-   * Check if player can move (returns false if noMovement rule active)
+   * Check if player can move
+   * Returns false if:
+   * - noMovement rule is active during FIGHTING state
+   * - Player is in COUNTDOWN state (frozen before fight starts)
    */
   canMove(playerId: string): boolean {
-    return !this.isDuelRuleActive(playerId, "noMovement");
+    const session = this.getPlayerDuel(playerId);
+    if (!session) return true; // Not in duel, can move freely
+
+    // Freeze during countdown (OSRS-accurate)
+    if (session.state === "COUNTDOWN") {
+      return false;
+    }
+
+    // Check noMovement rule during fight
+    if (session.state === "FIGHTING" && session.rules.noMovement) {
+      return false;
+    }
+
+    return true;
   }
 
   /**
@@ -1172,12 +1188,18 @@ export class DuelSystem {
     session.state = "FIGHTING";
     session.fightStartedAt = Date.now();
 
+    // Get arena bounds for client-side enforcement
+    const bounds = session.arenaId
+      ? this.arenaPool.getArenaBounds(session.arenaId)
+      : undefined;
+
     // Emit fight start event
     this.world.emit("duel:fight:start", {
       duelId: session.duelId,
       challengerId: session.challengerId,
       targetId: session.targetId,
       arenaId: session.arenaId,
+      bounds,
     });
   }
 

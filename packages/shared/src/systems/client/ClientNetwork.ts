@@ -2566,25 +2566,39 @@ export class ClientNetwork extends SystemBase {
   };
 
   /**
-   * Duel fight start with arena ID
+   * Duel fight start with arena ID and bounds
    */
   onDuelFightStart = (data: {
     duelId: string;
     arenaId: number;
     opponentId?: string;
+    bounds?: {
+      min: { x: number; y: number; z: number };
+      max: { x: number; y: number; z: number };
+    };
   }) => {
     console.log("[ClientNetwork] Duel fight start:", data);
 
     // Store active duel state on world so systems can access it
     // This allows PlayerInteractionHandler to show Attack option during duels
+    // Bounds are used for client-side movement restriction feedback
     (
       this.world as {
-        activeDuel?: { duelId: string; arenaId: number; opponentId?: string };
+        activeDuel?: {
+          duelId: string;
+          arenaId: number;
+          opponentId?: string;
+          bounds?: {
+            min: { x: number; y: number; z: number };
+            max: { x: number; y: number; z: number };
+          };
+        };
       }
     ).activeDuel = {
       duelId: data.duelId,
       arenaId: data.arenaId,
       opponentId: data.opponentId,
+      bounds: data.bounds,
     };
 
     this.world.emit(EventType.UI_UPDATE, {

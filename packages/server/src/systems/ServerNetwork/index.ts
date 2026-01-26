@@ -576,11 +576,15 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Listen for duel fight start and forward to clients
     this.world.on("duel:fight:start", (event) => {
-      const { duelId, challengerId, targetId, arenaId } = event as {
+      const { duelId, challengerId, targetId, arenaId, bounds } = event as {
         duelId: string;
         challengerId: string;
         targetId: string;
         arenaId: number;
+        bounds?: {
+          min: { x: number; y: number; z: number };
+          max: { x: number; y: number; z: number };
+        };
       };
 
       // Send to challenger with target as their opponent
@@ -590,6 +594,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           duelId,
           arenaId,
           opponentId: targetId,
+          bounds,
         });
       }
 
@@ -600,6 +605,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           duelId,
           arenaId,
           opponentId: challengerId,
+          bounds,
         });
       }
     });
