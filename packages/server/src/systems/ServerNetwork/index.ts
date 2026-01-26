@@ -187,6 +187,11 @@ import {
   handlePrivateMessage,
 } from "./handlers/friends";
 import { TradingSystem } from "../TradingSystem";
+import { DuelSystem } from "../DuelSystem";
+import {
+  handleDuelChallenge,
+  handleDuelChallengeRespond,
+} from "./handlers/duel";
 import { getDatabase } from "./handlers/common";
 
 const defaultSpawn = '{ "position": [0, 50, 0], "quaternion": [0, 0, 0, 1] }';
@@ -274,6 +279,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   private pendingTradeManager!: PendingTradeManager;
   private followManager!: FollowManager;
   private tradingSystem!: TradingSystem;
+  private duelSystem!: DuelSystem;
   private actionQueue!: ActionQueue;
   private tickSystem!: TickSystem;
   private socketManager!: SocketManager;
@@ -519,6 +525,19 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Store trading system on world so handlers can access it
     (this.world as { tradingSystem?: TradingSystem }).tradingSystem =
       this.tradingSystem;
+
+    // Duel system - server-authoritative player-to-player dueling (OSRS-style)
+    // Manages duel sessions, rules negotiation, stakes, and combat enforcement
+    this.duelSystem = new DuelSystem(this.world);
+    this.duelSystem.init();
+
+    // Store duel system on world so handlers can access it
+    (this.world as { duelSystem?: DuelSystem }).duelSystem = this.duelSystem;
+
+    // Register duel system tick processing
+    this.tickSystem.register(() => {
+      this.duelSystem.processTick();
+    }, TickPriority.MOVEMENT);
 
     // OSRS-accurate face direction manager
     // Defers rotation until end of tick, only applies if player didn't move
@@ -2144,6 +2163,35 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["tradeCancel"] = (socket, data) =>
       handleTradeCancel(socket, data as { tradeId: string }, this.world);
 
+    // Duel handlers
+    this.handlers["onDuelChallenge"] = (socket, data) =>
+      handleDuelChallenge(
+        socket,
+        data as { targetPlayerId: string },
+        this.world,
+      );
+
+    this.handlers["duel:challenge"] = (socket, data) =>
+      handleDuelChallenge(
+        socket,
+        data as { targetPlayerId: string },
+        this.world,
+      );
+
+    this.handlers["onDuelChallengeRespond"] = (socket, data) =>
+      handleDuelChallengeRespond(
+        socket,
+        data as { challengeId: string; accept: boolean },
+        this.world,
+      );
+
+    this.handlers["duel:challenge:respond"] = (socket, data) =>
+      handleDuelChallengeRespond(
+        socket,
+        data as { challengeId: string; accept: boolean },
+        this.world,
+      );
+
     // Friend/Social handlers
     this.handlers["onFriendRequest"] = (socket, data) =>
       handleFriendRequest(socket, data as { targetName: string }, this.world);
@@ -2230,6 +2278,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     // Destroy trading system first - cancels all active trades and clears cleanup interval
     if (this.tradingSystem) {
       this.tradingSystem.destroy();
+    }
+
+    // Destroy duel system - cancels all active duels and pending challenges
+    if (this.duelSystem) {
+      this.duelSystem.destroy();
     }
 
     this.socketManager.destroy();
