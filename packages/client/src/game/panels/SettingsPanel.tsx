@@ -1075,10 +1075,15 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
                   setUiScale(v);
                   prefs?.setUI?.(v);
                 }}
-                min={0.6}
-                max={1.6}
+                min={0.8}
+                max={1.2}
                 step={0.05}
-                formatValue={(v) => `${v.toFixed(2)}x`}
+                formatValue={(v) => {
+                  const percent = Math.round((v - 1) * 100);
+                  return percent === 0
+                    ? "Default"
+                    : `${percent > 0 ? "+" : ""}${percent}%`;
+                }}
               />
             </SettingsSection>
 

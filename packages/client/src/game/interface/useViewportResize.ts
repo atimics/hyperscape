@@ -13,11 +13,25 @@ import {
   repositionWindowForViewport,
   detectNearestAnchor,
   getDefaultAnchor,
+  clampPositionToViewport,
 } from "@/ui/stores/anchorUtils";
 import { createDefaultWindows } from "./DefaultLayoutFactory";
+import { getUIScale } from "@/ui/core/drag/utils";
 
 /** Mobile breakpoint threshold */
 const MOBILE_BREAKPOINT = 768;
+
+/**
+ * Get the current scaled viewport dimensions
+ * When UI is scaled, the effective viewport is smaller/larger
+ */
+function getScaledViewport(): { width: number; height: number } {
+  const scale = getUIScale();
+  return {
+    width: (typeof window !== "undefined" ? window.innerWidth : 1920) / scale,
+    height: (typeof window !== "undefined" ? window.innerHeight : 1080) / scale,
+  };
+}
 
 /**
  * Hook for handling viewport resize and window repositioning
@@ -188,10 +202,7 @@ export function usePositionClamping() {
       width: number,
       height: number,
     ): { x: number; y: number } => {
-      const viewportWidth =
-        typeof window !== "undefined" ? window.innerWidth : 1920;
-      const viewportHeight =
-        typeof window !== "undefined" ? window.innerHeight : 1080;
+      const viewport = getScaledViewport();
       const minVisible = 50;
 
       let newX = x;
@@ -201,14 +212,14 @@ export function usePositionClamping() {
       if (newX + width < minVisible) {
         newX = minVisible - width + 100;
       }
-      if (newX > viewportWidth - minVisible) {
-        newX = viewportWidth - minVisible;
+      if (newX > viewport.width - minVisible) {
+        newX = viewport.width - minVisible;
       }
       if (newY + height < minVisible) {
         newY = minVisible - height + 100;
       }
-      if (newY > viewportHeight - minVisible) {
-        newY = viewportHeight - minVisible;
+      if (newY > viewport.height - minVisible) {
+        newY = viewport.height - minVisible;
       }
 
       return { x: Math.round(newX), y: Math.round(newY) };
@@ -217,4 +228,35 @@ export function usePositionClamping() {
   );
 
   return { clampToViewport };
+}
+
+/**
+ * Clamp all windows to the current scaled viewport bounds
+ * Call this when the UI scale changes to ensure all windows stay visible
+ */
+export function clampAllWindowsToViewport(): void {
+  const viewport = getScaledViewport();
+  const allWindows = useWindowStore.getState().getAllWindows();
+  const windowStoreUpdate = useWindowStore.getState().updateWindow;
+
+  allWindows.forEach((win) => {
+    const clampedPosition = clampPositionToViewport(
+      win.position,
+      win.size,
+      viewport,
+    );
+
+    // Only update if position actually changed
+    if (
+      clampedPosition.x !== win.position.x ||
+      clampedPosition.y !== win.position.y
+    ) {
+      windowStoreUpdate(win.id, {
+        position: {
+          x: Math.round(clampedPosition.x),
+          y: Math.round(clampedPosition.y),
+        },
+      });
+    }
+  });
 }

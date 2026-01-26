@@ -1,6 +1,53 @@
 import type { Point, Rect } from "../../types";
 
 /**
+ * Get the current UI scale from the CSS variable set on the scaled container
+ * This is used to adjust mouse coordinates when the UI is scaled via CSS transform
+ */
+export function getUIScale(): number {
+  if (typeof document === "undefined") return 1;
+
+  // Try to read from CSS custom property set on the scaled container
+  const scaledContainer = document.querySelector("[data-ui-scale]");
+  if (scaledContainer) {
+    const scale = scaledContainer.getAttribute("data-ui-scale");
+    if (scale) {
+      const parsed = parseFloat(scale);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+  }
+
+  return 1;
+}
+
+/**
+ * Convert screen-space coordinates to scaled UI space
+ * When UI is scaled up (e.g., 1.5x), mouse movements need to be scaled down
+ * to match the visual movement of elements
+ */
+export function screenToScaledSpace(point: Point): Point {
+  const scale = getUIScale();
+  return {
+    x: point.x / scale,
+    y: point.y / scale,
+  };
+}
+
+/**
+ * Convert a delta value from screen space to scaled UI space
+ */
+export function scaleScreenDelta(
+  dx: number,
+  dy: number,
+): { dx: number; dy: number } {
+  const scale = getUIScale();
+  return {
+    dx: dx / scale,
+    dy: dy / scale,
+  };
+}
+
+/**
  * Check if a point is inside a rectangle
  */
 export function isPointInRect(point: Point, rect: Rect): boolean {
@@ -26,9 +73,25 @@ export function getElementRect(element: HTMLElement): Rect {
 }
 
 /**
- * Get pointer position from a pointer event
+ * Get pointer position from a pointer event, adjusted for UI scale
+ * When the UI is scaled via CSS transform, we need to convert screen coordinates
+ * to the scaled coordinate space for accurate drag positioning
  */
 export function getPointerPosition(
+  event: PointerEvent | React.PointerEvent,
+): Point {
+  const scale = getUIScale();
+  return {
+    x: event.clientX / scale,
+    y: event.clientY / scale,
+  };
+}
+
+/**
+ * Get raw pointer position without UI scale adjustment
+ * Use this when you need screen-space coordinates
+ */
+export function getRawPointerPosition(
   event: PointerEvent | React.PointerEvent,
 ): Point {
   return {
@@ -54,13 +117,16 @@ export function clamp(value: number, min: number, max: number): number {
 }
 
 /**
- * Get current viewport dimensions
+ * Get current viewport dimensions in scaled UI space
+ * When the UI is scaled via CSS transform, the effective viewport is larger/smaller
+ * than the actual screen (e.g., at 1.5x scale, 1920px screen = 1280px scaled viewport)
  */
 export function getViewportSize(): { width: number; height: number } {
   if (typeof globalThis !== "undefined" && globalThis.innerWidth) {
+    const scale = getUIScale();
     return {
-      width: globalThis.innerWidth,
-      height: globalThis.innerHeight,
+      width: globalThis.innerWidth / scale,
+      height: globalThis.innerHeight / scale,
     };
   }
   return { width: 1920, height: 1080 }; // Fallback

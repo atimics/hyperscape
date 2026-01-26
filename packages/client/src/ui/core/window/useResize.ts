@@ -2,7 +2,7 @@ import { useCallback, useRef, useEffect } from "react";
 import { useWindowStore } from "../../stores/windowStore";
 import { useEditStore } from "../../stores/editStore";
 import type { ResizeDirection, Point, Size } from "../../types";
-import { clamp } from "../drag/utils";
+import { clamp, getUIScale } from "../drag/utils";
 import { getViewportSize } from "../drag/modifiers";
 
 /** Snap a value to the nearest grid unit */
@@ -91,9 +91,11 @@ export function useResize(windowId: string): ResizeResult {
       e.preventDefault();
       e.stopPropagation();
 
+      // Store scaled pointer position so delta calculations work correctly
+      const scale = getUIScale();
       resizingRef.current = {
         direction,
-        startPointer: { x: e.clientX, y: e.clientY },
+        startPointer: { x: e.clientX / scale, y: e.clientY / scale },
         startPosition: { ...window.position },
         startSize: { ...window.size },
         pointerId: e.pointerId,
@@ -115,8 +117,12 @@ export function useResize(windowId: string): ResizeResult {
       const { direction, startPointer, startPosition, startSize } =
         resizingRef.current;
 
-      const dx = e.clientX - startPointer.x;
-      const dy = e.clientY - startPointer.y;
+      // Convert current pointer to scaled space to match startPointer
+      const scale = getUIScale();
+      const currentX = e.clientX / scale;
+      const currentY = e.clientY / scale;
+      const dx = currentX - startPointer.x;
+      const dy = currentY - startPointer.y;
 
       let newX = startPosition.x;
       let newY = startPosition.y;
@@ -133,7 +139,7 @@ export function useResize(windowId: string): ResizeResult {
       // When uncapped, we allow resizing beyond viewport bounds
       const hasUncappedSize = !window.maxSize;
 
-      // Viewport bounds
+      // Viewport bounds - getViewportSize already returns scaled dimensions
       const viewport = getViewportSize();
       const edgeThreshold = 10;
 

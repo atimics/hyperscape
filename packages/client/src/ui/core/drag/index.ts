@@ -63,11 +63,15 @@ export {
 export {
   getElementRect,
   getPointerPosition,
+  getRawPointerPosition,
   distance,
   clamp,
   getViewportSize as getViewportSizeUtil,
   clampToViewport,
   clampSizeToViewport,
   dropTargetRegistry,
+  getUIScale,
+  screenToScaledSpace,
+  scaleScreenDelta,
   type DropTargetInfo,
 } from "./utils";
