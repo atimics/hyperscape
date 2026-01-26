@@ -258,7 +258,7 @@ export interface MobSpawnPoint {
 export interface StationLocation {
   /** Unique instance ID for this station */
   id: string;
-  /** Station type - must match type in stations.json (anvil, furnace, range, bank, altar) */
+  /** Station type - must match type in stations.json */
   type: "bank" | "furnace" | "anvil" | "altar" | "range";
   /** World position (Y will be grounded to terrain) */
   position: WorldPosition;
