@@ -137,7 +137,11 @@ export type SortDirection = "asc" | "desc";
  */
 export function calculateQuestProgress(quest: Quest): number {
   const requiredObjectives = quest.objectives.filter((o) => !o.optional);
-  if (requiredObjectives.length === 0) return 100;
+  if (requiredObjectives.length === 0) {
+    // No objectives loaded - use state to determine progress
+    // Completed quests show 100%, otherwise show 0% until objectives are fetched
+    return quest.state === "completed" ? 100 : 0;
+  }
 
   const totalProgress = requiredObjectives.reduce((acc, obj) => {
     return acc + Math.min(obj.current / obj.target, 1);

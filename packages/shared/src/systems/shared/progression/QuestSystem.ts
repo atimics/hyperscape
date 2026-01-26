@@ -788,17 +788,19 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
       }
     }
 
-    // Debug-level logging for hot path (reduces I/O and string allocations)
-    this.logger.debug(`NPC_DIED: killedBy=${killedBy}, mobType=${mobType}`);
+    // Info-level logging for kill tracking visibility
+    this.logger.info(`[Quest] Kill: player=${killedBy}, mobType=${mobType}`);
 
     const state = this.playerStates.get(killedBy);
     if (!state) {
-      this.logger.debug(`No player state for ${killedBy}`);
+      this.logger.warn(
+        `[Quest] No player state for ${killedBy} - kills not tracked`,
+      );
       return;
     }
 
-    this.logger.debug(
-      `Player ${killedBy} has ${state.activeQuests.size} active quests`,
+    this.logger.info(
+      `[Quest] Player ${killedBy}: ${state.activeQuests.size} active quests`,
     );
 
     // Check all active quests for kill objectives

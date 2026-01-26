@@ -104,16 +104,23 @@ function transformServerQuest(serverQuest: ServerQuestListItem): Quest {
 function transformServerQuestDetail(detail: ServerQuestDetail): Quest {
   const state = mapStatusToState(detail.status);
 
-  // Transform stages to objectives
-  const objectives = detail.stages.map((stage, index) => {
+  // Filter out dialogue stages - only track kill/gather/interact objectives
+  const actionableStages = detail.stages.filter(
+    (stage) => stage.type !== "dialogue",
+  );
+
+  // Find current stage index in the filtered array
+  const currentStageIndex = actionableStages.findIndex(
+    (s) => s.id === detail.currentStage,
+  );
+
+  // Transform actionable stages to objectives
+  const objectives = actionableStages.map((stage, index) => {
     // Determine progress for this stage
     let current = 0;
     const target = stage.count || 1;
 
     // Check if this stage is before current stage (completed)
-    const currentStageIndex = detail.stages.findIndex(
-      (s) => s.id === detail.currentStage,
-    );
     const isCompleted =
       detail.status === "completed" || index < currentStageIndex;
     const isCurrent = index === currentStageIndex;
@@ -214,6 +221,12 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
         newMap.set(quest.id, quest);
         return newMap;
       });
+
+      // Update selectedQuest in store if this quest is currently selected
+      const currentSelected = useQuestSelectionStore.getState().selectedQuest;
+      if (currentSelected && currentSelected.id === quest.id) {
+        useQuestSelectionStore.getState().setSelectedQuest(quest);
+      }
     };
 
     // Refresh on quest events
