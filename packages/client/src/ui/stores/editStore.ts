@@ -93,7 +93,7 @@ export const useEditStore = create<EditStoreState>()(
       restrictToViewport: true, // Always restrict to viewport by default
       viewportEdgeMargin: 40, // At least 40px must remain visible
       holdToToggle: true, // Require holding key by default
-      holdDuration: 1000, // 1 second by default
+      holdDuration: 500, // 0.5 second by default
       toggleKey: "l", // L key by default
       isResizing: false,
       resizingWindowId: null,
@@ -190,9 +190,9 @@ export const useEditStore = create<EditStoreState>()(
       migrate: (persistedState, version) => {
         const state = persistedState as Record<string, unknown>;
         if (version === 0) {
-          // Migrate from old 2000ms default to new 1000ms default
-          if (state.holdDuration === 2000) {
-            state.holdDuration = 1000;
+          // Migrate from old defaults to new 500ms default
+          if (state.holdDuration === 2000 || state.holdDuration === 1000) {
+            state.holdDuration = 500;
           }
         }
         return state as typeof persistedState;
