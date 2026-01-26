@@ -37,8 +37,6 @@ export interface QuestEntryProps {
   onTogglePin?: (quest: Quest) => void;
   /** Accept quest handler */
   onAccept?: (quest: Quest) => void;
-  /** Abandon quest handler */
-  onAbandon?: (quest: Quest) => void;
   /** Complete quest handler */
   onComplete?: (quest: Quest) => void;
   /** Track quest handler */
@@ -80,7 +78,6 @@ export const QuestEntry = memo(function QuestEntry({
   onClick,
   onTogglePin,
   onAccept,
-  onAbandon,
   onComplete,
   onTrack,
   showCategory = true,
@@ -109,7 +106,6 @@ export const QuestEntry = memo(function QuestEntry({
 
   // Is quest actionable
   const canAccept = quest.state === "available";
-  const canAbandon = quest.state === "active";
   const canComplete = quest.state === "active" && progress === 100;
 
   // Handle click on header
@@ -549,17 +545,6 @@ export const QuestEntry = memo(function QuestEntry({
                 onClick={() => onTrack(quest)}
               >
                 {quest.pinned ? "Untrack" : "Track"}
-              </button>
-            )}
-            {canAbandon && onAbandon && (
-              <button
-                style={{
-                  ...secondaryButtonStyle,
-                  color: theme.colors.state.danger,
-                }}
-                onClick={() => onAbandon(quest)}
-              >
-                Abandon
               </button>
             )}
           </div>

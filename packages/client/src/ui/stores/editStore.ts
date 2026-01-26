@@ -93,7 +93,7 @@ export const useEditStore = create<EditStoreState>()(
       restrictToViewport: true, // Always restrict to viewport by default
       viewportEdgeMargin: 40, // At least 40px must remain visible
       holdToToggle: true, // Require holding key by default
-      holdDuration: 1000, // 1 second by default
+      holdDuration: 250, // 0.25 second by default
       toggleKey: "l", // L key by default
       isResizing: false,
       resizingWindowId: null,
@@ -172,7 +172,7 @@ export const useEditStore = create<EditStoreState>()(
     }),
     {
       name: STORAGE_KEY,
-      version: 1, // Increment when changing defaults
+      version: 2, // Increment when changing defaults
       storage: createJSONStorage(() => localStorage),
       // Don't persist mode - always start locked for safety
       partialize: (state) => ({
@@ -189,10 +189,14 @@ export const useEditStore = create<EditStoreState>()(
       // Migrate old settings to new defaults
       migrate: (persistedState, version) => {
         const state = persistedState as Record<string, unknown>;
-        if (version === 0) {
-          // Migrate from old 2000ms default to new 1000ms default
-          if (state.holdDuration === 2000) {
-            state.holdDuration = 1000;
+        if (version === 0 || version === 1) {
+          // Migrate from old defaults to new 250ms default
+          if (
+            state.holdDuration === 2000 ||
+            state.holdDuration === 1000 ||
+            state.holdDuration === 500
+          ) {
+            state.holdDuration = 250;
           }
         }
         return state as typeof persistedState;

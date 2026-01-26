@@ -967,6 +967,7 @@ export interface EventMap {
   [EventType.QUEST_STARTED]: QuestStartedPayload;
   [EventType.QUEST_PROGRESSED]: QuestProgressedPayload;
   [EventType.QUEST_COMPLETED]: QuestCompletedPayload;
+  [EventType.QUEST_ABANDONED]: QuestAbandonedPayload;
 
   // XP Lamp Events
   [EventType.XP_LAMP_USE_REQUEST]: XpLampUseRequestPayload;
@@ -1029,6 +1030,15 @@ export interface QuestCompletedPayload {
     items: Array<{ itemId: string; quantity: number }>;
     xp: Record<string, number>;
   };
+}
+
+/**
+ * Quest abandoned payload
+ */
+export interface QuestAbandonedPayload {
+  playerId: string;
+  questId: string;
+  questName: string;
 }
 
 /**

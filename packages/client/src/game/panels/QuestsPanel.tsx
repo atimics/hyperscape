@@ -1,14 +1,15 @@
 /**
  * QuestsPanel - Quest Log panel for the game interface
  *
- * Connects the QuestLog component to the game world's quest system.
+ * Connects the QuestLog component to the server's quest system via network.
  * Displays available, active, and completed quests with filtering and sorting.
  * Uses COLORS constants for consistent styling with other panels.
  *
  * When a quest is clicked, it opens the QuestDetailPanel in a separate window.
  */
 
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useEffect } from "react";
+import { EventType } from "@hyperscape/shared";
 import { useWindowStore, useQuestSelectionStore } from "@/ui";
 import { QuestLog } from "@/game/components/quest";
 import {
@@ -27,11 +28,176 @@ interface QuestsPanelProps {
   world: ClientWorld;
 }
 
+/** LocalStorage key for pinned quests */
+const PINNED_QUESTS_KEY = "hyperscape_pinned_quests";
+
+/** Load pinned quest IDs from localStorage */
+function loadPinnedQuests(): Set<string> {
+  try {
+    const stored = localStorage.getItem(PINNED_QUESTS_KEY);
+    if (stored) {
+      const ids = JSON.parse(stored) as string[];
+      return new Set(ids);
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return new Set();
+}
+
+/** Save pinned quest IDs to localStorage */
+function savePinnedQuests(pinnedIds: Set<string>): void {
+  try {
+    localStorage.setItem(PINNED_QUESTS_KEY, JSON.stringify([...pinnedIds]));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+/** Server quest list item structure */
+interface ServerQuestListItem {
+  id: string;
+  name: string;
+  status: "not_started" | "in_progress" | "ready_to_complete" | "completed";
+  difficulty: string;
+  questPoints: number;
+}
+
+/** Server quest detail structure */
+interface ServerQuestDetail {
+  id: string;
+  name: string;
+  description: string;
+  status: "not_started" | "in_progress" | "ready_to_complete" | "completed";
+  difficulty: string;
+  questPoints: number;
+  currentStage: string;
+  stageProgress: Record<string, number>;
+  stages: Array<{
+    id: string;
+    description: string;
+    type: string;
+    target?: string;
+    count?: number;
+  }>;
+}
+
+/** Map server status to client state */
+function mapStatusToState(status: ServerQuestListItem["status"]): QuestState {
+  switch (status) {
+    case "not_started":
+      return "available";
+    case "in_progress":
+    case "ready_to_complete":
+      return "active";
+    case "completed":
+      return "completed";
+    default:
+      return "available";
+  }
+}
+
+/** Map server difficulty to category (best effort mapping) */
+function mapDifficultyToCategory(_difficulty: string): QuestCategory {
+  // Default to "main" for now - could be extended with server-side category data
+  return "main";
+}
+
+/** Transform server quest list item to client Quest type */
+function transformServerQuest(serverQuest: ServerQuestListItem): Quest {
+  return {
+    id: serverQuest.id,
+    title: serverQuest.name,
+    description: "", // Will be filled in from detail request
+    state: mapStatusToState(serverQuest.status),
+    category: mapDifficultyToCategory(serverQuest.difficulty),
+    level: 1, // Default level - could be added to server response
+    objectives: [], // Will be filled in from detail request
+    rewards: [
+      {
+        type: "quest_points",
+        name: "Quest Points",
+        amount: serverQuest.questPoints,
+      },
+    ],
+    pinned: false,
+    questGiver: undefined,
+    questGiverLocation: undefined,
+  };
+}
+
+/** Transform server quest detail to client Quest type */
+function transformServerQuestDetail(detail: ServerQuestDetail): Quest {
+  const state = mapStatusToState(detail.status);
+
+  // Filter out dialogue stages - only track kill/gather/interact objectives
+  const actionableStages = detail.stages.filter(
+    (stage) => stage.type !== "dialogue",
+  );
+
+  // Find current stage index in the filtered array
+  const currentStageIndex = actionableStages.findIndex(
+    (s) => s.id === detail.currentStage,
+  );
+
+  // Transform actionable stages to objectives
+  const objectives = actionableStages.map((stage, index) => {
+    // Determine progress for this stage
+    let current = 0;
+    const target = stage.count || 1;
+
+    // Check if this stage is before current stage (completed)
+    const isCompleted =
+      detail.status === "completed" || index < currentStageIndex;
+    const isCurrent = index === currentStageIndex;
+
+    if (isCompleted) {
+      current = target;
+    } else if (isCurrent && stage.count) {
+      // Get progress from stageProgress
+      if (stage.type === "kill") {
+        current = detail.stageProgress.kills || 0;
+      } else if (stage.target) {
+        current = detail.stageProgress[stage.target] || 0;
+      }
+    }
+
+    return {
+      id: stage.id,
+      type: stage.type as Quest["objectives"][0]["type"],
+      description: stage.description,
+      current,
+      target,
+      optional: false,
+    };
+  });
+
+  return {
+    id: detail.id,
+    title: detail.name,
+    description: detail.description,
+    state,
+    category: mapDifficultyToCategory(detail.difficulty),
+    level: 1,
+    objectives,
+    rewards: [
+      {
+        type: "quest_points",
+        name: "Quest Points",
+        amount: detail.questPoints,
+      },
+    ],
+    pinned: false,
+    questGiver: undefined,
+    questGiverLocation: undefined,
+  };
+}
+
 /**
  * QuestsPanel Component
  *
  * Displays the quest log with filtering, sorting, and quest management.
- * Connects to the game world for quest data and actions.
+ * Connects to the game world for quest data and actions via network.
  */
 export function QuestsPanel({ world }: QuestsPanelProps) {
   // Filter state
@@ -44,27 +210,125 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
   const [sortBy, setSortBy] = useState<QuestSortOption>("category");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
 
-  // Get quests from world
-  // TODO: Connect to actual quest system when available
-  const allQuests = useMemo<Quest[]>(() => {
-    // Check if world has quest data
-    const questSystem = world.getSystem?.("quests");
-    if (
-      questSystem &&
-      typeof questSystem === "object" &&
-      "getPlayerQuests" in questSystem
-    ) {
-      const getQuests = questSystem.getPlayerQuests as () => Quest[];
-      return getQuests();
-    }
+  // Quest data from server
+  const [allQuests, setAllQuests] = useState<Quest[]>([]);
+  const [questDetails, setQuestDetails] = useState<Map<string, Quest>>(
+    new Map(),
+  );
+  const [loading, setLoading] = useState(true);
 
-    // Return sample quests for development/testing
-    return getSampleQuests();
+  // Pinned quests (client-side only, persisted to localStorage)
+  const [pinnedQuestIds, setPinnedQuestIds] =
+    useState<Set<string>>(loadPinnedQuests);
+
+  // Listen for pin changes from other components (e.g., QuestDetailPanel)
+  useEffect(() => {
+    const handlePinChange = (event: Event) => {
+      const customEvent = event as CustomEvent<{
+        questId: string;
+        pinned: boolean;
+      }>;
+      const { questId, pinned } = customEvent.detail;
+      setPinnedQuestIds((prev) => {
+        const newSet = new Set(prev);
+        if (pinned) {
+          newSet.add(questId);
+        } else {
+          newSet.delete(questId);
+        }
+        return newSet;
+      });
+    };
+
+    window.addEventListener("questPinChanged", handlePinChange);
+    return () => window.removeEventListener("questPinChanged", handlePinChange);
+  }, []);
+
+  // Fetch quest data from server
+  useEffect(() => {
+    const fetchQuestList = () => {
+      if (world.network?.send) {
+        world.network.send("getQuestList", {});
+      }
+    };
+
+    // Handle quest list response
+    const onQuestListUpdate = (data: unknown) => {
+      const payload = data as {
+        quests: ServerQuestListItem[];
+        questPoints: number;
+      };
+
+      const quests = (payload.quests || []).map(transformServerQuest);
+      setAllQuests(quests);
+      setLoading(false);
+    };
+
+    // Handle quest detail response - merge with existing quests
+    const onQuestDetailUpdate = (data: unknown) => {
+      const detail = data as ServerQuestDetail;
+      const quest = transformServerQuestDetail(detail);
+
+      setQuestDetails((prev) => {
+        const newMap = new Map(prev);
+        newMap.set(quest.id, quest);
+        return newMap;
+      });
+
+      // Update selectedQuest in store if this quest is currently selected
+      const currentSelected = useQuestSelectionStore.getState().selectedQuest;
+      if (currentSelected && currentSelected.id === quest.id) {
+        useQuestSelectionStore.getState().setSelectedQuest(quest);
+      }
+    };
+
+    // Refresh on quest events
+    const onQuestEvent = (data?: { questId?: string }) => {
+      fetchQuestList();
+
+      // If this event is for the currently selected quest, re-fetch its detail
+      const currentSelected = useQuestSelectionStore.getState().selectedQuest;
+      if (currentSelected && data?.questId === currentSelected.id) {
+        world.network?.send?.("getQuestDetail", {
+          questId: currentSelected.id,
+        });
+      }
+    };
+
+    // Register handlers
+    world.network?.on("questList", onQuestListUpdate);
+    world.network?.on("questDetail", onQuestDetailUpdate);
+    world.on(EventType.QUEST_STARTED, onQuestEvent);
+    world.on(EventType.QUEST_PROGRESSED, onQuestEvent);
+    world.on(EventType.QUEST_COMPLETED, onQuestEvent);
+
+    // Initial fetch
+    fetchQuestList();
+
+    return () => {
+      world.network?.off("questList", onQuestListUpdate);
+      world.network?.off("questDetail", onQuestDetailUpdate);
+      world.off(EventType.QUEST_STARTED, onQuestEvent);
+      world.off(EventType.QUEST_PROGRESSED, onQuestEvent);
+      world.off(EventType.QUEST_COMPLETED, onQuestEvent);
+    };
   }, [world]);
+
+  // Merge quest list with detailed quest data and pinned state
+  const mergedQuests = useMemo(() => {
+    return allQuests.map((quest) => {
+      const detail = questDetails.get(quest.id);
+      const pinned = pinnedQuestIds.has(quest.id);
+      if (detail) {
+        return { ...quest, ...detail, pinned };
+      }
+      return { ...quest, pinned };
+    });
+  }, [allQuests, questDetails, pinnedQuestIds]);
 
   // Filter and sort quests
   const filteredQuests = useMemo(() => {
-    let quests = [...allQuests];
+    let quests = [...mergedQuests];
 
     // Apply filters
     quests = filterQuests(quests, {
@@ -78,7 +342,7 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
 
     return quests;
   }, [
-    allQuests,
+    mergedQuests,
     searchText,
     stateFilter,
     categoryFilter,
@@ -89,11 +353,11 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
   // Quest counts
   const questCounts = useMemo(
     () => ({
-      active: allQuests.filter((q) => q.state === "active").length,
-      available: allQuests.filter((q) => q.state === "available").length,
-      completed: allQuests.filter((q) => q.state === "completed").length,
+      active: mergedQuests.filter((q) => q.state === "active").length,
+      available: mergedQuests.filter((q) => q.state === "available").length,
+      completed: mergedQuests.filter((q) => q.state === "completed").length,
     }),
-    [allQuests],
+    [mergedQuests],
   );
 
   // Quest actions
@@ -105,20 +369,29 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
     [world],
   );
 
-  const handleAbandonQuest = useCallback(
-    (quest: Quest) => {
-      // Send abandon quest request to server
-      world.network?.send?.("questAbandon", { questId: quest.id });
-    },
-    [world],
-  );
-
   const handleTogglePin = useCallback(
     (quest: Quest) => {
-      // Toggle pinned state - this could be client-side only or synced
-      world.network?.send?.("questTogglePin", { questId: quest.id });
+      // Toggle pinned state - client-side only, persisted to localStorage
+      const newPinned = !pinnedQuestIds.has(quest.id);
+      setPinnedQuestIds((prev) => {
+        const newSet = new Set(prev);
+        if (newSet.has(quest.id)) {
+          newSet.delete(quest.id);
+        } else {
+          newSet.add(quest.id);
+        }
+        savePinnedQuests(newSet);
+        return newSet;
+      });
+
+      // Dispatch event to sync other components (e.g., QuestDetailPanel, QuestLog popup)
+      window.dispatchEvent(
+        new CustomEvent("questPinChanged", {
+          detail: { questId: quest.id, pinned: newPinned },
+        }),
+      );
     },
-    [world],
+    [pinnedQuestIds],
   );
 
   const handleTrackQuest = useCallback(
@@ -134,11 +407,17 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
   const createWindow = useWindowStore((s) => s.createWindow);
   const windows = useWindowStore((s) => s.windows);
 
-  // Handle quest click - open quest detail in separate window
+  // Handle quest click - fetch details and open quest detail in separate window
   const handleQuestClick = useCallback(
     (quest: Quest) => {
-      // Set the selected quest in the store
-      setSelectedQuest(quest);
+      // Request quest detail from server (will update questDetails state)
+      if (world.network?.send) {
+        world.network.send("getQuestDetail", { questId: quest.id });
+      }
+
+      // Set the selected quest in the store (use detail if available, otherwise basic quest)
+      const detailedQuest = questDetails.get(quest.id) || quest;
+      setSelectedQuest(detailedQuest);
 
       // Check if quest-detail window already exists
       const existingWindow = windows.get("quest-detail-window");
@@ -172,7 +451,7 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
         });
       }
     },
-    [setSelectedQuest, createWindow, windows],
+    [setSelectedQuest, createWindow, windows, world, questDetails],
   );
 
   // Container style using COLORS constants for consistency
@@ -182,6 +461,25 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
     display: "flex",
     flexDirection: "column",
   };
+
+  // Show loading state
+  if (loading) {
+    return (
+      <div style={containerStyle}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            height: "100%",
+            color: "#888",
+          }}
+        >
+          Loading quests...
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={containerStyle}>
@@ -200,7 +498,6 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
         onCategoryFilterChange={setCategoryFilter}
         onTogglePin={handleTogglePin}
         onAcceptQuest={handleAcceptQuest}
-        onAbandonQuest={handleAbandonQuest}
         onTrackQuest={handleTrackQuest}
         groupByCategory
         showSearch
@@ -208,7 +505,7 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
         showSort
         showHeader
         title="Quest Log"
-        emptyMessage="No quests found. Talk to NPCs to discover new quests!"
+        emptyMessage="No quests available. Talk to NPCs to discover new quests!"
         useExternalPopup
         onQuestClick={handleQuestClick}
         style={{
@@ -219,135 +516,6 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
       />
     </div>
   );
-}
-
-/**
- * Sample quests for development/testing
- * TODO: Remove when real quest system is connected
- */
-function getSampleQuests(): Quest[] {
-  return [
-    {
-      id: "tutorial-1",
-      title: "Welcome to Hyperscape",
-      description:
-        "Learn the basics of the game by completing the tutorial tasks.",
-      state: "active",
-      category: "main",
-      level: 1,
-      objectives: [
-        {
-          id: "obj-1",
-          type: "talk",
-          description: "Talk to the Tutorial Guide",
-          current: 1,
-          target: 1,
-        },
-        {
-          id: "obj-2",
-          type: "explore",
-          description: "Walk to the Training Grounds",
-          current: 0,
-          target: 1,
-        },
-        {
-          id: "obj-3",
-          type: "kill",
-          description: "Defeat training dummies",
-          current: 2,
-          target: 5,
-        },
-      ],
-      rewards: [
-        { type: "xp", name: "Combat XP", amount: 100, skill: "combat" },
-        { type: "gold", name: "Gold", amount: 50, icon: "🪙" },
-      ],
-      pinned: true,
-      questGiver: "Tutorial Guide",
-      questGiverLocation: "Spawn Point",
-    },
-    {
-      id: "gather-resources",
-      title: "Resource Gathering",
-      description: "Collect resources from the wilderness to prove your worth.",
-      state: "available",
-      category: "side",
-      level: 5,
-      objectives: [
-        {
-          id: "obj-1",
-          type: "collect",
-          description: "Gather oak logs",
-          current: 0,
-          target: 10,
-        },
-        {
-          id: "obj-2",
-          type: "collect",
-          description: "Mine copper ore",
-          current: 0,
-          target: 10,
-        },
-      ],
-      rewards: [
-        {
-          type: "xp",
-          name: "Woodcutting XP",
-          amount: 200,
-          skill: "woodcutting",
-        },
-        { type: "xp", name: "Mining XP", amount: 200, skill: "mining" },
-        { type: "item", name: "Bronze Axe", itemId: "bronze_axe" },
-      ],
-      pinned: false,
-      questGiver: "Resource Master",
-      questGiverLocation: "Lumbridge",
-    },
-    {
-      id: "daily-fishing",
-      title: "Gone Fishing",
-      description: "Catch some fish for the local inn.",
-      state: "available",
-      category: "daily",
-      level: 1,
-      objectives: [
-        {
-          id: "obj-1",
-          type: "collect",
-          description: "Catch raw fish",
-          current: 0,
-          target: 5,
-        },
-      ],
-      rewards: [
-        { type: "gold", name: "Gold", amount: 25, icon: "🪙" },
-        { type: "xp", name: "Fishing XP", amount: 50, skill: "fishing" },
-      ],
-      pinned: false,
-      questGiver: "Inn Keeper",
-      questGiverLocation: "Lumbridge Inn",
-    },
-    {
-      id: "completed-intro",
-      title: "A New Beginning",
-      description: "You have arrived in Hyperscape and taken your first steps.",
-      state: "completed",
-      category: "main",
-      level: 1,
-      objectives: [
-        {
-          id: "obj-1",
-          type: "talk",
-          description: "Speak with the Welcome NPC",
-          current: 1,
-          target: 1,
-        },
-      ],
-      rewards: [{ type: "quest_points", name: "Quest Points", amount: 1 }],
-      pinned: false,
-      completedAt: Date.now() - 86400000,
-    },
-  ];
 }
 
 export default QuestsPanel;

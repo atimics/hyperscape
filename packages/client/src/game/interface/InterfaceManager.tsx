@@ -14,6 +14,7 @@
 
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { EventType, getItem } from "@hyperscape/shared";
+import { getItemIcon } from "@/utils";
 import {
   DndContext as DndKitContext,
   DragOverlay as DndKitDragOverlay,
@@ -1267,7 +1268,8 @@ function DesktopInterfaceManager({
                     (data?.item as { itemId: string } | undefined);
                   if (item) {
                     const itemData = getItem(item.itemId);
-                    icon = itemData?.iconPath || "📦";
+                    // Use getItemIcon for emoji icons (iconPath is an asset:// URL, not renderable as text)
+                    icon = getItemIcon(item.itemId);
                     label = itemData?.name || item.itemId;
                   }
                 } else if (id.startsWith("prayer-")) {

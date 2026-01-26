@@ -151,6 +151,8 @@ import {
   handleGetQuestList,
   handleGetQuestDetail,
   handleQuestAccept,
+  handleQuestAbandon,
+  handleQuestComplete,
 } from "./handlers/quest";
 import { PendingAttackManager } from "./PendingAttackManager";
 import { PendingGatherManager } from "./PendingGatherManager";
@@ -1884,6 +1886,14 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onQuestAccept"] = (socket, data) =>
       handleQuestAccept(socket, data as { questId: string }, this.world);
     this.handlers["questAccept"] = this.handlers["onQuestAccept"];
+
+    this.handlers["onQuestAbandon"] = (socket, data) =>
+      handleQuestAbandon(socket, data as { questId: string }, this.world);
+    this.handlers["questAbandon"] = this.handlers["onQuestAbandon"];
+
+    this.handlers["onQuestComplete"] = (socket, data) =>
+      handleQuestComplete(socket, data as { questId: string }, this.world);
+    this.handlers["questComplete"] = this.handlers["onQuestComplete"];
 
     // Store handlers
     this.handlers["onStoreOpen"] = (socket, data) =>

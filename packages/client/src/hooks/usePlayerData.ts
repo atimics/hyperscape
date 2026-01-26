@@ -116,16 +116,36 @@ export function usePlayerData(world: ClientWorld | null): PlayerDataState {
     };
 
     // UI_UPDATE is the primary source for player stats
+    // Merge with existing state to preserve prayer data (prayer is managed separately by PrayerSystem)
     const handleUIUpdate = (data: unknown) => {
       const update = data as { component: string; data: unknown };
       if (update.component === "player") {
-        setPlayerStats(update.data as PlayerStats);
+        const newData = update.data as PlayerStats;
+        setPlayerStats((prev) =>
+          prev
+            ? {
+                ...newData,
+                // Preserve existing prayer data if new data doesn't include it
+                prayerPoints: newData.prayerPoints || prev.prayerPoints,
+              }
+            : newData,
+        );
       }
     };
 
     // Stats updates (fallback/alternative event)
+    // Merge with existing state to preserve prayer data
     const handleStats = (data: unknown) => {
-      setPlayerStats(data as PlayerStats);
+      const newData = data as PlayerStats;
+      setPlayerStats((prev) =>
+        prev
+          ? {
+              ...newData,
+              // Preserve existing prayer data if new data doesn't include it
+              prayerPoints: newData.prayerPoints || prev.prayerPoints,
+            }
+          : newData,
+      );
     };
 
     // Skills updates

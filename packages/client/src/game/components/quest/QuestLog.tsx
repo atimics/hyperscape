@@ -85,8 +85,6 @@ export interface QuestLogProps {
   onTogglePin?: (quest: Quest) => void;
   /** Accept quest handler */
   onAcceptQuest?: (quest: Quest) => void;
-  /** Abandon quest handler */
-  onAbandonQuest?: (quest: Quest) => void;
   /** Complete quest handler */
   onCompleteQuest?: (quest: Quest) => void;
   /** Track quest handler */
@@ -137,7 +135,6 @@ export interface QuestDetailPopupProps {
   onClose: () => void;
   onTogglePin?: (quest: Quest) => void;
   onAcceptQuest?: (quest: Quest) => void;
-  onAbandonQuest?: (quest: Quest) => void;
   onCompleteQuest?: (quest: Quest) => void;
   onTrackQuest?: (quest: Quest) => void;
 }
@@ -153,7 +150,6 @@ export const QuestDetailPopup = memo(function QuestDetailPopup({
   onClose,
   onTogglePin,
   onAcceptQuest,
-  onAbandonQuest,
   onCompleteQuest,
   onTrackQuest,
 }: QuestDetailPopupProps): React.ReactElement {
@@ -162,7 +158,6 @@ export const QuestDetailPopup = memo(function QuestDetailPopup({
   const categoryConfig = CATEGORY_CONFIG[quest.category];
 
   const canAccept = quest.state === "available";
-  const canAbandon = quest.state === "active";
   const canComplete = quest.state === "active" && progress === 100;
 
   // Mobile responsiveness
@@ -429,7 +424,17 @@ export const QuestDetailPopup = memo(function QuestDetailPopup({
               />
             </svg>
           </button>
-          <h3 style={titleStyle}>{quest.title}</h3>
+          <h3 style={titleStyle}>
+            {quest.pinned && (
+              <span
+                style={{ color: "#ffd700", marginRight: "6px" }}
+                title="Pinned"
+              >
+                ★
+              </span>
+            )}
+            {quest.title}
+          </h3>
           <button style={closeButtonStyle} onClick={onClose} title="Close">
             ×
           </button>
@@ -594,17 +599,6 @@ export const QuestDetailPopup = memo(function QuestDetailPopup({
               Track
             </button>
           )}
-          {canAbandon && onAbandonQuest && (
-            <button
-              style={dangerButtonStyle}
-              onClick={() => {
-                onAbandonQuest(quest);
-                onClose();
-              }}
-            >
-              Abandon
-            </button>
-          )}
           {quest.state === "completed" && (
             <button style={secondaryButtonStyle} onClick={onClose}>
               Close
@@ -669,9 +663,10 @@ const QuestListItem = memo(function QuestListItem({
         {quest.pinned && (
           <span
             style={{
-              color: theme.colors.accent.primary,
+              color: "#ffd700", // Gold star for pinned quests
               marginRight: shouldUseMobileUI ? "6px" : "4px",
             }}
+            title="Pinned"
           >
             ★
           </span>
@@ -809,6 +804,111 @@ const CategoryGroup = memo(function CategoryGroup({
   );
 });
 
+/** Pinned Group Component - Shows pinned quests at top */
+interface PinnedGroupProps {
+  quests: Quest[];
+  onQuestClick: (quest: Quest) => void;
+  selectedQuestId?: string | null;
+  defaultCollapsed?: boolean;
+}
+
+const PinnedGroup = memo(function PinnedGroup({
+  quests,
+  onQuestClick,
+  selectedQuestId,
+  defaultCollapsed = false,
+}: PinnedGroupProps): React.ReactElement | null {
+  const theme = useTheme();
+  const { reducedMotion } = useAccessibilityStore();
+  const { shouldUseMobileUI } = useMobileLayout();
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+
+  // Don't render if no pinned quests
+  if (quests.length === 0) {
+    return null;
+  }
+
+  const headerStyle: CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: shouldUseMobileUI ? "8px" : "6px",
+    padding: shouldUseMobileUI ? "8px 12px" : "5px 8px",
+    cursor: "pointer",
+    userSelect: "none",
+    backgroundColor: theme.colors.slot.filled,
+    borderBottom: `1px solid ${theme.colors.border.default}30`,
+    minHeight: shouldUseMobileUI ? "40px" : "26px",
+  };
+
+  const expandIconStyle: CSSProperties = {
+    width: shouldUseMobileUI ? "14px" : "10px",
+    height: shouldUseMobileUI ? "14px" : "10px",
+    color: theme.colors.text.muted,
+    transform: collapsed ? "rotate(0deg)" : "rotate(90deg)",
+    transition: reducedMotion ? "none" : "transform 0.15s ease",
+  };
+
+  const indicatorStyle: CSSProperties = {
+    width: shouldUseMobileUI ? "8px" : "6px",
+    height: shouldUseMobileUI ? "8px" : "6px",
+    borderRadius: "50%",
+    backgroundColor: "#ffd700", // Gold color for pinned
+  };
+
+  const nameStyle: CSSProperties = {
+    flex: 1,
+    color: theme.colors.text.secondary,
+    fontSize: shouldUseMobileUI ? "13px" : "10px",
+    fontWeight: 600,
+    textTransform: "uppercase",
+    letterSpacing: "0.3px",
+  };
+
+  return (
+    <div>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        aria-label={`Pinned quests${collapsed ? ", collapsed" : ", expanded"}`}
+        style={headerStyle}
+        onClick={() => setCollapsed(!collapsed)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setCollapsed(!collapsed);
+          }
+        }}
+      >
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 12 12"
+          fill="currentColor"
+          style={expandIconStyle}
+          aria-hidden="true"
+        >
+          <path d="M4 2l4 4-4 4V2z" />
+        </svg>
+        <div style={indicatorStyle} aria-hidden="true" />
+        <span style={nameStyle}>Pinned</span>
+      </div>
+      {!collapsed && (
+        <div>
+          {quests.map((quest) => (
+            <QuestListItem
+              key={quest.id}
+              quest={quest}
+              onClick={() => onQuestClick(quest)}
+              isSelected={quest.id === selectedQuestId}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
 /**
  * Quest Log Component
  *
@@ -831,7 +931,6 @@ export const QuestLog = memo(function QuestLog({
   onSelectQuest,
   onTogglePin,
   onAcceptQuest,
-  onAbandonQuest,
   onCompleteQuest,
   onTrackQuest,
   groupByCategory = true,
@@ -885,7 +984,43 @@ export const QuestLog = memo(function QuestLog({
     setPopupQuest(null);
   }, []);
 
-  // Group quests by category
+  // Keep popupQuest in sync with quests array (for pinned state changes, etc.)
+  useEffect(() => {
+    if (popupQuest) {
+      const updatedQuest = quests.find((q) => q.id === popupQuest.id);
+      if (updatedQuest && updatedQuest.pinned !== popupQuest.pinned) {
+        setPopupQuest(updatedQuest);
+      }
+    }
+  }, [quests, popupQuest]);
+
+  // Listen for pin changes from other components for immediate popup update
+  useEffect(() => {
+    const handlePinChange = (event: Event) => {
+      const customEvent = event as CustomEvent<{
+        questId: string;
+        pinned: boolean;
+      }>;
+      const { questId, pinned } = customEvent.detail;
+      if (popupQuest && popupQuest.id === questId) {
+        setPopupQuest((prev) => (prev ? { ...prev, pinned } : null));
+      }
+    };
+
+    window.addEventListener("questPinChanged", handlePinChange);
+    return () => window.removeEventListener("questPinChanged", handlePinChange);
+  }, [popupQuest]);
+
+  // Separate pinned quests from non-pinned
+  const pinnedQuests = useMemo(() => {
+    return quests.filter((quest) => quest.pinned);
+  }, [quests]);
+
+  const nonPinnedQuests = useMemo(() => {
+    return quests.filter((quest) => !quest.pinned);
+  }, [quests]);
+
+  // Group non-pinned quests by category
   const questsByCategory = useMemo(() => {
     if (!groupByCategory) return null;
 
@@ -897,12 +1032,12 @@ export const QuestLog = memo(function QuestLog({
       event: [],
     };
 
-    quests.forEach((quest) => {
+    nonPinnedQuests.forEach((quest) => {
       groups[quest.category].push(quest);
     });
 
     return groups;
-  }, [quests, groupByCategory]);
+  }, [nonPinnedQuests, groupByCategory]);
 
   // Toggle state filter
   const toggleStateFilter = useCallback(
@@ -1262,8 +1397,15 @@ export const QuestLog = memo(function QuestLog({
               <div>{emptyMessage}</div>
             </div>
           ) : groupByCategory && questsByCategory ? (
-            // Grouped view
+            // Grouped view with pinned quests at top
             <>
+              {/* Pinned quests group - only shows if there are pinned quests */}
+              <PinnedGroup
+                quests={pinnedQuests}
+                onQuestClick={handleQuestClick}
+                selectedQuestId={selectedQuestId}
+              />
+              {/* Category groups - non-pinned quests */}
               {(Object.keys(questsByCategory) as QuestCategory[]).map(
                 (category) => (
                   <CategoryGroup
@@ -1277,9 +1419,16 @@ export const QuestLog = memo(function QuestLog({
               )}
             </>
           ) : (
-            // Flat list view
+            // Flat list view with pinned quests at top
             <div>
-              {quests.map((quest) => (
+              {/* Pinned quests group - only shows if there are pinned quests */}
+              <PinnedGroup
+                quests={pinnedQuests}
+                onQuestClick={handleQuestClick}
+                selectedQuestId={selectedQuestId}
+              />
+              {/* Non-pinned quests */}
+              {nonPinnedQuests.map((quest) => (
                 <QuestListItem
                   key={quest.id}
                   quest={quest}
@@ -1299,7 +1448,6 @@ export const QuestLog = memo(function QuestLog({
           onClose={handleClosePopup}
           onTogglePin={onTogglePin}
           onAcceptQuest={onAcceptQuest}
-          onAbandonQuest={onAbandonQuest}
           onCompleteQuest={onCompleteQuest}
           onTrackQuest={onTrackQuest}
         />

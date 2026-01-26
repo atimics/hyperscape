@@ -16,6 +16,14 @@ import {
   THREE,
 } from "@hyperscape/shared";
 
+// Import canonical types from hyperscape shared package
+import type {
+  Player,
+  PlayerInput,
+  PlayerStats,
+  ChatMessage,
+} from "@hyperscape/shared";
+
 // Define local type aliases for THREE types
 export type Vector3 = THREEVector3;
 export type Quaternion = THREEQuaternion;
@@ -98,16 +106,8 @@ export interface WorldOptions {
   avatar?: string;
 }
 
-// Import types from hyperscape shared package
-import type {
-  Player,
-  PlayerInput,
-  PlayerStats,
-  ChatMessage,
-} from "@hyperscape/shared";
-
 // Re-export for convenience
-export type { Player, PlayerInput, PlayerStats };
+export type { Player, PlayerInput, PlayerStats, ChatMessage };
 
 // Define RigidBody interface
 export interface RigidBody {
@@ -133,9 +133,7 @@ export interface ChatListener {
   (messages: ChatMessage[]): void;
 }
 
-// ChatMessage is now imported from @hyperscape/shared - no local definition needed
-// Re-export for convenience
-export type { ChatMessage };
+// ChatMessage is imported and re-exported from @hyperscape/shared above
 
 // Plugin-specific Physics interface
 export interface Physics {
