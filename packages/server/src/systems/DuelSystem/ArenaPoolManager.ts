@@ -34,8 +34,8 @@ interface ArenaState {
  * Base coordinates for the arena area.
  * These should match the duel_arena zone configuration.
  */
-const ARENA_BASE_X = 3360; // Duel Arena x coordinate
-const ARENA_BASE_Z = 3240; // Duel Arena z coordinate
+const ARENA_BASE_X = 60; // Duel Arena x coordinate (near spawn)
+const ARENA_BASE_Z = 80; // Duel Arena z coordinate (near spawn)
 const ARENA_Y = 0; // Ground level
 
 /**

@@ -51,9 +51,11 @@ interface ChatMessage {
   createdAt: string;
   timestamp?: number;
   /** Message type for different display styles (default: "chat") */
-  type?: "chat" | "system" | "trade_request";
+  type?: "chat" | "system" | "trade_request" | "duel_challenge";
   /** Trade ID for trade_request messages */
   tradeId?: string;
+  /** Challenge ID for duel_challenge messages */
+  challengeId?: string;
 }
 
 interface ControlBinding {
@@ -938,6 +940,33 @@ function Message({ msg, world }: { msg: ChatMessage; world: ChatWorld }) {
         }}
         onClick={handleAcceptTrade}
         title="Click to accept trade request"
+      >
+        {msg.body}
+      </div>
+    );
+  }
+
+  // Handle duel challenge messages (red clickable)
+  if (msg.type === "duel_challenge" && msg.challengeId) {
+    const handleAcceptDuel = () => {
+      // Send duel acceptance to server
+      world.network?.send?.("duel:challenge:respond", {
+        challengeId: msg.challengeId,
+        accept: true,
+      });
+    };
+
+    return (
+      <div
+        className="message text-[0.75rem] leading-[1.35] cursor-pointer hover:brightness-110"
+        style={{
+          color: "#FF4444", // Red for duel challenges
+          fontFamily: "'Inter', system-ui, sans-serif",
+          textShadow: "0 1px 2px rgba(0,0,0,0.75)",
+          textDecoration: "underline",
+        }}
+        onClick={handleAcceptDuel}
+        title="Click to accept duel challenge"
       >
         {msg.body}
       </div>

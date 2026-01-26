@@ -2,12 +2,20 @@
  * Duel Handler Helpers
  *
  * Shared utilities for duel packet handlers.
+ * IMPORTANT: This module imports common utilities from ../common to ensure
+ * consistent socket handling patterns across all handlers.
  */
 
-import type { World } from "@hyperscape/shared";
+import { type World, ALL_WORLD_AREAS } from "@hyperscape/shared";
 import type { ServerSocket } from "../../../../shared/types";
 import type { DuelSystem } from "../../../DuelSystem";
 import { RateLimitService } from "../../services";
+import {
+  sendToSocket,
+  getPlayerId,
+  sendErrorToast,
+  sendSuccessToast as sendSuccessToastCommon,
+} from "../common";
 
 // ============================================================================
 // Rate Limiter
@@ -31,13 +39,6 @@ export function getDuelSystem(world: World): DuelSystem | undefined {
 // ============================================================================
 // Player Utilities
 // ============================================================================
-
-/**
- * Get player ID from socket
- */
-export function getPlayerId(socket: ServerSocket): string | null {
-  return (socket.data?.playerId as string) || null;
-}
 
 /**
  * Get player name from world
@@ -91,26 +92,36 @@ export function getSocketByPlayerId(
   world: World,
   playerId: string,
 ): ServerSocket | undefined {
-  const serverNetwork = world.getSystem("server-network") as
-    | { getSocketByPlayerId?: (id: string) => ServerSocket | undefined }
+  // Try getting from network system (same pattern as trade helpers)
+  const serverNetwork = world.getSystem("network") as
+    | {
+        broadcastManager?: {
+          getPlayerSocket: (id: string) => ServerSocket | undefined;
+        };
+        sockets?: Map<string, ServerSocket>;
+      }
     | undefined;
-  return serverNetwork?.getSocketByPlayerId?.(playerId);
+
+  if (!serverNetwork) return undefined;
+
+  if (serverNetwork.broadcastManager?.getPlayerSocket) {
+    return serverNetwork.broadcastManager.getPlayerSocket(playerId);
+  }
+
+  if (serverNetwork.sockets) {
+    for (const [, socket] of serverNetwork.sockets) {
+      if (getPlayerId(socket) === playerId) {
+        return socket;
+      }
+    }
+  }
+
+  return undefined;
 }
 
 // ============================================================================
 // Response Utilities
 // ============================================================================
-
-/**
- * Send data to a socket
- */
-export function sendToSocket(
-  socket: ServerSocket,
-  event: string,
-  data: unknown,
-): void {
-  socket.emit(event, data);
-}
 
 /**
  * Send duel error to socket
@@ -120,15 +131,18 @@ export function sendDuelError(
   message: string,
   code: string,
 ): void {
-  socket.emit("duelError", { message, code });
+  sendToSocket(socket, "duelError", { message, code });
 }
 
 /**
  * Send success toast to socket
  */
 export function sendSuccessToast(socket: ServerSocket, message: string): void {
-  socket.emit("toast", { type: "success", message });
+  sendToSocket(socket, "showToast", { type: "success", message });
 }
+
+// Re-export common utilities for convenience
+export { sendToSocket, getPlayerId } from "../common";
 
 // ============================================================================
 // Zone Utilities
@@ -136,23 +150,39 @@ export function sendSuccessToast(socket: ServerSocket, message: string): void {
 
 /**
  * Check if player is in Duel Arena zone
+ * Uses ALL_WORLD_AREAS directly since zone detection system may not be available on server
  */
 export function isInDuelArenaZone(world: World, playerId: string): boolean {
   const player = world.entities.players?.get(playerId);
-  if (!player?.position) return false;
+  if (!player?.position) {
+    console.log("[DuelZone] No player or position for:", playerId);
+    return false;
+  }
 
-  const zoneSystem = world.getSystem("zone-detection") as
-    | { getZoneProperties?: (pos: { x: number; z: number }) => { id?: string } }
-    | undefined;
+  const { x, z } = player.position;
 
-  if (!zoneSystem?.getZoneProperties) return false;
+  // Get duel_arena bounds from ALL_WORLD_AREAS
+  const duelArena = ALL_WORLD_AREAS["duel_arena"];
+  if (!duelArena?.bounds) {
+    console.log("[DuelZone] duel_arena not found in ALL_WORLD_AREAS");
+    return false;
+  }
 
-  const zoneProps = zoneSystem.getZoneProperties({
-    x: player.position.x,
-    z: player.position.z,
-  });
+  const { minX, maxX, minZ, maxZ } = duelArena.bounds;
+  const inBounds = x >= minX && x <= maxX && z >= minZ && z <= maxZ;
 
-  return zoneProps.id === "duel_arena";
+  console.log(
+    "[DuelZone] Player",
+    playerId,
+    "at position",
+    { x, z },
+    "duel_arena bounds:",
+    { minX, maxX, minZ, maxZ },
+    "inBounds:",
+    inBounds,
+  );
+
+  return inBounds;
 }
 
 /**

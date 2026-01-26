@@ -153,6 +153,7 @@ function DesktopInterfaceManager({
     questStartData,
     questCompleteData,
     xpLampData,
+    duelData,
     setBankData,
     setStoreData,
     setDialogueData,
@@ -162,6 +163,7 @@ function DesktopInterfaceManager({
     setQuestStartData,
     setQuestCompleteData,
     setXpLampData,
+    setDuelData,
   } = useModalPanels(world);
 
   // Simple UI state for modals
@@ -1329,6 +1331,7 @@ function DesktopInterfaceManager({
           questStartData={questStartData}
           questCompleteData={questCompleteData}
           xpLampData={xpLampData}
+          duelData={duelData}
           worldMapOpen={worldMapOpen}
           statsModalOpen={statsModalOpen}
           deathModalOpen={deathModalOpen}
@@ -1341,6 +1344,7 @@ function DesktopInterfaceManager({
           setQuestStartData={setQuestStartData}
           setQuestCompleteData={setQuestCompleteData}
           setXpLampData={setXpLampData}
+          setDuelData={setDuelData}
           setWorldMapOpen={setWorldMapOpen}
           setStatsModalOpen={setStatsModalOpen}
           setDeathModalOpen={setDeathModalOpen}

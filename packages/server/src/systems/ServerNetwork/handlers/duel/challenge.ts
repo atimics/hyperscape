@@ -40,20 +40,35 @@ export function handleDuelChallenge(
   data: { targetPlayerId: string },
   world: World,
 ): void {
+  console.log("[DuelChallenge] Received challenge request:", data);
+
   const playerId = getPlayerId(socket);
   if (!playerId) {
+    console.log("[DuelChallenge] Failed: Not authenticated");
     sendDuelError(socket, "Not authenticated", "NOT_AUTHENTICATED");
     return;
   }
 
+  console.log(
+    "[DuelChallenge] Challenger:",
+    playerId,
+    "Target:",
+    data.targetPlayerId,
+  );
+
   const duelSystem = getDuelSystem(world);
+  console.log("[DuelChallenge] DuelSystem found:", !!duelSystem);
   if (!duelSystem) {
+    console.log("[DuelChallenge] Failed: Duel system unavailable");
     sendDuelError(socket, "Duel system unavailable", "SYSTEM_ERROR");
     return;
   }
 
   // Rate limit check
-  if (!rateLimiter.tryOperation(playerId)) {
+  const rateLimitOk = rateLimiter.tryOperation(playerId);
+  console.log("[DuelChallenge] Rate limit check:", rateLimitOk);
+  if (!rateLimitOk) {
+    console.log("[DuelChallenge] Failed: Rate limited");
     sendDuelError(
       socket,
       "Please wait before challenging again",
@@ -64,18 +79,27 @@ export function handleDuelChallenge(
 
   // Validate target player exists and is online
   const targetPlayerId = data.targetPlayerId;
-  if (!isValidPlayerID(targetPlayerId)) {
+  const validPlayerId = isValidPlayerID(targetPlayerId);
+  console.log("[DuelChallenge] Valid player ID:", validPlayerId);
+  if (!validPlayerId) {
+    console.log("[DuelChallenge] Failed: Invalid player ID");
     sendDuelError(socket, "Invalid player", "INVALID_PLAYER");
     return;
   }
 
-  if (!isPlayerOnline(world, targetPlayerId)) {
+  const targetOnline = isPlayerOnline(world, targetPlayerId);
+  console.log("[DuelChallenge] Target online:", targetOnline);
+  if (!targetOnline) {
+    console.log("[DuelChallenge] Failed: Target offline");
     sendDuelError(socket, "Player is not online", "PLAYER_OFFLINE");
     return;
   }
 
   // Check both players are in Duel Arena zone
-  if (!isInDuelArenaZone(world, playerId)) {
+  const challengerInArena = isInDuelArenaZone(world, playerId);
+  console.log("[DuelChallenge] Challenger in arena:", challengerInArena);
+  if (!challengerInArena) {
+    console.log("[DuelChallenge] Failed: Challenger not in duel arena");
     sendDuelError(
       socket,
       "You must be in the Duel Arena to challenge players.",
@@ -84,7 +108,10 @@ export function handleDuelChallenge(
     return;
   }
 
-  if (!isInDuelArenaZone(world, targetPlayerId)) {
+  const targetInArena = isInDuelArenaZone(world, targetPlayerId);
+  console.log("[DuelChallenge] Target in arena:", targetInArena);
+  if (!targetInArena) {
+    console.log("[DuelChallenge] Failed: Target not in duel arena");
     sendDuelError(
       socket,
       "That player is not in the Duel Arena.",
@@ -94,13 +121,22 @@ export function handleDuelChallenge(
   }
 
   // Check distance
-  if (!arePlayersInChallengeRange(world, playerId, targetPlayerId)) {
+  const inRange = arePlayersInChallengeRange(world, playerId, targetPlayerId);
+  console.log("[DuelChallenge] Players in range:", inRange);
+  if (!inRange) {
+    console.log("[DuelChallenge] Failed: Out of range");
     sendDuelError(socket, "That player is too far away.", "OUT_OF_RANGE");
     return;
   }
 
   // Interface blocking check
-  if (hasActiveInterfaceSession(world, playerId)) {
+  const challengerHasInterface = hasActiveInterfaceSession(world, playerId);
+  console.log(
+    "[DuelChallenge] Challenger has interface:",
+    challengerHasInterface,
+  );
+  if (challengerHasInterface) {
+    console.log("[DuelChallenge] Failed: Challenger has interface open");
     sendDuelError(
       socket,
       "You can't challenge while using another interface.",
@@ -109,7 +145,10 @@ export function handleDuelChallenge(
     return;
   }
 
-  if (hasActiveInterfaceSession(world, targetPlayerId)) {
+  const targetHasInterface = hasActiveInterfaceSession(world, targetPlayerId);
+  console.log("[DuelChallenge] Target has interface:", targetHasInterface);
+  if (targetHasInterface) {
+    console.log("[DuelChallenge] Failed: Target has interface open");
     sendDuelError(socket, "That player is busy.", "PLAYER_BUSY");
     return;
   }
@@ -120,6 +159,7 @@ export function handleDuelChallenge(
   const targetName = getPlayerName(world, targetPlayerId);
 
   // Create duel challenge
+  console.log("[DuelChallenge] Creating challenge...");
   const result = duelSystem.createChallenge(
     playerId,
     challengerName,
@@ -128,13 +168,17 @@ export function handleDuelChallenge(
   );
 
   if (!result.success) {
+    console.log("[DuelChallenge] Failed to create challenge:", result.error);
     sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
     return;
   }
 
+  console.log("[DuelChallenge] Challenge created:", result.challengeId);
+
   // Send notification to target player as OSRS-style chat message
   const targetSocket = getSocketByPlayerId(world, targetPlayerId);
   if (targetSocket) {
+    console.log("[DuelChallenge] Sending chat message to target player...");
     // Send as clickable chat message (like trade requests)
     const chatMessage = {
       id: uuid(),
@@ -148,6 +192,7 @@ export function handleDuelChallenge(
       challengeId: result.challengeId,
     };
     sendToSocket(targetSocket, "chatAdded", chatMessage);
+    console.log("[DuelChallenge] Chat message sent:", chatMessage);
 
     // Send structured challenge data for UI modal
     sendToSocket(targetSocket, "duelChallengeIncoming", {
@@ -156,7 +201,9 @@ export function handleDuelChallenge(
       fromPlayerName: challengerName,
       fromPlayerLevel: challengerLevel,
     });
+    console.log("[DuelChallenge] duelChallengeIncoming sent");
   } else {
+    console.log("[DuelChallenge] Target socket not found!");
     // Target socket not found - cancel the challenge
     duelSystem.pendingDuels.cancelChallenge(result.challengeId!);
     sendDuelError(socket, "Player is not available.", "PLAYER_OFFLINE");

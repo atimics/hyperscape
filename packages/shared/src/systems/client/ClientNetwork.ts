@@ -2302,6 +2302,297 @@ export class ClientNetwork extends SystemBase {
     });
   };
 
+  // --- Duel Arena packet handlers ---
+
+  /**
+   * Duel challenge sent confirmation
+   */
+  onDuelChallengeSent = (data: {
+    challengeId: string;
+    targetPlayerId: string;
+    targetPlayerName: string;
+  }) => {
+    console.log("[ClientNetwork] Duel challenge sent:", data);
+    this.world.emit(EventType.UI_TOAST, {
+      message: `Challenge sent to ${data.targetPlayerName}`,
+      type: "info",
+    });
+  };
+
+  /**
+   * Incoming duel challenge from another player
+   */
+  onDuelChallengeIncoming = (data: {
+    challengeId: string;
+    fromPlayerId: string;
+    fromPlayerName: string;
+    fromPlayerLevel: number;
+  }) => {
+    console.log("[ClientNetwork] Duel challenge incoming:", data);
+    // Emit UI update for potential modal handling
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelChallenge",
+      data: {
+        visible: true,
+        challengeId: data.challengeId,
+        fromPlayer: {
+          id: data.fromPlayerId,
+          name: data.fromPlayerName,
+          level: data.fromPlayerLevel,
+        },
+      },
+    });
+  };
+
+  /**
+   * Duel session started (both players accepted challenge)
+   */
+  onDuelSessionStarted = (data: {
+    duelId: string;
+    opponentId: string;
+    opponentName: string;
+    isChallenger: boolean;
+  }) => {
+    console.log("[ClientNetwork] Duel session started:", data);
+    // Emit UI update to open duel panel
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duel",
+      data: {
+        isOpen: true,
+        duelId: data.duelId,
+        opponent: {
+          id: data.opponentId,
+          name: data.opponentName,
+        },
+        isChallenger: data.isChallenger,
+      },
+    });
+  };
+
+  /**
+   * Duel challenge was declined
+   */
+  onDuelChallengeDeclined = (data: {
+    challengeId: string;
+    declinedBy?: string;
+  }) => {
+    console.log("[ClientNetwork] Duel challenge declined:", data);
+    if (data.declinedBy) {
+      this.world.emit(EventType.UI_TOAST, {
+        message: `${data.declinedBy} declined your duel challenge.`,
+        type: "info",
+      });
+    }
+    // Close any duel challenge modal
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelChallenge",
+      data: { visible: false },
+    });
+  };
+
+  /**
+   * Duel operation error
+   */
+  onDuelError = (data: { message: string; code: string }) => {
+    console.log("[ClientNetwork] Duel error:", data);
+    this.world.emit(EventType.UI_TOAST, {
+      message: data.message,
+      type: "error",
+    });
+  };
+
+  /**
+   * Duel rules updated (rule toggled)
+   */
+  onDuelRulesUpdated = (data: {
+    duelId: string;
+    rules: Record<string, boolean>;
+    challengerAccepted: boolean;
+    targetAccepted: boolean;
+    modifiedBy: string;
+  }) => {
+    console.log("[ClientNetwork] Duel rules updated:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelRulesUpdate",
+      data,
+    });
+  };
+
+  /**
+   * Duel equipment restrictions updated
+   */
+  onDuelEquipmentUpdated = (data: {
+    duelId: string;
+    equipmentRestrictions: Record<string, boolean>;
+    challengerAccepted: boolean;
+    targetAccepted: boolean;
+    modifiedBy: string;
+  }) => {
+    console.log("[ClientNetwork] Duel equipment updated:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelEquipmentUpdate",
+      data,
+    });
+  };
+
+  /**
+   * Duel acceptance state updated
+   */
+  onDuelAcceptanceUpdated = (data: {
+    duelId: string;
+    challengerAccepted: boolean;
+    targetAccepted: boolean;
+    state: string;
+    movedToStakes: boolean;
+  }) => {
+    console.log("[ClientNetwork] Duel acceptance updated:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelAcceptanceUpdate",
+      data,
+    });
+  };
+
+  /**
+   * Duel stakes updated (add/remove stake)
+   */
+  onDuelStakesUpdated = (data: {
+    duelId: string;
+    challengerStakes: Array<{
+      inventorySlot: number;
+      itemId: string;
+      quantity: number;
+      value: number;
+    }>;
+    targetStakes: Array<{
+      inventorySlot: number;
+      itemId: string;
+      quantity: number;
+      value: number;
+    }>;
+    challengerAccepted: boolean;
+    targetAccepted: boolean;
+    modifiedBy: string;
+  }) => {
+    console.log("[ClientNetwork] Duel stakes updated:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelStakesUpdate",
+      data,
+    });
+  };
+
+  /**
+   * Duel state/phase changed
+   */
+  onDuelStateChanged = (data: {
+    duelId: string;
+    state: string;
+    rules?: Record<string, boolean>;
+    equipmentRestrictions?: Record<string, boolean>;
+  }) => {
+    console.log("[ClientNetwork] Duel state changed:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelStateChange",
+      data,
+    });
+  };
+
+  /**
+   * Duel cancelled
+   */
+  onDuelCancelled = (data: {
+    duelId: string;
+    reason: string;
+    cancelledBy?: string;
+  }) => {
+    console.log("[ClientNetwork] Duel cancelled:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelClose",
+      data,
+    });
+    if (data.cancelledBy) {
+      this.world.emit(EventType.UI_TOAST, {
+        message: "Duel has been cancelled.",
+        type: "info",
+      });
+    }
+  };
+
+  /**
+   * Duel countdown start (3-2-1-FIGHT!)
+   */
+  onDuelCountdownStart = (data: {
+    duelId: string;
+    countdownSeconds: number;
+    challengerPosition: { x: number; y: number; z: number };
+    targetPosition: { x: number; y: number; z: number };
+  }) => {
+    console.log("[ClientNetwork] Duel countdown start:", data);
+    // Close the duel panel
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelClose",
+      data: { duelId: data.duelId },
+    });
+    // Emit countdown event for UI overlay
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelCountdown",
+      data,
+    });
+  };
+
+  /**
+   * Duel countdown tick (3, 2, 1, 0)
+   */
+  onDuelCountdownTick = (data: { duelId: string; count: number }) => {
+    console.log("[ClientNetwork] Duel countdown tick:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelCountdownTick",
+      data,
+    });
+  };
+
+  /**
+   * Duel fight begins (countdown finished)
+   */
+  onDuelFightBegin = (data: {
+    duelId: string;
+    challengerId: string;
+    targetId: string;
+  }) => {
+    console.log("[ClientNetwork] Duel fight begin:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelFightBegin",
+      data,
+    });
+  };
+
+  /**
+   * Duel fight start with arena ID
+   */
+  onDuelFightStart = (data: { duelId: string; arenaId: number }) => {
+    console.log("[ClientNetwork] Duel fight start:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelFightStart",
+      data,
+    });
+  };
+
+  /**
+   * Duel ended (winner declared)
+   */
+  onDuelEnded = (data: {
+    duelId: string;
+    winnerId: string;
+    loserId: string;
+    reason: string;
+    rewards?: Array<{ itemId: string; quantity: number }>;
+  }) => {
+    console.log("[ClientNetwork] Duel ended:", data);
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "duelEnded",
+      data,
+    });
+  };
+
   // --- Social/Friend system handlers ---
 
   /**

@@ -290,6 +290,32 @@ export type {
   SocialError,
 } from "./types/game/social-types";
 
+// Export duel arena types and utilities
+export {
+  DEFAULT_DUEL_RULES,
+  validateRuleCombination,
+  INVALID_RULE_COMBINATIONS,
+  DEFAULT_EQUIPMENT_RESTRICTIONS,
+  createDuelParticipant,
+  DUEL_CHALLENGE_TIMEOUT_MS,
+  DuelErrorCode,
+  DuelEvents,
+} from "./types/game/duel-types";
+export type {
+  DuelRules,
+  EquipmentSlotRestriction,
+  EquipmentRestrictions,
+  StakedItem,
+  DuelParticipant,
+  DuelState,
+  DuelSession,
+  ArenaSpawnPoint,
+  ArenaBounds,
+  Arena,
+  PendingDuelChallenge,
+  DuelEventName,
+} from "./types/game/duel-types";
+
 // Export quest type guards for server validation
 export { isValidQuestId } from "./types/game/quest-types";
 

@@ -36,6 +36,7 @@ export {
   type QuestStartData,
   type QuestCompleteData,
   type XpLampData,
+  type DuelData,
 } from "./useModalPanels";
 export { usePlayerData, type PlayerDataState } from "./usePlayerData";
 export {

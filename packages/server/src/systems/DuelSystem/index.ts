@@ -168,12 +168,12 @@ export class DuelSystem {
     // Subscribe to player disconnect events
     this.world.on(EventType.PLAYER_LEFT, (payload: unknown) => {
       const data = payload as { playerId: string };
-      this.handlePlayerDisconnect(data.playerId);
+      this.onPlayerDisconnect(data.playerId);
     });
 
     this.world.on(EventType.PLAYER_LOGOUT, (payload: unknown) => {
       const data = payload as { playerId: string };
-      this.handlePlayerDisconnect(data.playerId);
+      this.onPlayerDisconnect(data.playerId);
     });
 
     // Subscribe to player death to end duel
@@ -463,11 +463,11 @@ export class DuelSystem {
 
     // Validate rule combination
     const tempRules = { ...session.rules, [rule]: newValue };
-    const validation = validateRuleCombination(tempRules);
-    if (!validation.valid) {
+    const validationError = validateRuleCombination(tempRules);
+    if (validationError !== null) {
       return {
         success: false,
-        error: validation.reason || "Invalid rule combination.",
+        error: validationError,
         errorCode: DuelErrorCode.INVALID_RULE_COMBINATION,
       };
     }
@@ -865,6 +865,11 @@ export class DuelSystem {
       session.arenaId = arenaId;
       session.state = "COUNTDOWN";
       session.countdownStartedAt = Date.now();
+      session.lastCountdownTick = 3;
+
+      // Teleport players to arena and apply equipment restrictions
+      this.teleportPlayersToArena(session);
+      this.applyEquipmentRestrictions(session);
 
       this.world.emit("duel:countdown:start", {
         duelId,
@@ -1671,7 +1676,7 @@ export class DuelSystem {
    */
   private teleportToHospital(playerId: string): void {
     // Hospital spawn point - can be configured from world data
-    const hospitalSpawn = { x: 3200, y: 0, z: 3200 };
+    const hospitalSpawn = { x: 60, y: 0, z: 60 };
 
     this.world.emit("player:teleport", {
       playerId,
@@ -1685,7 +1690,7 @@ export class DuelSystem {
    */
   private teleportToLobby(playerId: string): void {
     // Lobby spawn point - center of duel arena lobby area
-    const lobbySpawn = { x: 3370, y: 0, z: 3220 };
+    const lobbySpawn = { x: 105, y: 0, z: 60 };
 
     this.world.emit("player:teleport", {
       playerId,

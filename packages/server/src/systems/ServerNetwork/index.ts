@@ -544,7 +544,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     (this.world as { duelSystem?: DuelSystem }).duelSystem = this.duelSystem;
 
     // Register duel system tick processing
-    this.tickSystem.register(() => {
+    this.tickSystem.onTick(() => {
       this.duelSystem.processTick();
     }, TickPriority.MOVEMENT);
 
@@ -561,12 +561,12 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
       const challengerSocket = this.getSocketByPlayerId(challengerId);
       if (challengerSocket) {
-        challengerSocket.emit("duelCountdownTick", payload);
+        challengerSocket.send("duelCountdownTick", payload);
       }
 
       const targetSocket = this.getSocketByPlayerId(targetId);
       if (targetSocket) {
-        targetSocket.emit("duelCountdownTick", payload);
+        targetSocket.send("duelCountdownTick", payload);
       }
     });
 
@@ -583,12 +583,12 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
       const challengerSocket = this.getSocketByPlayerId(challengerId);
       if (challengerSocket) {
-        challengerSocket.emit("duelFightStart", payload);
+        challengerSocket.send("duelFightStart", payload);
       }
 
       const targetSocket = this.getSocketByPlayerId(targetId);
       if (targetSocket) {
-        targetSocket.emit("duelFightStart", payload);
+        targetSocket.send("duelFightStart", payload);
       }
     });
 
@@ -641,7 +641,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       // Send to winner
       const winnerSocket = this.getSocketByPlayerId(winnerId);
       if (winnerSocket) {
-        winnerSocket.emit("duelCompleted", {
+        winnerSocket.send("duelCompleted", {
           duelId,
           won: true,
           opponentName: loserName,
@@ -656,7 +656,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       // Send to loser
       const loserSocket = this.getSocketByPlayerId(loserId);
       if (loserSocket) {
-        loserSocket.emit("duelCompleted", {
+        loserSocket.send("duelCompleted", {
           duelId,
           won: false,
           opponentName: winnerName,
@@ -683,7 +683,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const opponentId = playerId === challengerId ? targetId : challengerId;
       const opponentSocket = this.getSocketByPlayerId(opponentId);
       if (opponentSocket) {
-        opponentSocket.emit("duelOpponentDisconnected", {
+        opponentSocket.send("duelOpponentDisconnected", {
           duelId,
           timeoutMs,
         });
@@ -703,7 +703,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       const opponentId = playerId === challengerId ? targetId : challengerId;
       const opponentSocket = this.getSocketByPlayerId(opponentId);
       if (opponentSocket) {
-        opponentSocket.emit("duelOpponentReconnected", { duelId });
+        opponentSocket.send("duelOpponentReconnected", { duelId });
       }
     });
 
@@ -723,13 +723,17 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         player.position.z = position.z;
       }
 
-      // Update tile movement manager for the new position
-      this.tileMovementManager.setPlayerPosition(playerId, position);
+      // Clear any in-progress movement by cleaning up the player's movement state
+      this.tileMovementManager.cleanup(playerId);
 
-      // Send teleport to client
+      // Send teleport to client (position as array to match client expectation)
       const socket = this.getSocketByPlayerId(playerId);
       if (socket) {
-        socket.emit("playerTeleport", { playerId, position, rotation });
+        socket.send("playerTeleport", {
+          playerId,
+          position: [position.x, position.y, position.z],
+          rotation,
+        });
       }
     });
 
@@ -2378,6 +2382,14 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         this.world,
       );
 
+    // Also register with "on" prefix (packet transformation adds this)
+    this.handlers["onDuel:challenge"] = (socket, data) =>
+      handleDuelChallenge(
+        socket,
+        data as { targetPlayerId: string },
+        this.world,
+      );
+
     this.handlers["onDuelChallengeRespond"] = (socket, data) =>
       handleDuelChallengeRespond(
         socket,
@@ -2392,13 +2404,22 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         this.world,
       );
 
-    // Duel rules handlers
+    // Also register with "on" prefix (packet transformation adds this)
+    this.handlers["onDuel:challenge:respond"] = (socket, data) =>
+      handleDuelChallengeRespond(
+        socket,
+        data as { challengeId: string; accept: boolean },
+        this.world,
+      );
+
+    // Duel rules handlers (register with both formats for packet routing)
     this.handlers["duel:toggle:rule"] = (socket, data) =>
       handleDuelToggleRule(
         socket,
         data as { duelId: string; rule: string },
         this.world,
       );
+    this.handlers["onDuel:toggle:rule"] = this.handlers["duel:toggle:rule"];
 
     this.handlers["duel:toggle:equipment"] = (socket, data) =>
       handleDuelToggleEquipment(
@@ -2406,20 +2427,34 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         data as { duelId: string; slot: string },
         this.world,
       );
+    this.handlers["onDuel:toggle:equipment"] =
+      this.handlers["duel:toggle:equipment"];
 
     this.handlers["duel:accept:rules"] = (socket, data) =>
       handleDuelAcceptRules(socket, data as { duelId: string }, this.world);
+    this.handlers["onDuel:accept:rules"] = this.handlers["duel:accept:rules"];
 
     this.handlers["duel:cancel"] = (socket, data) =>
       handleDuelCancel(socket, data as { duelId: string }, this.world);
+    this.handlers["onDuel:cancel"] = this.handlers["duel:cancel"];
 
     // Duel stakes handlers
-    this.handlers["duel:add:stake"] = (socket, data) =>
+    this.handlers["duel:add:stake"] = (socket, data) => {
+      const db = getDatabase(this.world);
+      if (!db) {
+        console.error(
+          "[ServerNetwork] Database not available for duel add stake",
+        );
+        return;
+      }
       handleDuelAddStake(
         socket,
         data as { duelId: string; inventorySlot: number; quantity: number },
         this.world,
+        db,
       );
+    };
+    this.handlers["onDuel:add:stake"] = this.handlers["duel:add:stake"];
 
     this.handlers["duel:remove:stake"] = (socket, data) =>
       handleDuelRemoveStake(
@@ -2427,15 +2462,19 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         data as { duelId: string; stakeIndex: number },
         this.world,
       );
+    this.handlers["onDuel:remove:stake"] = this.handlers["duel:remove:stake"];
 
     this.handlers["duel:accept:stakes"] = (socket, data) =>
       handleDuelAcceptStakes(socket, data as { duelId: string }, this.world);
+    this.handlers["onDuel:accept:stakes"] = this.handlers["duel:accept:stakes"];
 
     this.handlers["duel:accept:final"] = (socket, data) =>
       handleDuelAcceptFinal(socket, data as { duelId: string }, this.world);
+    this.handlers["onDuel:accept:final"] = this.handlers["duel:accept:final"];
 
     this.handlers["duel:forfeit"] = (socket, data) =>
       handleDuelForfeit(socket, data as { duelId: string }, this.world);
+    this.handlers["onDuel:forfeit"] = this.handlers["duel:forfeit"];
 
     // Friend/Social handlers
     this.handlers["onFriendRequest"] = (socket, data) =>
@@ -2584,6 +2623,24 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.socketManager.checkSockets();
   }
 
+  /**
+   * Get socket by player ID
+   */
+  getSocketByPlayerId(playerId: string): ServerSocket | undefined {
+    // Try using BroadcastManager first
+    if (this.broadcastManager?.getPlayerSocket) {
+      return this.broadcastManager.getPlayerSocket(playerId);
+    }
+
+    // Fallback to searching sockets map
+    for (const [, socket] of this.sockets) {
+      if (socket.player?.id === playerId) {
+        return socket;
+      }
+    }
+    return undefined;
+  }
+
   enqueue(socket: ServerSocket | Socket, method: string, data: unknown): void {
     this.queue.push([socket as ServerSocket, method, data]);
   }
@@ -2598,6 +2655,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   flush(): void {
     while (this.queue.length) {
       const [socket, method, data] = this.queue.shift()!;
+
+      // Debug: Log duel-related packets
+      if (method.includes("duel") || method.includes("Duel")) {
+        console.log(`[ServerNetwork] Received duel packet: ${method}`, data);
+      }
 
       const handler = this.handlers[method];
       if (handler) {
