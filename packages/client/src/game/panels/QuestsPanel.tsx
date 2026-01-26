@@ -72,7 +72,7 @@ function mapStatusToState(status: ServerQuestListItem["status"]): QuestState {
 }
 
 /** Map server difficulty to category (best effort mapping) */
-function mapDifficultyToCategory(difficulty: string): QuestCategory {
+function mapDifficultyToCategory(_difficulty: string): QuestCategory {
   // Default to "main" for now - could be extended with server-side category data
   return "main";
 }
