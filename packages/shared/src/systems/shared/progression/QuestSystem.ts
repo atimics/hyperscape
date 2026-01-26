@@ -1180,6 +1180,70 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
   }
 
   /**
+   * Abandon an active quest for a player
+   *
+   * Removes the quest from active quests and deletes progress from database
+   */
+  public async abandonQuest(
+    playerId: string,
+    questId: string,
+  ): Promise<boolean> {
+    const state = this.playerStates.get(playerId);
+    if (!state) {
+      this.logger.warn(`Cannot abandon quest: player ${playerId} not found`);
+      return false;
+    }
+
+    const progress = state.activeQuests.get(questId);
+    if (!progress) {
+      this.logger.warn(`Quest ${questId} not active for ${playerId}`);
+      return false;
+    }
+
+    const definition = this.questDefinitions.get(questId);
+    const questName = definition?.name || questId;
+
+    // Remove from active quests
+    state.activeQuests.delete(questId);
+    this.markActiveQuestsDirty(playerId);
+
+    // Delete from database
+    try {
+      const dbSystem = this.world.getSystem("database") as {
+        getQuestRepository?: () => {
+          abandonQuest: (playerId: string, questId: string) => Promise<void>;
+        };
+      };
+
+      if (dbSystem?.getQuestRepository) {
+        await dbSystem.getQuestRepository().abandonQuest(playerId, questId);
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to delete quest ${questId} from database for ${playerId}`,
+        error instanceof Error ? error : undefined,
+      );
+    }
+
+    // Send chat message
+    this.emitTypedEvent(EventType.CHAT_MESSAGE, {
+      playerId,
+      message: `You have abandoned the quest: ${questName}`,
+      type: "game",
+    });
+
+    // Emit quest abandoned event
+    this.emitTypedEvent(EventType.QUEST_ABANDONED, {
+      playerId,
+      questId,
+      questName,
+    });
+
+    this.logger.info(`Player ${playerId} abandoned quest: ${questId}`);
+    return true;
+  }
+
+  /**
    * Get player's quest points
    */
   public getQuestPoints(playerId: string): number {

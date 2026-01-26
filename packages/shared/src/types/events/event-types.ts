@@ -289,6 +289,7 @@ export enum EventType {
   QUEST_STARTED = "quest:started",
   QUEST_PROGRESSED = "quest:progressed",
   QUEST_COMPLETED = "quest:completed",
+  QUEST_ABANDONED = "quest:abandoned",
 
   // XP Lamp System
   XP_LAMP_USE_REQUEST = "xp_lamp:use_request",

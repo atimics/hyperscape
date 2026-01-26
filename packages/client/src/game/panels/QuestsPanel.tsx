@@ -28,6 +28,32 @@ interface QuestsPanelProps {
   world: ClientWorld;
 }
 
+/** LocalStorage key for pinned quests */
+const PINNED_QUESTS_KEY = "hyperscape_pinned_quests";
+
+/** Load pinned quest IDs from localStorage */
+function loadPinnedQuests(): Set<string> {
+  try {
+    const stored = localStorage.getItem(PINNED_QUESTS_KEY);
+    if (stored) {
+      const ids = JSON.parse(stored) as string[];
+      return new Set(ids);
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return new Set();
+}
+
+/** Save pinned quest IDs to localStorage */
+function savePinnedQuests(pinnedIds: Set<string>): void {
+  try {
+    localStorage.setItem(PINNED_QUESTS_KEY, JSON.stringify([...pinnedIds]));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 /** Server quest list item structure */
 interface ServerQuestListItem {
   id: string;
@@ -191,6 +217,33 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
   );
   const [loading, setLoading] = useState(true);
 
+  // Pinned quests (client-side only, persisted to localStorage)
+  const [pinnedQuestIds, setPinnedQuestIds] =
+    useState<Set<string>>(loadPinnedQuests);
+
+  // Listen for pin changes from other components (e.g., QuestDetailPanel)
+  useEffect(() => {
+    const handlePinChange = (event: Event) => {
+      const customEvent = event as CustomEvent<{
+        questId: string;
+        pinned: boolean;
+      }>;
+      const { questId, pinned } = customEvent.detail;
+      setPinnedQuestIds((prev) => {
+        const newSet = new Set(prev);
+        if (pinned) {
+          newSet.add(questId);
+        } else {
+          newSet.delete(questId);
+        }
+        return newSet;
+      });
+    };
+
+    window.addEventListener("questPinChanged", handlePinChange);
+    return () => window.removeEventListener("questPinChanged", handlePinChange);
+  }, []);
+
   // Fetch quest data from server
   useEffect(() => {
     const fetchQuestList = () => {
@@ -230,8 +283,16 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
     };
 
     // Refresh on quest events
-    const onQuestEvent = () => {
+    const onQuestEvent = (data?: { questId?: string }) => {
       fetchQuestList();
+
+      // If this event is for the currently selected quest, re-fetch its detail
+      const currentSelected = useQuestSelectionStore.getState().selectedQuest;
+      if (currentSelected && data?.questId === currentSelected.id) {
+        world.network?.send?.("getQuestDetail", {
+          questId: currentSelected.id,
+        });
+      }
     };
 
     // Register handlers
@@ -253,16 +314,17 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
     };
   }, [world]);
 
-  // Merge quest list with detailed quest data
+  // Merge quest list with detailed quest data and pinned state
   const mergedQuests = useMemo(() => {
     return allQuests.map((quest) => {
       const detail = questDetails.get(quest.id);
+      const pinned = pinnedQuestIds.has(quest.id);
       if (detail) {
-        return { ...quest, ...detail };
+        return { ...quest, ...detail, pinned };
       }
-      return quest;
+      return { ...quest, pinned };
     });
-  }, [allQuests, questDetails]);
+  }, [allQuests, questDetails, pinnedQuestIds]);
 
   // Filter and sort quests
   const filteredQuests = useMemo(() => {
@@ -307,20 +369,29 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
     [world],
   );
 
-  const handleAbandonQuest = useCallback(
-    (quest: Quest) => {
-      // Send abandon quest request to server
-      world.network?.send?.("questAbandon", { questId: quest.id });
-    },
-    [world],
-  );
-
   const handleTogglePin = useCallback(
     (quest: Quest) => {
-      // Toggle pinned state - this could be client-side only or synced
-      world.network?.send?.("questTogglePin", { questId: quest.id });
+      // Toggle pinned state - client-side only, persisted to localStorage
+      const newPinned = !pinnedQuestIds.has(quest.id);
+      setPinnedQuestIds((prev) => {
+        const newSet = new Set(prev);
+        if (newSet.has(quest.id)) {
+          newSet.delete(quest.id);
+        } else {
+          newSet.add(quest.id);
+        }
+        savePinnedQuests(newSet);
+        return newSet;
+      });
+
+      // Dispatch event to sync other components (e.g., QuestDetailPanel, QuestLog popup)
+      window.dispatchEvent(
+        new CustomEvent("questPinChanged", {
+          detail: { questId: quest.id, pinned: newPinned },
+        }),
+      );
     },
-    [world],
+    [pinnedQuestIds],
   );
 
   const handleTrackQuest = useCallback(
@@ -427,7 +498,6 @@ export function QuestsPanel({ world }: QuestsPanelProps) {
         onCategoryFilterChange={setCategoryFilter}
         onTogglePin={handleTogglePin}
         onAcceptQuest={handleAcceptQuest}
-        onAbandonQuest={handleAbandonQuest}
         onTrackQuest={handleTrackQuest}
         groupByCategory
         showSearch

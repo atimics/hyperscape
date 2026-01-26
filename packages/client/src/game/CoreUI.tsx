@@ -307,7 +307,17 @@ export function CoreUI({ world }: { world: ClientWorld }) {
     const onUIUpdate = (raw: unknown) => {
       const update = raw as { component: string; data: unknown };
       if (update.component === "player") {
-        setPlayerStats(update.data as PlayerStats);
+        const newData = update.data as PlayerStats;
+        // Merge with existing state to preserve prayer data (prayer is managed separately by PrayerSystem)
+        setPlayerStats((prev) =>
+          prev
+            ? {
+                ...newData,
+                // Preserve existing prayer data if new data doesn't include it
+                prayerPoints: newData.prayerPoints || prev.prayerPoints,
+              }
+            : newData,
+        );
       }
     };
 

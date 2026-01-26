@@ -77,8 +77,6 @@ export interface UseQuestLogResult {
   // Quest actions
   /** Accept/start a quest */
   acceptQuest: (questId: string) => void;
-  /** Abandon a quest */
-  abandonQuest: (questId: string) => void;
   /** Complete a quest */
   completeQuest: (questId: string) => void;
   /** Fail a quest */
@@ -298,16 +296,6 @@ export function useQuestLog(
     [updateQuestState],
   );
 
-  const abandonQuest = useCallback(
-    (questId: string) => {
-      updateQuestState(questId, "available", {
-        startedAt: undefined,
-        pinned: false,
-      });
-    },
-    [updateQuestState],
-  );
-
   const completeQuest = useCallback(
     (questId: string) => {
       updateQuestState(questId, "completed", {
@@ -423,7 +411,6 @@ export function useQuestLog(
 
     // Quest actions
     acceptQuest,
-    abandonQuest,
     completeQuest,
     failQuest,
     togglePinQuest,

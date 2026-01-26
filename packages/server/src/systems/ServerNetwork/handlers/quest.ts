@@ -15,6 +15,7 @@ import {
   getQuestListRateLimiter,
   getQuestDetailRateLimiter,
   getQuestAcceptRateLimiter,
+  getQuestAbandonRateLimiter,
   getQuestCompleteRateLimiter,
 } from "../services/SlidingWindowRateLimiter";
 
@@ -189,6 +190,51 @@ export async function handleQuestAccept(
     logger.info(`Player ${playerId} started quest ${questId}`);
   } else {
     logger.warn(`Failed to start quest ${questId} for player ${playerId}`);
+  }
+}
+
+/**
+ * Handle quest abandon request from client
+ * Called when player clicks "Abandon Quest" button
+ */
+export async function handleQuestAbandon(
+  socket: ServerSocket,
+  data: { questId: string },
+  world: World,
+): Promise<void> {
+  const playerId = getPlayerId(socket);
+  if (!playerId) {
+    logger.warn("No playerId for questAbandon request");
+    return;
+  }
+
+  // Rate limit check
+  if (!getQuestAbandonRateLimiter().check(playerId)) {
+    logger.debug(`Rate limit exceeded for ${playerId} on questAbandon`);
+    return;
+  }
+
+  const { questId } = data;
+
+  // Validate questId format (prevents log injection and invalid lookups)
+  if (!isValidQuestId(questId)) {
+    logger.warn("Invalid or missing questId format for questAbandon");
+    return;
+  }
+
+  const questSystem = world.getSystem("quest") as QuestSystem | undefined;
+  if (!questSystem) {
+    logger.warn("QuestSystem not available");
+    return;
+  }
+
+  // Abandon the quest
+  const success = await questSystem.abandonQuest(playerId, questId);
+
+  if (success) {
+    logger.info(`Player ${playerId} abandoned quest ${questId}`);
+  } else {
+    logger.warn(`Failed to abandon quest ${questId} for player ${playerId}`);
   }
 }
 
