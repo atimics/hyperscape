@@ -195,6 +195,9 @@ import {
   handleDuelToggleEquipment,
   handleDuelAcceptRules,
   handleDuelCancel,
+  handleDuelAddStake,
+  handleDuelRemoveStake,
+  handleDuelAcceptStakes,
 } from "./handlers/duel";
 import { getDatabase } from "./handlers/common";
 
@@ -2216,6 +2219,24 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     this.handlers["duel:cancel"] = (socket, data) =>
       handleDuelCancel(socket, data as { duelId: string }, this.world);
+
+    // Duel stakes handlers
+    this.handlers["duel:add:stake"] = (socket, data) =>
+      handleDuelAddStake(
+        socket,
+        data as { duelId: string; inventorySlot: number; quantity: number },
+        this.world,
+      );
+
+    this.handlers["duel:remove:stake"] = (socket, data) =>
+      handleDuelRemoveStake(
+        socket,
+        data as { duelId: string; stakeIndex: number },
+        this.world,
+      );
+
+    this.handlers["duel:accept:stakes"] = (socket, data) =>
+      handleDuelAcceptStakes(socket, data as { duelId: string }, this.world);
 
     // Friend/Social handlers
     this.handlers["onFriendRequest"] = (socket, data) =>

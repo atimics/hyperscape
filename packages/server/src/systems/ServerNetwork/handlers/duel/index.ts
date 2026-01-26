@@ -5,10 +5,10 @@
  *
  * - challenge.ts: Duel challenge initiation and response
  * - rules.ts: Toggle rules, accept rules
+ * - stakes.ts: Add, remove, accept stakes
  * - helpers.ts: Shared utilities (not exported externally)
  *
  * Future modules (to be added in later phases):
- * - stakes.ts: Add, remove, accept stakes
  * - confirmation.ts: Final confirmation handlers
  * - combat.ts: Forfeit handler
  */
@@ -23,3 +23,10 @@ export {
   handleDuelAcceptRules,
   handleDuelCancel,
 } from "./rules";
+
+// Stakes handlers
+export {
+  handleDuelAddStake,
+  handleDuelRemoveStake,
+  handleDuelAcceptStakes,
+} from "./stakes";

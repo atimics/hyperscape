@@ -5,9 +5,9 @@
  * - DuelChallengeModal: Incoming challenge popup
  * - DuelPanel: Main duel interface with screen switching
  * - RulesScreen: Rules negotiation screen
+ * - StakesScreen: Stakes negotiation screen
  *
  * Future components (to be added in later phases):
- * - StakesScreen: Stakes negotiation
  * - ConfirmScreen: Final confirmation
  */
 
@@ -24,3 +24,5 @@ export {
 } from "./DuelPanel";
 
 export { RulesScreen } from "./RulesScreen";
+
+export { StakesScreen } from "./StakesScreen";

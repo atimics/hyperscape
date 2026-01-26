@@ -515,6 +515,213 @@ export class DuelSystem {
   }
 
   // ============================================================================
+  // Public API - Stakes
+  // ============================================================================
+
+  /**
+   * Add an item to player's stakes
+   */
+  addStake(
+    duelId: string,
+    playerId: string,
+    inventorySlot: number,
+    itemId: string,
+    quantity: number,
+    value: number,
+  ): DuelOperationResult {
+    const session = this.duelSessions.get(duelId);
+    if (!session) {
+      return {
+        success: false,
+        error: "Duel not found.",
+        errorCode: DuelErrorCode.DUEL_NOT_FOUND,
+      };
+    }
+
+    // Must be in STAKES state
+    if (session.state !== "STAKES") {
+      return {
+        success: false,
+        error: "Cannot modify stakes at this stage.",
+        errorCode: DuelErrorCode.INVALID_STATE,
+      };
+    }
+
+    // Must be a participant
+    const isChallenger = playerId === session.challengerId;
+    const isTarget = playerId === session.targetId;
+    if (!isChallenger && !isTarget) {
+      return {
+        success: false,
+        error: "You're not in this duel.",
+        errorCode: DuelErrorCode.NOT_PARTICIPANT,
+      };
+    }
+
+    // Get the appropriate stakes array
+    const stakes = isChallenger
+      ? session.challengerStakes
+      : session.targetStakes;
+
+    // Check if this inventory slot is already staked
+    const existingIndex = stakes.findIndex(
+      (s) => s.inventorySlot === inventorySlot,
+    );
+    if (existingIndex >= 0) {
+      // Update existing stake quantity
+      stakes[existingIndex].quantity += quantity;
+      stakes[existingIndex].value += value;
+    } else {
+      // Add new stake
+      stakes.push({
+        inventorySlot,
+        itemId,
+        quantity,
+        value,
+      });
+    }
+
+    // Reset both players' acceptance when stakes change
+    session.challengerAccepted = false;
+    session.targetAccepted = false;
+
+    // Emit update
+    this.world.emit("duel:stakes:updated", {
+      duelId,
+      challengerStakes: session.challengerStakes,
+      targetStakes: session.targetStakes,
+      modifiedBy: playerId,
+    });
+
+    return { success: true };
+  }
+
+  /**
+   * Remove an item from player's stakes
+   */
+  removeStake(
+    duelId: string,
+    playerId: string,
+    stakeIndex: number,
+  ): DuelOperationResult {
+    const session = this.duelSessions.get(duelId);
+    if (!session) {
+      return {
+        success: false,
+        error: "Duel not found.",
+        errorCode: DuelErrorCode.DUEL_NOT_FOUND,
+      };
+    }
+
+    // Must be in STAKES state
+    if (session.state !== "STAKES") {
+      return {
+        success: false,
+        error: "Cannot modify stakes at this stage.",
+        errorCode: DuelErrorCode.INVALID_STATE,
+      };
+    }
+
+    // Must be a participant
+    const isChallenger = playerId === session.challengerId;
+    const isTarget = playerId === session.targetId;
+    if (!isChallenger && !isTarget) {
+      return {
+        success: false,
+        error: "You're not in this duel.",
+        errorCode: DuelErrorCode.NOT_PARTICIPANT,
+      };
+    }
+
+    // Get the appropriate stakes array
+    const stakes = isChallenger
+      ? session.challengerStakes
+      : session.targetStakes;
+
+    // Validate index
+    if (stakeIndex < 0 || stakeIndex >= stakes.length) {
+      return {
+        success: false,
+        error: "Invalid stake index.",
+        errorCode: DuelErrorCode.STAKE_NOT_FOUND,
+      };
+    }
+
+    // Remove the stake
+    stakes.splice(stakeIndex, 1);
+
+    // Reset both players' acceptance when stakes change
+    session.challengerAccepted = false;
+    session.targetAccepted = false;
+
+    // Emit update
+    this.world.emit("duel:stakes:updated", {
+      duelId,
+      challengerStakes: session.challengerStakes,
+      targetStakes: session.targetStakes,
+      modifiedBy: playerId,
+    });
+
+    return { success: true };
+  }
+
+  /**
+   * Accept current stakes
+   */
+  acceptStakes(duelId: string, playerId: string): DuelOperationResult {
+    const session = this.duelSessions.get(duelId);
+    if (!session) {
+      return {
+        success: false,
+        error: "Duel not found.",
+        errorCode: DuelErrorCode.DUEL_NOT_FOUND,
+      };
+    }
+
+    if (session.state !== "STAKES") {
+      return {
+        success: false,
+        error: "Cannot accept stakes at this stage.",
+        errorCode: DuelErrorCode.INVALID_STATE,
+      };
+    }
+
+    // Set acceptance
+    if (playerId === session.challengerId) {
+      session.challengerAccepted = true;
+    } else if (playerId === session.targetId) {
+      session.targetAccepted = true;
+    } else {
+      return {
+        success: false,
+        error: "You're not in this duel.",
+        errorCode: DuelErrorCode.NOT_PARTICIPANT,
+      };
+    }
+
+    // Check if both accepted
+    if (session.challengerAccepted && session.targetAccepted) {
+      // Move to confirmation screen
+      session.state = "CONFIRMING";
+      session.challengerAccepted = false;
+      session.targetAccepted = false;
+
+      this.world.emit("duel:state:changed", {
+        duelId,
+        state: session.state,
+      });
+    } else {
+      this.world.emit("duel:acceptance:updated", {
+        duelId,
+        challengerAccepted: session.challengerAccepted,
+        targetAccepted: session.targetAccepted,
+      });
+    }
+
+    return { success: true };
+  }
+
+  // ============================================================================
   // Private Methods
   // ============================================================================
 
