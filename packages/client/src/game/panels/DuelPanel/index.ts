@@ -8,6 +8,7 @@
  * - StakesScreen: Stakes negotiation screen
  * - ConfirmScreen: Final confirmation screen
  * - DuelCountdown: 3-2-1-FIGHT overlay
+ * - DuelResultModal: Win/loss result display
  */
 
 export {
@@ -33,3 +34,10 @@ export {
   createDefaultDuelCountdownState,
   type DuelCountdownState,
 } from "./DuelCountdown";
+
+export {
+  DuelResultModal,
+  createDefaultDuelResultState,
+  type DuelResultState,
+  type DuelResultItem,
+} from "./DuelResultModal";

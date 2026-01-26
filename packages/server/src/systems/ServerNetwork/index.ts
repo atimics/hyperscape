@@ -592,6 +592,83 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       }
     });
 
+    // Listen for duel completion and send results to both players
+    this.world.on("duel:completed", (event) => {
+      const {
+        duelId,
+        winnerId,
+        winnerName,
+        loserId,
+        loserName,
+        reason,
+        forfeit,
+        winnerReceives,
+        winnerReceivesValue,
+        challengerStakes,
+        targetStakes,
+      } = event as {
+        duelId: string;
+        winnerId: string;
+        winnerName: string;
+        loserId: string;
+        loserName: string;
+        reason: "death" | "forfeit";
+        forfeit: boolean;
+        winnerReceives: Array<{
+          itemId: string;
+          quantity: number;
+          value: number;
+        }>;
+        winnerReceivesValue: number;
+        challengerStakes: Array<{
+          itemId: string;
+          quantity: number;
+          value: number;
+        }>;
+        targetStakes: Array<{
+          itemId: string;
+          quantity: number;
+          value: number;
+        }>;
+      };
+
+      // Calculate what the loser lost (their stakes)
+      const loserLostValue =
+        winnerId === loserId
+          ? 0
+          : winnerReceives.reduce((sum, item) => sum + item.value, 0);
+
+      // Send to winner
+      const winnerSocket = this.getSocketByPlayerId(winnerId);
+      if (winnerSocket) {
+        winnerSocket.emit("duelCompleted", {
+          duelId,
+          won: true,
+          opponentName: loserName,
+          itemsReceived: winnerReceives,
+          itemsLost: [],
+          totalValueWon: winnerReceivesValue,
+          totalValueLost: 0,
+          forfeit,
+        });
+      }
+
+      // Send to loser
+      const loserSocket = this.getSocketByPlayerId(loserId);
+      if (loserSocket) {
+        loserSocket.emit("duelCompleted", {
+          duelId,
+          won: false,
+          opponentName: winnerName,
+          itemsReceived: [],
+          itemsLost: winnerReceives,
+          totalValueWon: 0,
+          totalValueLost: loserLostValue,
+          forfeit,
+        });
+      }
+    });
+
     // Listen for player teleport events (used by duel system)
     this.world.on("player:teleport", (event) => {
       const { playerId, position, rotation } = event as {

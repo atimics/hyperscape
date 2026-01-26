@@ -1336,6 +1336,29 @@ export class DuelSystem {
   ): void {
     session.state = "FINISHED";
     session.winnerId = winnerId;
+    session.finishedAt = Date.now();
+
+    // Calculate what each player staked
+    const winnerIsChallenger = winnerId === session.challengerId;
+    const winnerStakes = winnerIsChallenger
+      ? session.challengerStakes
+      : session.targetStakes;
+    const loserStakes = winnerIsChallenger
+      ? session.targetStakes
+      : session.challengerStakes;
+
+    const winnerName = winnerIsChallenger
+      ? session.challengerName
+      : session.targetName;
+    const loserName = winnerIsChallenger
+      ? session.targetName
+      : session.challengerName;
+
+    // Calculate total values
+    const winnerReceivesValue = loserStakes.reduce(
+      (sum, s) => sum + s.value,
+      0,
+    );
 
     // Transfer stakes to winner
     this.transferStakes(session, winnerId);
@@ -1343,12 +1366,20 @@ export class DuelSystem {
     // Teleport loser to hospital
     this.teleportToHospital(loserId);
 
-    // Emit duel completed event
+    // Teleport winner to lobby
+    this.teleportToLobby(winnerId);
+
+    // Emit duel completed event with full details
     this.world.emit("duel:completed", {
       duelId: session.duelId,
       winnerId,
+      winnerName,
       loserId,
+      loserName,
       reason,
+      forfeit: reason === "forfeit",
+      winnerReceives: loserStakes,
+      winnerReceivesValue,
       challengerStakes: session.challengerStakes,
       targetStakes: session.targetStakes,
     });
@@ -1455,24 +1486,114 @@ export class DuelSystem {
   }
 
   /**
-   * Return staked items to both players
+   * Return staked items to both players (on cancel/disconnect)
    */
-  private returnStakedItems(_session: DuelSession): void {
-    // TODO: Implement stake return via InventorySystem
+  private returnStakedItems(session: DuelSession): void {
+    // Return challenger's stakes
+    if (session.challengerStakes.length > 0) {
+      this.world.emit("duel:stakes:return", {
+        playerId: session.challengerId,
+        stakes: session.challengerStakes,
+        reason: "duel_cancelled",
+      });
+    }
+
+    // Return target's stakes
+    if (session.targetStakes.length > 0) {
+      this.world.emit("duel:stakes:return", {
+        playerId: session.targetId,
+        stakes: session.targetStakes,
+        reason: "duel_cancelled",
+      });
+    }
   }
 
   /**
    * Transfer all stakes to the winner
    */
-  private transferStakes(_session: DuelSession, _winnerId: string): void {
-    // TODO: Implement stake transfer via InventorySystem
+  private transferStakes(session: DuelSession, winnerId: string): void {
+    const loserId =
+      winnerId === session.challengerId
+        ? session.targetId
+        : session.challengerId;
+
+    // Get winner's stakes (they keep their own)
+    const winnerStakes =
+      winnerId === session.challengerId
+        ? session.challengerStakes
+        : session.targetStakes;
+
+    // Get loser's stakes (transferred to winner)
+    const loserStakes =
+      winnerId === session.challengerId
+        ? session.targetStakes
+        : session.challengerStakes;
+
+    // Calculate total values
+    const winnerOwnValue = winnerStakes.reduce((sum, s) => sum + s.value, 0);
+    const winnerReceivesValue = loserStakes.reduce(
+      (sum, s) => sum + s.value,
+      0,
+    );
+
+    // Emit stake transfer event
+    this.world.emit("duel:stakes:transfer", {
+      winnerId,
+      loserId,
+      duelId: session.duelId,
+      winnerReceives: loserStakes,
+      winnerKeeps: winnerStakes,
+      loserLoses: loserStakes,
+      totalWinnings: winnerReceivesValue,
+      winnerOwnStakeValue: winnerOwnValue,
+    });
+
+    // Return winner's own stakes to their inventory
+    if (winnerStakes.length > 0) {
+      this.world.emit("duel:stakes:return", {
+        playerId: winnerId,
+        stakes: winnerStakes,
+        reason: "duel_won",
+      });
+    }
+
+    // Give loser's stakes to winner
+    if (loserStakes.length > 0) {
+      this.world.emit("duel:stakes:award", {
+        playerId: winnerId,
+        stakes: loserStakes,
+        reason: "duel_won",
+        fromPlayerId: loserId,
+      });
+    }
   }
 
   /**
-   * Teleport player to hospital spawn point
+   * Teleport player to hospital spawn point (loser)
    */
-  private teleportToHospital(_playerId: string): void {
-    // TODO: Implement teleportation to hospital
+  private teleportToHospital(playerId: string): void {
+    // Hospital spawn point - can be configured from world data
+    const hospitalSpawn = { x: 3200, y: 0, z: 3200 };
+
+    this.world.emit("player:teleport", {
+      playerId,
+      position: hospitalSpawn,
+      rotation: 0,
+    });
+  }
+
+  /**
+   * Teleport player to duel arena lobby (winner)
+   */
+  private teleportToLobby(playerId: string): void {
+    // Lobby spawn point - center of duel arena lobby area
+    const lobbySpawn = { x: 3370, y: 0, z: 3220 };
+
+    this.world.emit("player:teleport", {
+      playerId,
+      position: lobbySpawn,
+      rotation: 0,
+    });
   }
 
   /**
