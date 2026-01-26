@@ -1097,6 +1097,32 @@ function MenuBarPanel({
     ).width;
   }, [buttonCount]);
 
+  const globalMinHeight = useMemo(() => {
+    // Minimum: 1-row layout at minimum button size
+    return calculateMenuBarContentSize(
+      buttonCount,
+      1,
+      MENUBAR_BUTTON_GAP,
+      MENUBAR_PADDING,
+      MENUBAR_MIN_BUTTON_SIZE,
+    ).height;
+  }, [buttonCount]);
+
+  const globalMaxHeight = useMemo(() => {
+    // Maximum: max-rows layout (e.g., 3x3 for 9 buttons)
+    const maxRows = Math.ceil(Math.sqrt(buttonCount));
+    return calculateMenuBarContentSize(
+      Math.ceil(buttonCount / maxRows),
+      maxRows,
+      MENUBAR_BUTTON_GAP,
+      MENUBAR_PADDING,
+      MENUBAR_MAX_BUTTON_SIZE,
+    ).height;
+  }, [buttonCount]);
+
+  // Get current window state for position adjustments
+  const currentWindow = useWindowStore((s) => s.windows.get(windowId || ""));
+
   // Update window constraints and snap height when layout rows change
   useEffect(() => {
     if (!windowId) return;
@@ -1105,7 +1131,7 @@ function MenuBarPanel({
     const isInitialMount = prevRowsRef.current === null;
     const rowsChanged = prevRowsRef.current !== currentRows;
 
-    // Calculate exact content height for current layout
+    // Calculate exact content dimensions for current layout
     const contentHeight = calculateMenuBarContentSize(
       layout.cols,
       currentRows,
@@ -1114,27 +1140,62 @@ function MenuBarPanel({
       layout.buttonSize,
     ).height;
 
-    // Always update height constraint to match current layout
-    // Width can vary freely within global bounds to allow layout transitions
+    const contentWidth = calculateMenuBarContentSize(
+      layout.cols,
+      currentRows,
+      MENUBAR_BUTTON_GAP,
+      MENUBAR_PADDING,
+      layout.buttonSize,
+    ).width;
+
+    // Allow height to vary between min and max possible layouts
+    // This enables resize-triggered layout transitions
     updateWindow(windowId, {
-      minSize: { width: globalMinWidth, height: contentHeight },
-      maxSize: { width: globalMaxWidth, height: contentHeight },
+      minSize: { width: globalMinWidth, height: globalMinHeight },
+      maxSize: { width: globalMaxWidth, height: globalMaxHeight },
     });
 
-    // On row count change, also snap the window size
+    // On row count change, snap the window size and reposition to keep on screen
     if (isInitialMount || rowsChanged) {
       prevRowsRef.current = currentRows;
 
-      const contentWidth = calculateMenuBarContentSize(
-        layout.cols,
-        currentRows,
-        MENUBAR_BUTTON_GAP,
-        MENUBAR_PADDING,
-        layout.buttonSize,
-      ).width;
+      // Get viewport dimensions
+      const viewport = {
+        width: typeof window !== "undefined" ? window.innerWidth : 1920,
+        height: typeof window !== "undefined" ? window.innerHeight : 1080,
+      };
+
+      // Calculate new position to keep window on screen
+      // If window was at an edge, keep it at that edge with new size
+      let newX = currentWindow?.position.x ?? 0;
+      let newY = currentWindow?.position.y ?? 0;
+      const oldWidth = currentWindow?.size.width ?? contentWidth;
+      const oldHeight = currentWindow?.size.height ?? contentHeight;
+
+      // Edge detection threshold
+      const edgeThreshold = 15;
+
+      // Check if window was at right edge - keep right edge aligned
+      const wasAtRightEdge =
+        Math.abs(newX + oldWidth - viewport.width) < edgeThreshold;
+      if (wasAtRightEdge) {
+        newX = viewport.width - contentWidth;
+      }
+
+      // Check if window was at bottom edge - keep bottom edge aligned
+      const wasAtBottomEdge =
+        Math.abs(newY + oldHeight - viewport.height) < edgeThreshold;
+      if (wasAtBottomEdge) {
+        newY = viewport.height - contentHeight;
+      }
+
+      // Clamp to viewport to ensure window stays on screen
+      newX = Math.max(0, Math.min(newX, viewport.width - contentWidth));
+      newY = Math.max(0, Math.min(newY, viewport.height - contentHeight));
 
       updateWindow(windowId, {
         size: { width: contentWidth, height: contentHeight },
+        position: { x: newX, y: newY },
       });
     }
   }, [
@@ -1144,7 +1205,13 @@ function MenuBarPanel({
     layout.buttonSize,
     globalMinWidth,
     globalMaxWidth,
+    globalMinHeight,
+    globalMaxHeight,
     updateWindow,
+    currentWindow?.position.x,
+    currentWindow?.position.y,
+    currentWindow?.size.width,
+    currentWindow?.size.height,
   ]);
 
   return (
