@@ -773,7 +773,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       // Clear any in-progress movement by cleaning up the player's movement state
       this.tileMovementManager.cleanup(playerId);
 
-      // Send teleport to client (position as array to match client expectation)
+      // Send teleport to the teleporting player
       const socket = this.getSocketByPlayerId(playerId);
       if (socket) {
         socket.send("playerTeleport", {
@@ -783,12 +783,17 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         });
       }
 
-      // Broadcast position update to all other clients so they see the teleport
+      // Broadcast teleport to ALL other clients so they see the teleport
       // This is critical for duel arena - both players need to see each other teleport
-      // Use socket.id to exclude the teleporting player (they already got playerTeleport)
+      // We send playerTeleport (not entityModified) because remote players have tile state
+      // and entityModified position updates are skipped for tile-controlled entities
       this.broadcastManager.sendToAll(
-        "entityModified",
-        { id: playerId, changes: { p: [position.x, position.y, position.z] } },
+        "playerTeleport",
+        {
+          playerId,
+          position: [position.x, position.y, position.z],
+          rotation,
+        },
         socket?.id,
       );
     });

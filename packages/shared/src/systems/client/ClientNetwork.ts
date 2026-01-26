@@ -3478,14 +3478,15 @@ export class ClientNetwork extends SystemBase {
     playerId: string;
     position: [number, number, number];
   }) => {
-    const player = this.world.entities.player;
-    if (player instanceof PlayerLocal) {
-      const pos = _v3_1.set(
-        data.position[0],
-        data.position[1],
-        data.position[2],
-      );
+    const pos = _v3_1.set(data.position[0], data.position[1], data.position[2]);
 
+    // Check if this is the local player
+    const localPlayer = this.world.entities.player;
+    const isLocalPlayer =
+      localPlayer instanceof PlayerLocal && localPlayer.id === data.playerId;
+
+    if (isLocalPlayer) {
+      // Local player teleport
       // CRITICAL: Reset tile interpolator state BEFORE teleporting
       // Otherwise the tile movement system will immediately pull player back
       this.tileInterpolator.syncPosition(data.playerId, {
@@ -3495,17 +3496,40 @@ export class ClientNetwork extends SystemBase {
       });
 
       // Clear the tile movement flags on player data
-      player.data.tileInterpolatorControlled = false;
-      player.data.tileMovementActive = false;
+      localPlayer.data.tileInterpolatorControlled = false;
+      localPlayer.data.tileMovementActive = false;
 
       // Now teleport the player
-      player.teleport(pos);
+      localPlayer.teleport(pos);
 
       // Emit event for UI (e.g., home teleport completion)
       this.world.emit(EventType.PLAYER_TELEPORTED, {
         playerId: data.playerId,
         position: { x: pos.x, y: pos.y, z: pos.z },
       });
+    } else {
+      // Remote player teleport - update their position so we see them move
+      const remotePlayer = this.world.entities.players?.get(data.playerId);
+      if (remotePlayer) {
+        // Reset tile interpolator state for this remote player
+        this.tileInterpolator.syncPosition(data.playerId, {
+          x: pos.x,
+          y: pos.y,
+          z: pos.z,
+        });
+
+        // Update their position directly
+        if (remotePlayer.position) {
+          remotePlayer.position.x = pos.x;
+          remotePlayer.position.y = pos.y;
+          remotePlayer.position.z = pos.z;
+        }
+
+        // Also update node position if available
+        if (remotePlayer.node) {
+          remotePlayer.node.position.set(pos.x, pos.y, pos.z);
+        }
+      }
     }
   };
 
