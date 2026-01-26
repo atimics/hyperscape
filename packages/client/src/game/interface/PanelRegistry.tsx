@@ -345,16 +345,16 @@ export const PANEL_CONFIG: Record<string, PanelConfig> = {
   },
   // Equipment - fixed layout, needs specific dimensions for slot arrangement
   equipment: {
-    minSize: { width: 180, height: 260 },
-    preferredSize: { width: 220, height: 320 },
+    minSize: { width: 160, height: 220 },
+    preferredSize: { width: 200, height: 280 },
     maxSize: { width: 300, height: 420 },
     scrollable: false,
     resizable: true,
     scaleFactor: { min: 0.85, max: 1.15 },
     responsive: {
-      mobile: { width: 180, height: 280 },
-      tablet: { width: 200, height: 300 },
-      desktop: { width: 220, height: 320 },
+      mobile: { width: 165, height: 240 },
+      tablet: { width: 180, height: 260 },
+      desktop: { width: 200, height: 280 },
     },
     mobileLayout: {
       drawerType: "sheet",
@@ -505,15 +505,15 @@ export const PANEL_CONFIG: Record<string, PanelConfig> = {
   },
   // Chat - needs width for messages, panel handles own scrolling
   chat: {
-    minSize: { width: 280, height: 280 },
+    minSize: { width: 100, height: 150 },
     preferredSize: { width: 400, height: 450 },
     // No maxSize - allow unlimited resizing in edit mode (like minimap)
     scrollable: false,
     resizable: true,
     // No scaleFactor - use preferredSize directly without scaling limits
     responsive: {
-      mobile: { width: 320, height: 350 },
-      tablet: { width: 380, height: 420 },
+      mobile: { width: 200, height: 300 },
+      tablet: { width: 200, height: 380 },
       desktop: { width: 400, height: 450 },
     },
     mobileLayout: {

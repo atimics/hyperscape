@@ -65,11 +65,11 @@ export const MOBILE_EQUIPMENT = {
   /** Number of columns in mobile equipment grid */
   columns: 2,
   /** Slot height */
-  slotHeight: 52,
+  slotHeight: 58,
   /** Gap between slots */
   gap: 6,
   /** Padding inside panel */
-  padding: 8,
+  padding: 6,
 } as const;
 
 /** Skills panel configuration for mobile - matches desktop 3-column layout */
@@ -77,7 +77,7 @@ export const MOBILE_SKILLS = {
   /** Number of columns in mobile skills grid (3 like desktop) */
   columns: 3,
   /** Minimum card height - compact like desktop */
-  cardHeight: 38,
+  cardHeight: 36,
   /** Gap between cards */
   gap: 4,
   /** Icon size in skill cards */
