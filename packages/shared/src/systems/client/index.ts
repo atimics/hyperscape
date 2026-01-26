@@ -20,6 +20,7 @@ export { DamageSplatSystem } from "./DamageSplatSystem";
 export { XPDropSystem } from "./XPDropSystem";
 export { ZoneVisualsSystem } from "./ZoneVisualsSystem";
 export { ResourceTileDebugSystem } from "./ResourceTileDebugSystem";
+export { DuelArenaVisualsSystem } from "./DuelArenaVisualsSystem";
 
 // New interaction system (replaces legacy InteractionSystem)
 export { InteractionRouter } from "./interaction";

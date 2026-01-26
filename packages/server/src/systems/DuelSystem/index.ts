@@ -140,6 +140,13 @@ export class DuelSystem {
   /** Cleanup interval handle */
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
+  /** Disconnected players during combat - maps playerId to timeout handle */
+  private disconnectTimers: Map<string, ReturnType<typeof setTimeout>> =
+    new Map();
+
+  /** Duration before auto-forfeit on disconnect during combat (ms) */
+  private static readonly DISCONNECT_TIMEOUT_MS = 30_000;
+
   constructor(world: World) {
     this.world = world;
     this.pendingDuels = new PendingDuelManager(world);
@@ -186,6 +193,12 @@ export class DuelSystem {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
     }
+
+    // Clear all disconnect timers
+    for (const timer of this.disconnectTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.disconnectTimers.clear();
 
     // Cancel all active duels
     for (const [duelId] of this.duelSessions) {
@@ -1286,17 +1299,102 @@ export class DuelSystem {
   }
 
   /**
-   * Handle player disconnect during duel
+   * Handle player disconnect during duel (public API for ServerNetwork)
    */
-  private handlePlayerDisconnect(playerId: string): void {
+  onPlayerDisconnect(playerId: string): void {
     // Cancel any pending challenges
     this.pendingDuels.cancelPlayerChallenges(playerId);
 
-    // Cancel active duel
+    // Check if player is in an active duel
     const duelId = this.playerDuels.get(playerId);
-    if (duelId) {
-      this.cancelDuel(duelId, "player_disconnected", playerId);
+    if (!duelId) return;
+
+    const session = this.duelSessions.get(duelId);
+    if (!session) return;
+
+    // If in FIGHTING state, start disconnect timer instead of immediate cancel
+    if (session.state === "FIGHTING") {
+      this.startDisconnectTimer(playerId, session);
+      return;
     }
+
+    // For setup states (RULES, STAKES, CONFIRMING, COUNTDOWN), cancel immediately
+    this.cancelDuel(duelId, "player_disconnected", playerId);
+  }
+
+  /**
+   * Handle player reconnect during duel
+   */
+  onPlayerReconnect(playerId: string): void {
+    // Clear any pending disconnect timer
+    const timer = this.disconnectTimers.get(playerId);
+    if (timer) {
+      clearTimeout(timer);
+      this.disconnectTimers.delete(playerId);
+
+      // Notify both players that the disconnected player returned
+      const duelId = this.playerDuels.get(playerId);
+      if (duelId) {
+        const session = this.duelSessions.get(duelId);
+        if (session) {
+          this.world.emit("duel:player:reconnected", {
+            duelId,
+            playerId,
+            challengerId: session.challengerId,
+            targetId: session.targetId,
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * Start disconnect timer for player in active combat
+   */
+  private startDisconnectTimer(playerId: string, session: DuelSession): void {
+    // Don't start another timer if one already exists
+    if (this.disconnectTimers.has(playerId)) return;
+
+    // Notify opponent that player disconnected
+    this.world.emit("duel:player:disconnected", {
+      duelId: session.duelId,
+      playerId,
+      challengerId: session.challengerId,
+      targetId: session.targetId,
+      timeoutMs: DuelSystem.DISCONNECT_TIMEOUT_MS,
+    });
+
+    // If noForfeit rule is active, instant loss (can't forfeit, so disconnect = loss)
+    if (session.rules.noForfeit) {
+      const winnerId =
+        playerId === session.challengerId
+          ? session.targetId
+          : session.challengerId;
+      this.resolveDuel(session, winnerId, playerId, "forfeit");
+      return;
+    }
+
+    // Start 30-second timer for reconnection
+    const timer = setTimeout(() => {
+      this.disconnectTimers.delete(playerId);
+
+      // Check if duel still exists and player is still disconnected
+      const duelId = this.playerDuels.get(playerId);
+      if (!duelId) return;
+
+      const currentSession = this.duelSessions.get(duelId);
+      if (!currentSession || currentSession.state !== "FIGHTING") return;
+
+      // Auto-forfeit: disconnected player loses
+      const winnerId =
+        playerId === currentSession.challengerId
+          ? currentSession.targetId
+          : currentSession.challengerId;
+
+      this.resolveDuel(currentSession, winnerId, playerId, "forfeit");
+    }, DuelSystem.DISCONNECT_TIMEOUT_MS);
+
+    this.disconnectTimers.set(playerId, timer);
   }
 
   /**

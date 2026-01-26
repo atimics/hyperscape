@@ -5,9 +5,10 @@
  * when a duel is about to begin.
  *
  * Features:
- * - Large centered countdown number
- * - Animated scale/fade transitions
- * - "FIGHT!" display on 0
+ * - Large centered countdown number with color-coded stages
+ * - Animated scale/fade "punch" transitions
+ * - Expanding ring pulse effect
+ * - "FIGHT!" display on 0 with green glow
  * - Auto-hides after fight starts
  */
 
@@ -29,13 +30,32 @@ interface DuelCountdownProps {
 }
 
 // ============================================================================
+// Animation Phase Type
+// ============================================================================
+
+type AnimPhase = "idle" | "punch" | "settle";
+
+// ============================================================================
+// Color Config by Count
+// ============================================================================
+
+const COUNT_COLORS: Record<number, string> = {
+  3: "#ff4444", // Red
+  2: "#ff8800", // Orange
+  1: "#ffcc00", // Yellow
+  0: "#44ff44", // Green (FIGHT!)
+};
+
+// ============================================================================
 // Component
 // ============================================================================
 
 export function DuelCountdown({ state }: DuelCountdownProps) {
   const theme = useThemeStore((s) => s.theme);
-  const [animating, setAnimating] = useState(false);
+  const [animPhase, setAnimPhase] = useState<AnimPhase>("idle");
   const [displayValue, setDisplayValue] = useState<string>("");
+  const [ringScale, setRingScale] = useState(0);
+  const [ringOpacity, setRingOpacity] = useState(0);
 
   // Trigger animation when count changes
   useEffect(() => {
@@ -45,14 +65,49 @@ export function DuelCountdown({ state }: DuelCountdownProps) {
     const text = state.count === 0 ? "FIGHT!" : state.count.toString();
     setDisplayValue(text);
 
-    // Trigger scale animation
-    setAnimating(true);
-    const timer = setTimeout(() => setAnimating(false), 300);
+    // Start punch animation sequence
+    setAnimPhase("punch");
+    setRingScale(0.5);
+    setRingOpacity(0.8);
 
-    return () => clearTimeout(timer);
+    // Phase 2: Settle (scale back down)
+    const settleTimer = setTimeout(() => {
+      setAnimPhase("settle");
+    }, 150);
+
+    // Phase 3: Idle
+    const idleTimer = setTimeout(() => {
+      setAnimPhase("idle");
+    }, 400);
+
+    // Ring expansion
+    const ringTimer = setTimeout(() => {
+      setRingScale(2.5);
+      setRingOpacity(0);
+    }, 50);
+
+    return () => {
+      clearTimeout(settleTimer);
+      clearTimeout(idleTimer);
+      clearTimeout(ringTimer);
+    };
   }, [state.count, state.visible]);
 
   if (!state.visible) return null;
+
+  const countColor = COUNT_COLORS[state.count] || "#fff";
+
+  // Calculate transform based on animation phase
+  const getTransform = (): string => {
+    switch (animPhase) {
+      case "punch":
+        return "scale(1.4)";
+      case "settle":
+        return "scale(0.95)";
+      default:
+        return "scale(1)";
+    }
+  };
 
   // Styles
   const overlayStyle: CSSProperties = {
@@ -65,32 +120,58 @@ export function DuelCountdown({ state }: DuelCountdownProps) {
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    background: "rgba(0, 0, 0, 0.6)",
+    background: "rgba(0, 0, 0, 0.7)",
     zIndex: 10000,
     pointerEvents: "none",
   };
 
+  const countdownContainerStyle: CSSProperties = {
+    position: "relative",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  };
+
   const countdownStyle: CSSProperties = {
-    fontSize: state.count === 0 ? "120px" : "180px",
+    fontSize: state.count === 0 ? "140px" : "200px",
     fontWeight: theme.typography.fontWeight.bold,
-    color: state.count === 0 ? theme.colors.state.success : "#fff",
+    color: countColor,
     textShadow: `
-      0 0 20px ${state.count === 0 ? theme.colors.state.success : "rgba(255,255,255,0.8)"},
-      0 0 40px ${state.count === 0 ? theme.colors.state.success : "rgba(255,255,255,0.5)"},
-      0 4px 8px rgba(0,0,0,0.5)
+      0 0 30px ${countColor},
+      0 0 60px ${countColor}88,
+      0 0 100px ${countColor}44,
+      0 6px 12px rgba(0,0,0,0.6)
     `,
-    transform: animating ? "scale(1.3)" : "scale(1)",
-    opacity: animating ? 0.8 : 1,
-    transition: "transform 0.15s ease-out, opacity 0.15s ease-out",
+    transform: getTransform(),
+    transition:
+      animPhase === "punch"
+        ? "transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275)"
+        : "transform 0.25s ease-out",
     userSelect: "none",
+    zIndex: 2,
+  };
+
+  const ringStyle: CSSProperties = {
+    position: "absolute",
+    width: "200px",
+    height: "200px",
+    borderRadius: "50%",
+    border: `4px solid ${countColor}`,
+    transform: `scale(${ringScale})`,
+    opacity: ringOpacity,
+    transition: "transform 0.6s ease-out, opacity 0.6s ease-out",
+    pointerEvents: "none",
+    zIndex: 1,
   };
 
   const subtitleStyle: CSSProperties = {
-    fontSize: theme.typography.fontSize.lg,
+    fontSize: theme.typography.fontSize.xl,
     color: theme.colors.text.secondary,
-    marginTop: theme.spacing.md,
-    textShadow: "0 2px 4px rgba(0,0,0,0.5)",
+    marginTop: theme.spacing.lg,
+    textShadow: "0 2px 8px rgba(0,0,0,0.8)",
     userSelect: "none",
+    opacity: animPhase === "idle" ? 1 : 0.5,
+    transition: "opacity 0.2s ease-out",
   };
 
   const arenaTextStyle: CSSProperties = {
@@ -98,17 +179,26 @@ export function DuelCountdown({ state }: DuelCountdownProps) {
     top: theme.spacing.xl,
     left: "50%",
     transform: "translateX(-50%)",
-    fontSize: theme.typography.fontSize.md,
+    fontSize: theme.typography.fontSize.lg,
+    fontWeight: theme.typography.fontWeight.bold,
     color: theme.colors.text.primary,
-    textShadow: "0 2px 4px rgba(0,0,0,0.5)",
+    textShadow: "0 2px 8px rgba(0,0,0,0.8)",
     userSelect: "none",
+    letterSpacing: "2px",
+    textTransform: "uppercase",
   };
 
   return (
     <div style={overlayStyle}>
       <div style={arenaTextStyle}>Duel Arena</div>
 
-      <div style={countdownStyle}>{displayValue}</div>
+      <div style={countdownContainerStyle}>
+        {/* Expanding ring effect */}
+        <div style={ringStyle} />
+
+        {/* Main countdown number */}
+        <div style={countdownStyle}>{displayValue}</div>
+      </div>
 
       {state.count > 0 && (
         <div style={subtitleStyle}>vs {state.opponentName}</div>

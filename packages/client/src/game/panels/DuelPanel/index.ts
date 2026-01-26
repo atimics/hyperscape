@@ -9,6 +9,7 @@
  * - ConfirmScreen: Final confirmation screen
  * - DuelCountdown: 3-2-1-FIGHT overlay
  * - DuelResultModal: Win/loss result display
+ * - DuelHUD: In-combat overlay with opponent health and forfeit
  */
 
 export {
@@ -41,3 +42,9 @@ export {
   type DuelResultState,
   type DuelResultItem,
 } from "./DuelResultModal";
+
+export {
+  DuelHUD,
+  createDefaultDuelHUDState,
+  type DuelHUDState,
+} from "./DuelHUD";

@@ -669,6 +669,44 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       }
     });
 
+    // Listen for duel player disconnect (notify opponent)
+    this.world.on("duel:player:disconnected", (event) => {
+      const { duelId, playerId, challengerId, targetId, timeoutMs } = event as {
+        duelId: string;
+        playerId: string;
+        challengerId: string;
+        targetId: string;
+        timeoutMs: number;
+      };
+
+      // Notify the opponent that their duel partner disconnected
+      const opponentId = playerId === challengerId ? targetId : challengerId;
+      const opponentSocket = this.getSocketByPlayerId(opponentId);
+      if (opponentSocket) {
+        opponentSocket.emit("duelOpponentDisconnected", {
+          duelId,
+          timeoutMs,
+        });
+      }
+    });
+
+    // Listen for duel player reconnect (notify opponent)
+    this.world.on("duel:player:reconnected", (event) => {
+      const { duelId, playerId, challengerId, targetId } = event as {
+        duelId: string;
+        playerId: string;
+        challengerId: string;
+        targetId: string;
+      };
+
+      // Notify the opponent that their duel partner reconnected
+      const opponentId = playerId === challengerId ? targetId : challengerId;
+      const opponentSocket = this.getSocketByPlayerId(opponentId);
+      if (opponentSocket) {
+        opponentSocket.emit("duelOpponentReconnected", { duelId });
+      }
+    });
+
     // Listen for player teleport events (used by duel system)
     this.world.on("player:teleport", (event) => {
       const { playerId, position, rotation } = event as {
@@ -1015,7 +1053,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.world as { interactionSessionManager?: InteractionSessionManager }
     ).interactionSessionManager = this.interactionSessionManager;
 
-    // Clean up interaction sessions, pending attacks, follows, gathers, cooks, trades, and home teleport when player disconnects
+    // Clean up interaction sessions, pending attacks, follows, gathers, cooks, trades, duels, and home teleport when player disconnects
     this.world.on(EventType.PLAYER_LEFT, (event: { playerId: string }) => {
       this.interactionSessionManager.onPlayerDisconnect(event.playerId);
       this.pendingAttackManager.onPlayerDisconnect(event.playerId);
@@ -1023,10 +1061,16 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.pendingGatherManager.onPlayerDisconnect(event.playerId);
       this.pendingCookManager.onPlayerDisconnect(event.playerId);
       this.pendingTradeManager.onPlayerDisconnect(event.playerId);
+      this.duelSystem.onPlayerDisconnect(event.playerId);
       const homeTeleportManager = getHomeTeleportManager();
       if (homeTeleportManager) {
         homeTeleportManager.onPlayerDisconnect(event.playerId);
       }
+    });
+
+    // Handle player reconnection (clears disconnect timer if active duel)
+    this.world.on(EventType.PLAYER_JOINED, (event: { playerId: string }) => {
+      this.duelSystem.onPlayerReconnect(event.playerId);
     });
 
     // Initialization manager

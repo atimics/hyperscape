@@ -4,10 +4,15 @@
  * Modal displayed when a duel ends, showing whether the player
  * won or lost, along with the items they received or lost.
  *
+ * Features:
+ * - Animated entrance with icon pop and title slide
+ * - Victory trophy or defeat skull display
+ * - Items won/lost with gold values
+ *
  * Uses ModalWindow for consistent styling and behavior.
  */
 
-import { useCallback, useState, type CSSProperties } from "react";
+import { useCallback, useState, useEffect, type CSSProperties } from "react";
 import { ModalWindow, useThemeStore } from "@/ui";
 import { getItem } from "@hyperscape/shared";
 
@@ -44,10 +49,34 @@ interface DuelResultModalProps {
 export function DuelResultModal({ state, onClose }: DuelResultModalProps) {
   const theme = useThemeStore((s) => s.theme);
   const [buttonHover, setButtonHover] = useState(false);
+  const [animPhase, setAnimPhase] = useState<
+    "initial" | "icon" | "title" | "content"
+  >("initial");
 
   const handleClose = useCallback(() => {
     onClose();
   }, [onClose]);
+
+  // Entrance animation sequence
+  useEffect(() => {
+    if (!state.visible) {
+      setAnimPhase("initial");
+      return;
+    }
+
+    // Start animation sequence
+    setAnimPhase("initial");
+
+    const iconTimer = setTimeout(() => setAnimPhase("icon"), 100);
+    const titleTimer = setTimeout(() => setAnimPhase("title"), 300);
+    const contentTimer = setTimeout(() => setAnimPhase("content"), 500);
+
+    return () => {
+      clearTimeout(iconTimer);
+      clearTimeout(titleTimer);
+      clearTimeout(contentTimer);
+    };
+  }, [state.visible]);
 
   if (!state.visible) return null;
 
@@ -65,28 +94,50 @@ export function DuelResultModal({ state, onClose }: DuelResultModalProps) {
     return value.toLocaleString();
   };
 
-  // Styles
+  // Styles with entrance animations
   const resultHeaderStyle: CSSProperties = {
     textAlign: "center",
     marginBottom: theme.spacing.lg,
   };
 
   const iconStyle: CSSProperties = {
-    fontSize: "48px",
+    fontSize: "64px",
     marginBottom: theme.spacing.sm,
+    transform:
+      animPhase === "initial"
+        ? "scale(0) rotate(-180deg)"
+        : animPhase === "icon"
+          ? "scale(1.2) rotate(0deg)"
+          : "scale(1) rotate(0deg)",
+    opacity: animPhase === "initial" ? 0 : 1,
+    transition:
+      "transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s ease-out",
+    display: "inline-block",
+    filter: isWinner
+      ? "drop-shadow(0 0 15px rgba(255, 215, 0, 0.8))"
+      : "drop-shadow(0 0 15px rgba(255, 100, 100, 0.5))",
   };
 
   const titleStyle: CSSProperties = {
-    fontSize: theme.typography.fontSize.xl,
+    fontSize: theme.typography.fontSize.xxl || "28px",
     fontWeight: theme.typography.fontWeight.bold,
     color: isWinner ? theme.colors.state.success : theme.colors.state.danger,
-    textShadow: `0 0 10px ${isWinner ? theme.colors.state.success : theme.colors.state.danger}66`,
+    textShadow: `0 0 20px ${isWinner ? theme.colors.state.success : theme.colors.state.danger}88`,
     marginBottom: theme.spacing.xs,
+    transform:
+      animPhase === "initial" || animPhase === "icon"
+        ? "translateY(20px)"
+        : "translateY(0)",
+    opacity: animPhase === "initial" || animPhase === "icon" ? 0 : 1,
+    transition: "transform 0.3s ease-out, opacity 0.3s ease-out",
   };
 
   const subtitleStyle: CSSProperties = {
     fontSize: theme.typography.fontSize.sm,
     color: theme.colors.text.secondary,
+    transform: animPhase === "content" ? "translateY(0)" : "translateY(10px)",
+    opacity: animPhase === "content" ? 1 : 0,
+    transition: "transform 0.3s ease-out, opacity 0.3s ease-out",
   };
 
   const sectionStyle: CSSProperties = {
@@ -95,6 +146,9 @@ export function DuelResultModal({ state, onClose }: DuelResultModalProps) {
     borderRadius: theme.borderRadius.md,
     padding: theme.spacing.md,
     marginBottom: theme.spacing.md,
+    transform: animPhase === "content" ? "translateY(0)" : "translateY(15px)",
+    opacity: animPhase === "content" ? 1 : 0,
+    transition: "transform 0.4s ease-out, opacity 0.4s ease-out",
   };
 
   const sectionTitleStyle: CSSProperties = {
