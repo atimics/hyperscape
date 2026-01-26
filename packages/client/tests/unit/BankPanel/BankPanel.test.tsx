@@ -13,8 +13,25 @@ import type {
   BankItem,
   BankTab,
 } from "../../../src/game/panels/BankPanel/types";
-import type { PlayerEquipmentItems } from "@hyperscape/shared";
+import type { PlayerEquipmentItems, Item } from "@hyperscape/shared";
+import type { ClientWorld } from "../../../src/types";
 import { createMockWorld } from "../../mocks/MockWorld";
+
+// Helper to create a mock Item for testing
+function createMockItem(id: string, name: string, equipSlot?: string): Item {
+  return {
+    id,
+    name,
+    type: "weapon" as Item["type"],
+    description: `A ${name}`,
+    examine: `Examine ${name}`,
+    tradeable: true,
+    rarity: "common" as Item["rarity"],
+    modelPath: null,
+    iconPath: `/items/${id}.png`,
+    equipSlot: equipSlot as Item["equipSlot"],
+  };
+}
 
 // ============================================================================
 // TEST DATA FACTORIES
@@ -52,44 +69,25 @@ function createBankItems(count: number, tabIndex = 0): BankItem[] {
 }
 
 function createInventoryItems() {
+  // Only return actual items, not null slots
   return [
     { slot: 0, itemId: "bronze_sword", quantity: 1 },
     { slot: 1, itemId: "lobster", quantity: 5 },
     { slot: 5, itemId: "oak_logs_noted", quantity: 100 },
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
   ];
 }
 
 function createEquipment(): PlayerEquipmentItems {
   return {
-    helmet: { id: "iron_helmet", slot: "helmet" },
+    helmet: createMockItem("iron_helmet", "Iron Helmet", "helmet"),
     body: null,
     legs: null,
-    weapon: { id: "bronze_sword", slot: "weapon" },
+    boots: null,
+    gloves: null,
+    cape: null,
+    amulet: null,
+    ring: null,
+    weapon: createMockItem("bronze_sword", "Bronze Sword", "weapon"),
     shield: null,
     arrows: null,
   };
@@ -108,7 +106,7 @@ describe("BankPanel", () => {
     tabs: [] as BankTab[],
     alwaysSetPlaceholder: false,
     maxSlots: 480,
-    world: null as unknown as ReturnType<typeof createMockWorld>,
+    world: null as unknown as ClientWorld,
     inventory: createInventoryItems(),
     equipment: createEquipment(),
     coins: 1000,
@@ -118,7 +116,7 @@ describe("BankPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockWorld = createMockWorld();
-    defaultProps.world = mockWorld as unknown as typeof defaultProps.world;
+    defaultProps.world = mockWorld as unknown as ClientWorld;
     localStorage.clear();
   });
 
@@ -187,7 +185,10 @@ describe("BankPanel", () => {
         }),
       ];
       const items = [...tab0Items, ...tab1Items];
-      const tabs: BankTab[] = [{ name: "Tab 0" }, { name: "Tab 1" }];
+      const tabs: BankTab[] = [
+        { tabIndex: 0, iconItemId: null },
+        { tabIndex: 1, iconItemId: null },
+      ];
 
       render(<BankPanel {...defaultProps} items={items} tabs={tabs} />);
 
@@ -612,7 +613,10 @@ describe("BankPanel", () => {
 
   describe("tab management", () => {
     it("renders tab bar", () => {
-      const tabs: BankTab[] = [{ name: "Tab 0" }, { name: "Tab 1" }];
+      const tabs: BankTab[] = [
+        { tabIndex: 0, iconItemId: null },
+        { tabIndex: 1, iconItemId: null },
+      ];
       render(<BankPanel {...defaultProps} tabs={tabs} />);
 
       // Should see tab indicators - the "∞" All tab button
@@ -647,7 +651,10 @@ describe("BankPanel", () => {
         }),
       ];
       const items = [...tab0Items, ...tab1Items];
-      const tabs: BankTab[] = [{ name: "Main" }, { name: "Weapons" }];
+      const tabs: BankTab[] = [
+        { tabIndex: 0, iconItemId: null },
+        { tabIndex: 1, iconItemId: null },
+      ];
 
       const { rerender } = render(
         <BankPanel {...defaultProps} items={items} tabs={tabs} />,
@@ -670,7 +677,7 @@ describe("BankPanel", () => {
   describe("confirm modal", () => {
     it("shows confirm modal when deleting tab with items", () => {
       const items = createBankItems(5, 0);
-      const tabs: BankTab[] = [{ name: "Main" }];
+      const tabs: BankTab[] = [{ tabIndex: 0, iconItemId: null }];
       render(<BankPanel {...defaultProps} items={items} tabs={tabs} />);
 
       // Tab deletion with items should trigger confirm modal
@@ -693,7 +700,11 @@ describe("BankPanel", () => {
     });
 
     it("handles no inventory items", () => {
-      const emptyInventory = Array(28).fill(null);
+      const emptyInventory: {
+        slot: number;
+        itemId: string;
+        quantity: number;
+      }[] = [];
       render(<BankPanel {...defaultProps} inventory={emptyInventory} />);
 
       expect(screen.getByText("Inventory")).toBeInTheDocument();
@@ -704,6 +715,11 @@ describe("BankPanel", () => {
         helmet: null,
         body: null,
         legs: null,
+        boots: null,
+        gloves: null,
+        cape: null,
+        amulet: null,
+        ring: null,
         weapon: null,
         shield: null,
         arrows: null,
