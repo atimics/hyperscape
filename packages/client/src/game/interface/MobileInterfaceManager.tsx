@@ -613,32 +613,25 @@ export function MobileInterfaceManager({
         </ModalWindow>
       )}
 
+      {/* Dialogue Panel - renders with its own fixed positioning, no ModalWindow wrapper needed */}
       {dialogueData?.visible && (
-        <ModalWindow
+        <DialoguePanel
           visible={true}
+          world={world}
+          npcId={dialogueData.npcId}
+          npcName={dialogueData.npcName}
+          text={dialogueData.text}
+          responses={dialogueData.responses}
+          npcEntityId={dialogueData.npcEntityId}
+          onSelectResponse={(index, response) => {
+            // Send response to server - the panel handles this internally,
+            // but we can also track it here if needed
+            console.log(
+              `[MobileUI] Dialogue response selected: ${index} - ${response.text}`,
+            );
+          }}
           onClose={() => setDialogueData(null)}
-          title={dialogueData.npcName}
-          maxWidth="90vw"
-          maxHeight="80vh"
-        >
-          <DialoguePanel
-            visible={true}
-            world={world}
-            npcId={dialogueData.npcId}
-            npcName={dialogueData.npcName}
-            text={dialogueData.text}
-            responses={dialogueData.responses}
-            npcEntityId={dialogueData.npcEntityId}
-            onSelectResponse={(index, response) => {
-              // Send response to server - the panel handles this internally,
-              // but we can also track it here if needed
-              console.log(
-                `[MobileUI] Dialogue response selected: ${index} - ${response.text}`,
-              );
-            }}
-            onClose={() => setDialogueData(null)}
-          />
-        </ModalWindow>
+        />
       )}
 
       {smeltingData?.visible && (
