@@ -9,6 +9,7 @@
 import { type World, ALL_WORLD_AREAS } from "@hyperscape/shared";
 import type { ServerSocket } from "../../../../shared/types";
 import type { DuelSystem } from "../../../DuelSystem";
+import type { PendingDuelChallengeManager } from "../../PendingDuelChallengeManager";
 import { Logger, RateLimitService } from "../../services";
 import { sendToSocket, getPlayerId } from "../common";
 
@@ -29,6 +30,18 @@ export const rateLimiter = new RateLimitService();
 export function getDuelSystem(world: World): DuelSystem | undefined {
   const worldWithDuel = world as { duelSystem?: DuelSystem };
   return worldWithDuel.duelSystem;
+}
+
+/**
+ * Get PendingDuelChallengeManager from world
+ */
+export function getPendingDuelChallengeManager(
+  world: World,
+): PendingDuelChallengeManager | undefined {
+  const worldWithPending = world as {
+    pendingDuelChallengeManager?: PendingDuelChallengeManager;
+  };
+  return worldWithPending.pendingDuelChallengeManager;
 }
 
 // ============================================================================
@@ -133,6 +146,7 @@ export function isInDuelArenaZone(world: World, playerId: string): boolean {
 
 /**
  * Check if two players are within challenge range (15 tiles)
+ * Used for visibility/clickability range
  */
 export function arePlayersInChallengeRange(
   world: World,
@@ -149,4 +163,25 @@ export function arePlayersInChallengeRange(
   const distance = Math.max(dx, dz); // Chebyshev distance
 
   return distance <= 15;
+}
+
+/**
+ * Check if two players are adjacent (1 tile range)
+ * Used for actual challenge delivery (after walking to player)
+ */
+export function arePlayersAdjacent(
+  world: World,
+  player1Id: string,
+  player2Id: string,
+): boolean {
+  const player1 = world.entities.players?.get(player1Id);
+  const player2 = world.entities.players?.get(player2Id);
+
+  if (!player1?.position || !player2?.position) return false;
+
+  const dx = Math.abs(player1.position.x - player2.position.x);
+  const dz = Math.abs(player1.position.z - player2.position.z);
+  const distance = Math.max(dx, dz); // Chebyshev distance
+
+  return distance <= 1;
 }

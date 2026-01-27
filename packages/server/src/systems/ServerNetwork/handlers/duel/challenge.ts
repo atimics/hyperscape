@@ -13,6 +13,7 @@ import { Logger } from "../../services";
 import {
   rateLimiter,
   getDuelSystem,
+  getPendingDuelChallengeManager,
   getPlayerName,
   getPlayerCombatLevel,
   getSocketByPlayerId,
@@ -22,6 +23,7 @@ import {
   isPlayerOnline,
   isInDuelArenaZone,
   arePlayersInChallengeRange,
+  arePlayersAdjacent,
 } from "./helpers";
 
 // ============================================================================
@@ -34,7 +36,8 @@ import {
  * Requirements:
  * - Both players must be in the Duel Arena zone
  * - Neither player can be in another duel
- * - Players must be within 15 tiles of each other
+ * - Players must be within 15 tiles of each other (visibility range)
+ * - If not adjacent, walk to player first then send challenge
  */
 export function handleDuelChallenge(
   socket: ServerSocket,
@@ -117,9 +120,9 @@ export function handleDuelChallenge(
     return;
   }
 
-  // Check distance
+  // Check visibility range (15 tiles) - must be able to see target to initiate
   if (!arePlayersInChallengeRange(world, playerId, targetPlayerId)) {
-    Logger.debug("DuelChallenge", "Failed: Out of range", {
+    Logger.debug("DuelChallenge", "Failed: Out of visibility range", {
       playerId,
       targetPlayerId,
     });
@@ -153,81 +156,133 @@ export function handleDuelChallenge(
   const challengerLevel = getPlayerCombatLevel(world, playerId);
   const targetName = getPlayerName(world, targetPlayerId);
 
-  // Create duel challenge
-  const result = duelSystem.createChallenge(
-    playerId,
-    challengerName,
-    targetPlayerId,
-    targetName,
-  );
+  /**
+   * Send the actual duel challenge to target player
+   * Called immediately if adjacent, or after walking to player
+   */
+  const sendChallengeToTarget = () => {
+    // Re-validate that both players are still valid
+    if (!isPlayerOnline(world, targetPlayerId)) {
+      sendDuelError(socket, "Player is no longer available.", "PLAYER_OFFLINE");
+      return;
+    }
 
-  if (!result.success) {
-    Logger.debug("DuelChallenge", "Failed to create challenge", {
-      error: result.error,
-      errorCode: result.errorCode,
+    // Re-check interface blocking (may have changed while walking)
+    if (hasActiveInterfaceSession(world, targetPlayerId)) {
+      sendDuelError(socket, "That player is busy.", "PLAYER_BUSY");
+      return;
+    }
+
+    // Create duel challenge
+    const result = duelSystem.createChallenge(
+      playerId,
+      challengerName,
+      targetPlayerId,
+      targetName,
+    );
+
+    if (!result.success) {
+      Logger.debug("DuelChallenge", "Failed to create challenge", {
+        error: result.error,
+        errorCode: result.errorCode,
+      });
+      sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+      return;
+    }
+
+    Logger.debug("DuelChallenge", "Challenge created", {
+      challengeId: result.challengeId,
+      challengerId: playerId,
+      targetId: targetPlayerId,
     });
-    sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
-    return;
-  }
 
-  Logger.debug("DuelChallenge", "Challenge created", {
-    challengeId: result.challengeId,
-    challengerId: playerId,
-    targetId: targetPlayerId,
-  });
+    // Send notification to target player as OSRS-style chat message
+    const targetSocket = getSocketByPlayerId(world, targetPlayerId);
+    if (targetSocket) {
+      // Send as clickable chat message (like trade requests)
+      const chatMessage = {
+        id: uuid(),
+        from: "",
+        fromId: playerId,
+        body: `${challengerName} wishes to duel with you.`,
+        text: `${challengerName} wishes to duel with you.`,
+        timestamp: Date.now(),
+        createdAt: new Date().toISOString(),
+        type: "duel_challenge" as const,
+        challengeId: result.challengeId,
+      };
+      sendToSocket(targetSocket, "chatAdded", chatMessage);
 
-  // Send notification to target player as OSRS-style chat message
-  const targetSocket = getSocketByPlayerId(world, targetPlayerId);
-  if (targetSocket) {
-    // Send as clickable chat message (like trade requests)
-    const chatMessage = {
+      // Send structured challenge data for UI modal
+      sendToSocket(targetSocket, "duelChallengeIncoming", {
+        challengeId: result.challengeId,
+        fromPlayerId: playerId,
+        fromPlayerName: challengerName,
+        fromPlayerLevel: challengerLevel,
+      });
+    } else {
+      Logger.debug("DuelChallenge", "Target socket not found", {
+        targetPlayerId,
+      });
+      // Target socket not found - cancel the challenge
+      duelSystem.pendingDuels.cancelChallenge(result.challengeId!);
+      sendDuelError(socket, "Player is not available.", "PLAYER_OFFLINE");
+      return;
+    }
+
+    // Send confirmation to challenger
+    sendToSocket(socket, "duelChallengeSent", {
+      challengeId: result.challengeId,
+      targetPlayerId,
+      targetPlayerName: targetName,
+    });
+
+    // Also add chat message for challenger
+    const challengerChatMessage = {
       id: uuid(),
       from: "",
-      fromId: playerId,
-      body: `${challengerName} wishes to duel with you.`,
-      text: `${challengerName} wishes to duel with you.`,
+      body: `Sending duel challenge to ${targetName}...`,
+      text: `Sending duel challenge to ${targetName}...`,
       timestamp: Date.now(),
       createdAt: new Date().toISOString(),
-      type: "duel_challenge" as const,
-      challengeId: result.challengeId,
+      type: "system" as const,
     };
-    sendToSocket(targetSocket, "chatAdded", chatMessage);
+    sendToSocket(socket, "chatAdded", challengerChatMessage);
+  };
 
-    // Send structured challenge data for UI modal
-    sendToSocket(targetSocket, "duelChallengeIncoming", {
-      challengeId: result.challengeId,
-      fromPlayerId: playerId,
-      fromPlayerName: challengerName,
-      fromPlayerLevel: challengerLevel,
-    });
-  } else {
-    Logger.debug("DuelChallenge", "Target socket not found", {
+  // Check if already adjacent - if so, send challenge immediately
+  if (arePlayersAdjacent(world, playerId, targetPlayerId)) {
+    Logger.debug("DuelChallenge", "Players adjacent, sending challenge", {
+      playerId,
       targetPlayerId,
     });
-    // Target socket not found - cancel the challenge
-    duelSystem.pendingDuels.cancelChallenge(result.challengeId!);
-    sendDuelError(socket, "Player is not available.", "PLAYER_OFFLINE");
+    sendChallengeToTarget();
     return;
   }
 
-  // Send confirmation to challenger
-  sendToSocket(socket, "duelChallengeSent", {
-    challengeId: result.challengeId,
+  // Not adjacent - use PendingDuelChallengeManager to walk up to target first
+  const pendingChallengeManager = getPendingDuelChallengeManager(world);
+  if (!pendingChallengeManager) {
+    Logger.warn("DuelChallenge", "PendingDuelChallengeManager not available");
+    sendDuelError(
+      socket,
+      "You need to be closer to challenge that player.",
+      "TOO_FAR",
+    );
+    return;
+  }
+
+  Logger.debug("DuelChallenge", "Queueing walk-to-player challenge", {
+    playerId,
     targetPlayerId,
-    targetPlayerName: targetName,
   });
 
-  // Also add chat message for challenger
-  const challengerChatMessage = {
-    id: uuid(),
-    from: "",
-    body: `Sending duel challenge to ${targetName}...`,
-    text: `Sending duel challenge to ${targetName}...`,
-    timestamp: Date.now(),
-    createdAt: new Date().toISOString(),
-    type: "system" as const,
-  };
-  sendToSocket(socket, "chatAdded", challengerChatMessage);
+  // Queue pending challenge - player will walk up to target, then send challenge
+  pendingChallengeManager.queuePendingChallenge(
+    playerId,
+    targetPlayerId,
+    sendChallengeToTarget,
+  );
 }
 
 // ============================================================================

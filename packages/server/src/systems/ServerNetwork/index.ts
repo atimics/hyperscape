@@ -158,6 +158,7 @@ import { PendingAttackManager } from "./PendingAttackManager";
 import { PendingGatherManager } from "./PendingGatherManager";
 import { PendingCookManager } from "./PendingCookManager";
 import { PendingTradeManager } from "./PendingTradeManager";
+import { PendingDuelChallengeManager } from "./PendingDuelChallengeManager";
 import { FollowManager } from "./FollowManager";
 import { FaceDirectionManager } from "./FaceDirectionManager";
 import { handleFollowPlayer, handleChangePlayerName } from "./handlers/player";
@@ -288,6 +289,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   private pendingGatherManager!: PendingGatherManager;
   private pendingCookManager!: PendingCookManager;
   private pendingTradeManager!: PendingTradeManager;
+  private pendingDuelChallengeManager!: PendingDuelChallengeManager;
   private followManager!: FollowManager;
   private tradingSystem!: TradingSystem;
   private duelSystem!: DuelSystem;
@@ -537,6 +539,25 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     (
       this.world as { pendingTradeManager?: PendingTradeManager }
     ).pendingTradeManager = this.pendingTradeManager;
+
+    // Pending duel challenge manager - server-authoritative "walk to player and challenge" system
+    // OSRS-style: if player clicks to challenge someone far away, walk up first
+    this.pendingDuelChallengeManager = new PendingDuelChallengeManager(
+      this.world,
+      this.tileMovementManager,
+    );
+
+    // Register pending duel challenge processing (same priority as movement)
+    this.tickSystem.onTick(() => {
+      this.pendingDuelChallengeManager.processTick();
+    }, TickPriority.MOVEMENT);
+
+    // Store pending duel challenge manager on world so handlers can access it
+    (
+      this.world as {
+        pendingDuelChallengeManager?: PendingDuelChallengeManager;
+      }
+    ).pendingDuelChallengeManager = this.pendingDuelChallengeManager;
 
     // Trading system - server-authoritative player-to-player trading
     // Manages trade sessions, item offers, acceptance state, and atomic swaps
@@ -1234,6 +1255,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.pendingGatherManager.onPlayerDisconnect(event.playerId);
       this.pendingCookManager.onPlayerDisconnect(event.playerId);
       this.pendingTradeManager.onPlayerDisconnect(event.playerId);
+      this.pendingDuelChallengeManager.onPlayerDisconnect(event.playerId);
       this.duelSystem.onPlayerDisconnect(event.playerId);
       const homeTeleportManager = getHomeTeleportManager();
       if (homeTeleportManager) {
@@ -1624,6 +1646,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         this.pendingAttackManager.cancelPendingAttack(socket.player.id);
         this.followManager.stopFollowing(socket.player.id);
         this.pendingTradeManager.cancelPendingTrade(socket.player.id);
+        this.pendingDuelChallengeManager.cancelPendingChallenge(
+          socket.player.id,
+        );
         const homeTeleportManager = getHomeTeleportManager();
         if (homeTeleportManager?.isCasting(socket.player.id)) {
           homeTeleportManager.cancelCasting(socket.player.id, "Player moved");
