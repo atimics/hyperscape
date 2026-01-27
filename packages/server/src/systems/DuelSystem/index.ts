@@ -127,6 +127,9 @@ export class DuelSystem {
     // Initialize pending duel manager
     this.pendingDuels.init();
 
+    // Register arena wall collision to prevent players from escaping arenas
+    this.arenaPool.registerArenaWallCollision(this.world.collision);
+
     // Start periodic cleanup
     this.cleanupInterval = setInterval(() => {
       this.cleanupExpiredSessions();

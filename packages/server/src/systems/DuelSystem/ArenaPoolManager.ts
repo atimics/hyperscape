@@ -15,7 +15,13 @@
  * - Arena bounds used for movement clamping if noMovement rule
  */
 
-import type { Arena, ArenaSpawnPoint, ArenaBounds } from "@hyperscape/shared";
+import {
+  type Arena,
+  type ArenaSpawnPoint,
+  type ArenaBounds,
+  type ICollisionMatrix,
+  CollisionFlag,
+} from "@hyperscape/shared";
 
 // ============================================================================
 // Types
@@ -224,5 +230,46 @@ export class ArenaPoolManager {
    */
   getDuelIdForArena(arenaId: number): string | null {
     return this.arenas.get(arenaId)?.currentDuelId ?? null;
+  }
+
+  /**
+   * Register arena wall collision for all arenas.
+   * Blocks a 1-tile perimeter ring around each arena to prevent escape.
+   *
+   * @param collision - The world's collision matrix to register walls with
+   */
+  registerArenaWallCollision(collision: ICollisionMatrix): void {
+    for (const [arenaId, state] of this.arenas) {
+      const bounds = state.arena.bounds;
+
+      // Convert bounds to tile coordinates (floor for min, ceil for max)
+      const minX = Math.floor(bounds.min.x);
+      const maxX = Math.ceil(bounds.max.x);
+      const minZ = Math.floor(bounds.min.z);
+      const maxZ = Math.ceil(bounds.max.z);
+
+      // Block the perimeter ring OUTSIDE the arena
+      // North wall: one row north of arena (z = minZ - 1)
+      for (let x = minX - 1; x <= maxX + 1; x++) {
+        collision.addFlags(x, minZ - 1, CollisionFlag.BLOCKED);
+      }
+
+      // South wall: one row south of arena (z = maxZ + 1)
+      for (let x = minX - 1; x <= maxX + 1; x++) {
+        collision.addFlags(x, maxZ + 1, CollisionFlag.BLOCKED);
+      }
+
+      // West wall: one column west of arena (x = minX - 1)
+      // Skip corners already covered by north/south walls
+      for (let z = minZ; z <= maxZ; z++) {
+        collision.addFlags(minX - 1, z, CollisionFlag.BLOCKED);
+      }
+
+      // East wall: one column east of arena (x = maxX + 1)
+      // Skip corners already covered by north/south walls
+      for (let z = minZ; z <= maxZ; z++) {
+        collision.addFlags(maxX + 1, z, CollisionFlag.BLOCKED);
+      }
+    }
   }
 }
