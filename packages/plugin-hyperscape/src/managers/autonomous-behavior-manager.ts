@@ -95,7 +95,8 @@ export interface CurrentGoal {
     | "cooking"
     | "exploration"
     | "idle"
-    | "starter_items";
+    | "starter_items"
+    | "user_command";
   description: string;
   target: number;
   progress: number;
@@ -368,9 +369,8 @@ export class AutonomousBehaviorManager {
         );
 
         // Import and execute the user's action
-        const { pickupItemAction, dropItemAction } = await import(
-          "../actions/inventory.js"
-        );
+        const { pickupItemAction, dropItemAction } =
+          await import("../actions/inventory.js");
         const { attackEntityAction } = await import("../actions/combat.js");
         const { chopTreeAction } = await import("../actions/skills.js");
         const { moveToAction } = await import("../actions/movement.js");

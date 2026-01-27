@@ -115,6 +115,7 @@ export type WaterUniforms = {
   time: UniformFloat;
   sunDirection: UniformVec3;
   windStrength: UniformFloat;
+  reflectionIntensity: UniformFloat;
 };
 
 // Reflector node type from TSL
@@ -123,6 +124,13 @@ type ReflectorNode = ReturnType<typeof reflector> & {
   uvNode: ReturnType<typeof vec2>;
 };
 
+/**
+ * Water body type - determines shader and visual characteristics
+ * - lake: Inland water bodies with planar reflections (when enabled)
+ * - ocean: Large boundary water bodies without reflections, deeper colors
+ */
+export type WaterBodyType = "lake" | "ocean";
+
 // ============================================================================
 // WATER SYSTEM
 // ============================================================================
@@ -130,8 +138,10 @@ type ReflectorNode = ReturnType<typeof reflector> & {
 export class WaterSystem {
   private world: World;
   private waterTime = 0;
-  private waterMaterial?: MeshStandardNodeMaterial;
+  private lakeMaterial?: MeshStandardNodeMaterial; // Lake/pond water with reflections
+  private oceanMaterial?: MeshStandardNodeMaterial; // Ocean water without reflections
   private uniforms: WaterUniforms | null = null;
+  private oceanUniforms: WaterUniforms | null = null;
   private normalTex1?: THREE.Texture;
   private normalTex2?: THREE.Texture;
   private foamTex?: THREE.Texture;
@@ -149,12 +159,56 @@ export class WaterSystem {
   // Reflection state tracking for DevStats
   private reflectionActive = false;
 
+  // User preference for reflections (can be toggled)
+  private _reflectionsEnabled = true;
+
   constructor(world: World) {
     this.world = world;
   }
 
+  /**
+   * Get whether realtime water reflections are enabled
+   */
+  get reflectionsEnabled(): boolean {
+    return this._reflectionsEnabled;
+  }
+
+  /**
+   * Enable or disable realtime water reflections for lake/pond water
+   * Ocean water never has reflections regardless of this setting
+   */
+  setReflectionsEnabled(enabled: boolean): void {
+    this._reflectionsEnabled = enabled;
+
+    // Update reflection intensity uniform - this actually disables reflections in the shader
+    if (this.uniforms) {
+      this.uniforms.reflectionIntensity.value = enabled ? 0.4 : 0.0;
+    }
+
+    // Update reflector visibility based on setting
+    if (this.reflection?.target) {
+      // When disabled, hide the reflector to save GPU resources
+      if (!enabled) {
+        this.reflection.target.visible = false;
+        this.reflectionActive = false;
+      }
+      // When enabled, visibility will be controlled by frustum culling in update()
+    }
+
+    console.log(
+      `[WaterSystem] Realtime water reflections ${enabled ? "enabled" : "disabled"}`,
+    );
+  }
+
   get waterUniforms(): WaterUniforms | null {
     return this.uniforms;
+  }
+
+  /**
+   * Get the material for a specific water body type
+   */
+  getMaterial(type: WaterBodyType): MeshStandardNodeMaterial | undefined {
+    return type === "ocean" ? this.oceanMaterial : this.lakeMaterial;
   }
 
   /**
@@ -195,22 +249,28 @@ export class WaterSystem {
   async init(): Promise<void> {
     if (this.world.isServer) return;
 
-    // Create procedural textures (reduced resolution for performance)
-    this.normalTex1 = this.createNormalMap(256, 1.0, 42);
-    this.normalTex2 = this.createNormalMap(128, 2.0, 137);
-    this.foamTex = this.createFoamTexture(128);
+    // Create procedural textures asynchronously with yielding (prevents main thread blocking)
+    // These are CPU-intensive nested loops that can block for 50-100ms without yielding
+    this.normalTex1 = await this.createNormalMapAsync(256, 1.0, 42);
+    this.normalTex2 = await this.createNormalMapAsync(128, 2.0, 137);
+    this.foamTex = await this.createFoamTextureAsync(128);
 
-    // Create TSL reflector for planar reflections
+    // Create TSL reflector for planar reflections (lake water only)
     // This handles all the reflection camera, render target, and UV calculation automatically
     this.reflection = reflector({ resolutionScale: 0.45 }) as ReflectorNode;
     // Rotate to face upward (water is horizontal plane)
     this.reflection.target.rotateX(-Math.PI / 2);
     this.reflection.target.name = "WaterReflector";
 
-    // Create material AFTER reflector is set up
-    this.waterMaterial = this.createMaterial();
+    // Create lake material with reflections AFTER reflector is set up
+    this.lakeMaterial = this.createLakeMaterial();
 
-    console.log("[WaterSystem] Initialized with TSL planar reflections");
+    // Create ocean material without reflections (different visual style)
+    this.oceanMaterial = this.createOceanMaterial();
+
+    console.log(
+      "[WaterSystem] Initialized with lake (reflective) and ocean (non-reflective) shaders",
+    );
   }
 
   /**
@@ -344,19 +404,172 @@ export class WaterSystem {
     return tex;
   }
 
+  /**
+   * Async version of createNormalMap with row-based yielding to prevent main thread blocking.
+   * Processes ROW_BATCH_SIZE rows at a time, yielding between batches.
+   */
+  private async createNormalMapAsync(
+    size: number,
+    freq: number,
+    seed: number,
+  ): Promise<THREE.Texture> {
+    const data = new Uint8Array(size * size * 4);
+    const TAU = Math.PI * 2;
+    const ROW_BATCH_SIZE = 32; // Process 32 rows per batch
+
+    for (let yBatch = 0; yBatch < size; yBatch += ROW_BATCH_SIZE) {
+      const yEnd = Math.min(yBatch + ROW_BATCH_SIZE, size);
+
+      for (let y = yBatch; y < yEnd; y++) {
+        for (let x = 0; x < size; x++) {
+          const nx = x / size,
+            ny = y / size;
+          const cx = Math.cos(nx * TAU),
+            sx = Math.sin(nx * TAU);
+          const cy = Math.cos(ny * TAU),
+            sy = Math.sin(ny * TAU);
+
+          let dx = 0,
+            dy = 0;
+          for (let oct = 0; oct < 4; oct++) {
+            const f = freq * (1 << oct);
+            const amp = 0.4 / (1 << oct);
+            const s = seed + oct * 100;
+            const x4 = cx * f,
+              y4 = sx * f,
+              z4 = cy * f * 0.618,
+              w4 = sy * f * 0.618;
+            dx +=
+              (Math.sin(x4 + s + Math.cos(z4 * 0.7 + s * 0.3)) * 0.3 +
+                Math.cos(y4 + s * 0.5 + Math.sin(w4 * 1.3 + s * 0.7)) * 0.3 +
+                Math.sin(z4 * 1.1 + x4 * 0.8 + s * 0.2) * 0.2 +
+                Math.cos(w4 * 0.9 + y4 * 0.6 + s * 0.9) * 0.2) *
+              amp;
+            dy +=
+              (Math.sin(x4 + s + 50 + Math.cos(z4 * 0.7 + s * 0.3 + 50)) * 0.3 +
+                Math.cos(
+                  y4 + s * 0.5 + 50 + Math.sin(w4 * 1.3 + s * 0.7 + 50),
+                ) *
+                  0.3 +
+                Math.sin(z4 * 1.1 + x4 * 0.8 + s * 0.2 + 50) * 0.2 +
+                Math.cos(w4 * 0.9 + y4 * 0.6 + s * 0.9 + 50) * 0.2) *
+              amp;
+          }
+
+          const idx = (y * size + x) * 4;
+          data[idx] = Math.floor(Math.max(0, Math.min(255, 128 + dx * 80)));
+          data[idx + 1] = Math.floor(Math.max(0, Math.min(255, 128 + dy * 80)));
+          data[idx + 2] = 220;
+          data[idx + 3] = 255;
+        }
+      }
+
+      // Yield to main thread between batches
+      if (yEnd < size) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+    }
+
+    const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.generateMipmaps = true;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  /**
+   * Async version of createFoamTexture with row-based yielding to prevent main thread blocking.
+   */
+  private async createFoamTextureAsync(size: number): Promise<THREE.Texture> {
+    const data = new Uint8Array(size * size * 4);
+    const ROW_BATCH_SIZE = 16; // Process 16 rows per batch (foam has more computation per pixel)
+
+    // Pre-generate cells (small operation, no yield needed)
+    const cells: { x: number; y: number }[] = [];
+    let s = 12345;
+    for (let i = 0; i < 32; i++) {
+      s = (s * 1103515245 + 12345) & 0x7fffffff;
+      const cx = (s % 1000) / 1000;
+      s = (s * 1103515245 + 12345) & 0x7fffffff;
+      cells.push({ x: cx, y: (s % 1000) / 1000 });
+    }
+
+    for (let yBatch = 0; yBatch < size; yBatch += ROW_BATCH_SIZE) {
+      const yEnd = Math.min(yBatch + ROW_BATCH_SIZE, size);
+
+      for (let y = yBatch; y < yEnd; y++) {
+        for (let x = 0; x < size; x++) {
+          const px = x / size,
+            py = y / size;
+          let d1 = 999,
+            d2 = 999;
+
+          for (const c of cells) {
+            let dx = Math.abs(px - c.x),
+              dy = Math.abs(py - c.y);
+            if (dx > 0.5) dx = 1 - dx;
+            if (dy > 0.5) dy = 1 - dy;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            if (d < d1) {
+              d2 = d1;
+              d1 = d;
+            } else if (d < d2) d2 = d;
+          }
+
+          const edge = d2 - d1;
+          const foam = Math.pow(Math.max(0, 1 - edge * 8), 2);
+          const noise =
+            0.7 +
+            (Math.sin(px * 47 + py * 31) * 0.5 +
+              Math.sin(px * 97 + py * 67) * 0.25 +
+              Math.sin(px * 157 + py * 113) * 0.25) *
+              0.3;
+          const v = Math.floor(Math.max(0, Math.min(255, foam * noise * 255)));
+
+          const idx = (y * size + x) * 4;
+          data[idx] = data[idx + 1] = data[idx + 2] = data[idx + 3] = v;
+        }
+      }
+
+      // Yield to main thread between batches
+      if (yEnd < size) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+    }
+
+    const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.generateMipmaps = true;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
   // ==========================================================================
-  // SHADER MATERIAL
+  // SHADER MATERIALS
   // ==========================================================================
 
-  private createMaterial(): MeshStandardNodeMaterial {
+  /**
+   * Create lake/pond water material with planar reflections
+   */
+  private createLakeMaterial(): MeshStandardNodeMaterial {
     const uTime = uniform(float(0));
     const uSunDir = uniform(vec3(0.4, 0.8, 0.4));
     const uWind = uniform(float(1.0));
+    // Reflection intensity uniform - allows disabling reflections via settings
+    // Default 0.4 matches the hardcoded value we had before
+    const uReflectionIntensity = uniform(
+      float(this._reflectionsEnabled ? 0.4 : 0.0),
+    );
 
     this.uniforms = {
       time: uTime,
       sunDirection: uSunDir as unknown as UniformVec3,
       windStrength: uWind,
+      reflectionIntensity: uReflectionIntensity,
     };
 
     const material = new MeshStandardNodeMaterial();
@@ -579,8 +792,12 @@ export class WaterSystem {
       );
     })();
 
-    // Reflection goes to emissive, scaled by fresnel - reduced from 0.7 to 0.4 for more transparency
-    material.emissiveNode = mul(reflectionNode, mul(fresnelNode, float(0.4)));
+    // Reflection goes to emissive, scaled by fresnel and reflection intensity uniform
+    // When reflectionIntensity is 0, no reflections are rendered (saves GPU)
+    material.emissiveNode = mul(
+      reflectionNode,
+      mul(fresnelNode, uReflectionIntensity),
+    );
 
     // ========================================================================
     // OPACITY
@@ -636,29 +853,317 @@ export class WaterSystem {
     return material;
   }
 
+  /**
+   * Create ocean water material - no reflections, deeper colors, larger waves
+   * Ocean water is meant for world boundary/edge areas
+   */
+  private createOceanMaterial(): MeshStandardNodeMaterial {
+    const uTime = uniform(float(0));
+    const uSunDir = uniform(vec3(0.4, 0.8, 0.4));
+    const uWind = uniform(float(1.2)); // Slightly windier for ocean
+    // Ocean never has reflections, but we include the uniform for type consistency
+    const uReflectionIntensity = uniform(float(0));
+
+    this.oceanUniforms = {
+      time: uTime,
+      sunDirection: uSunDir as unknown as UniformVec3,
+      windStrength: uWind,
+      reflectionIntensity: uReflectionIntensity, // Always 0 for ocean
+    };
+
+    const material = new MeshStandardNodeMaterial();
+    material.transparent = true;
+    material.depthWrite = true;
+    material.side = THREE.DoubleSide;
+    material.roughness = WATER_ROUGHNESS;
+    material.metalness = 0.0;
+    material.fog = false;
+    material.envMapIntensity = 0;
+
+    const normalTex1 = this.normalTex1!;
+    const normalTex2 = this.normalTex2!;
+    const foamTex = this.foamTex!;
+
+    const wavePhase = (
+      wp: ShaderNodeInput,
+      t: ShaderNodeInput,
+      w: ShaderNodeInput,
+      wave: WaveParams,
+    ) => {
+      const wpNode = wp as ShaderNode;
+      const dotDP = add(
+        mul(wpNode.x, float(wave.Dx)),
+        mul(wpNode.z, float(wave.Dz)),
+      );
+      return add(mul(float(wave.w), dotDP), mul(mul(float(wave.phi), t), w));
+    };
+
+    // ========================================================================
+    // VERTEX: Gerstner Displacement (larger waves for ocean)
+    // ========================================================================
+    material.positionNode = Fn(() => {
+      const pos = positionLocal.xyz;
+      const wp = positionWorld;
+      const shoreMask = smoothstep(
+        float(0),
+        float(6),
+        attribute("shoreDistance", "float"),
+      );
+
+      let dx: ShaderNode = float(0),
+        dy: ShaderNode = float(0),
+        dz: ShaderNode = float(0);
+      for (const wave of WAVES) {
+        const phase = wavePhase(wp, uTime, uWind, wave);
+        const c = cos(phase),
+          s = sin(phase);
+        // Larger wave amplitude for ocean (1.3x)
+        dx = add(dx, mul(float(wave.QADx * 1.3), c));
+        dy = add(dy, mul(float(wave.A * 1.3), s));
+        dz = add(dz, mul(float(wave.QADz * 1.3), c));
+      }
+
+      return vec3(
+        add(pos.x, mul(dx, shoreMask)),
+        add(pos.y, mul(dy, shoreMask)),
+        add(pos.z, mul(dz, shoreMask)),
+      );
+    })();
+
+    // ========================================================================
+    // FRAGMENT: Ocean color (deeper, bluer, no reflection)
+    // ========================================================================
+    const oceanColorNode = Fn(() => {
+      const wp = positionWorld;
+      const shoreDist = attribute("shoreDistance", "float");
+      const shoreMask = smoothstep(float(0), float(6), shoreDist);
+      const wUV = vec2(wp.x, wp.z);
+
+      // Wave normals for specular
+      let nx: ShaderNode = float(0),
+        nz: ShaderNode = float(0);
+      for (const wave of WAVES) {
+        const c = cos(wavePhase(wp, uTime, uWind, wave));
+        nx = add(nx, mul(float(wave.wADx), c));
+        nz = add(nz, mul(float(wave.wADz), c));
+      }
+      nx = mul(nx, shoreMask);
+      nz = mul(nz, shoreMask);
+
+      // Detail normals
+      let detailX: ShaderNode = float(0),
+        detailZ: ShaderNode = float(0);
+      const textures = [normalTex1, normalTex2];
+      for (let i = 0; i < NORMAL_LAYERS.length; i++) {
+        const [scale, sx, sy] = NORMAL_LAYERS[i];
+        const uv = mul(
+          vec2(
+            add(wUV.x, mul(uTime, float(sx))),
+            add(wUV.y, mul(uTime, float(sy))),
+          ),
+          float(scale),
+        );
+        const n = sub(mul(texture(textures[i], uv).rgb, float(2)), float(1));
+        detailX = add(detailX, mul(n.x, float(NORMAL_WEIGHTS[i])));
+        detailZ = add(detailZ, mul(n.z, float(NORMAL_WEIGHTS[i])));
+      }
+
+      const N = normalize(
+        vec3(
+          mul(add(nx, mul(detailX, float(0.5))), float(-1)),
+          float(1),
+          mul(add(nz, mul(detailZ, float(0.5))), float(-1)),
+        ),
+      );
+
+      // View vectors
+      const V = normalize(sub(cameraPosition, wp));
+      const L = normalize(uSunDir);
+      const H = normalize(add(V, L));
+      const NdotV = max(dot(N, V), float(0.001));
+      const NdotL = max(dot(N, L), float(0));
+      const NdotH = max(dot(N, H), float(0));
+      const VdotH = max(dot(V, H), float(0));
+
+      // Ocean colors - deeper and bluer than lake water
+      const depth = clamp(shoreDist, float(0), float(50)); // Extended depth for ocean
+      const shallowColor = vec3(0.08, 0.32, 0.45); // More blue-green
+      const deepColor = vec3(0.01, 0.04, 0.08); // Very deep blue
+      const oceanColor = vec3(
+        mix(
+          deepColor.x,
+          shallowColor.x,
+          exp(mul(float(-ABSORPTION.r * 0.7), depth)),
+        ),
+        mix(
+          deepColor.y,
+          shallowColor.y,
+          exp(mul(float(-ABSORPTION.g * 0.7), depth)),
+        ),
+        mix(
+          deepColor.z,
+          shallowColor.z,
+          exp(mul(float(-ABSORPTION.b * 0.7), depth)),
+        ),
+      );
+
+      // Subsurface scattering
+      const sssView = pow(
+        clamp(dot(V, mul(L, float(-1))), float(0), float(1)),
+        float(3),
+      );
+      const sssIntensity = mul(
+        mul(sssView, smoothstep(float(8), float(0.5), shoreDist)),
+        float(0.25), // Less SSS for ocean
+      );
+
+      // GGX specular
+      const alpha = WATER_ROUGHNESS * WATER_ROUGHNESS;
+      const alpha2 = alpha * alpha;
+      const NdotH2 = mul(NdotH, NdotH);
+      const denom = add(mul(NdotH2, float(alpha2 - 1)), float(1));
+      const D_GGX = div(float(alpha2), mul(float(PI), mul(denom, denom)));
+      const k = (WATER_ROUGHNESS + 1) / 8;
+      const G1_V = div(NdotV, add(mul(NdotV, float(1 - k)), float(k)));
+      const G1_L = div(NdotL, add(mul(NdotL, float(1 - k)), float(k)));
+      const F_spec = add(
+        float(WATER_F0),
+        mul(float(1 - WATER_F0), pow(sub(float(1), VdotH), float(5))),
+      );
+      const specular = div(
+        mul(mul(D_GGX, mul(G1_V, G1_L)), F_spec),
+        max(mul(mul(float(4), NdotV), NdotL), float(0.001)),
+      );
+
+      const sunColor = vec3(1.0, 0.98, 0.92);
+      const sunSpec = mul(sunColor, mul(mul(specular, float(2.0)), NdotL));
+
+      // Ocean foam (more whitecaps)
+      const crestFoam = smoothstep(
+        float(0.12),
+        float(0.35),
+        mul(length(vec2(nx, nz)), shoreMask),
+      );
+      const foamUV = mul(
+        vec2(
+          add(wUV.x, mul(uTime, float(0.025))),
+          add(wUV.y, mul(uTime, float(0.02))),
+        ),
+        float(0.08),
+      );
+      const foamPattern = texture(foamTex, foamUV).r;
+      const foamIntensity = mul(crestFoam, foamPattern);
+
+      // Composite color - no reflection for ocean
+      let color: ShaderNode = oceanColor;
+      color = add(color, sunSpec);
+      color = add(color, mul(vec3(0.05, 0.25, 0.3), sssIntensity));
+      color = mix(
+        color,
+        vec3(0.9, 0.92, 0.95),
+        clamp(foamIntensity, float(0), float(0.75)),
+      );
+
+      // Add sky reflection approximation (simple fresnel-based)
+      const skyColor = vec3(0.5, 0.6, 0.75);
+      const fresnelSky = pow(sub(float(1), NdotV), float(4));
+      color = add(color, mul(skyColor, mul(fresnelSky, float(0.15))));
+
+      return color;
+    })();
+
+    material.colorNode = oceanColorNode;
+
+    // No emissive reflection for ocean - just use the base color
+
+    // ========================================================================
+    // OPACITY
+    // ========================================================================
+    material.opacityNode = Fn(() => {
+      const shoreDist = attribute("shoreDistance", "float");
+      const V = normalize(sub(cameraPosition, positionWorld));
+
+      const edgeFade = smoothstep(float(0), float(0.4), shoreDist);
+      const depthFade = smoothstep(float(0.4), float(8.0), shoreDist); // Deeper fade for ocean
+      const depthOpacity = mix(float(0.3), float(0.85), depthFade); // More opaque overall
+      const NdotV = max(dot(vec3(0, 1, 0), V), float(0));
+      const fresnelOpacity = mix(
+        float(0.9),
+        float(1.0),
+        pow(sub(float(1), NdotV), float(3)),
+      );
+
+      return mul(mul(edgeFade, depthOpacity), fresnelOpacity);
+    })();
+
+    // ========================================================================
+    // NORMAL MAP
+    // ========================================================================
+    material.normalNode = Fn(() => {
+      const wp = positionWorld;
+      const wUV = vec2(wp.x, wp.z);
+      const uv1 = mul(
+        vec2(
+          add(wUV.x, mul(uTime, float(0.006))),
+          add(wUV.y, mul(uTime, float(0.004))),
+        ),
+        float(0.018),
+      );
+      const uv2 = mul(
+        vec2(
+          sub(wUV.x, mul(uTime, float(0.005))),
+          add(wUV.y, mul(uTime, float(0.007))),
+        ),
+        float(0.03),
+      );
+      const n1 = sub(mul(texture(normalTex1, uv1).rgb, float(2)), float(1));
+      const n2 = sub(mul(texture(normalTex2, uv2).rgb, float(2)), float(1));
+      const blended = normalize(add(n1, n2));
+      return normalize(
+        vec3(
+          mul(blended.x, float(0.35)),
+          float(1),
+          mul(blended.z, float(0.35)),
+        ),
+      );
+    })();
+
+    return material;
+  }
+
   // ==========================================================================
   // MESH GENERATION
   // ==========================================================================
 
+  /**
+   * Generate a water mesh for a terrain tile
+   * @param tile The terrain tile
+   * @param waterThreshold Water level threshold
+   * @param tileSize Size of the tile
+   * @param getHeightAt Optional height function for accurate shoreline detection
+   * @param waterType Type of water body - "lake" for reflective water, "ocean" for non-reflective
+   */
   generateWaterMesh(
     tile: TerrainTile,
     waterThreshold: number,
     tileSize: number,
     getHeightAt?: (worldX: number, worldZ: number) => number,
+    waterType: WaterBodyType = "lake",
   ): THREE.Mesh | null {
     this.waterLevel = waterThreshold;
 
-    // Position the reflector at water level
-    if (this.reflection?.target) {
+    // Position the reflector at water level (only needed for lake water)
+    if (waterType === "lake" && this.reflection?.target) {
       this.reflection.target.position.y = waterThreshold;
-      console.log(
-        "[WaterSystem] Reflector target positioned at y=",
-        waterThreshold,
-      );
     }
 
     if (!getHeightAt) {
-      const mesh = this.createFallbackMesh(tile, waterThreshold, tileSize);
+      const mesh = this.createFallbackMesh(
+        tile,
+        waterThreshold,
+        tileSize,
+        waterType,
+      );
       this.waterMeshes.push(mesh);
       return mesh;
     }
@@ -698,10 +1203,22 @@ export class WaterSystem {
       }
     }
 
-    // Shore distance calculation (optimized: 8 directions, 5 binary search iterations)
+    // Shore distance calculation (OPTIMIZED: reduced iterations, early termination)
+    // Original: ~2M iterations for high-res tiles
+    // Optimized: ~200K iterations (4 directions, larger step, fewer refinements)
     const shoreDist: number[][] = [];
     const searchRadius = 30;
-    const numDirs = 8;
+    const numDirs = 4; // Reduced from 8 to 4 (cardinal directions only)
+    const initialStep = 2.0; // Larger initial step (was 0.5)
+    const binarySearchIters = 3; // Reduced from 6
+
+    // Pre-compute direction vectors
+    const dirVecs: Array<{ dx: number; dz: number }> = [
+      { dx: 1, dz: 0 }, // East
+      { dx: 0, dz: 1 }, // South
+      { dx: -1, dz: 0 }, // West
+      { dx: 0, dz: -1 }, // North
+    ];
 
     for (let i = 0; i <= resolution; i++) {
       shoreDist[i] = [];
@@ -716,29 +1233,38 @@ export class WaterSystem {
         let minDist = searchRadius;
 
         for (let d = 0; d < numDirs; d++) {
-          const angle = (d / numDirs) * TWO_PI;
-          const dx = Math.cos(angle),
-            dz = Math.sin(angle);
-          let lo = 0,
-            hi = searchRadius,
-            found = false;
+          const { dx, dz } = dirVecs[d];
+          let lo = 0;
+          let hi = searchRadius;
+          let found = false;
 
-          for (let dist = 0.5; dist <= searchRadius; dist += 0.5) {
+          // Coarse search with larger steps
+          for (
+            let dist = initialStep;
+            dist <= searchRadius;
+            dist += initialStep
+          ) {
             if (getHeightAt(wx + dx * dist, wz + dz * dist) >= waterThreshold) {
               hi = dist;
+              lo = dist - initialStep;
               found = true;
               break;
             }
           }
 
           if (found) {
-            for (let iter = 0; iter < 6; iter++) {
+            // Reduced binary search refinement
+            for (let iter = 0; iter < binarySearchIters; iter++) {
               const mid = (lo + hi) / 2;
-              if (getHeightAt(wx + dx * mid, wz + dz * mid) >= waterThreshold)
+              if (getHeightAt(wx + dx * mid, wz + dz * mid) >= waterThreshold) {
                 hi = mid;
-              else lo = mid;
+              } else {
+                lo = mid;
+              }
             }
             minDist = Math.min(minDist, hi);
+            // Early termination: if we found shore very close, stop searching
+            if (minDist < 2) break;
           }
         }
         shoreDist[i][j] = minDist;
@@ -807,7 +1333,7 @@ export class WaterSystem {
     }
     geom.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
 
-    const mesh = this.createMesh(geom, tile, waterThreshold);
+    const mesh = this.createMesh(geom, tile, waterThreshold, waterType);
     this.waterMeshes.push(mesh);
     return mesh;
   }
@@ -816,6 +1342,7 @@ export class WaterSystem {
     tile: TerrainTile,
     waterThreshold: number,
     tileSize: number,
+    waterType: WaterBodyType = "lake",
   ): THREE.Mesh {
     // Calculate LOD resolution based on tile distance from camera
     let resolution = 32;
@@ -854,24 +1381,34 @@ export class WaterSystem {
     }
     geom.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
 
-    return this.createMesh(geom, tile, waterThreshold);
+    return this.createMesh(geom, tile, waterThreshold, waterType);
   }
 
   private createMesh(
     geom: THREE.BufferGeometry,
     tile: TerrainTile,
     waterThreshold: number,
+    waterType: WaterBodyType = "lake",
   ): THREE.Mesh {
-    if (!this.waterMaterial) {
+    // Select material based on water type
+    const material =
+      waterType === "ocean" ? this.oceanMaterial : this.lakeMaterial;
+    if (!material) {
       throw new Error(
-        "[WaterSystem] createMesh called before init() completed",
+        `[WaterSystem] createMesh called before init() completed (${waterType} material missing)`,
       );
     }
-    const mesh = new THREE.Mesh(geom, this.waterMaterial);
+
+    const mesh = new THREE.Mesh(geom, material);
     mesh.position.y = waterThreshold;
-    mesh.name = `Water_${tile.key}`;
+    mesh.name = `Water_${waterType}_${tile.key}`;
     mesh.renderOrder = 100;
-    mesh.userData = { type: "water", walkable: false, clickable: false };
+    mesh.userData = {
+      type: "water",
+      waterType: waterType,
+      walkable: false,
+      clickable: false,
+    };
 
     // PERFORMANCE: Put water on layer 1 (main camera only, not minimap)
     // This prevents expensive water shader from rendering in minimap
@@ -889,31 +1426,45 @@ export class WaterSystem {
       typeof deltaTime === "number" && isFinite(deltaTime) ? deltaTime : 1 / 60;
     this.waterTime += dt;
 
+    const sunAngle = this.waterTime * 0.005;
+    const sunX = Math.cos(sunAngle) * 0.4;
+    const sunY = 0.75 + Math.sin(sunAngle * 0.3) * 0.1;
+    const sunZ = Math.sin(sunAngle) * 0.4;
+    const windStrength = 0.9 + Math.sin(this.waterTime * 0.1) * 0.1;
+
+    // Update lake water uniforms
     if (this.uniforms) {
       this.uniforms.time.value = this.waterTime;
-      const sunAngle = this.waterTime * 0.005;
-      this.uniforms.sunDirection.value
-        .set(
-          Math.cos(sunAngle) * 0.4,
-          0.75 + Math.sin(sunAngle * 0.3) * 0.1,
-          Math.sin(sunAngle) * 0.4,
-        )
-        .normalize();
-      this.uniforms.windStrength.value =
-        0.9 + Math.sin(this.waterTime * 0.1) * 0.1;
+      this.uniforms.sunDirection.value.set(sunX, sunY, sunZ).normalize();
+      this.uniforms.windStrength.value = windStrength;
     }
 
-    // Frustum culling: disable reflection camera when no water is visible
+    // Update ocean water uniforms
+    if (this.oceanUniforms) {
+      this.oceanUniforms.time.value = this.waterTime;
+      this.oceanUniforms.sunDirection.value.set(sunX, sunY, sunZ).normalize();
+      this.oceanUniforms.windStrength.value = windStrength * 1.2; // Ocean is windier
+    }
+
+    // Frustum culling: disable reflection camera when no lake water is visible
+    // (or when reflections are disabled)
     this.updateReflectionVisibility();
   }
 
   /**
-   * Check if any water meshes are in the camera frustum and enable/disable
+   * Check if any lake water meshes are in the camera frustum and enable/disable
    * the reflection render pass accordingly. This saves a full scene render
-   * when no water is visible.
+   * when no lake water is visible. Ocean water never uses reflections.
    */
   private updateReflectionVisibility(): void {
     if (!this.reflection?.target) {
+      this.reflectionActive = false;
+      return;
+    }
+
+    // If reflections are disabled by user preference, hide the reflector
+    if (!this._reflectionsEnabled) {
+      this.reflection.target.visible = false;
       this.reflectionActive = false;
       return;
     }
@@ -944,13 +1495,29 @@ export class WaterSystem {
     );
     this.frustum.setFromProjectionMatrix(this.projScreenMatrix);
 
-    // Check if any water mesh is visible and in the frustum
-    let anyWaterVisible = false;
+    // Check if any LAKE water mesh is visible and in the frustum
+    // Ocean water never uses reflections
+    // OPTIMIZATION: Cap meshes checked per frame to prevent frame drops with many tiles
+    const MAX_MESH_CHECKS = 20;
+    let anyLakeWaterVisible = false;
+    let checked = 0;
+
     for (const mesh of this.waterMeshes) {
+      if (checked >= MAX_MESH_CHECKS) {
+        // Over budget - assume visible to be safe (avoids reflection popping)
+        anyLakeWaterVisible = this.reflectionActive; // Maintain last state
+        break;
+      }
+
       // Skip meshes that have been removed from scene or are hidden
       if (!mesh.parent || !mesh.visible) continue;
 
-      // Ensure bounding sphere exists
+      // Skip ocean water - it doesn't use reflections
+      if (mesh.userData.waterType === "ocean") continue;
+
+      checked++;
+
+      // Ensure bounding sphere exists (computeBoundingSphere can be expensive)
       if (!mesh.geometry.boundingSphere) {
         mesh.geometry.computeBoundingSphere();
       }
@@ -963,14 +1530,14 @@ export class WaterSystem {
       this.tempSphere.applyMatrix4(mesh.matrixWorld);
 
       if (this.frustum.intersectsSphere(this.tempSphere)) {
-        anyWaterVisible = true;
+        anyLakeWaterVisible = true;
         break;
       }
     }
 
-    // Enable/disable reflector based on water visibility
-    this.reflection.target.visible = anyWaterVisible;
-    this.reflectionActive = anyWaterVisible;
+    // Enable/disable reflector based on lake water visibility
+    this.reflection.target.visible = anyLakeWaterVisible;
+    this.reflectionActive = anyLakeWaterVisible;
   }
 
   destroy(): void {

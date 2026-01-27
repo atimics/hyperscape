@@ -253,6 +253,16 @@ export class NPCEntity extends Entity {
       action.setLoop(THREE.LoopRepeat, Infinity);
       action.play();
 
+      // CRITICAL: Apply first frame IMMEDIATELY to prevent T-pose flash
+      // Without this, the skeleton stays in bind pose until the next clientUpdate()
+      mixer.update(0);
+
+      // Force skeleton bone matrices to update after animation is applied
+      const mesh = skinnedMesh as THREE.SkinnedMesh;
+      if (mesh.skeleton) {
+        mesh.skeleton.bones.forEach((bone) => bone.updateMatrixWorld(true));
+      }
+
       // Store mixer on entity for update in clientUpdate
       (this as { mixer?: THREE.AnimationMixer }).mixer = mixer;
     } else {
@@ -359,6 +369,9 @@ export class NPCEntity extends Entity {
       raw?: { scene?: THREE.Object3D };
     };
     if (instanceWithRaw?.raw?.scene) {
+      // Set mesh reference for HLOD system
+      this.mesh = instanceWithRaw.raw.scene;
+
       const userData = {
         type: "npc",
         entityId: this.id,
@@ -381,6 +394,47 @@ export class NPCEntity extends Entity {
         // must transform every vertex by bone weights. The capsule proxy is instant.
         child.raycast = () => {};
       });
+
+      // AAA LOD: Initialize HLOD impostor support for VRM NPCs
+      // Bake impostor in idle pose (not T-pose), freeze animations at LOD1
+      await this.initHLOD(
+        `npc_vrm_${this.config.npcType}_${this.config.model}`,
+        {
+          category: "npc",
+          atlasSize: 512,
+          hemisphere: true,
+          freezeAnimationAtLOD1: true, // AAA LOD: Freeze animation at medium distance
+          prepareForBake: async () => {
+            // AAA LOD: Ensure VRM is in idle pose before baking impostor
+            // The VRM factory's update() handles rest pose fallback if no emote is playing
+            if (this._avatarInstance && this.mesh) {
+              // Ensure idle emote is set if available
+              const instanceWithEmote = this._avatarInstance as {
+                setEmote?: (emote: string) => void;
+                setEmoteAndWait?: (
+                  emote: string,
+                  timeoutMs?: number,
+                ) => Promise<void>;
+                update: (delta: number) => void;
+              };
+
+              // Set idle emote if not already set
+              if (instanceWithEmote.setEmoteAndWait) {
+                await instanceWithEmote.setEmoteAndWait(Emotes.IDLE, 2000);
+              } else if (instanceWithEmote.setEmote) {
+                instanceWithEmote.setEmote(Emotes.IDLE);
+              }
+
+              // Update animation to apply idle pose to skeleton
+              // delta=0 applies current animation state without advancing time
+              this._avatarInstance.update(0);
+
+              // Force complete matrix world update
+              this.mesh.updateMatrixWorld(true);
+            }
+          },
+        },
+      );
     }
   }
 
@@ -522,6 +576,56 @@ export class NPCEntity extends Entity {
           this.setupIdleAnimation(animations);
         }
 
+        // Initialize HLOD impostor support for NPCs
+        // AAA LOD: Bake in idle pose (not T-pose), freeze animations at LOD1
+        await this.initHLOD(`npc_${this.config.npcType}_${this.config.model}`, {
+          category: "npc",
+          atlasSize: 512,
+          hemisphere: true,
+          freezeAnimationAtLOD1: true, // AAA LOD: Freeze animation at medium distance
+          prepareForBake: async () => {
+            // AAA LOD: Ensure GLB mesh is in idle pose before baking impostor
+            // This captures the idle animation frame 0, not T-pose
+            const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
+            if (mixer && this.mesh) {
+              // Reset current action to frame 0 to ensure consistent idle pose
+              // NPCs don't store currentAction, but we can get it from mixer
+              const root = mixer.getRoot();
+              const animations =
+                root && "animations" in root
+                  ? (root as THREE.Object3D).animations
+                  : undefined;
+              if (animations && animations.length > 0) {
+                const action = mixer.clipAction(animations[0]);
+                if (action) {
+                  action.time = 0;
+                }
+              }
+
+              // Apply frame 0 to skeleton (delta=0 applies current time position)
+              mixer.update(0);
+
+              // Force complete skeleton matrix update
+              this.mesh.traverse((child) => {
+                if ((child as THREE.SkinnedMesh).isSkinnedMesh) {
+                  const skinnedMesh = child as THREE.SkinnedMesh;
+                  if (skinnedMesh.skeleton) {
+                    // Update each bone's world matrix
+                    skinnedMesh.skeleton.bones.forEach((bone) =>
+                      bone.updateMatrixWorld(true),
+                    );
+                    // Recompute skeleton's bone matrices
+                    skinnedMesh.skeleton.update();
+                  }
+                }
+              });
+
+              // Update entire mesh hierarchy
+              this.mesh.updateMatrixWorld(true);
+            }
+          },
+        });
+
         return;
       } catch (error) {
         console.warn(
@@ -651,15 +755,19 @@ export class NPCEntity extends Entity {
       // Update avatar position to follow node (always, for proper positioning)
       this._avatarInstance.move(this.node.matrixWorld);
 
-      // ANIMATION LOD: Only update VRM animation when LOD allows
-      if (animLODResult.shouldUpdate) {
+      // AAA LOD + ANIMATION LOD: Only update VRM animation when both allow
+      // - animLODResult.shouldUpdate: Throttles based on distance (frame skipping)
+      // - shouldUpdateAnimationsForLOD(): Freezes completely at LOD1+ (HLOD system)
+      // At medium distance (LOD1), NPC shows frozen in idle pose (no animation CPU cost)
+      if (animLODResult.shouldUpdate && this.shouldUpdateAnimationsForLOD()) {
         this._avatarInstance.update(animLODResult.effectiveDelta);
       }
       return;
     }
 
-    // GLB mesh path: Update animation mixer (only when LOD allows)
-    if (animLODResult.shouldUpdate) {
+    // GLB mesh path: Update animation mixer (only when both LOD systems allow)
+    // AAA LOD + ANIMATION LOD: Freeze at medium distance, throttle at far distance
+    if (animLODResult.shouldUpdate && this.shouldUpdateAnimationsForLOD()) {
       this.updateAnimationsWithDelta(animLODResult.effectiveDelta);
     }
   }

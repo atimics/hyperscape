@@ -49,6 +49,9 @@ export class SmithingSystem extends SystemBase {
   /** Track last processed tick to ensure once-per-tick processing */
   private lastProcessedTick = -1;
 
+  /** OPTIMIZATION: Pre-allocated array for completed players (avoids allocation per tick) */
+  private readonly _completedPlayers: string[] = [];
+
   constructor(world: World) {
     super(world, {
       name: "smithing",
@@ -473,11 +476,15 @@ export class SmithingSystem extends SystemBase {
     this.lastProcessedTick = currentTick;
 
     // Process all active sessions that have reached their completion tick
-    // Use Array.from to safely iterate while potentially modifying the map
-    for (const [playerId, session] of Array.from(this.activeSessions)) {
+    // OPTIMIZATION: Use pre-allocated array to avoid allocation per tick
+    this._completedPlayers.length = 0; // Clear without reallocating
+    for (const [playerId, session] of this.activeSessions) {
       if (currentTick >= session.completionTick) {
-        this.completeSmith(playerId);
+        this._completedPlayers.push(playerId);
       }
+    }
+    for (const playerId of this._completedPlayers) {
+      this.completeSmith(playerId);
     }
   }
 

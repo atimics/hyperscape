@@ -96,14 +96,52 @@ export type VegetationCategory =
   | "fallen_tree";
 
 /**
+ * LOD (Level of Detail) configuration for vegetation assets
+ * Controls when to switch between detail levels and imposters
+ */
+export interface VegetationLODConfig {
+  /**
+   * Distance at which LOD1 (low poly) is used instead of LOD0 (full detail)
+   * Only applies if lod1Model is specified
+   */
+  lod1Distance?: number;
+  /**
+   * Distance at which imposter (billboard) replaces 3D mesh
+   * Defaults vary by category: trees ~200m, bushes ~120m, small objects ~60m
+   */
+  imposterDistance?: number;
+  /**
+   * Distance at which vegetation completely fades out
+   * Should be > imposterDistance for smooth transition
+   */
+  fadeDistance?: number;
+}
+
+/**
  * Single vegetation asset model definition
  * Each asset represents a GLB model that can be instanced
+ *
+ * **LOD System (2-level + imposter):**
+ * - LOD0: Full detail model (close range) - uses `model` path
+ * - LOD1: Low-poly model (medium range) - uses `lod1Model` path (optional)
+ * - Imposter: Billboard (far range) - auto-generated from model
+ *
+ * **Vertex Budget Guidelines:**
+ * - Large objects (trees): LOD0 ~5000 verts, LOD1 ~500 verts
+ * - Medium objects (bushes): LOD0 ~1000 verts, LOD1 ~200 verts
+ * - Small objects (mushrooms, flowers <0.3m): 100-200 verts max (no LOD1 needed)
  */
 export interface VegetationAsset {
   /** Unique identifier for this asset */
   id: string;
-  /** Path to the GLB model file (relative to assets folder) */
+  /** Path to the GLB model file (relative to assets folder) - LOD0 (full detail) */
   model: string;
+  /**
+   * Path to low-poly GLB model for LOD1 (optional)
+   * If not provided, the full model is used until imposter distance
+   * Recommended for trees and large vegetation to improve mid-range performance
+   */
+  lod1Model?: string;
   /** Category of vegetation this asset belongs to */
   category: VegetationCategory;
   /** Base scale of the model (1.0 = original size) */
@@ -122,6 +160,8 @@ export interface VegetationAsset {
   alignToNormal?: boolean;
   /** Y offset to apply after placement (for buried objects, etc.) */
   yOffset?: number;
+  /** LOD configuration (optional - uses category defaults if not specified) */
+  lod?: VegetationLODConfig;
 }
 
 /**
@@ -566,7 +606,16 @@ export type TownSize = "hamlet" | "village" | "town";
 /**
  * Building types available in towns
  */
-export type TownBuildingType = "bank" | "store" | "anvil" | "house" | "well";
+export type TownBuildingType =
+  | "bank"
+  | "store"
+  | "anvil"
+  | "house"
+  | "well"
+  | "inn"
+  | "smithy"
+  | "simple-house"
+  | "long-house";
 
 /**
  * A building placed within a town
@@ -582,6 +631,100 @@ export interface TownBuilding {
   rotation: number;
   /** Building footprint size */
   size: { width: number; depth: number };
+  /** Entrance position (calculated from building center + rotation) */
+  entrance?: { x: number; z: number };
+}
+
+/**
+ * Town layout type - how roads pass through the town
+ */
+export type TownLayoutType =
+  | "terminus" // Single road ends here (dead end)
+  | "throughway" // Single road passes through (2 entry points opposite)
+  | "fork" // Road forks into two (3 entry points, Y-shape)
+  | "crossroads"; // Two roads cross (4 entry points, X-shape)
+
+/**
+ * Entry point where a road enters the town
+ */
+export interface TownEntryPoint {
+  /** Direction angle in radians (0 = +X, PI/2 = +Z) */
+  angle: number;
+  /** Position at the edge of the safe zone */
+  position: { x: number; z: number };
+  /** Connected road ID (set after road generation) */
+  roadId?: string;
+}
+
+/**
+ * Internal road segment within a town
+ */
+export interface TownInternalRoad {
+  /** Start position (world coordinates) */
+  start: { x: number; z: number };
+  /** End position (world coordinates) */
+  end: { x: number; z: number };
+  /** Whether this is the main street */
+  isMain: boolean;
+}
+
+/**
+ * Walkway path from road to building entrance
+ */
+export interface TownPath {
+  /** Start position - connection point on road edge */
+  start: { x: number; z: number };
+  /** End position - building entrance */
+  end: { x: number; z: number };
+  /** Path width in meters (typically 1-2m) */
+  width: number;
+  /** ID of building this path leads to */
+  buildingId: string;
+}
+
+/**
+ * Types of landmarks that can appear in towns
+ */
+export type TownLandmarkType =
+  | "well" // Central water source
+  | "fountain" // Decorative fountain (larger towns)
+  | "market_stall" // Trading booth
+  | "signpost" // Direction sign at entrances
+  | "bench" // Seating
+  | "barrel" // Storage decoration
+  | "crate" // Cargo decoration
+  | "lamppost" // Street lighting
+  | "tree" // Decorative tree
+  | "planter"; // Flower planter
+
+/**
+ * Landmark/decoration placed in the town
+ */
+export interface TownLandmark {
+  /** Unique landmark ID */
+  id: string;
+  /** Type of landmark */
+  type: TownLandmarkType;
+  /** World position */
+  position: { x: number; y: number; z: number };
+  /** Y-axis rotation in radians */
+  rotation: number;
+  /** Size in meters */
+  size: { width: number; depth: number; height: number };
+}
+
+/**
+ * Central plaza/public square
+ */
+export interface TownPlaza {
+  /** Center position (world coordinates) */
+  position: { x: number; z: number };
+  /** Radius of the plaza */
+  radius: number;
+  /** Shape of the plaza */
+  shape: "circle" | "square" | "octagon";
+  /** Surface material */
+  material: "cobblestone" | "dirt" | "grass";
 }
 
 /**
@@ -607,6 +750,18 @@ export interface ProceduralTown {
   suitabilityScore: number;
   /** Connected road IDs */
   connectedRoads: string[];
+  /** Town layout type (how roads pass through) */
+  layoutType?: TownLayoutType;
+  /** Entry points where roads enter the town */
+  entryPoints?: TownEntryPoint[];
+  /** Internal road segments within the town */
+  internalRoads?: TownInternalRoad[];
+  /** Walkway paths from roads to building entrances */
+  paths?: TownPath[];
+  /** Landmarks and decorations (wells, benches, etc.) */
+  landmarks?: TownLandmark[];
+  /** Central plaza/public square */
+  plaza?: TownPlaza;
 }
 
 // ============== PROCEDURAL ROAD TYPES ==============
@@ -799,4 +954,96 @@ export interface WorldConfigManifest {
   roads: RoadConfigManifest;
   /** World seed for procedural generation */
   seed: number;
+}
+
+// ============== BUILDINGS MANIFEST TYPES ==============
+
+/**
+ * Size category for manifest-defined towns
+ */
+export type ManifestTownSize = "sm" | "md" | "lg";
+
+/**
+ * A building defined in the buildings manifest
+ */
+export interface ManifestBuilding {
+  /** Unique building ID */
+  id: string;
+  /** Building type */
+  type: TownBuildingType;
+  /** Position relative to town center or absolute */
+  position: { x: number; y: number; z: number };
+  /** Y-axis rotation in radians */
+  rotation: number;
+  /** Building footprint size */
+  size: { width: number; depth: number };
+}
+
+/**
+ * A town defined in the buildings manifest
+ */
+export interface ManifestTown {
+  /** Unique town ID */
+  id: string;
+  /** Town display name */
+  name: string;
+  /** World position of town center */
+  position: { x: number; y: number; z: number };
+  /** Town size category */
+  size: ManifestTownSize;
+  /** Whether this town should always be kept (not replaced by procedural generation) */
+  keep: boolean;
+  /** Safe zone radius in meters */
+  safeZoneRadius: number;
+  /** Buildings in this town */
+  buildings: ManifestBuilding[];
+}
+
+/**
+ * Building type definition in manifest
+ */
+export interface ManifestBuildingType {
+  /** Display label */
+  label: string;
+  /** Width range [min, max] in tiles */
+  widthRange: [number, number];
+  /** Depth range [min, max] in tiles */
+  depthRange: [number, number];
+  /** Number of floors */
+  floors: number;
+  /** Whether building has a basement */
+  hasBasement: boolean;
+  /** Props/NPCs in this building type */
+  props?: string[];
+}
+
+/**
+ * Size definition in manifest
+ */
+export interface ManifestSizeDefinition {
+  /** Display label */
+  label: string;
+  /** Minimum buildings for this size */
+  minBuildings: number;
+  /** Maximum buildings for this size */
+  maxBuildings: number;
+  /** Town radius in meters */
+  radius: number;
+  /** Safe zone radius in meters */
+  safeZoneRadius: number;
+}
+
+/**
+ * Complete buildings manifest
+ * Loaded from assets/manifests/buildings.json
+ */
+export interface BuildingsManifest {
+  /** Manifest version */
+  version: number;
+  /** Pre-defined towns with buildings */
+  towns: ManifestTown[];
+  /** Building type definitions */
+  buildingTypes: Record<string, ManifestBuildingType>;
+  /** Size category definitions */
+  sizeDefinitions: Record<ManifestTownSize, ManifestSizeDefinition>;
 }

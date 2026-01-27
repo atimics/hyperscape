@@ -9,7 +9,6 @@ import { renderHook, act } from "@testing-library/react";
 import { useDragDrop } from "../../../../src/game/panels/BankPanel/hooks/useDragDrop";
 import {
   createDragEventAtPosition,
-  createInsertZoneDragEvent,
   createSwapZoneDragEvent,
   createMockDragEvent,
 } from "../../../mocks";
@@ -186,34 +185,6 @@ describe("useDragDrop", () => {
   // ========================================================================
 
   describe("drop mode detection", () => {
-    it("sets insert mode when cursor is in left 40%", () => {
-      enablePerformanceMock();
-      setMockPerformanceNow(0);
-
-      const { result } = renderHook(() =>
-        useDragDrop({
-          onBankMove: mockOnBankMove,
-          onMoveToTab: mockOnMoveToTab,
-        }),
-      );
-
-      act(() => {
-        result.current.handleSlotDragStart(5, 0);
-      });
-
-      advanceMockPerformanceNow(DRAG_THROTTLE_MS + 1);
-
-      // 20% of width = insert zone
-      const event = createDragEventAtPosition("dragover", 0.2);
-
-      act(() => {
-        result.current.handleSlotDragOver(event, 10, 0);
-      });
-
-      expect(result.current.dragState.dropMode).toBe("insert");
-      expect(result.current.dragState.insertPosition).toBe("before");
-    });
-
     it("sets swap mode when cursor is in right 60%", () => {
       enablePerformanceMock();
       setMockPerformanceNow(0);
@@ -240,33 +211,6 @@ describe("useDragDrop", () => {
 
       expect(result.current.dragState.dropMode).toBe("swap");
       expect(result.current.dragState.insertPosition).toBeNull();
-    });
-
-    it("treats exactly 40% as insert mode", () => {
-      enablePerformanceMock();
-      setMockPerformanceNow(0);
-
-      const { result } = renderHook(() =>
-        useDragDrop({
-          onBankMove: mockOnBankMove,
-          onMoveToTab: mockOnMoveToTab,
-        }),
-      );
-
-      act(() => {
-        result.current.handleSlotDragStart(5, 0);
-      });
-
-      advanceMockPerformanceNow(DRAG_THROTTLE_MS + 1);
-
-      // Exactly 39.9% (just under 40%)
-      const event = createDragEventAtPosition("dragover", 0.399);
-
-      act(() => {
-        result.current.handleSlotDragOver(event, 10, 0);
-      });
-
-      expect(result.current.dragState.dropMode).toBe("insert");
     });
 
     it("treats 41% as swap mode", () => {
@@ -431,40 +375,6 @@ describe("useDragDrop", () => {
 
       expect(mockOnBankMove).toHaveBeenCalledWith(5, 10, "swap", 0);
       expect(mockOnMoveToTab).not.toHaveBeenCalled();
-    });
-
-    it("calls onBankMove for same-tab drop with insert mode", () => {
-      enablePerformanceMock();
-      setMockPerformanceNow(0);
-
-      const { result } = renderHook(() =>
-        useDragDrop({
-          onBankMove: mockOnBankMove,
-          onMoveToTab: mockOnMoveToTab,
-        }),
-      );
-
-      // Start drag
-      act(() => {
-        result.current.handleSlotDragStart(5, 0);
-      });
-
-      // Hover to set insert mode
-      advanceMockPerformanceNow(DRAG_THROTTLE_MS + 1);
-      const hoverEvent = createInsertZoneDragEvent("dragover");
-
-      act(() => {
-        result.current.handleSlotDragOver(hoverEvent, 10, 0);
-      });
-
-      // Drop
-      const dropEvent = createMockDragEvent("drop");
-
-      act(() => {
-        result.current.handleSlotDrop(dropEvent, 10, 0);
-      });
-
-      expect(mockOnBankMove).toHaveBeenCalledWith(5, 10, "insert", 0);
     });
 
     it("calls onMoveToTab for cross-tab drop", () => {

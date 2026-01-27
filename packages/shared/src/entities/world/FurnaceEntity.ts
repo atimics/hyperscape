@@ -218,6 +218,13 @@ export class FurnaceEntity extends InteractableEntity {
           this.node.userData.interactable = true;
         }
 
+        // Initialize HLOD impostor support
+        await this.initHLOD(`station_furnace_${modelPath}`, {
+          category: "station",
+          atlasSize: 1024,
+          hemisphere: true,
+        });
+
         return;
       } catch (error) {
         console.warn(

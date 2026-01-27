@@ -442,6 +442,9 @@ export function createVRMFactory(
     let _deathAnimationActive = false;
     let _deathUpdateLogCount = 0;
 
+    // Track if we've applied idle pose as fallback (only log once)
+    let hasAppliedIdleFallback = false;
+
     /**
      * Update animation with delta time.
      *
@@ -449,17 +452,45 @@ export function createVRMFactory(
      * This function passes delta directly to the mixer without internal accumulation
      * or rate limiting, ensuring consistent timing across all entity types.
      *
+     * CRITICAL: If no emote is playing (during loading or when cleared), we apply
+     * the VRM's normalized rest pose to prevent showing T-pose. This ensures the
+     * avatar always shows a reasonable pose, never the raw bind pose.
+     *
      * @param delta - Delta time from AnimationLOD.effectiveDelta (may be accumulated for skipped frames)
      */
     const update = (delta: number) => {
-      // Skip zero delta (entity was throttled by AnimationLOD)
-      if (delta <= 0) return;
+      // Skip negative delta (invalid state)
+      // NOTE: delta=0 is allowed - it applies current animation state without advancing time
+      // This is needed for impostor baking (prepareForBake calls update(0))
+      if (delta < 0) return;
 
       // HYBRID APPROACH - Asset Forge animation pipeline:
 
+      // Check if we have a valid animation playing
+      const hasValidAnimation = currentEmote?.action && !currentEmote.loading;
+
       // Step 1: Update AnimationMixer (animates normalized bones)
-      if (mixer) {
+      // delta=0 applies current state without advancing time (useful for baking)
+      if (mixer && hasValidAnimation) {
         mixer.update(delta);
+      } else if (
+        clonedHumanoid &&
+        "resetPose" in clonedHumanoid &&
+        !hasValidAnimation
+      ) {
+        // NO ANIMATION PLAYING: Apply rest pose to prevent T-pose
+        // This happens during emote loading or when no emote is set
+        // resetPose() sets the VRM to its normalized rest pose (usually A-pose)
+        // which is much better than showing T-pose
+        (clonedHumanoid as { resetPose: () => void }).resetPose();
+
+        if (!hasAppliedIdleFallback) {
+          hasAppliedIdleFallback = true;
+          // Only log once to avoid spam
+          console.log(
+            `[VRM] Applied rest pose fallback - no valid animation playing`,
+          );
+        }
       }
 
       // Step 2: CRITICAL - Propagate normalized bone transforms to raw bones
@@ -481,6 +512,11 @@ export function createVRMFactory(
         bones[i].updateMatrixWorld();
       }
       skeleton.update();
+
+      // Reset the fallback flag once we have a valid animation again
+      if (hasValidAnimation) {
+        hasAppliedIdleFallback = false;
+      }
     };
     // world.updater.add(update)
     interface EmoteData {
@@ -585,6 +621,178 @@ export function createVRMFactory(
             console.error(`[VRM] Failed to load emote:`, url, err);
           });
       }
+    };
+
+    /**
+     * Pre-load an emote without playing it.
+     * Use this to warm the emote cache and prevent T-pose flash on first use.
+     * Fire-and-forget - doesn't block or return a promise.
+     *
+     * @param url - Emote URL to pre-load
+     */
+    const preloadEmote = (url: string) => {
+      if (!url || emotes[url]) {
+        // Already loaded or loading
+        return;
+      }
+
+      const opts = getQueryParams(url);
+      const speed = parseFloat(opts.s || "1");
+
+      const newEmote: EmoteData = {
+        url,
+        loading: true,
+        action: null,
+      };
+      emotes[url] = newEmote;
+
+      type LoaderType = {
+        load: (
+          type: string,
+          url: string,
+        ) => Promise<{ toClip: (opts: unknown) => THREE.AnimationClip }>;
+      };
+
+      (hooks.loader as LoaderType)
+        .load("emote", url)
+        .then((emo) => {
+          const clip = emo.toClip({
+            rootToHips,
+            version,
+            getBoneName,
+          });
+          const action = mixer.clipAction(clip);
+          action.timeScale = speed;
+          newEmote.action = action;
+          newEmote.loading = false;
+          // Don't play - just cache it
+        })
+        .catch((err) => {
+          console.warn(`[VRM] Failed to preload emote:`, url, err);
+          // Remove failed emote from cache so it can be retried
+          delete emotes[url];
+        });
+    };
+
+    /**
+     * Set emote and wait for it to be fully loaded and playing.
+     * Returns a Promise that resolves when the emote animation is ready.
+     * Use this when you need to guarantee the animation is visible before showing the avatar.
+     *
+     * @param url - Emote URL to load and play
+     * @param timeoutMs - Maximum time to wait (default 3000ms)
+     * @returns Promise that resolves when emote is playing, rejects on timeout or error
+     */
+    const setEmoteAndWait = (url: string, timeoutMs = 3000): Promise<void> => {
+      return new Promise((resolve, reject) => {
+        if (!url) {
+          // No emote requested - resolve immediately (will show rest pose)
+          resolve();
+          return;
+        }
+
+        // Check if emote is already cached and ready
+        const cached = emotes[url];
+        if (cached && cached.action && !cached.loading) {
+          // Emote is ready - set it and resolve
+          setEmote(url);
+          // Apply first frame immediately
+          if (mixer) {
+            mixer.update(0);
+          }
+          resolve();
+          return;
+        }
+
+        // Need to load the emote - set up timeout
+        const timeoutId = setTimeout(() => {
+          reject(
+            new Error(
+              `[VRM] setEmoteAndWait timed out after ${timeoutMs}ms for: ${url}`,
+            ),
+          );
+        }, timeoutMs);
+
+        const opts = getQueryParams(url);
+        const loop = opts.l !== "0";
+        const speed = parseFloat(opts.s || "1");
+
+        // Check if already loading
+        if (cached && cached.loading) {
+          // Poll for completion
+          const checkInterval = setInterval(() => {
+            if (cached.action && !cached.loading) {
+              clearInterval(checkInterval);
+              clearTimeout(timeoutId);
+              setEmote(url);
+              if (mixer) {
+                mixer.update(0);
+              }
+              resolve();
+            }
+          }, 16); // Check every frame
+          return;
+        }
+
+        // Start loading
+        const newEmote: EmoteData = {
+          url,
+          loading: true,
+          action: null,
+        };
+        emotes[url] = newEmote;
+        currentEmote = newEmote;
+
+        type LoaderType = {
+          load: (
+            type: string,
+            url: string,
+          ) => Promise<{ toClip: (opts: unknown) => THREE.AnimationClip }>;
+        };
+
+        (hooks.loader as LoaderType)
+          .load("emote", url)
+          .then((emo) => {
+            clearTimeout(timeoutId);
+
+            const clip = emo.toClip({
+              rootToHips,
+              version,
+              getBoneName,
+            });
+            const action = mixer.clipAction(clip);
+            action.timeScale = speed;
+            newEmote.action = action;
+            newEmote.loading = false;
+
+            // Play if still the current emote
+            if (currentEmote === newEmote) {
+              action.clampWhenFinished = !loop;
+              action.setLoop(
+                loop ? THREE.LoopRepeat : THREE.LoopOnce,
+                Infinity,
+              );
+              action.reset().fadeIn(0.15).play();
+
+              // Apply first frame immediately
+              if (mixer) {
+                mixer.update(0);
+              }
+
+              if (url?.includes("death")) {
+                _deathAnimationActive = true;
+                _deathUpdateLogCount = 0;
+              }
+            }
+
+            resolve();
+          })
+          .catch((err) => {
+            clearTimeout(timeoutId);
+            console.error(`[VRM] setEmoteAndWait failed:`, url, err);
+            reject(err);
+          });
+      });
     };
 
     const bonesByName = {};
@@ -735,6 +943,8 @@ export function createVRMFactory(
       height,
       headToHeight,
       setEmote,
+      preloadEmote,
+      setEmoteAndWait,
       setFirstPerson,
       update: wrappedUpdate,
       getBoneTransform,

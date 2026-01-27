@@ -796,6 +796,24 @@ export class MobEntity extends CombatantEntity {
     action.setLoop(THREE.LoopRepeat, Infinity); // Loop animation indefinitely
     action.play();
 
+    // CRITICAL: Apply first frame IMMEDIATELY to prevent T-pose flash
+    // Without this, the skeleton stays in bind pose until the next clientUpdate()
+    mixer.update(0);
+
+    // Force skeleton bone matrices to update after animation is applied
+    if (this.mesh) {
+      this.mesh.traverse((child) => {
+        if ((child as THREE.SkinnedMesh).isSkinnedMesh) {
+          const skinnedMesh = child as THREE.SkinnedMesh;
+          if (skinnedMesh.skeleton) {
+            skinnedMesh.skeleton.bones.forEach((bone) =>
+              bone.updateMatrixWorld(true),
+            );
+          }
+        }
+      });
+    }
+
     // Store mixer and clips on entity
     (this as { mixer?: THREE.AnimationMixer }).mixer = mixer;
     (this as { animationClips?: typeof animationClips }).animationClips =
@@ -934,6 +952,47 @@ export class MobEntity extends CombatantEntity {
       // VRM instances manage their own positioning via move() - do NOT parent to node
       // The factory already added the scene to world.stage.scene
       // We'll use avatarInstance.move() to position it each frame
+
+      // AAA LOD: Initialize HLOD impostor support for VRM mobs
+      // Bake impostor in idle pose (not T-pose), freeze animations at LOD1
+      await this.initHLOD(
+        `mob_vrm_${this.config.mobType}_${this.config.model}`,
+        {
+          category: "mob",
+          atlasSize: 512, // Smaller for mobs
+          hemisphere: true,
+          freezeAnimationAtLOD1: true, // AAA LOD: Freeze animation at medium distance
+          prepareForBake: async () => {
+            // AAA LOD: Ensure VRM is in idle pose before baking impostor
+            // The VRM factory's update() handles rest pose fallback if no emote is playing
+            if (this._avatarInstance && this.mesh) {
+              // Ensure idle emote is set if available
+              const instanceWithEmote = this._avatarInstance as {
+                setEmote?: (emote: string) => void;
+                setEmoteAndWait?: (
+                  emote: string,
+                  timeoutMs?: number,
+                ) => Promise<void>;
+                update: (delta: number) => void;
+              };
+
+              // Set idle emote if not already set
+              if (instanceWithEmote.setEmoteAndWait) {
+                await instanceWithEmote.setEmoteAndWait(Emotes.IDLE, 2000);
+              } else if (instanceWithEmote.setEmote) {
+                instanceWithEmote.setEmote(Emotes.IDLE);
+              }
+
+              // Update animation to apply idle pose to skeleton
+              // delta=0 applies current animation state without advancing time
+              this._avatarInstance.update(0);
+
+              // Force complete matrix world update
+              this.mesh.updateMatrixWorld(true);
+            }
+          },
+        },
+      );
     } else {
       console.error(
         `[MobEntity] ❌ No scene in VRM instance for ${this.config.mobType}`,
@@ -1029,6 +1088,25 @@ export class MobEntity extends CombatantEntity {
     action.setEffectiveWeight(1.0);
     action.setLoop(THREE.LoopRepeat, Infinity);
     action.play();
+
+    // CRITICAL: Apply first frame IMMEDIATELY to prevent T-pose flash
+    // Without this, the skeleton stays in bind pose until the next clientUpdate()
+    mixer.update(0);
+
+    // Force skeleton bone matrices to update after animation is applied
+    // This ensures the mesh renders with the animated pose, not T-pose
+    if (this.mesh) {
+      this.mesh.traverse((child) => {
+        if ((child as THREE.SkinnedMesh).isSkinnedMesh) {
+          const skinnedMesh = child as THREE.SkinnedMesh;
+          if (skinnedMesh.skeleton) {
+            skinnedMesh.skeleton.bones.forEach((bone) =>
+              bone.updateMatrixWorld(true),
+            );
+          }
+        }
+      });
+    }
 
     // Store mixer and clips
     (this as { mixer?: THREE.AnimationMixer }).mixer = mixer;
@@ -1237,6 +1315,51 @@ export class MobEntity extends CombatantEntity {
             await this.setupAnimations(animations);
           }
         }
+
+        // Initialize HLOD impostor support for non-instanced GLB mobs
+        // (Instanced mobs use MobInstancedRenderer's impostor system instead)
+        // AAA LOD: Bake in idle pose (not T-pose), freeze animations at LOD1
+        await this.initHLOD(`mob_${this.config.mobType}_${this.config.model}`, {
+          category: "mob",
+          atlasSize: 512, // Smaller for mobs
+          hemisphere: true,
+          freezeAnimationAtLOD1: true, // AAA LOD: Freeze animation at medium distance
+          prepareForBake: async () => {
+            // AAA LOD: Ensure mesh is in idle pose before baking impostor
+            // This captures the idle animation frame 0, not T-pose
+            const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
+            if (mixer && this.mesh) {
+              // Reset current action to frame 0 to ensure consistent idle pose
+              const currentAction = (
+                this as { currentAction?: THREE.AnimationAction }
+              ).currentAction;
+              if (currentAction) {
+                currentAction.time = 0;
+              }
+
+              // Apply frame 0 to skeleton (delta=0 applies current time position)
+              mixer.update(0);
+
+              // Force complete skeleton matrix update
+              this.mesh.traverse((child) => {
+                if ((child as THREE.SkinnedMesh).isSkinnedMesh) {
+                  const skinnedMesh = child as THREE.SkinnedMesh;
+                  if (skinnedMesh.skeleton) {
+                    // Update each bone's world matrix
+                    skinnedMesh.skeleton.bones.forEach((bone) =>
+                      bone.updateMatrixWorld(true),
+                    );
+                    // Recompute skeleton's bone matrices
+                    skinnedMesh.skeleton.update();
+                  }
+                }
+              });
+
+              // Update entire mesh hierarchy
+              this.mesh.updateMatrixWorld(true);
+            }
+          },
+        });
 
         return;
       } catch (error) {
@@ -2339,8 +2462,11 @@ export class MobEntity extends CombatantEntity {
         // Position VRM at terrain-snapped location
         this._avatarInstance.move(this.node.matrixWorld);
 
-        // ANIMATION LOD: Only update VRM animations when LOD allows
-        if (animLODResult.shouldUpdate) {
+        // AAA LOD + ANIMATION LOD: Only update VRM animations when both allow
+        // - animLODResult.shouldUpdate: Throttles based on distance (frame skipping)
+        // - shouldUpdateAnimationsForLOD(): Freezes completely at LOD1+ (HLOD system)
+        // At medium distance (LOD1), mob shows frozen in current pose (no animation CPU cost)
+        if (animLODResult.shouldUpdate && this.shouldUpdateAnimationsForLOD()) {
           this._avatarInstance.update(animLODResult.effectiveDelta);
         }
 
@@ -2379,8 +2505,18 @@ export class MobEntity extends CombatantEntity {
     }
 
     // GLB path: Existing animation code for non-VRM mobs
-    // Update animations based on AI state
-    this.updateAnimation();
+
+    // AAA LOD + ANIMATION LOD: Only update animations when both allow
+    // - animLODResult.shouldUpdate: Throttles based on distance (frame skipping)
+    // - shouldUpdateAnimationsForLOD(): Freezes completely at LOD1+ (HLOD system)
+    // At medium distance (LOD1), mob shows frozen in idle pose (no animation CPU cost)
+    const shouldAnimate =
+      animLODResult.shouldUpdate && this.shouldUpdateAnimationsForLOD();
+
+    // Only update animation state machine when we'll actually animate
+    if (shouldAnimate) {
+      this.updateAnimation();
+    }
 
     // Update animation mixer
     const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
@@ -2388,9 +2524,9 @@ export class MobEntity extends CombatantEntity {
     // Note: Mixer may not exist for mobs with no animations - that's OK
     // The visible placeholder fallback doesn't have a mixer
 
-    // ANIMATION LOD: Only update mixer when LOD allows
+    // AAA LOD + ANIMATION LOD: Only update mixer when both allow
     // This significantly reduces CPU/GPU load for distant mobs
-    if (mixer && animLODResult.shouldUpdate) {
+    if (mixer && shouldAnimate) {
       mixer.update(animLODResult.effectiveDelta);
 
       // Update skeleton bones using pre-defined callback to avoid GC pressure

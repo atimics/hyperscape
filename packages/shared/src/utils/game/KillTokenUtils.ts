@@ -55,21 +55,39 @@ function getCrypto(): typeof import("crypto") | null {
   return cryptoModule;
 }
 
-/** Default secret for development (override via KILL_TOKEN_SECRET env var) */
-const DEFAULT_SECRET = "hyperscape-kill-secret-dev";
-
 /** Maximum age of a valid kill event (milliseconds) */
 const MAX_KILL_EVENT_AGE_MS = 5000;
+
+/** Tracks if we've warned about missing secret */
+let secretWarningLogged = false;
 
 /**
  * Get the secret used for kill token generation/validation
  */
 function getSecret(): string {
-  // Use environment variable if available, otherwise default
   if (typeof process !== "undefined" && process.env?.KILL_TOKEN_SECRET) {
     return process.env.KILL_TOKEN_SECRET;
   }
-  return DEFAULT_SECRET;
+
+  // In production, require the secret
+  const isProduction =
+    typeof process !== "undefined" && process.env?.NODE_ENV === "production";
+  if (isProduction) {
+    throw new Error(
+      "KILL_TOKEN_SECRET environment variable is required in production",
+    );
+  }
+
+  // Development fallback - log warning once
+  if (!secretWarningLogged) {
+    console.warn(
+      "[KillTokenUtils] Using insecure development secret. Set KILL_TOKEN_SECRET in production.",
+    );
+    secretWarningLogged = true;
+  }
+
+  // Generate a session-specific secret for development (changes each restart)
+  return `dev-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 /**

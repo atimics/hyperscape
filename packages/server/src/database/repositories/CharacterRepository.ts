@@ -28,6 +28,7 @@ export class CharacterRepository extends BaseRepository {
    *
    * Retrieves a list of all characters (avatars) owned by a specific account.
    * Used to populate the character selection screen.
+   * Includes automatic retry for transient connection failures.
    *
    * @param accountId - The account/user ID to fetch characters for
    * @returns Array of characters with id and name
@@ -45,24 +46,26 @@ export class CharacterRepository extends BaseRepository {
   > {
     this.ensureDatabase();
 
-    const results = await this.db
-      .select({
-        id: schema.characters.id,
-        name: schema.characters.name,
-        avatar: schema.characters.avatar,
-        wallet: schema.characters.wallet,
-        isAgent: schema.characters.isAgent,
-        combatLevel: schema.characters.combatLevel,
-        constitutionLevel: schema.characters.constitutionLevel,
-      })
-      .from(schema.characters)
-      .where(eq(schema.characters.accountId, accountId));
+    return this.withRetry(async () => {
+      const results = await this.db
+        .select({
+          id: schema.characters.id,
+          name: schema.characters.name,
+          avatar: schema.characters.avatar,
+          wallet: schema.characters.wallet,
+          isAgent: schema.characters.isAgent,
+          combatLevel: schema.characters.combatLevel,
+          constitutionLevel: schema.characters.constitutionLevel,
+        })
+        .from(schema.characters)
+        .where(eq(schema.characters.accountId, accountId));
 
-    // Convert isAgent from number (0/1) to boolean
-    return results.map((char) => ({
-      ...char,
-      isAgent: char.isAgent === 1,
-    }));
+      // Convert isAgent from number (0/1) to boolean
+      return results.map((char) => ({
+        ...char,
+        isAgent: char.isAgent === 1,
+      }));
+    }, `getCharacters(${accountId})`);
   }
 
   /**
@@ -70,6 +73,7 @@ export class CharacterRepository extends BaseRepository {
    *
    * Creates a new character (avatar) for an account with default starting stats.
    * Characters start at level 1 in all skills with initial health and position.
+   * Includes automatic retry for transient connection failures.
    *
    * @param accountId - The account that owns this character
    * @param id - Unique character ID (usually a UUID)
@@ -101,54 +105,53 @@ export class CharacterRepository extends BaseRepository {
       timestamp: now,
     });
 
-    try {
-      await this.db.insert(schema.characters).values({
-        id,
-        accountId,
-        name,
-        avatar,
-        wallet,
-        isAgent: isAgent ? 1 : 0, // Convert boolean to integer for SQLite/PostgreSQL
-        createdAt: now,
-        lastLogin: now,
-      });
+    return this.withRetry(async () => {
+      try {
+        await this.db.insert(schema.characters).values({
+          id,
+          accountId,
+          name,
+          avatar,
+          wallet,
+          isAgent: isAgent ? 1 : 0, // Convert boolean to integer for SQLite/PostgreSQL
+          createdAt: now,
+          lastLogin: now,
+        });
 
-      console.log(
-        "[CharacterRepository] ✅ Character created successfully in DB",
-      );
-
-      // Verify it was saved
-      const verify = await this.db
-        .select()
-        .from(schema.characters)
-        .where(eq(schema.characters.id, id))
-        .limit(1);
-
-      console.log(
-        "[CharacterRepository] 🔍 Verification query result:",
-        verify,
-      );
-
-      return true;
-    } catch (error) {
-      console.error(
-        "[CharacterRepository] ❌ Error creating character:",
-        error,
-      );
-      // Character already exists (PostgreSQL unique constraint violation code)
-      if (
-        error &&
-        typeof error === "object" &&
-        "code" in error &&
-        error.code === "23505"
-      ) {
         console.log(
-          "[CharacterRepository] Character already exists (duplicate key)",
+          "[CharacterRepository] ✅ Character created successfully in DB",
         );
-        return false;
+
+        // Verify it was saved
+        const verify = await this.db
+          .select()
+          .from(schema.characters)
+          .where(eq(schema.characters.id, id))
+          .limit(1);
+
+        console.log(
+          "[CharacterRepository] 🔍 Verification query result:",
+          verify,
+        );
+
+        return true;
+      } catch (error) {
+        // Character already exists (PostgreSQL unique constraint violation code)
+        // Don't retry this error - it's expected
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "23505"
+        ) {
+          console.log(
+            "[CharacterRepository] Character already exists (duplicate key)",
+          );
+          return false;
+        }
+        throw error;
       }
-      throw error;
-    }
+    }, `createCharacter(${id})`);
   }
 
   /**
@@ -196,6 +199,7 @@ export class CharacterRepository extends BaseRepository {
    *
    * Retrieves skill levels and XP for a character. Used by the dashboard
    * to display agent skill progress in real-time.
+   * Includes automatic retry for transient connection failures.
    *
    * @param characterId - The character ID to fetch skills for
    * @returns Skills object with level and xp for each skill, or null if not found
@@ -217,69 +221,71 @@ export class CharacterRepository extends BaseRepository {
   } | null> {
     this.ensureDatabase();
 
-    const results = await this.db
-      .select({
-        attackLevel: schema.characters.attackLevel,
-        strengthLevel: schema.characters.strengthLevel,
-        defenseLevel: schema.characters.defenseLevel,
-        constitutionLevel: schema.characters.constitutionLevel,
-        rangedLevel: schema.characters.rangedLevel,
-        prayerLevel: schema.characters.prayerLevel,
-        woodcuttingLevel: schema.characters.woodcuttingLevel,
-        miningLevel: schema.characters.miningLevel,
-        fishingLevel: schema.characters.fishingLevel,
-        firemakingLevel: schema.characters.firemakingLevel,
-        cookingLevel: schema.characters.cookingLevel,
-        smithingLevel: schema.characters.smithingLevel,
-        agilityLevel: schema.characters.agilityLevel,
-        attackXp: schema.characters.attackXp,
-        strengthXp: schema.characters.strengthXp,
-        defenseXp: schema.characters.defenseXp,
-        constitutionXp: schema.characters.constitutionXp,
-        rangedXp: schema.characters.rangedXp,
-        prayerXp: schema.characters.prayerXp,
-        woodcuttingXp: schema.characters.woodcuttingXp,
-        miningXp: schema.characters.miningXp,
-        fishingXp: schema.characters.fishingXp,
-        firemakingXp: schema.characters.firemakingXp,
-        cookingXp: schema.characters.cookingXp,
-        smithingXp: schema.characters.smithingXp,
-        agilityXp: schema.characters.agilityXp,
-      })
-      .from(schema.characters)
-      .where(eq(schema.characters.id, characterId))
-      .limit(1);
+    return this.withRetry(async () => {
+      const results = await this.db
+        .select({
+          attackLevel: schema.characters.attackLevel,
+          strengthLevel: schema.characters.strengthLevel,
+          defenseLevel: schema.characters.defenseLevel,
+          constitutionLevel: schema.characters.constitutionLevel,
+          rangedLevel: schema.characters.rangedLevel,
+          prayerLevel: schema.characters.prayerLevel,
+          woodcuttingLevel: schema.characters.woodcuttingLevel,
+          miningLevel: schema.characters.miningLevel,
+          fishingLevel: schema.characters.fishingLevel,
+          firemakingLevel: schema.characters.firemakingLevel,
+          cookingLevel: schema.characters.cookingLevel,
+          smithingLevel: schema.characters.smithingLevel,
+          agilityLevel: schema.characters.agilityLevel,
+          attackXp: schema.characters.attackXp,
+          strengthXp: schema.characters.strengthXp,
+          defenseXp: schema.characters.defenseXp,
+          constitutionXp: schema.characters.constitutionXp,
+          rangedXp: schema.characters.rangedXp,
+          prayerXp: schema.characters.prayerXp,
+          woodcuttingXp: schema.characters.woodcuttingXp,
+          miningXp: schema.characters.miningXp,
+          fishingXp: schema.characters.fishingXp,
+          firemakingXp: schema.characters.firemakingXp,
+          cookingXp: schema.characters.cookingXp,
+          smithingXp: schema.characters.smithingXp,
+          agilityXp: schema.characters.agilityXp,
+        })
+        .from(schema.characters)
+        .where(eq(schema.characters.id, characterId))
+        .limit(1);
 
-    if (results.length === 0) {
-      return null;
-    }
+      if (results.length === 0) {
+        return null;
+      }
 
-    const row = results[0];
+      const row = results[0];
 
-    return {
-      attack: { level: row.attackLevel || 1, xp: row.attackXp || 0 },
-      strength: { level: row.strengthLevel || 1, xp: row.strengthXp || 0 },
-      defense: { level: row.defenseLevel || 1, xp: row.defenseXp || 0 },
-      constitution: {
-        level: row.constitutionLevel || 10,
-        xp: row.constitutionXp || 1154,
-      },
-      ranged: { level: row.rangedLevel || 1, xp: row.rangedXp || 0 },
-      prayer: { level: row.prayerLevel || 1, xp: row.prayerXp || 0 },
-      woodcutting: {
-        level: row.woodcuttingLevel || 1,
-        xp: row.woodcuttingXp || 0,
-      },
-      mining: { level: row.miningLevel || 1, xp: row.miningXp || 0 },
-      fishing: { level: row.fishingLevel || 1, xp: row.fishingXp || 0 },
-      firemaking: {
-        level: row.firemakingLevel || 1,
-        xp: row.firemakingXp || 0,
-      },
-      cooking: { level: row.cookingLevel || 1, xp: row.cookingXp || 0 },
-      smithing: { level: row.smithingLevel || 1, xp: row.smithingXp || 0 },
-      agility: { level: row.agilityLevel || 1, xp: row.agilityXp || 0 },
-    };
+      return {
+        attack: { level: row.attackLevel || 1, xp: row.attackXp || 0 },
+        strength: { level: row.strengthLevel || 1, xp: row.strengthXp || 0 },
+        defense: { level: row.defenseLevel || 1, xp: row.defenseXp || 0 },
+        constitution: {
+          level: row.constitutionLevel || 10,
+          xp: row.constitutionXp || 1154,
+        },
+        ranged: { level: row.rangedLevel || 1, xp: row.rangedXp || 0 },
+        prayer: { level: row.prayerLevel || 1, xp: row.prayerXp || 0 },
+        woodcutting: {
+          level: row.woodcuttingLevel || 1,
+          xp: row.woodcuttingXp || 0,
+        },
+        mining: { level: row.miningLevel || 1, xp: row.miningXp || 0 },
+        fishing: { level: row.fishingLevel || 1, xp: row.fishingXp || 0 },
+        firemaking: {
+          level: row.firemakingLevel || 1,
+          xp: row.firemakingXp || 0,
+        },
+        cooking: { level: row.cookingLevel || 1, xp: row.cookingXp || 0 },
+        smithing: { level: row.smithingLevel || 1, xp: row.smithingXp || 0 },
+        agility: { level: row.agilityLevel || 1, xp: row.agilityXp || 0 },
+      };
+    }, `getCharacterSkills(${characterId})`);
   }
 
   /**

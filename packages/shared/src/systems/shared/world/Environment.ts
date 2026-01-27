@@ -3,7 +3,8 @@ import THREE, { CSMShadowNode } from "../../../extras/three/three";
 import { Node as NodeClass } from "../../../nodes/Node";
 import { System } from "../infrastructure/System";
 
-import { SkySystem } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import { SkySystem } from "./SkySystem";
 import type {
   BaseEnvironment,
   EnvironmentModel,

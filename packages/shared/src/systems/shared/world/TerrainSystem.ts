@@ -15,6 +15,20 @@ import { NoiseGenerator } from "../../../utils/NoiseGenerator";
 import { InstancedMeshManager } from "../../../utils/rendering/InstancedMeshManager";
 import { CollisionMask } from "../movement/CollisionFlags";
 import { worldToTile } from "../movement/TileSystem";
+import {
+  getTerrainWorkerPool,
+  generateTerrainTilesBatch,
+  terminateTerrainWorkerPool,
+  type TerrainWorkerConfig,
+  type TerrainWorkerOutput,
+} from "../../../utils/workers";
+
+// Import terrain generator from procgen package
+import {
+  TerrainGenerator,
+  type TerrainConfig,
+  type BiomeDefinition,
+} from "@hyperscape/procgen/terrain";
 
 /**
  * Terrain System
@@ -36,7 +50,9 @@ import { Layers } from "../../../physics/Layers";
 import { BIOMES } from "../../../data/world-structure";
 import { ALL_WORLD_AREAS } from "../../../data/world-areas";
 import { DataManager } from "../../../data/DataManager";
-import { WaterSystem, Environment } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import { WaterSystem } from "./WaterSystem";
+import { Environment } from "./Environment";
 import { createTerrainMaterial, TerrainUniforms } from "./TerrainShader";
 import type { RoadNetworkSystem } from "./RoadNetworkSystem";
 import type { TownSystem } from "./TownSystem";
@@ -115,17 +131,22 @@ export class TerrainSystem extends System {
   private _tempVec3_2 = new THREE.Vector3();
   private _tempVec2 = new THREE.Vector2();
   private _tempVec2_2 = new THREE.Vector2();
+  private _tempVec2_3 = new THREE.Vector2(); // For road distance calculations
   private _tempBox3 = new THREE.Box3();
+  private _tempColor = new THREE.Color(); // For fog color updates
   private waterSystem?: WaterSystem;
   private roadNetworkSystem?: RoadNetworkSystem;
   private townSystem: TownSystem | null = null;
   private bossHotspots: BossHotspot[] = [];
 
+  // Unified terrain generator from @hyperscape/procgen
+  // Provides deterministic height/biome calculation independent of rendering
+  private terrainGenerator!: TerrainGenerator;
+
   // PERFORMANCE: Template geometry and pre-allocated buffers for tile creation
   private templateGeometry: THREE.PlaneGeometry | null = null;
   private templateColors: Float32Array | null = null;
   private templateBiomeIds: Float32Array | null = null;
-  private _tempColor = new THREE.Color();
 
   // Serialization system
   private lastSerializationTime = 0;
@@ -314,10 +335,57 @@ export class TerrainSystem extends System {
     if (this.terrainTiles.has(key) || this.pendingTileSet.has(key)) return;
     this.pendingTileSet.add(key);
     this.pendingTileKeys.push(key);
+
+    // Also queue for worker pre-computation if enabled (client-side only)
+    if (
+      this.world.isClient &&
+      this.CONFIG.USE_WORKERS &&
+      !this.pendingWorkerResults.has(key)
+    ) {
+      this.pendingWorkerTiles.push({ tileX, tileZ });
+    }
+  }
+
+  /** Tiles waiting to be sent to workers for pre-computation */
+  private pendingWorkerTiles: Array<{ tileX: number; tileZ: number }> = [];
+
+  /**
+   * Public API: Request prefetch of a tile for speculative loading.
+   * Used by VegetationSystem to pre-generate tiles in the direction of player movement.
+   * This queues the tile for generation at low priority (after immediate tiles).
+   *
+   * @param tileX - Tile X coordinate
+   * @param tileZ - Tile Z coordinate
+   */
+  prefetchTile(tileX: number, tileZ: number): void {
+    const key = `${tileX}_${tileZ}`;
+
+    if (this.terrainTiles.has(key) || this.pendingTileSet.has(key)) {
+      return;
+    }
+
+    // Add to worker pre-computation queue first (background processing)
+    if (
+      this.world.isClient &&
+      this.CONFIG.USE_WORKERS &&
+      !this.pendingWorkerResults.has(key)
+    ) {
+      // Check if not already in worker queue
+      const alreadyQueued = this.pendingWorkerTiles.some(
+        (t) => t.tileX === tileX && t.tileZ === tileZ,
+      );
+      if (!alreadyQueued) {
+        this.pendingWorkerTiles.push({ tileX, tileZ });
+      }
+    }
+
+    // Enqueue for generation (will be processed when budget allows)
+    this.enqueueTileForGeneration(tileX, tileZ, true);
   }
 
   /**
    * Process queued tile generations within per-frame time and count budgets
+   * Prefers using pre-computed worker data when available
    */
   private processTileGenerationQueue(): void {
     if (this.pendingTileKeys.length === 0) return;
@@ -334,9 +402,51 @@ export class TerrainSystem extends System {
       this.pendingTileSet.delete(key);
       const [x, z] = key.split("_").map(Number);
 
-      this.generateTile(x, z);
+      // Check if we have pre-computed worker data for this tile
+      const workerData = this.pendingWorkerResults.get(key);
+      if (workerData) {
+        // Use pre-computed data (faster path)
+        const geometry = this.createTileGeometryFromWorkerData(workerData);
+        this.createTileFromGeometryWithResources(x, z, geometry);
+        this.pendingWorkerResults.delete(key);
+      } else {
+        // Fall back to synchronous generation
+        this.generateTile(x, z);
+      }
       generated++;
     }
+  }
+
+  /**
+   * Dispatch pending tiles to workers for pre-computation
+   * Called each frame to keep workers busy
+   */
+  private dispatchWorkerBatch(): void {
+    if (
+      this.pendingWorkerTiles.length === 0 ||
+      this.workerBatchInProgress ||
+      !this.CONFIG.USE_WORKERS
+    ) {
+      return;
+    }
+
+    // Take a batch of tiles to process
+    const batchSize = Math.min(this.pendingWorkerTiles.length, 9); // Up to 9 tiles (3x3)
+    const batch = this.pendingWorkerTiles.splice(0, batchSize);
+
+    // Filter out tiles that already have results
+    const tilesToProcess = batch.filter(
+      (t) => !this.pendingWorkerResults.has(`${t.tileX}_${t.tileZ}`),
+    );
+
+    if (tilesToProcess.length === 0) {
+      return;
+    }
+
+    // Fire and forget - don't await, let it run in background
+    this.precomputeTilesWithWorker(tilesToProcess).catch((err) => {
+      console.warn("[TerrainSystem] Worker batch error:", err);
+    });
   }
 
   private processCollisionGenerationQueue(): void {
@@ -364,6 +474,475 @@ export class TerrainSystem extends System {
 
     // Avoid leaked cloned geometry
     transformedGeometry.dispose();
+  }
+
+  /**
+   * Pre-compute terrain data for multiple tiles using web workers
+   *
+   * This offloads the heavy noise/heightmap calculations to worker threads,
+   * allowing parallel processing across CPU cores while keeping the main thread
+   * free for rendering and input handling.
+   *
+   * @param tiles - Array of tile coordinates to pre-compute
+   * @returns Promise that resolves when all tiles are computed
+   */
+  async precomputeTilesWithWorker(
+    tiles: Array<{ tileX: number; tileZ: number }>,
+  ): Promise<void> {
+    // Workers only available on client and when enabled
+    if (!this.world.isClient || !this.CONFIG.USE_WORKERS) {
+      return;
+    }
+
+    if (this.workerBatchInProgress) {
+      return;
+    }
+
+    // Filter out tiles that are already computed or have pending results
+    const tilesToProcess = tiles.filter((t) => {
+      const key = `${t.tileX}_${t.tileZ}`;
+      return !this.terrainTiles.has(key) && !this.pendingWorkerResults.has(key);
+    });
+
+    if (tilesToProcess.length === 0) {
+      return;
+    }
+
+    this.workerBatchInProgress = true;
+
+    try {
+      // Build worker config from current CONFIG
+      // MUST match TerrainWorkerConfig interface exactly
+      const workerConfig: TerrainWorkerConfig = {
+        TILE_SIZE: this.CONFIG.TILE_SIZE,
+        TILE_RESOLUTION: this.CONFIG.TILE_RESOLUTION,
+        MAX_HEIGHT: this.CONFIG.MAX_HEIGHT,
+        // Biome calculation - MUST match getBiomeInfluencesAtPosition()
+        BIOME_GAUSSIAN_COEFF: this.CONFIG.BIOME_GAUSSIAN_COEFF,
+        BIOME_BOUNDARY_NOISE_SCALE: this.CONFIG.BIOME_BOUNDARY_NOISE_SCALE,
+        BIOME_BOUNDARY_NOISE_AMOUNT: this.CONFIG.BIOME_BOUNDARY_NOISE_AMOUNT,
+        MOUNTAIN_HEIGHT_THRESHOLD: this.CONFIG.MOUNTAIN_HEIGHT_THRESHOLD,
+        MOUNTAIN_WEIGHT_BOOST: this.CONFIG.MOUNTAIN_WEIGHT_BOOST,
+        VALLEY_HEIGHT_THRESHOLD: this.CONFIG.VALLEY_HEIGHT_THRESHOLD,
+        VALLEY_WEIGHT_BOOST: this.CONFIG.VALLEY_WEIGHT_BOOST,
+        // Mountain height boost - MUST match getHeightAtWithoutShore()
+        MOUNTAIN_HEIGHT_BOOST: this.CONFIG.MOUNTAIN_HEIGHT_BOOST,
+        // Shoreline config - MUST match getHeightAt() and createTileGeometry()
+        WATER_THRESHOLD: this.CONFIG.WATER_THRESHOLD,
+        WATER_LEVEL_NORMALIZED: this.CONFIG.WATER_LEVEL_NORMALIZED,
+        SHORELINE_THRESHOLD: this.CONFIG.SHORELINE_THRESHOLD,
+        SHORELINE_STRENGTH: this.CONFIG.SHORELINE_STRENGTH,
+      };
+
+      // Build simplified biome data for worker
+      const biomeData: Record<
+        string,
+        { heightModifier: number; color: { r: number; g: number; b: number } }
+      > = {};
+      for (const [name, biome] of Object.entries(BIOMES)) {
+        const color = new THREE.Color(biome.color);
+        biomeData[name] = {
+          // Use terrainMultiplier from BiomeData as heightModifier for worker
+          heightModifier: biome.terrainMultiplier || 1,
+          color: { r: color.r, g: color.g, b: color.b },
+        };
+      }
+
+      // Generate terrain data in parallel using workers
+      const batchResult = await generateTerrainTilesBatch(
+        tilesToProcess,
+        workerConfig,
+        this.computeSeedFromWorldId(),
+        this.biomeCenters,
+        biomeData,
+      );
+
+      // Check if workers were actually available
+      if (!batchResult.workersAvailable) {
+        console.warn(
+          "[TerrainSystem] Workers not available, tiles will use synchronous generation",
+        );
+        // Tiles will be generated synchronously via the normal queue
+        return;
+      }
+
+      // Check if any tiles failed
+      if (batchResult.failedCount > 0) {
+        console.warn(
+          `[TerrainSystem] ${batchResult.failedCount} tiles failed in worker, will retry synchronously`,
+        );
+      }
+
+      // Store successful results for later geometry creation
+      for (const result of batchResult.results) {
+        this.pendingWorkerResults.set(result.tileKey, result);
+      }
+    } catch (error) {
+      console.error("[TerrainSystem] Worker batch failed:", error);
+    } finally {
+      this.workerBatchInProgress = false;
+    }
+  }
+
+  /**
+   * Create tile geometry from pre-computed worker data
+   * This is faster than generating from scratch since heightmap is pre-computed
+   */
+  private createTileGeometryFromWorkerData(
+    workerData: TerrainWorkerOutput,
+  ): THREE.PlaneGeometry {
+    const { tileX, tileZ, heightData, colorData, biomeData } = workerData;
+
+    // Clone template geometry
+    const template = this.getOrCreateTemplateGeometry();
+    const geometry = template.clone();
+
+    const positions = geometry.attributes.position;
+    const roadInfluences = new Float32Array(positions.count);
+
+    // Apply pre-computed height data
+    for (let i = 0; i < positions.count; i++) {
+      positions.setY(i, heightData[i]);
+    }
+
+    // OPTIMIZATION: Get road segments once for the entire tile (not per vertex)
+    this.roadNetworkSystem ??= this.world.getSystem("roads") as
+      | RoadNetworkSystem
+      | undefined;
+    const segments =
+      this.roadNetworkSystem?.getRoadSegmentsForTile(tileX, tileZ) ?? [];
+    const hasRoads = segments.length > 0;
+
+    // Apply road coloring (batch processing all vertices with cached segments)
+    if (hasRoads) {
+      for (let i = 0; i < positions.count; i++) {
+        const localX = positions.getX(i);
+        const localZ = positions.getZ(i);
+
+        // Calculate road influence using cached segments
+        let minDistance = Infinity;
+        let closestWidth = this.CONFIG.ROAD_WIDTH;
+
+        for (const segment of segments) {
+          const distance = this.distanceToLineSegmentLocal(
+            localX,
+            localZ,
+            segment.start.x,
+            segment.start.z,
+            segment.end.x,
+            segment.end.z,
+          );
+          if (distance < minDistance) {
+            minDistance = distance;
+            closestWidth = segment.width;
+          }
+        }
+
+        // Calculate influence based on distance
+        const halfWidth = closestWidth / 2;
+        const totalInfluenceWidth = halfWidth + ROAD_BLEND_WIDTH;
+
+        let roadInfluence = 0;
+        if (minDistance < totalInfluenceWidth) {
+          if (minDistance <= halfWidth) {
+            roadInfluence = 1.0;
+          } else {
+            const t = 1.0 - (minDistance - halfWidth) / ROAD_BLEND_WIDTH;
+            roadInfluence = t * t * (3 - 2 * t); // smoothstep
+          }
+        }
+
+        roadInfluences[i] = roadInfluence;
+
+        // Blend road color into pre-computed colors
+        if (roadInfluence > 0) {
+          const edgeFactor = 1.0 - roadInfluence;
+          const roadR =
+            ROAD_COLOR.r * roadInfluence + ROAD_EDGE_COLOR.r * edgeFactor * 0.3;
+          const roadG =
+            ROAD_COLOR.g * roadInfluence + ROAD_EDGE_COLOR.g * edgeFactor * 0.3;
+          const roadB =
+            ROAD_COLOR.b * roadInfluence + ROAD_EDGE_COLOR.b * edgeFactor * 0.3;
+
+          colorData[i * 3] =
+            colorData[i * 3] * (1 - roadInfluence) + roadR * roadInfluence;
+          colorData[i * 3 + 1] =
+            colorData[i * 3 + 1] * (1 - roadInfluence) + roadG * roadInfluence;
+          colorData[i * 3 + 2] =
+            colorData[i * 3 + 2] * (1 - roadInfluence) + roadB * roadInfluence;
+        }
+      }
+    }
+
+    // Set attributes
+    geometry.setAttribute("color", new THREE.BufferAttribute(colorData, 3));
+    geometry.setAttribute(
+      "biomeId",
+      new THREE.BufferAttribute(new Float32Array(biomeData), 1),
+    );
+    geometry.setAttribute(
+      "roadInfluence",
+      new THREE.BufferAttribute(roadInfluences, 1),
+    );
+    geometry.computeVertexNormals();
+
+    // Store height data for persistence
+    this.storeHeightData(tileX, tileZ, Array.from(heightData));
+
+    return geometry;
+  }
+
+  /**
+   * Create a terrain tile from pre-computed geometry WITH full resource generation
+   * This is the complete path for worker-generated tiles
+   */
+  private createTileFromGeometryWithResources(
+    tileX: number,
+    tileZ: number,
+    geometry: THREE.PlaneGeometry,
+  ): TerrainTile {
+    const key = `${tileX}_${tileZ}`;
+
+    // Check if tile already exists
+    if (this.terrainTiles.has(key)) {
+      geometry.dispose();
+      return this.terrainTiles.get(key)!;
+    }
+
+    const material = this.getTerrainMaterial();
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(
+      tileX * this.CONFIG.TILE_SIZE,
+      0,
+      tileZ * this.CONFIG.TILE_SIZE,
+    );
+    mesh.name = `Terrain_${key}`;
+    mesh.receiveShadow = true;
+    mesh.castShadow = false;
+    mesh.frustumCulled = true;
+    mesh.userData = {
+      type: "terrain",
+      walkable: true,
+      clickable: true,
+      biome: this.getBiomeAt(tileX, tileZ),
+      tileKey: key,
+      tileX,
+      tileZ,
+    };
+
+    // Create tile object
+    const tile: TerrainTile = {
+      key,
+      x: tileX,
+      z: tileZ,
+      mesh,
+      collision: null,
+      biome: this.getBiomeAt(tileX, tileZ) as TerrainTile["biome"],
+      resources: [],
+      roads: [],
+      generated: true,
+      lastActiveTime: new Date(),
+      playerCount: 0,
+      needsSave: true,
+      waterMeshes: [],
+      heightData: [],
+      chunkSeed: 0,
+      heightMap: new Float32Array(0),
+      collider: null,
+      lastUpdate: Date.now(),
+    };
+
+    // Create physics collision (same as generateTile)
+    const physics = this.world.physics;
+    const PHYSX = getPhysX();
+    if (physics && PHYSX) {
+      const positionAttribute = geometry.attributes.position;
+      const vertices = positionAttribute.array as Float32Array;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      let avgY = 0;
+      const vertexCount = positionAttribute.count;
+      for (let i = 0; i < vertexCount; i++) {
+        const y = vertices[i * 3 + 1];
+        avgY += y;
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+      avgY /= vertexCount;
+
+      const heightRange = maxY - minY;
+      const boxThickness = Math.max(5, heightRange * 0.5);
+      const halfExtents = {
+        x: this.CONFIG.TILE_SIZE / 2,
+        y: boxThickness / 2,
+        z: this.CONFIG.TILE_SIZE / 2,
+      };
+      const boxGeometry = new PHYSX.PxBoxGeometry(
+        halfExtents.x,
+        halfExtents.y,
+        halfExtents.z,
+      );
+      const physicsMaterial = physics.physics.createMaterial(0.5, 0.5, 0.1);
+      const shape = physics.physics.createShape(
+        boxGeometry,
+        physicsMaterial,
+        true,
+      );
+
+      const terrainLayer = Layers.terrain;
+      if (terrainLayer) {
+        const filterData = new PHYSX.PxFilterData(
+          terrainLayer.group,
+          0xffffffff,
+          0,
+          0,
+        );
+        shape.setQueryFilterData(filterData);
+        const simFilterData = new PHYSX.PxFilterData(
+          terrainLayer.group,
+          terrainLayer.mask,
+          0,
+          0,
+        );
+        shape.setSimulationFilterData(simFilterData);
+      }
+
+      const transform = new PHYSX.PxTransform(
+        new PHYSX.PxVec3(
+          mesh.position.x + this.CONFIG.TILE_SIZE / 2,
+          avgY,
+          mesh.position.z + this.CONFIG.TILE_SIZE / 2,
+        ),
+        new PHYSX.PxQuat(0, 0, 0, 1),
+      );
+      const actor = physics.physics.createRigidStatic(transform);
+      actor.attachShape(shape);
+
+      const handle: PhysicsHandle = {
+        tag: `terrain_${tile.key}`,
+        contactedHandles: new Set<PhysicsHandle>(),
+        triggeredHandles: new Set<PhysicsHandle>(),
+      };
+      tile.collider = physics.addActor(actor, handle);
+    }
+
+    // Add to scene
+    if (this.terrainContainer) {
+      this.terrainContainer.add(mesh);
+    }
+
+    // Generate content (resources, visual features, water)
+    const isServer = this.world.network?.isServer || false;
+    const isClient = this.world.network?.isClient || false;
+
+    if (isServer) {
+      this.generateTileResources(tile);
+    }
+
+    if (isClient) {
+      if (!isServer && tile.resources.length === 0) {
+        this.generateTileResources(tile);
+      }
+      this.generateVisualFeatures(tile);
+      this.generateWaterMeshes(tile);
+
+      // Add resource meshes
+      if (tile.resources.length > 0 && tile.mesh) {
+        for (const resource of tile.resources) {
+          if (resource.instanceId != null) continue;
+          this._tempVec3.set(
+            tile.x * this.CONFIG.TILE_SIZE + resource.position.x,
+            resource.position.y,
+            tile.z * this.CONFIG.TILE_SIZE + resource.position.z,
+          );
+          const instanceId = this.instancedMeshManager.addInstance(
+            resource.type,
+            resource.id,
+            this._tempVec3,
+          );
+          if (instanceId !== null) {
+            resource.instanceId = instanceId;
+            resource.meshType = resource.type;
+            this.world.emit(EventType.RESOURCE_MESH_CREATED, {
+              mesh: undefined,
+              instanceId: instanceId,
+              resourceId: resource.id,
+              resourceType:
+                resource.type === "ore" ? "mining_rock" : resource.type,
+              worldPosition: {
+                x: this._tempVec3.x,
+                y: this._tempVec3.y,
+                z: this._tempVec3.z,
+              },
+            });
+          }
+        }
+      }
+    }
+
+    // Emit tile generated event
+    const originX = tileX * this.CONFIG.TILE_SIZE;
+    const originZ = tileZ * this.CONFIG.TILE_SIZE;
+    const resourcesPayload = tile.resources.map((r) => ({
+      id: r.id,
+      type: r.type,
+      position: {
+        x: originX + r.position.x,
+        y: r.position.y,
+        z: originZ + r.position.z,
+      },
+    }));
+    const genericBiome = this.mapBiomeToGeneric(tile.biome as string);
+    this.world.emit(EventType.TERRAIN_TILE_GENERATED, {
+      tileId: `${tileX},${tileZ}`,
+      position: { x: originX, z: originZ },
+      tileX,
+      tileZ,
+      biome: genericBiome,
+      resources: resourcesPayload,
+    });
+
+    // Register resource spawn points (same as generateTile)
+    if (isServer && tile.resources.length > 0) {
+      const spawnPoints = tile.resources.map((r) => {
+        const worldPos = {
+          x: originX + r.position.x,
+          y: r.position.y,
+          z: originZ + r.position.z,
+        };
+        return {
+          id: r.id,
+          type: r.type,
+          subType: r.type === "tree" ? "normal" : r.type,
+          position: worldPos,
+        };
+      });
+      this.world.emit(EventType.RESOURCE_SPAWN_POINTS_REGISTERED, {
+        spawnPoints,
+      });
+    } else if (tile.resources.length > 0 && isClient && !isServer) {
+      const spawnPoints = tile.resources.map((r) => {
+        const worldPos = {
+          x: originX + r.position.x,
+          y: r.position.y,
+          z: originZ + r.position.z,
+        };
+        return {
+          id: r.id,
+          type: r.type,
+          subType: r.type === "tree" ? "normal" : r.type,
+          position: worldPos,
+        };
+      });
+      this.world.emit(EventType.RESOURCE_SPAWN_POINTS_REGISTERED, {
+        spawnPoints,
+      });
+    }
+
+    this.terrainTiles.set(key, tile);
+    this.activeChunks.add(key);
+
+    return tile;
   }
 
   private initializeBiomeCenters(): void {
@@ -428,6 +1007,115 @@ export class TerrainSystem extends System {
         });
       }
     }
+  }
+
+  /**
+   * Initialize the unified TerrainGenerator from @hyperscape/procgen
+   * This creates a standalone generator that matches this system's configuration
+   */
+  private initializeTerrainGenerator(): void {
+    const seed = this.computeSeedFromWorldId();
+    const worldSizeMeters = this.getActiveWorldSizeMeters();
+
+    // Convert BIOMES data to BiomeDefinition format
+    const biomeDefinitions: Record<string, BiomeDefinition> = {};
+    for (const [id, biomeData] of Object.entries(BIOMES)) {
+      biomeDefinitions[id] = {
+        id,
+        name: biomeData.name,
+        color: biomeData.color,
+        terrainMultiplier: biomeData.terrainMultiplier || 1.0,
+        difficultyLevel: biomeData.difficultyLevel || 0,
+        heightRange: biomeData.heightRange,
+        maxSlope: biomeData.maxSlope,
+        resourceDensity: biomeData.resourceDensity,
+      };
+    }
+
+    // Create configuration that matches this system's CONFIG
+    const terrainConfig: Partial<TerrainConfig> = {
+      seed,
+      tileSize: this.CONFIG.TILE_SIZE,
+      worldSize: this.CONFIG.WORLD_SIZE,
+      tileResolution: this.CONFIG.TILE_RESOLUTION,
+      maxHeight: this.CONFIG.MAX_HEIGHT,
+      waterThreshold: this.CONFIG.WATER_THRESHOLD,
+      noise: {
+        continent: {
+          scale: 0.0008,
+          weight: 0.4,
+          octaves: 5,
+          persistence: 0.7,
+          lacunarity: 2.0,
+        },
+        ridge: { scale: 0.003, weight: 0.1 },
+        hill: {
+          scale: 0.012,
+          weight: 0.12,
+          octaves: 4,
+          persistence: 0.5,
+          lacunarity: 2.2,
+        },
+        erosion: { scale: 0.005, weight: 0.08, octaves: 3 },
+        detail: {
+          scale: 0.04,
+          weight: 0.03,
+          octaves: 2,
+          persistence: 0.3,
+          lacunarity: 2.5,
+        },
+      },
+      biomes: {
+        gridSize: this.CONFIG.BIOME_GRID_SIZE,
+        jitter: this.CONFIG.BIOME_JITTER,
+        minInfluence: this.CONFIG.BIOME_MIN_INFLUENCE,
+        maxInfluence: this.CONFIG.BIOME_MAX_INFLUENCE,
+        gaussianCoeff: this.CONFIG.BIOME_GAUSSIAN_COEFF,
+        boundaryNoiseScale: this.CONFIG.BIOME_BOUNDARY_NOISE_SCALE,
+        boundaryNoiseAmount: this.CONFIG.BIOME_BOUNDARY_NOISE_AMOUNT,
+        mountainHeightThreshold: this.CONFIG.MOUNTAIN_HEIGHT_THRESHOLD,
+        mountainWeightBoost: this.CONFIG.MOUNTAIN_WEIGHT_BOOST,
+        valleyHeightThreshold: this.CONFIG.VALLEY_HEIGHT_THRESHOLD,
+        valleyWeightBoost: this.CONFIG.VALLEY_WEIGHT_BOOST,
+        mountainHeightBoost: this.CONFIG.MOUNTAIN_HEIGHT_BOOST,
+      },
+      island: {
+        enabled: this.CONFIG.ISLAND_MASK_ENABLED,
+        maxWorldSizeTiles: this.CONFIG.ISLAND_MAX_WORLD_SIZE_TILES,
+        falloffTiles: this.CONFIG.ISLAND_FALLOFF_TILES,
+        edgeNoiseScale: this.CONFIG.ISLAND_EDGE_NOISE_SCALE,
+        edgeNoiseStrength: this.CONFIG.ISLAND_EDGE_NOISE_STRENGTH,
+      },
+      shoreline: {
+        waterLevelNormalized: this.CONFIG.WATER_LEVEL_NORMALIZED,
+        threshold: this.CONFIG.SHORELINE_THRESHOLD,
+        colorStrength: this.CONFIG.SHORELINE_STRENGTH,
+        minSlope: this.CONFIG.SHORELINE_MIN_SLOPE,
+        slopeSampleDistance: this.CONFIG.SHORELINE_SLOPE_SAMPLE_DISTANCE,
+        landBand: this.CONFIG.SHORELINE_LAND_BAND,
+        landMaxMultiplier: this.CONFIG.SHORELINE_LAND_MAX_MULTIPLIER,
+        underwaterBand: this.CONFIG.SHORELINE_UNDERWATER_BAND,
+        underwaterDepthMultiplier: this.CONFIG.UNDERWATER_DEPTH_MULTIPLIER,
+      },
+    };
+
+    this.terrainGenerator = new TerrainGenerator(
+      terrainConfig,
+      biomeDefinitions,
+    );
+
+    console.log(
+      `[TerrainSystem] Initialized unified TerrainGenerator with seed ${seed}, ` +
+        `world size ${worldSizeMeters}m, ${Object.keys(biomeDefinitions).length} biomes`,
+    );
+  }
+
+  /**
+   * Get the unified terrain generator for external use
+   * Useful for systems that need standalone terrain queries
+   */
+  public getTerrainGenerator(): TerrainGenerator {
+    return this.terrainGenerator;
   }
 
   // World Configuration - Your Specifications
@@ -513,7 +1201,15 @@ export class TerrainSystem extends System {
     ISLAND_FALLOFF_TILES: 4, // Coastline falloff width in tiles
     ISLAND_EDGE_NOISE_SCALE: 0.0015, // Noise scale for coastline irregularity
     ISLAND_EDGE_NOISE_STRENGTH: 0.03, // Radius variance as fraction of radius
+
+    // Web Worker settings for parallel terrain generation
+    USE_WORKERS: true, // Enable web workers for heightmap generation (client-side only)
+    WORKER_POOL_SIZE: 0, // Number of workers (0 = auto, based on CPU cores)
   };
+
+  // Pre-computed terrain data from workers (awaiting geometry creation)
+  private pendingWorkerResults = new Map<string, TerrainWorkerOutput>();
+  private workerBatchInProgress = false;
 
   // Biomes now loaded from assets/manifests/biomes.json via DataManager
   // Uses imported BIOMES from world-structure.ts
@@ -533,6 +1229,10 @@ export class TerrainSystem extends System {
     // Initialize biome centers using deterministic random placement
     this.initializeBiomeCenters();
 
+    // Initialize the unified terrain generator from @hyperscape/procgen
+    // This provides a standalone, testable height generation system
+    this.initializeTerrainGenerator();
+
     // Cache optional TownSystem for difficulty falloff and boss placement
     this.townSystem = this.world.getSystem<TownSystem>("towns") ?? null;
 
@@ -551,6 +1251,16 @@ export class TerrainSystem extends System {
     // Add water system to scene (required for reflector and debug view)
     if (this.world.stage?.scene) {
       this.waterSystem.addToScene(this.world.stage.scene);
+    }
+
+    // Sync water reflections setting from prefs (client-side only)
+    if (this.world.isClient && this.world.prefs) {
+      // Set initial value from prefs
+      const waterReflectionsEnabled = this.world.prefs.waterReflections ?? true;
+      this.waterSystem.setReflectionsEnabled(waterReflectionsEnabled);
+
+      // Listen for prefs changes
+      this.world.prefs.on("change", this.onPrefsChange);
     }
 
     // Get systems references
@@ -1381,89 +2091,115 @@ export class TerrainSystem extends System {
   /**
    * Refresh vertex colors for all loaded tiles
    * Called when road network becomes available to apply road coloring
+   *
+   * MAIN THREAD PROTECTION: Processes tiles in batches with yielding
+   * to prevent frame drops during road color updates.
    */
-  private refreshTileColors(): void {
+  private async refreshTileColors(): Promise<void> {
     console.log(
       `[TerrainSystem] Refreshing tile colors for ${this.terrainTiles.size} tiles after road generation`,
     );
 
-    for (const [key, tile] of this.terrainTiles) {
-      if (!tile.mesh) continue;
+    const tiles = Array.from(this.terrainTiles.entries());
+    const TILES_PER_BATCH = 2; // Process 2 tiles per batch
+    const VERTICES_PER_YIELD = 2000; // Yield after this many vertices
 
-      // Parse tile coordinates from key
-      const parts = key.split("_");
-      const tileX = parseInt(parts[0], 10);
-      const tileZ = parseInt(parts[1], 10);
+    for (let tileIdx = 0; tileIdx < tiles.length; tileIdx += TILES_PER_BATCH) {
+      const batchEnd = Math.min(tileIdx + TILES_PER_BATCH, tiles.length);
 
-      // Get geometry
-      const geometry = (tile.mesh as THREE.Mesh)
-        .geometry as THREE.BufferGeometry;
-      if (!geometry) continue;
+      for (let t = tileIdx; t < batchEnd; t++) {
+        const [key, tile] = tiles[t];
+        if (!tile.mesh) continue;
 
-      const positions = geometry.attributes.position;
-      const colors = geometry.attributes.color;
-      if (!positions || !colors) continue;
-      const roadInfluenceAttribute = geometry.getAttribute("roadInfluence");
-      const roadInfluenceBuffer =
-        roadInfluenceAttribute instanceof THREE.BufferAttribute
-          ? roadInfluenceAttribute
+        // Parse tile coordinates from key
+        const parts = key.split("_");
+        const tileX = parseInt(parts[0], 10);
+        const tileZ = parseInt(parts[1], 10);
+
+        // Get geometry
+        const geometry = (tile.mesh as THREE.Mesh)
+          .geometry as THREE.BufferGeometry;
+        if (!geometry) continue;
+
+        const positions = geometry.attributes.position;
+        const colors = geometry.attributes.color;
+        if (!positions || !colors) continue;
+        const roadInfluenceAttribute = geometry.getAttribute("roadInfluence");
+        const roadInfluenceBuffer =
+          roadInfluenceAttribute instanceof THREE.BufferAttribute
+            ? roadInfluenceAttribute
+            : null;
+
+        // Verify biome data is loaded
+        if (Object.keys(BIOMES).length === 0) continue;
+
+        // Update colors with road influence
+        const colorArray = colors.array as Float32Array;
+        const roadInfluenceArray = roadInfluenceBuffer
+          ? (roadInfluenceBuffer.array as Float32Array)
           : null;
 
-      // Verify biome data is loaded
-      if (Object.keys(BIOMES).length === 0) continue;
+        // Process vertices in chunks with yielding for very large tiles
+        for (let i = 0; i < positions.count; i++) {
+          const localX = positions.getX(i);
+          const localZ = positions.getZ(i);
+          const x = localX + tileX * this.CONFIG.TILE_SIZE;
+          const z = localZ + tileZ * this.CONFIG.TILE_SIZE;
 
-      // Update colors with road influence
-      const colorArray = colors.array as Float32Array;
-      const roadInfluenceArray = roadInfluenceBuffer
-        ? (roadInfluenceBuffer.array as Float32Array)
-        : null;
+          // Get current color
+          let colorR = colorArray[i * 3];
+          let colorG = colorArray[i * 3 + 1];
+          let colorB = colorArray[i * 3 + 2];
 
-      for (let i = 0; i < positions.count; i++) {
-        const localX = positions.getX(i);
-        const localZ = positions.getZ(i);
-        const x = localX + tileX * this.CONFIG.TILE_SIZE;
-        const z = localZ + tileZ * this.CONFIG.TILE_SIZE;
+          // Apply road coloring based on distance to road segments
+          const roadInfluence = this.calculateRoadInfluenceAtVertex(
+            x,
+            z,
+            tileX,
+            tileZ,
+          );
+          if (roadInfluenceArray) {
+            roadInfluenceArray[i] = roadInfluence;
+          }
+          if (roadInfluence > 0) {
+            // Blend toward road color based on influence
+            const edgeFactor = 1.0 - roadInfluence;
+            const roadR =
+              ROAD_COLOR.r * roadInfluence +
+              ROAD_EDGE_COLOR.r * edgeFactor * 0.3;
+            const roadG =
+              ROAD_COLOR.g * roadInfluence +
+              ROAD_EDGE_COLOR.g * edgeFactor * 0.3;
+            const roadB =
+              ROAD_COLOR.b * roadInfluence +
+              ROAD_EDGE_COLOR.b * edgeFactor * 0.3;
 
-        // Get current color
-        let colorR = colorArray[i * 3];
-        let colorG = colorArray[i * 3 + 1];
-        let colorB = colorArray[i * 3 + 2];
+            colorR = colorR * (1 - roadInfluence) + roadR * roadInfluence;
+            colorG = colorG * (1 - roadInfluence) + roadG * roadInfluence;
+            colorB = colorB * (1 - roadInfluence) + roadB * roadInfluence;
 
-        // Apply road coloring based on distance to road segments
-        const roadInfluence = this.calculateRoadInfluenceAtVertex(
-          x,
-          z,
-          tileX,
-          tileZ,
-        );
-        if (roadInfluenceArray) {
-          roadInfluenceArray[i] = roadInfluence;
+            // Update color array
+            colorArray[i * 3] = colorR;
+            colorArray[i * 3 + 1] = colorG;
+            colorArray[i * 3 + 2] = colorB;
+          }
+
+          // Yield to main thread periodically for very large tiles
+          if (i > 0 && i % VERTICES_PER_YIELD === 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          }
         }
-        if (roadInfluence > 0) {
-          // Blend toward road color based on influence
-          const edgeFactor = 1.0 - roadInfluence;
-          const roadR =
-            ROAD_COLOR.r * roadInfluence + ROAD_EDGE_COLOR.r * edgeFactor * 0.3;
-          const roadG =
-            ROAD_COLOR.g * roadInfluence + ROAD_EDGE_COLOR.g * edgeFactor * 0.3;
-          const roadB =
-            ROAD_COLOR.b * roadInfluence + ROAD_EDGE_COLOR.b * edgeFactor * 0.3;
 
-          colorR = colorR * (1 - roadInfluence) + roadR * roadInfluence;
-          colorG = colorG * (1 - roadInfluence) + roadG * roadInfluence;
-          colorB = colorB * (1 - roadInfluence) + roadB * roadInfluence;
-
-          // Update color array
-          colorArray[i * 3] = colorR;
-          colorArray[i * 3 + 1] = colorG;
-          colorArray[i * 3 + 2] = colorB;
+        // Mark color attribute as needing update
+        colors.needsUpdate = true;
+        if (roadInfluenceBuffer) {
+          roadInfluenceBuffer.needsUpdate = true;
         }
       }
 
-      // Mark color attribute as needing update
-      colors.needsUpdate = true;
-      if (roadInfluenceBuffer) {
-        roadInfluenceBuffer.needsUpdate = true;
+      // Yield to main thread between tile batches
+      if (batchEnd < tiles.length) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
     }
 
@@ -1591,8 +2327,8 @@ export class TerrainSystem extends System {
     // ============================================
     // ISLAND CONFIGURATION
     // ============================================
-    const ISLAND_RADIUS = 220; // Base radius: ~220m (~440m diameter)
-    const ISLAND_FALLOFF = 60; // Transition zone width (beach/shore)
+    const ISLAND_RADIUS = 350; // Base radius: ~220m (~440m diameter)
+    const ISLAND_FALLOFF = 100; // Transition zone width (beach/shore) - wider for gentler slope
     const POND_RADIUS = 50; // Pond radius (bigger pond)
     const POND_DEPTH = 0.55; // Pond depth (normalized) - deeper to get below water with high island
 
@@ -1639,10 +2375,12 @@ export class TerrainSystem extends System {
     // ============================================
     let islandMask = 1.0;
     if (distFromCenter > effectiveRadius - ISLAND_FALLOFF) {
-      // Smooth transition from land to ocean
+      // Smooth transition from land to ocean using smoothstep for gentler slope
       const edgeDist = distFromCenter - (effectiveRadius - ISLAND_FALLOFF);
-      const falloffFactor = edgeDist / ISLAND_FALLOFF;
-      islandMask = 1.0 - Math.min(1.0, falloffFactor * falloffFactor);
+      const t = Math.min(1.0, edgeDist / ISLAND_FALLOFF);
+      // Smoothstep: 3t² - 2t³ gives zero slope at both ends, smooth transition
+      const smoothstep = t * t * (3 - 2 * t);
+      islandMask = 1.0 - smoothstep;
     }
 
     // Outside island = deep ocean
@@ -1684,11 +2422,6 @@ export class TerrainSystem extends System {
     // Ocean floor outside island
     if (islandMask === 0) {
       height = 0.05; // Very low = deep underwater
-    }
-
-    const islandMask = this.getIslandMask(worldX, worldZ);
-    if (islandMask < 1) {
-      height *= islandMask;
     }
 
     return height * this.CONFIG.MAX_HEIGHT;
@@ -1799,7 +2532,65 @@ export class TerrainSystem extends System {
       : waterThreshold - adjustedDelta;
   }
 
-  getHeightAt(worldX: number, worldZ: number): number {
+  /**
+   * PERFORMANCE: Get height from cached tile data using bilinear interpolation.
+   * Returns null if tile not loaded - caller should fallback to getHeightAtComputed().
+   * O(1) lookup vs O(n) noise computation.
+   */
+  private getHeightAtCached(worldX: number, worldZ: number): number | null {
+    const tileX = Math.floor(worldX / this.CONFIG.TILE_SIZE);
+    const tileZ = Math.floor(worldZ / this.CONFIG.TILE_SIZE);
+    const key = `${tileX}_${tileZ}`;
+    const tile = this.terrainTiles.get(key);
+
+    // Check if tile has cached height data
+    if (!tile?.heightData || tile.heightData.length === 0) {
+      return null;
+    }
+
+    const resolution = this.CONFIG.TILE_RESOLUTION;
+    const tileSize = this.CONFIG.TILE_SIZE;
+
+    // Convert world position to local tile coordinates [0, tileSize]
+    const localX = worldX - tileX * tileSize;
+    const localZ = worldZ - tileZ * tileSize;
+
+    // Convert local coordinates to grid indices (0 to resolution-1)
+    // heightData is laid out as row-major: index = iz * resolution + ix
+    const gridStep = tileSize / (resolution - 1);
+    const gx = localX / gridStep;
+    const gz = localZ / gridStep;
+
+    // Clamp to valid range
+    const gxClamped = Math.max(0, Math.min(resolution - 1.001, gx));
+    const gzClamped = Math.max(0, Math.min(resolution - 1.001, gz));
+
+    // Integer indices for bilinear interpolation
+    const ix0 = Math.floor(gxClamped);
+    const iz0 = Math.floor(gzClamped);
+    const ix1 = Math.min(ix0 + 1, resolution - 1);
+    const iz1 = Math.min(iz0 + 1, resolution - 1);
+
+    // Fractional parts
+    const fx = gxClamped - ix0;
+    const fz = gzClamped - iz0;
+
+    // Sample four corners
+    const h00 = tile.heightData[iz0 * resolution + ix0];
+    const h10 = tile.heightData[iz0 * resolution + ix1];
+    const h01 = tile.heightData[iz1 * resolution + ix0];
+    const h11 = tile.heightData[iz1 * resolution + ix1];
+
+    // Bilinear interpolation
+    const h0 = h00 + (h10 - h00) * fx;
+    const h1 = h01 + (h11 - h01) * fx;
+    return h0 + (h1 - h0) * fz;
+  }
+
+  /**
+   * Compute height using noise functions (expensive, used when tile not cached)
+   */
+  private getHeightAtComputed(worldX: number, worldZ: number): number {
     const baseHeight = this.getHeightAtWithoutShore(worldX, worldZ);
     const waterThreshold = this.CONFIG.WATER_THRESHOLD;
     const landBand = this.CONFIG.SHORELINE_LAND_BAND;
@@ -1814,6 +2605,17 @@ export class TerrainSystem extends System {
 
     const slope = this.calculateBaseSlopeAt(worldX, worldZ, baseHeight);
     return this.adjustHeightForShoreline(baseHeight, slope);
+  }
+
+  getHeightAt(worldX: number, worldZ: number): number {
+    // PERFORMANCE: Try cached tile data first (O(1) bilinear interpolation)
+    const cachedHeight = this.getHeightAtCached(worldX, worldZ);
+    if (cachedHeight !== null) {
+      return cachedHeight;
+    }
+
+    // Fallback to expensive noise computation
+    return this.getHeightAtComputed(worldX, worldZ);
   }
 
   /**
@@ -2142,6 +2944,11 @@ export class TerrainSystem extends System {
     const resolution = this.CONFIG.TILE_RESOLUTION;
     const step = this.CONFIG.TILE_SIZE / (resolution - 1);
 
+    // OPTIMIZATION: Reuse pre-allocated Vector2s to avoid allocations in nested loop
+    const pointVec = this._tempVec2;
+    const startVec = this._tempVec2_2;
+    const endVec = this._tempVec2_3;
+
     for (let i = 0; i < resolution; i++) {
       for (let j = 0; j < resolution; j++) {
         const localX = (i - (resolution - 1) / 2) * step;
@@ -2151,14 +2958,27 @@ export class TerrainSystem extends System {
 
         // Check distance to each road segment
         for (const road of tempTile.roads) {
+          // Set point position
+          pointVec.set(localX, localZ);
+
+          // Set start position (reuse if already Vector2, otherwise convert)
+          if (road.start instanceof THREE.Vector2) {
+            startVec.copy(road.start);
+          } else {
+            startVec.set(road.start.x, road.start.z);
+          }
+
+          // Set end position (reuse if already Vector2, otherwise convert)
+          if (road.end instanceof THREE.Vector2) {
+            endVec.copy(road.end);
+          } else {
+            endVec.set(road.end.x, road.end.z);
+          }
+
           const distanceToRoad = this.distanceToLineSegment(
-            new THREE.Vector2(localX, localZ),
-            road.start instanceof THREE.Vector2
-              ? road.start
-              : new THREE.Vector2(road.start.x, road.start.z),
-            road.end instanceof THREE.Vector2
-              ? road.end
-              : new THREE.Vector2(road.end.x, road.end.z),
+            pointVec,
+            startVec,
+            endVec,
           );
 
           // Calculate influence based on distance (closer = more influence)
@@ -2263,7 +3083,13 @@ export class TerrainSystem extends System {
   }
 
   update(_deltaTime: number): void {
+    // Dispatch pending tiles to workers for pre-computation (client only)
+    if (this.world.isClient && this.CONFIG.USE_WORKERS) {
+      this.dispatchWorkerBatch();
+    }
+
     // Process queued tile generations within a small per-frame budget
+    // (also processes pre-computed worker results when available)
     this.processTileGenerationQueue();
 
     // Process queued collision generation on the server
@@ -2329,11 +3155,12 @@ export class TerrainSystem extends System {
       this.terrainMaterial.terrainUniforms.fogFarSq.value = fogFar * fogFar;
     }
     if (fogColor) {
-      const color = new THREE.Color(fogColor);
+      // Reuse _tempColor to avoid allocation every frame
+      this._tempColor.set(fogColor);
       this.terrainMaterial.terrainUniforms.fogColor.value.set(
-        color.r,
-        color.g,
-        color.b,
+        this._tempColor.r,
+        this._tempColor.g,
+        this._tempColor.b,
       );
     }
   }
@@ -2636,9 +3463,15 @@ export class TerrainSystem extends System {
   /**
    * Generate water meshes for low areas
    * Water geometry is shaped to only cover actual underwater terrain
+   * Uses "ocean" shader for water at island boundary, "lake" for inland water
    */
   private generateWaterMeshes(tile: TerrainTile): void {
     if (!this.waterSystem) return;
+
+    // Determine water type based on tile position relative to island
+    // Ocean water is at the world boundaries (outside island radius)
+    // Lake water is inland (ponds, lakes within the island)
+    const waterType = this.determineWaterType(tile);
 
     // Pass height function so water mesh can be shaped to underwater areas only
     // Water will only be created where terrain is below WATER_THRESHOLD
@@ -2648,6 +3481,7 @@ export class TerrainSystem extends System {
       this.CONFIG.WATER_THRESHOLD,
       this.CONFIG.TILE_SIZE,
       (worldX: number, worldZ: number) => this.getHeightAt(worldX, worldZ),
+      waterType,
     );
 
     // waterMesh is null if no underwater areas exist
@@ -2655,6 +3489,35 @@ export class TerrainSystem extends System {
       tile.mesh.add(waterMesh);
       tile.waterMeshes.push(waterMesh);
     }
+  }
+
+  /**
+   * Determine if a tile's water should be "ocean" (boundary) or "lake" (inland)
+   * Ocean: water at world edges where island mask < threshold
+   * Lake: inland water bodies (ponds, rivers within the island)
+   */
+  private determineWaterType(tile: TerrainTile): "lake" | "ocean" {
+    // If island mask is disabled, all water is lake
+    if (!this.CONFIG.ISLAND_MASK_ENABLED) {
+      return "lake";
+    }
+
+    // Calculate tile center position
+    const tileCenterX = tile.x * this.CONFIG.TILE_SIZE;
+    const tileCenterZ = tile.z * this.CONFIG.TILE_SIZE;
+
+    // Get the island mask at tile center
+    // Island mask is 1.0 at center, falls to 0.0 at ocean
+    const islandMask = this.getIslandMask(tileCenterX, tileCenterZ);
+
+    // If island mask is below threshold, this is ocean water
+    // Use 0.3 as threshold - water in the outer 70% of falloff zone is ocean
+    const OCEAN_THRESHOLD = 0.3;
+    if (islandMask < OCEAN_THRESHOLD) {
+      return "ocean";
+    }
+
+    return "lake";
   }
 
   /**
@@ -3221,6 +4084,17 @@ export class TerrainSystem extends System {
   }
 
   destroy(): void {
+    // Terminate terrain worker pool to free resources
+    terminateTerrainWorkerPool();
+
+    // Clear pending worker results
+    this.pendingWorkerResults.clear();
+
+    // Remove prefs listener
+    if (this.world.prefs) {
+      this.world.prefs.off("change", this.onPrefsChange);
+    }
+
     // Perform final serialization before shutdown
     this.performImmediateSerialization();
 
@@ -3826,4 +4700,15 @@ export class TerrainSystem extends System {
   public getBiomeData(biomeId: string): (typeof BIOMES)[string] | null {
     return BIOMES[biomeId] ?? null;
   }
+
+  /**
+   * Handle preference changes - specifically water reflections
+   */
+  private onPrefsChange = (changes: {
+    waterReflections?: { value: boolean };
+  }) => {
+    if (changes.waterReflections && this.waterSystem) {
+      this.waterSystem.setReflectionsEnabled(changes.waterReflections.value);
+    }
+  };
 }

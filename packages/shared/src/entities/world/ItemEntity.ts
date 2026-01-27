@@ -148,6 +148,14 @@ export class ItemEntity extends InteractableEntity {
           };
 
           this.node.add(this.mesh);
+
+          // Initialize HLOD impostor support for ground items with 3D models
+          await this.initHLOD(`item_${this.config.itemId}_${modelToLoad}`, {
+            category: "item",
+            atlasSize: 256, // Small for items
+            hemisphere: false, // Items are small, full sphere view
+          });
+
           return;
         } catch (error) {
           console.warn(

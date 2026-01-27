@@ -21,12 +21,16 @@ import type { TileCoord } from "./TileSystem";
 
 /**
  * Pooled data structures for BFS pathfinding
+ *
+ * OPTIMIZATION: Uses numeric keys (Set<number>, Map<number, ...>) instead of strings
+ * to avoid string allocation in hot pathfinding loops.
+ * Use tileKeyNumeric() to generate keys.
  */
 export interface BFSPooledData {
-  /** Visited tile keys (cleared on acquire) */
-  visited: Set<string>;
-  /** Parent map for path reconstruction (cleared on acquire) */
-  parent: Map<string, TileCoord>;
+  /** Visited tile keys (cleared on acquire) - uses numeric keys for performance */
+  visited: Set<number>;
+  /** Parent map for path reconstruction (cleared on acquire) - uses numeric keys */
+  parent: Map<number, TileCoord>;
   /** Queue for BFS frontier (cleared on acquire) */
   queue: TileCoord[];
 }

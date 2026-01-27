@@ -386,12 +386,18 @@ function createReducer(
 
         const newProgress = new Map(state.progress);
 
-        // Reverse the action
+        // Set rank first, then compute state (computeNodeState needs the new rank in the map)
         newProgress.set(lastAction.nodeId, {
           nodeId: lastAction.nodeId,
           currentRank: lastAction.previousRank,
-          state: computeNodeState(lastAction.nodeId, nodesMap, newProgress),
+          state: "locked",
         });
+        const undoProgress = newProgress.get(lastAction.nodeId)!;
+        undoProgress.state = computeNodeState(
+          lastAction.nodeId,
+          nodesMap,
+          newProgress,
+        );
 
         // Update dependent node states
         tree.nodes.forEach((n) => {

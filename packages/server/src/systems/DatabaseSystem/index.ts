@@ -1344,6 +1344,75 @@ export class DatabaseSystem extends SystemBase {
   }
 
   /**
+   * Check database connection health
+   *
+   * Performs a lightweight health check by executing a simple query.
+   * Returns connection status information useful for monitoring.
+   *
+   * @returns Health check result with status and pool info
+   */
+  async checkHealthAsync(): Promise<{
+    healthy: boolean;
+    latencyMs: number;
+    poolInfo?: {
+      totalCount: number;
+      idleCount: number;
+      waitingCount: number;
+    };
+    error?: string;
+  }> {
+    if (!this.db || !this.pool) {
+      return {
+        healthy: false,
+        latencyMs: 0,
+        error: "Database not initialized",
+      };
+    }
+
+    const startTime = performance.now();
+
+    try {
+      // Simple query to verify connection (SELECT 1)
+      await this.pool.query("SELECT 1");
+
+      const latencyMs = Math.round(performance.now() - startTime);
+
+      return {
+        healthy: true,
+        latencyMs,
+        poolInfo: {
+          totalCount: this.pool.totalCount,
+          idleCount: this.pool.idleCount,
+          waitingCount: this.pool.waitingCount,
+        },
+      };
+    } catch (error) {
+      const latencyMs = Math.round(performance.now() - startTime);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+
+      console.error("[DatabaseSystem] Health check failed:", errorMessage);
+
+      return {
+        healthy: false,
+        latencyMs,
+        error: errorMessage,
+      };
+    }
+  }
+
+  /**
+   * Get the PostgreSQL connection pool
+   *
+   * Provides access to the underlying pool for monitoring or direct operations.
+   *
+   * @returns The pg.Pool instance or null if not initialized
+   */
+  getPool(): pg.Pool | null {
+    return this.pool;
+  }
+
+  /**
    * Clean up database system resources
    *
    * Nullifies references to database instances but does NOT close the connection pool.

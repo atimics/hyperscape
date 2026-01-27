@@ -44,6 +44,7 @@ import THREE, {
   sub,
   add,
   mul,
+  max,
   Fn,
   MeshStandardNodeMaterial,
   float,
@@ -69,6 +70,14 @@ import {
   distanceSquaredXZ,
   getCameraPosition,
 } from "./AnimationLOD";
+import { csmLevels } from "../../systems/shared/world/Environment";
+import { ImpostorManager, BakePriority } from "../../systems/shared/rendering";
+import {
+  createImpostorMaterial,
+  updateImpostorMaterial,
+  type ImpostorViewData,
+  type ImpostorBakeResult,
+} from "@hyperscape/impostor";
 
 // ============================================================================
 // MOB DISSOLVE MATERIAL TYPES
@@ -203,6 +212,20 @@ export class InstancedMeshManager {
   private _tempMatrix = new THREE.Matrix4();
   private _tempVec3 = new THREE.Vector3();
   private didInitialVisibility = false;
+  // OPTIMIZATION: Pre-allocated array for visibility sorting (avoids allocation per update)
+  private _visibilitySortArray: Array<
+    [
+      string,
+      {
+        position: THREE.Vector3;
+        matrix: THREE.Matrix4;
+        distance: number;
+        distanceSq?: number;
+        visible: boolean;
+        entityId: string;
+      },
+    ]
+  > = [];
 
   /**
    * Create a new InstancedMeshManager
@@ -692,16 +715,15 @@ type MobInstancedGroup = {
 /**
  * Imposter render data for a model.
  * Created once per model type and shared across all groups.
+ * Uses OctahedralImpostor from @hyperscape/impostor for quality multi-view rendering.
  */
 type MobImposterModel = {
-  /** Pre-rendered imposter texture */
+  /** Pre-rendered imposter texture (from bake result) */
   texture: THREE.Texture;
-  /** Render target that owns the texture (must be kept alive) */
-  renderTarget: THREE.WebGLRenderTarget;
   /** Billboard geometry (plane) */
   geometry: THREE.PlaneGeometry;
-  /** Billboard material */
-  material: THREE.MeshBasicMaterial;
+  /** Billboard material (GLSL impostor material from @hyperscape/impostor) */
+  material: THREE.ShaderMaterial;
   /** Instanced mesh for all imposters of this model */
   mesh: THREE.InstancedMesh;
   /** Instance index map (handle ID -> index) */
@@ -716,6 +738,12 @@ type MobImposterModel = {
   width: number;
   /** Height of the mob (world units) */
   height: number;
+  /** ImpostorManager bake result for octahedral rendering */
+  bakeResult: ImpostorBakeResult;
+  /** Grid size X for octahedral sampling */
+  gridSizeX: number;
+  /** Grid size Y for octahedral sampling */
+  gridSizeY: number;
 };
 
 type MobInstancedModel = {
@@ -744,9 +772,6 @@ const DEFAULT_MOB_VARIANTS = 3; // animation phase buckets per state
 
 // Note: Imposter distances are now dynamic, initialized from shadow quality
 // See MobInstancedRenderer._imposterDistance* variables
-
-/** Imposter texture size (power of 2) */
-const IMPOSTER_TEXTURE_SIZE = 256;
 
 const mobInstancedRenderers = new WeakMap<World, MobInstancedRenderer>();
 
@@ -782,11 +807,6 @@ export class MobInstancedRenderer {
   private readonly _tempVec3 = new THREE.Vector3();
   private readonly _tempBox = new THREE.Box3();
   private readonly _sharedMaterialCache = new Map<string, THREE.Material>();
-
-  // Imposter rendering
-  private _imposterRenderTarget: THREE.WebGLRenderTarget | null = null;
-  private _imposterCamera: THREE.OrthographicCamera | null = null;
-  private _imposterScene: THREE.Scene | null = null;
 
   // Frustum culling - skip mobs outside camera view
   private readonly _frustum = new THREE.Frustum();
@@ -831,12 +851,49 @@ export class MobInstancedRenderer {
   private readonly _dissolveMaterials: MobDissolveMaterial[] = [];
   private readonly _dissolvePlayerPos = new THREE.Vector3();
 
+  // Pre-allocated Vector3s for imposter view data (avoid per-frame allocation)
+  private readonly _imposterFaceIndices = new THREE.Vector3();
+  private readonly _imposterFaceWeights = new THREE.Vector3(1, 0, 0);
+
   // VAT (Vertex Animation Texture) cache
   private readonly _vatCache = new Map<string, VATData | null>();
   private readonly _vatLoadingPromises = new Map<
     string,
     Promise<VATData | null>
   >();
+
+  // Impostor baking promises (to avoid duplicate bakes)
+  private readonly _impostorBakingPromises = new Map<
+    string,
+    Promise<ImpostorBakeResult | null>
+  >();
+
+  // ============================================
+  // FRAME BUDGET MANAGEMENT - Prevent main thread blocking
+  // ============================================
+
+  /** Max handles to process per frame during culling */
+  private readonly _maxCullHandlesPerFrame = 50;
+  /** Max imposter transitions per frame */
+  private readonly _maxImposterTransitionsPerFrame = 10;
+  /** Max billboard updates per frame */
+  private readonly _maxBillboardUpdatesPerFrame = 30;
+  /** Max skeleton updates per frame */
+  private readonly _maxSkeletonUpdatesPerFrame = 20;
+
+  /** Iterator for incremental culling */
+  private _cullIterator: IterableIterator<[string, MobInstancedHandle]> | null =
+    null;
+  /** Track if full culling pass is needed */
+  private _fullCullNeeded = true;
+
+  /** Skeleton update queue for spreading work across frames */
+  private _pendingSkeletonUpdates: Array<{
+    group: MobInstancedGroup;
+    delta: number;
+  }> = [];
+  /** Index into skeleton update queue */
+  private _skeletonUpdateIndex = 0;
 
   private constructor(world: World, variants = DEFAULT_MOB_VARIANTS) {
     this.world = world;
@@ -846,45 +903,55 @@ export class MobInstancedRenderer {
   }
 
   /**
-   * Initialize culling distances based on shadow quality settings.
-   * Matches vegetation system for consistent visual culling across all entities.
-   * Called lazily on first update when world.prefs is available.
+   * Initialize distance thresholds from world preferences.
+   * Syncs with shadow quality settings so mobs dissolve at same distance as vegetation.
+   *
+   * DISTANCE HIERARCHY (must match VegetationSystem):
+   * 1. FADE_START - dissolve begins (90% of shadow maxFar)
+   * 2. FADE_END - fully dissolved (equals shadow maxFar)
+   * 3. CULL - hidden beyond fade end
+   *
+   * Distance zones (from close to far):
+   * - 0-50m: Full 3D with animation LOD tiers
+   * - 50-80m: Imposter billboard (before dissolve starts)
+   * - FADE_START to FADE_END: Dissolve transition zone
+   * - Beyond FADE_END: Fully culled
    */
   private initializeDistances(): void {
     if (this._distancesInitialized) return;
 
-    // Get shadow quality from world preferences (same as vegetation)
+    // Sync with shadow quality like VegetationSystem does
+    // This ensures mobs dissolve at the same distance as vegetation
     const shadowsLevel = (this.world.prefs?.shadows as string) || "med";
+    const csmConfig =
+      csmLevels[shadowsLevel as keyof typeof csmLevels] || csmLevels.med;
+    const shadowMaxFar = csmConfig.maxFar;
 
-    // Import shadow config (inline to avoid circular deps)
-    const csmLevels: Record<string, { maxFar: number }> = {
-      none: { maxFar: 50 },
-      low: { maxFar: 200 },
-      med: { maxFar: 350 },
-      high: { maxFar: 1000 },
-    };
+    // Match vegetation exactly: fade ends at shadow cutoff
+    const fadeEnd = shadowMaxFar;
+    const fadeStart = shadowMaxFar * 0.9;
 
-    const config = csmLevels[shadowsLevel] || csmLevels.med;
-    const maxFar = config.maxFar;
-
-    // Set distances to match vegetation fade behavior
-    this._cullDistance = maxFar;
-    this._cullDistanceSq = maxFar * maxFar;
-    this._fadeStartDistance = maxFar * 0.9; // Fade starts at 90% of max
-    this._fadeStartDistanceSq =
-      this._fadeStartDistance * this._fadeStartDistance;
-    this._uncullDistance = maxFar * 0.95; // Uncull at 95% for hysteresis
+    // Cull/render distances - match vegetation for consistent visual boundary
+    this._cullDistance = fadeEnd;
+    this._cullDistanceSq = fadeEnd * fadeEnd;
+    this._fadeStartDistance = fadeStart;
+    this._fadeStartDistanceSq = fadeStart * fadeStart;
+    this._uncullDistance = fadeStart; // Uncull at fade start for hysteresis
     this._uncullDistanceSq = this._uncullDistance * this._uncullDistance;
 
-    // Imposter distances (before frozen state for smooth transition)
-    // Use 30% of max distance for imposter switch
-    this._imposterDistance = Math.min(60, maxFar * 0.3);
+    // Imposter distances - switch to billboard well before dissolve zone
+    // This gives smooth transition: 3D -> imposter -> dissolve -> cull
+    // Keep imposters at fixed distance since they're performance optimization
+    this._imposterDistance = Math.min(50, fadeStart * 0.3); // 30% of fade start, max 50m
     this._imposterDistanceSq = this._imposterDistance * this._imposterDistance;
-    this._imposterUncullDistance = this._imposterDistance * 0.9;
+    this._imposterUncullDistance = this._imposterDistance - 5; // 5m hysteresis
     this._imposterUncullDistanceSq =
       this._imposterUncullDistance * this._imposterUncullDistance;
 
     this._distancesInitialized = true;
+    console.log(
+      `[MobInstancedRenderer] Synced with shadows "${shadowsLevel}": fade ${fadeStart.toFixed(0)}-${fadeEnd.toFixed(0)}m, imposterAt=${this._imposterDistance.toFixed(0)}m`,
+    );
   }
 
   static get(world: World): MobInstancedRenderer {
@@ -897,39 +964,8 @@ export class MobInstancedRenderer {
     return renderer;
   }
 
-  /**
-   * Initialize the imposter rendering system.
-   * Creates render target and camera for pre-rendering mob textures.
-   */
-  private initImposterRenderer(): void {
-    // Create render target for imposter textures
-    this._imposterRenderTarget = new THREE.WebGLRenderTarget(
-      IMPOSTER_TEXTURE_SIZE,
-      IMPOSTER_TEXTURE_SIZE,
-      {
-        minFilter: THREE.LinearFilter,
-        magFilter: THREE.LinearFilter,
-        format: THREE.RGBAFormat,
-        type: THREE.UnsignedByteType,
-        depthBuffer: true,
-        stencilBuffer: false,
-      },
-    );
-
-    // Orthographic camera for consistent imposter capture
-    this._imposterCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
-
-    // Isolated scene for imposter rendering
-    this._imposterScene = new THREE.Scene();
-    this._imposterScene.background = null;
-
-    // Lighting for imposter capture
-    const ambient = new THREE.AmbientLight(0xffffff, 0.8);
-    this._imposterScene.add(ambient);
-    const dirLight = new THREE.DirectionalLight(0xfff8f0, 0.6);
-    dirLight.position.set(0, 2, 1);
-    this._imposterScene.add(dirLight);
-  }
+  // NOTE: Old imposter rendering system removed.
+  // All impostor baking is now handled by ImpostorManager using @hyperscape/impostor.
 
   async registerMob(
     registration: MobInstanceRegistration,
@@ -984,6 +1020,12 @@ export class MobInstancedRenderer {
     return handle;
   }
 
+  // Lerp factor for smooth position interpolation (0-1, higher = faster catch-up)
+  // This smooths out network jitter and provides silky movement
+  private readonly _lerpFactor = 0.25;
+  private readonly _lerpThreshold = 0.001; // Below this distance, snap directly
+  private readonly _lerpMaxDistance = 10; // Above this distance, snap directly (teleport)
+
   updateTransform(
     handle: MobInstancedHandle,
     position: THREE.Vector3,
@@ -991,20 +1033,48 @@ export class MobInstancedRenderer {
   ): void {
     const pos = handle.position;
     const quat = handle.quaternion;
-    if (
-      pos.x === position.x &&
-      pos.y === position.y &&
-      pos.z === position.z &&
-      quat.x === quaternion.x &&
-      quat.y === quaternion.y &&
-      quat.z === quaternion.z &&
-      quat.w === quaternion.w
-    ) {
+
+    // Check if position actually changed
+    const dx = position.x - pos.x;
+    const dy = position.y - pos.y;
+    const dz = position.z - pos.z;
+    const distSq = dx * dx + dy * dy + dz * dz;
+
+    // Check if quaternion changed
+    const quatChanged =
+      quat.x !== quaternion.x ||
+      quat.y !== quaternion.y ||
+      quat.z !== quaternion.z ||
+      quat.w !== quaternion.w;
+
+    // Early exit if nothing changed
+    if (distSq < this._lerpThreshold * this._lerpThreshold && !quatChanged) {
       return;
     }
-    pos.copy(position);
-    quat.copy(quaternion);
-    this.composeInstanceMatrix(handle, position, quaternion);
+
+    // SMOOTH LERP: Interpolate position for silky movement
+    // - Below threshold: snap directly (avoids jitter at rest)
+    // - Above max distance: snap directly (teleport)
+    // - In between: lerp smoothly
+    if (
+      distSq > this._lerpThreshold * this._lerpThreshold &&
+      distSq < this._lerpMaxDistance * this._lerpMaxDistance
+    ) {
+      // Smooth lerp to target position
+      pos.x += dx * this._lerpFactor;
+      pos.y += dy * this._lerpFactor;
+      pos.z += dz * this._lerpFactor;
+    } else {
+      // Snap directly (too small or too large distance)
+      pos.copy(position);
+    }
+
+    // Slerp quaternion for smooth rotation
+    if (quatChanged) {
+      quat.slerp(quaternion, this._lerpFactor);
+    }
+
+    this.composeInstanceMatrix(handle, pos, quat);
     this._cullDirty = true;
     this._lodDirty = true;
     if (handle.hidden) return;
@@ -1164,10 +1234,26 @@ export class MobInstancedRenderer {
       ? this.shouldRefreshLOD(cameraPos.x, cameraPos.z, now)
       : false;
 
+    // Track skeleton and billboard update budgets this frame
+    let skeletonUpdatesThisFrame = 0;
+    let billboardUpdatesThisFrame = 0;
+
     for (const model of this.models.values()) {
-      // Update imposter billboards to face camera
+      // Update imposter billboards to face camera (with per-frame limit)
       if (model.imposter && model.imposter.count > 0 && cameraPos) {
-        this.updateImposterBillboards(model.imposter, cameraPos);
+        if (billboardUpdatesThisFrame < this._maxBillboardUpdatesPerFrame) {
+          // Only update a portion of billboards per frame
+          const updatesToProcess = Math.min(
+            model.imposter.count,
+            this._maxBillboardUpdatesPerFrame - billboardUpdatesThisFrame,
+          );
+          this.updateImposterBillboardsPartial(
+            model.imposter,
+            cameraPos,
+            updatesToProcess,
+          );
+          billboardUpdatesThisFrame += updatesToProcess;
+        }
       }
 
       for (const group of model.groups.values()) {
@@ -1197,14 +1283,20 @@ export class MobInstancedRenderer {
           if (group.mixer) {
             group.mixer.update(lod.effectiveDelta);
           }
-          // Update skeletons only when animating
-          if (group.skeletons.length > 0) {
+          // Update skeletons with per-frame budget
+          if (
+            group.skeletons.length > 0 &&
+            skeletonUpdatesThisFrame < this._maxSkeletonUpdatesPerFrame
+          ) {
             for (const skeleton of group.skeletons) {
+              if (skeletonUpdatesThisFrame >= this._maxSkeletonUpdatesPerFrame)
+                break;
               const bones = skeleton.bones;
               for (let i = 0; i < bones.length; i += 1) {
                 bones[i].updateMatrixWorld();
               }
               skeleton.update();
+              skeletonUpdatesThisFrame++;
             }
           }
         }
@@ -1249,15 +1341,35 @@ export class MobInstancedRenderer {
 
   /**
    * Update imposter billboard orientations to face camera.
+   * Updates octahedral view cell based on camera direction using @hyperscape/impostor material.
    */
   private updateImposterBillboards(
     imposter: MobImposterModel,
     cameraPos: { x: number; z: number },
   ): void {
     if (imposter.count === 0) return;
+    this.updateImposterBillboardsPartial(imposter, cameraPos, imposter.count);
+  }
+
+  /**
+   * Update a limited number of imposter billboards per call.
+   * Used for frame budget management to prevent main thread blocking.
+   */
+  private updateImposterBillboardsPartial(
+    imposter: MobImposterModel,
+    cameraPos: { x: number; z: number },
+    maxUpdates: number,
+  ): void {
+    if (imposter.count === 0) return;
+
+    // Update octahedral view cell for the material (cheap operation)
+    this.updateOctahedralViewCell(imposter, cameraPos);
 
     // Update each imposter to face camera (Y-axis billboard rotation only)
+    let updated = 0;
     for (const [handleId, index] of imposter.instanceMap) {
+      if (updated >= maxUpdates) break;
+
       const handle = this.handles.get(handleId);
       if (!handle) continue;
 
@@ -1276,13 +1388,75 @@ export class MobInstancedRenderer {
 
       this._tempMatrix.compose(this._tempPos, this._tempQuat, this._tempScale);
       imposter.mesh.setMatrixAt(index, this._tempMatrix);
+      updated++;
     }
 
     imposter.mesh.instanceMatrix.needsUpdate = true;
   }
 
   /**
+   * Update octahedral imposter view cell based on camera direction.
+   * Uses hemisphere mapping to select appropriate atlas cell and updates material via updateImpostorMaterial.
+   * @internal
+   */
+  private updateOctahedralViewCell(
+    imposter: MobImposterModel,
+    cameraPos: { x: number; z: number },
+  ): void {
+    const { gridSizeX, gridSizeY } = imposter;
+
+    // Get a representative position (first visible imposter)
+    let representativePos: THREE.Vector3 | null = null;
+    for (const handleId of imposter.instanceMap.keys()) {
+      const handle = this.handles.get(handleId);
+      if (handle) {
+        representativePos = handle.position;
+        break;
+      }
+    }
+    if (!representativePos) return;
+
+    // Calculate view direction from imposter to camera
+    const dx = cameraPos.x - representativePos.x;
+    const dz = cameraPos.z - representativePos.z;
+    const len = Math.sqrt(dx * dx + dz * dz);
+    if (len < 0.001) return;
+
+    // Normalize view direction (XZ plane only for ground mobs)
+    const vx = dx / len;
+    const vz = dz / len;
+
+    // Convert view direction to octahedral cell coordinates
+    // For HEMI mapping, we map from XZ plane direction to grid cell
+    // Map from [-1,1] to [0, gridSize-1]
+    const col = Math.floor(((vx + 1) / 2) * (gridSizeX - 1));
+    const row = Math.floor(((vz + 1) / 2) * (gridSizeY - 1));
+
+    // Clamp to valid range
+    const clampedCol = Math.max(0, Math.min(gridSizeX - 1, col));
+    const clampedRow = Math.max(0, Math.min(gridSizeY - 1, row));
+
+    // Calculate flat index for the dominant cell
+    const flatIndex = clampedRow * gridSizeX + clampedCol;
+
+    // For instanced rendering, use single-cell rendering (all weight on one face)
+    // This is a simplified approach - full octahedral blending would need per-instance raycasting
+    // OPTIMIZATION: Reuse pre-allocated Vector3s to avoid per-frame allocation
+    this._imposterFaceIndices.set(flatIndex, flatIndex, flatIndex);
+    // Note: _imposterFaceWeights is always (1, 0, 0), no need to update
+
+    const viewData: ImpostorViewData = {
+      faceIndices: this._imposterFaceIndices,
+      faceWeights: this._imposterFaceWeights,
+    };
+
+    // Update material using @hyperscape/impostor function
+    updateImpostorMaterial(imposter.material, viewData);
+  }
+
+  /**
    * Transition mobs between 3D rendering and imposters based on distance.
+   * Limited per-frame to prevent main thread blocking with many mobs.
    */
   private updateImposterTransitions(cameraX: number, cameraZ: number): void {
     const toImposter: MobInstancedHandle[] = [];
@@ -1313,12 +1487,22 @@ export class MobInstancedRenderer {
       }
     }
 
-    // Execute transitions
+    // Execute transitions with per-frame limit to prevent blocking
+    // Prioritize 3D->imposter (reduces rendering load)
+    const maxTransitions = this._maxImposterTransitionsPerFrame;
+    let transitions = 0;
+
     for (const handle of toImposter) {
+      if (transitions >= maxTransitions) break;
       this.switchToImposter(handle);
+      transitions++;
     }
+
+    // Remaining budget for imposter->3D transitions
     for (const handle of to3D) {
+      if (transitions >= maxTransitions) break;
       this.switchTo3D(handle);
+      transitions++;
     }
   }
 
@@ -1327,7 +1511,14 @@ export class MobInstancedRenderer {
    */
   private switchToImposter(handle: MobInstancedHandle): void {
     const model = this.models.get(handle.modelKey);
-    if (!model || !model.imposter) return;
+    if (!model) return;
+
+    // Lazy create imposter if it wasn't created during model load
+    // (e.g., renderer wasn't available at that time)
+    if (!model.imposter && model.templateScene) {
+      model.imposter = this.createModelImposter(model, model.templateScene);
+    }
+    if (!model.imposter) return;
 
     // Hide from 3D group
     const group = this.getGroupForHandle(handle);
@@ -1511,19 +1702,6 @@ export class MobInstancedRenderer {
    * Call when the world is being destroyed.
    */
   dispose(): void {
-    // Dispose imposter render target
-    if (this._imposterRenderTarget) {
-      this._imposterRenderTarget.dispose();
-      this._imposterRenderTarget = null;
-    }
-
-    // Clear imposter scene
-    if (this._imposterScene) {
-      this._imposterScene.clear();
-      this._imposterScene = null;
-    }
-    this._imposterCamera = null;
-
     // Dispose all models
     for (const model of this.models.values()) {
       // Dispose imposter
@@ -1534,8 +1712,8 @@ export class MobInstancedRenderer {
         model.imposter.mesh.dispose();
         model.imposter.geometry.dispose();
         model.imposter.material.dispose();
-        // Dispose render target (which also disposes its texture)
-        model.imposter.renderTarget.dispose();
+        // Note: bakeResult resources are managed by ImpostorManager's cache
+        // Don't dispose texture directly as it may be shared via caching
       }
 
       // Dispose groups
@@ -1581,25 +1759,53 @@ export class MobInstancedRenderer {
     // Check if frustum needs update (camera rotated)
     const frustumChanged = this.checkFrustumNeedsUpdate();
 
-    // Throttle culling updates unless frustum changed
-    if (now - this._lastCullTime < this._cullIntervalMs && !frustumChanged) {
-      if (this._hasCullCamera && !this._cullDirty) {
-        const dx = cameraX - this._lastCullCameraPos.x;
-        const dz = cameraZ - this._lastCullCameraPos.z;
-        if (dx * dx + dz * dz < this._cullMoveThresholdSq) return;
+    // Determine if we need to start a new culling pass
+    const shouldStartNewPass =
+      frustumChanged ||
+      now - this._lastCullTime >= this._cullIntervalMs ||
+      this._cullDirty ||
+      !this._hasCullCamera;
+
+    // Check if camera moved significantly
+    if (!shouldStartNewPass && this._hasCullCamera) {
+      const dx = cameraX - this._lastCullCameraPos.x;
+      const dz = cameraZ - this._lastCullCameraPos.z;
+      if (dx * dx + dz * dz >= this._cullMoveThresholdSq) {
+        this._fullCullNeeded = true;
       }
     }
 
-    this._lastCullTime = now;
-    this._lastCullCameraPos.set(cameraX, 0, cameraZ);
-    this._hasCullCamera = true;
-    this._cullDirty = false;
+    // Start new culling pass if needed
+    if (shouldStartNewPass || this._fullCullNeeded) {
+      this._lastCullTime = now;
+      this._lastCullCameraPos.set(cameraX, 0, cameraZ);
+      this._hasCullCamera = true;
+      this._cullDirty = false;
+      this._fullCullNeeded = false;
 
-    // Update frustum planes from camera
-    this.updateFrustum();
+      // Reset iterator to start fresh pass
+      this._cullIterator = this.handles.entries();
 
-    // Batch visibility changes using distance AND frustum culling
-    for (const handle of this.handles.values()) {
+      // Update frustum planes from camera
+      this.updateFrustum();
+    }
+
+    // If no iterator, nothing to process
+    if (!this._cullIterator) return;
+
+    // Process a limited number of handles per frame to avoid blocking
+    let processed = 0;
+    while (processed < this._maxCullHandlesPerFrame) {
+      const result = this._cullIterator.next();
+      if (result.done) {
+        // Finished this pass
+        this._cullIterator = null;
+        break;
+      }
+
+      const [, handle] = result.value;
+      processed++;
+
       const distSq = distanceSquaredXZ(
         handle.position.x,
         handle.position.z,
@@ -1616,10 +1822,9 @@ export class MobInstancedRenderer {
       }
 
       // Frustum culling (secondary) - use bounding sphere for accurate test
-      // Center sphere at mob position with height offset, use mob bounding radius
       this._boundingSphere.center.set(
         handle.position.x,
-        handle.position.y + 1.2, // Center of mob (approximate waist height)
+        handle.position.y + 1.2,
         handle.position.z,
       );
       this._boundingSphere.radius = this._mobBoundingRadius;
@@ -1628,13 +1833,11 @@ export class MobInstancedRenderer {
 
       if (handle.hidden) {
         // Hidden mob - check if should become visible
-        // Must be within uncull distance AND in frustum
         if (distSq <= this._uncullDistanceSq && inFrustum) {
           this.setVisible(handle, true);
         }
       } else {
         // Visible mob - cull if completely outside frustum
-        // Use expanded sphere for hysteresis to prevent popping
         this._boundingSphere.radius = this._mobBoundingRadius * 1.5;
         const inExpandedFrustum = this._frustum.intersectsSphere(
           this._boundingSphere,
@@ -1995,7 +2198,8 @@ export class MobInstancedRenderer {
 
   /**
    * Create imposter (billboard) data for a model.
-   * Pre-renders the model at idle animation frame 0 to a texture for use at distance.
+   * Uses ImpostorManager for runtime octahedral baking with caching.
+   * Returns null initially - the model.imposter is set asynchronously when baking completes.
    */
   private createModelImposter(
     model: MobInstancedModel,
@@ -2007,33 +2211,136 @@ export class MobInstancedRenderer {
     const width = Math.max(size.x, size.z) * MOB_MODEL_SCALE;
     const height = size.y * MOB_MODEL_SCALE;
 
-    // Pre-render model at idle frame 0 to texture
-    const renderResult = this.prerenderImposterTexture(
+    // Extract model ID from path for caching
+    const pathParts = model.modelPath.split("/");
+    const filename = pathParts[pathParts.length - 1];
+    const modelId = `mob_instanced_${filename.replace(/\.(vrm|glb|gltf)$/i, "")}`;
+
+    // Check if already baking
+    const existingPromise = this._impostorBakingPromises.get(modelId);
+    if (existingPromise) {
+      return null; // Already in progress
+    }
+
+    // Start async baking using ImpostorManager
+    const bakePromise = this.bakeModelImpostor(
+      model,
       scene,
-      model.boundingBox,
-      model.clips.idle, // Pass idle clip for frame 0 rendering
+      modelId,
+      width,
+      height,
     );
-    if (!renderResult) {
-      console.warn(
-        `[MobInstancedRenderer] Failed to create imposter texture for ${model.modelPath}`,
-      );
+    this._impostorBakingPromises.set(modelId, bakePromise);
+
+    bakePromise
+      .then((bakeResult) => {
+        this._impostorBakingPromises.delete(modelId);
+        if (bakeResult) {
+          model.imposter = this.createImpostorFromBakeResult(
+            bakeResult,
+            width,
+            height,
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn(
+          `[MobInstancedRenderer] Failed to bake impostor for ${modelId}:`,
+          err,
+        );
+        this._impostorBakingPromises.delete(modelId);
+      });
+
+    return null; // Imposter created asynchronously
+  }
+
+  /**
+   * Bake impostor using ImpostorManager.
+   * @internal
+   */
+  private async bakeModelImpostor(
+    model: MobInstancedModel,
+    scene: THREE.Object3D,
+    modelId: string,
+    _width: number,
+    _height: number,
+  ): Promise<ImpostorBakeResult | null> {
+    const manager = ImpostorManager.getInstance(this.world);
+
+    if (!manager.initBaker()) {
+      console.warn(`[MobInstancedRenderer] Cannot init impostor baker`);
       return null;
     }
 
-    const { texture, renderTarget } = renderResult;
+    // Clone scene to prepare for baking (set idle pose)
+    const bakeScene = SkeletonUtils.clone(scene);
 
-    // Create billboard geometry and material
-    const geometry = new THREE.PlaneGeometry(1, 1);
-    const material = new THREE.MeshBasicMaterial({
-      map: texture,
+    // Apply idle animation to get correct pose for baking
+    const skinnedMeshes: THREE.SkinnedMesh[] = [];
+    bakeScene.traverse((child) => {
+      if (child instanceof THREE.SkinnedMesh) {
+        skinnedMeshes.push(child);
+      }
+    });
+
+    if (model.clips.idle && skinnedMeshes.length > 0) {
+      const mixer = new THREE.AnimationMixer(skinnedMeshes[0]);
+      const action = mixer.clipAction(model.clips.idle);
+      action.play();
+      action.time = 0;
+      mixer.update(0);
+    }
+
+    bakeScene.updateMatrixWorld(true);
+
+    // Use ImpostorManager for baking with caching
+    const bakeResult = await manager.getOrCreate(modelId, bakeScene, {
+      atlasSize: 512,
+      hemisphere: true, // Mobs are typically viewed from above
+      priority: BakePriority.NORMAL,
+      category: "mob",
+    });
+
+    console.log(`[MobInstancedRenderer] Baked impostor for ${modelId}:`, {
+      gridSizeX: bakeResult.gridSizeX,
+      gridSizeY: bakeResult.gridSizeY,
+      atlasSize: bakeResult.atlasTexture?.image?.width ?? "no image",
+    });
+
+    return bakeResult;
+  }
+
+  /**
+   * Create MobImposterModel from ImpostorManager bake result.
+   * @internal
+   */
+  private createImpostorFromBakeResult(
+    bakeResult: ImpostorBakeResult,
+    width: number,
+    height: number,
+  ): MobImposterModel {
+    const { atlasTexture, gridSizeX, gridSizeY, boundingSphere } = bakeResult;
+
+    // Use bounding sphere for sizing if available
+    const finalWidth = boundingSphere
+      ? boundingSphere.radius * 2 * MOB_MODEL_SCALE
+      : width;
+    const finalHeight = boundingSphere
+      ? boundingSphere.radius * 2 * MOB_MODEL_SCALE
+      : height;
+
+    // Create material using @hyperscape/impostor's GLSL material
+    const material = createImpostorMaterial({
+      atlasTexture,
+      gridSizeX,
+      gridSizeY,
       transparent: true,
-      alphaTest: 0.1,
-      side: THREE.DoubleSide,
       depthWrite: true,
     });
     this.world.setupMaterial(material);
 
-    // Create instanced mesh for billboards
+    // Create billboard geometry and instanced mesh
+    const geometry = new THREE.PlaneGeometry(1, 1);
     const initialCapacity = 50;
     const mesh = new THREE.InstancedMesh(geometry, material, initialCapacity);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -2043,8 +2350,7 @@ export class MobInstancedRenderer {
     this.world.stage.scene.add(mesh);
 
     return {
-      texture,
-      renderTarget,
+      texture: atlasTexture,
       geometry,
       material,
       mesh,
@@ -2052,139 +2358,16 @@ export class MobInstancedRenderer {
       reverseMap: new Map(),
       count: 0,
       capacity: initialCapacity,
-      width,
-      height,
+      width: finalWidth,
+      height: finalHeight,
+      bakeResult,
+      gridSizeX,
+      gridSizeY,
     };
   }
 
-  /**
-   * Pre-render a model to a texture for use as an imposter.
-   * Creates a dedicated render target per model to avoid texture copying issues.
-   * Renders at idle animation frame 0 if an idle clip is provided.
-   * Returns null if rendering fails (no renderer, etc.)
-   */
-  private prerenderImposterTexture(
-    modelScene: THREE.Object3D,
-    boundingBox: THREE.Box3,
-    idleClip?: THREE.AnimationClip,
-  ): { texture: THREE.Texture; renderTarget: THREE.WebGLRenderTarget } | null {
-    // Get renderer from world graphics
-    const graphics = this.world.graphics as { renderer?: THREE.WebGPURenderer };
-    const renderer = graphics?.renderer;
-    if (!renderer) {
-      console.warn(
-        "[MobInstancedRenderer] Cannot create imposter: no renderer available",
-      );
-      return null;
-    }
-
-    // Lazy initialize shared imposter scene/camera
-    if (!this._imposterCamera || !this._imposterScene) {
-      this.initImposterRenderer();
-    }
-
-    const camera = this._imposterCamera;
-    const scene = this._imposterScene;
-    if (!camera || !scene) return null;
-
-    // Create a dedicated render target for THIS model's imposter
-    // This avoids the need to copy texture data (which is complex with WebGPU)
-    const modelRenderTarget = new THREE.WebGLRenderTarget(
-      IMPOSTER_TEXTURE_SIZE,
-      IMPOSTER_TEXTURE_SIZE,
-      {
-        minFilter: THREE.LinearFilter,
-        magFilter: THREE.LinearFilter,
-        format: THREE.RGBAFormat,
-        type: THREE.UnsignedByteType,
-        depthBuffer: true,
-        stencilBuffer: false,
-      },
-    );
-
-    // Clone model for isolated rendering using SkeletonUtils for proper skeleton cloning
-    const modelClone = SkeletonUtils.clone(modelScene);
-    modelClone.traverse((child) => {
-      if (child instanceof THREE.Mesh && child.material) {
-        const mat = child.material as THREE.Material;
-        mat.visible = true;
-      }
-    });
-    modelClone.updateMatrixWorld(true);
-
-    // Set up idle animation at frame 0 if clip is available
-    let mixer: THREE.AnimationMixer | null = null;
-    if (idleClip) {
-      // Find a skinned mesh to attach the mixer to
-      const skinnedMeshes: THREE.SkinnedMesh[] = [];
-      modelClone.traverse((child) => {
-        if (child instanceof THREE.SkinnedMesh) {
-          skinnedMeshes.push(child);
-        }
-      });
-
-      const skinnedMesh = skinnedMeshes[0];
-      if (skinnedMesh) {
-        mixer = new THREE.AnimationMixer(skinnedMesh);
-        const action = mixer.clipAction(idleClip);
-        action.enabled = true;
-        action.setEffectiveWeight(1.0);
-        action.play();
-        // Set to frame 0 (time = 0)
-        mixer.setTime(0);
-        mixer.update(0);
-        // Force skeleton update
-        skinnedMesh.skeleton.update();
-      }
-    }
-
-    // Calculate size for camera framing
-    const size = new THREE.Vector3();
-    boundingBox.getSize(size);
-    const maxDim = Math.max(size.x, size.z);
-
-    // Configure orthographic camera for front view
-    camera.left = -maxDim / 2;
-    camera.right = maxDim / 2;
-    camera.top = size.y * 0.6;
-    camera.bottom = -size.y * 0.6;
-    camera.near = 0.1;
-    camera.far = maxDim * 4;
-    camera.updateProjectionMatrix();
-
-    // Position camera in front of model
-    camera.position.set(0, size.y * 0.3, maxDim * 1.5);
-    camera.lookAt(0, size.y * 0.3, 0);
-
-    // Center model in scene
-    const center = new THREE.Vector3();
-    boundingBox.getCenter(center);
-    modelClone.position.set(-center.x, -center.y, -center.z);
-
-    scene.add(modelClone);
-
-    // Render to the dedicated render target
-    const currentRenderTarget = renderer.getRenderTarget();
-    renderer.setRenderTarget(modelRenderTarget);
-    renderer.clear();
-    renderer.render(scene, camera);
-    renderer.setRenderTarget(currentRenderTarget);
-
-    // Remove model from scene
-    scene.remove(modelClone);
-
-    // Clean up mixer if created
-    if (mixer) {
-      mixer.stopAllAction();
-      mixer.uncacheRoot(modelClone);
-    }
-
-    // Return both texture and render target (caller must keep render target alive)
-    return {
-      texture: modelRenderTarget.texture,
-      renderTarget: modelRenderTarget,
-    };
-  }
+  // NOTE: Simple billboard and CDN-based octahedral impostor methods removed.
+  // All impostor baking is now handled by ImpostorManager using @hyperscape/impostor.
 
   private async resolveAnimationClips(
     modelPath: string,
@@ -2361,6 +2544,9 @@ export class MobInstancedRenderer {
       this._vatCache.delete(modelPath);
     }
   }
+
+  // NOTE: CDN-based octahedral imposter loading has been removed.
+  // All impostor baking is now handled by ImpostorManager using @hyperscape/impostor.
 
   private getOrCreateGroup(
     model: MobInstancedModel,
@@ -2705,6 +2891,7 @@ export class MobInstancedRenderer {
    * Create a dissolve-enabled material using TSL.
    * Clones the source material's visual properties onto a NodeMaterial
    * with GPU-driven dithered dissolve based on distance from player.
+   * Supports both near and far camera dissolve.
    */
   private createDissolveMaterial(source: THREE.Material): MobDissolveMaterial {
     // Create TSL node material
@@ -2731,7 +2918,7 @@ export class MobInstancedRenderer {
       if (source.metalnessMap) material.metalnessMap = source.metalnessMap;
       if (source.aoMap) material.aoMap = source.aoMap;
     } else {
-      // Fallback for non-standard materials
+      // Fallback for non-standard materials (e.g., VRM)
       material.color.set(0x888888);
       material.roughness = 0.8;
       material.metalness = 0.0;
@@ -2747,6 +2934,12 @@ export class MobInstancedRenderer {
     );
     const fadeEndSq = mul(float(this._cullDistance), float(this._cullDistance));
 
+    // Near fade distances (dissolve when camera too close)
+    const nearFadeStart = float(1); // Start dissolving at 1m
+    const nearFadeEnd = float(3); // Fully visible at 3m
+    const nearFadeStartSq = mul(nearFadeStart, nearFadeStart);
+    const nearFadeEndSq = mul(nearFadeEnd, nearFadeEnd);
+
     // ========== ALPHA TEST (DITHERED DISSOLVE) ==========
     material.alphaTestNode = Fn(() => {
       // World position after skinning transformation
@@ -2759,8 +2952,17 @@ export class MobInstancedRenderer {
         mul(toPlayer.z, toPlayer.z),
       );
 
-      // Distance factor: 0.0 when close (keep), 1.0 when far (discard)
-      const distanceFade = smoothstep(fadeStartSq, fadeEndSq, distSq);
+      // FAR fade: 0.0 when close (keep), 1.0 when far (discard)
+      const farFade = smoothstep(fadeStartSq, fadeEndSq, distSq);
+
+      // NEAR fade: 0.0 when outside near zone (keep), 1.0 when too close (discard)
+      const nearFade = sub(
+        float(1.0),
+        smoothstep(nearFadeStartSq, nearFadeEndSq, distSq),
+      );
+
+      // Combined distance fade (max of near and far fade)
+      const distanceFade = max(farFade, nearFade);
 
       // World-space dithering for smooth per-fragment dissolve
       const ditherScale = float(3.0);
@@ -2814,13 +3016,13 @@ export class MobInstancedRenderer {
     const standard = material as THREE.MeshStandardMaterial;
     const hasMaps = Boolean(
       standard.map ||
-        standard.normalMap ||
-        standard.emissiveMap ||
-        standard.roughnessMap ||
-        standard.metalnessMap ||
-        standard.alphaMap ||
-        standard.aoMap ||
-        standard.lightMap,
+      standard.normalMap ||
+      standard.emissiveMap ||
+      standard.roughnessMap ||
+      standard.metalnessMap ||
+      standard.alphaMap ||
+      standard.aoMap ||
+      standard.lightMap,
     );
     return standard.vertexColors === true && !hasMaps;
   }

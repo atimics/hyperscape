@@ -14,7 +14,12 @@
 import React, { memo } from "react";
 import { useThemeStore } from "hs-kit";
 import type { BankItem } from "../types";
-import { formatItemName, formatQuantity, getItemIcon } from "../utils";
+import {
+  formatItemName,
+  formatQuantity,
+  getItemIcon,
+  getQuantityColor,
+} from "../utils";
 
 /**
  * Props for the memoized BankSlotItem component
@@ -138,12 +143,7 @@ export const BankSlotItem = memo(function BankSlotItem({
         <span
           className="absolute bottom-0 right-0.5 text-[10px] font-bold pointer-events-none"
           style={{
-            color:
-              item.quantity >= 10000000
-                ? theme.colors.state.success
-                : item.quantity >= 100000
-                  ? theme.colors.text.primary
-                  : theme.colors.state.warning,
+            color: getQuantityColor(item.quantity),
             textShadow: "1px 1px 1px black, -1px -1px 1px black",
           }}
         >

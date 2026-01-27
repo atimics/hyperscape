@@ -83,7 +83,9 @@ import type { EntityData } from "../types/index";
 import { Component, createComponent } from "../components";
 import THREE from "../extras/three/three";
 import { getPhysX } from "../physics/PhysXManager";
-import { type PhysXRigidDynamic } from "../systems/shared";
+// NOTE: Import directly to avoid circular dependency through barrel file
+// The barrel imports combat which imports MobEntity which extends Entity
+import { type PhysXRigidDynamic } from "../systems/shared/interaction/Physics";
 import { getWorldNetwork } from "../utils/SystemUtils";
 import type { World } from "../core/World";
 import { EventType } from "../types/events";
@@ -100,6 +102,28 @@ import type {
   HealthBars as HealthBarsSystem,
   HealthBarHandle,
 } from "../systems/client/HealthBars";
+// HLOD Impostor support
+import {
+  ImpostorManager,
+  BakePriority,
+  type ImpostorOptions,
+  LODLevel,
+  type ImpostorInitOptions,
+} from "../systems/shared/rendering";
+import {
+  createTSLImpostorMaterial,
+  createImpostorMaterial,
+  updateImpostorMaterial,
+  type TSLImpostorMaterial,
+  type ImpostorBakeResult,
+  type DissolveConfig,
+  type ImpostorViewData,
+} from "@hyperscape/impostor";
+import {
+  getLODDistances,
+  getLODConfig,
+  type LODDistancesWithSq,
+} from "../systems/shared/world/GPUVegetation";
 // Re-export types for external use
 export type { EntityConfig };
 
@@ -148,6 +172,49 @@ export class Entity implements IEntity {
   public worldNodes: Set<THREE.Object3D> = new Set(); // Nodes added to world
   public listeners: Record<string, Set<EventCallback>> = {}; // Event listeners
   public worldListeners: Map<(data: unknown) => void, string> = new Map(); // World event listeners
+
+  // ============================================================================
+  // HLOD IMPOSTOR SYSTEM
+  // ============================================================================
+  /** HLOD state - null if impostor not initialized */
+  protected hlodState: {
+    /** Model identifier for caching */
+    modelId: string;
+    /** Category for LOD distances */
+    category: string;
+    /** LOD distances with squared values */
+    lodConfig: LODDistancesWithSq;
+    /** Current LOD level */
+    currentLOD: LODLevel;
+    /** LOD0 mesh reference (full detail) */
+    lod0Mesh: THREE.Object3D | null;
+    /** LOD1 mesh reference (low-poly) - optional */
+    lod1Mesh: THREE.Object3D | null;
+    /** Impostor mesh (billboard) */
+    impostorMesh: THREE.Mesh | null;
+    /** Impostor material (TSL for WebGPU, ShaderMaterial for WebGL) */
+    impostorMaterial: TSLImpostorMaterial | THREE.ShaderMaterial | null;
+    /** Whether using WebGPU (TSL) or WebGL (GLSL) material */
+    usesTSL: boolean;
+    /** Bake result */
+    bakeResult: ImpostorBakeResult | null;
+    /** Whether impostor is ready */
+    impostorReady: boolean;
+    /** Whether impostor is being created */
+    impostorPending: boolean;
+    /** Dissolve config */
+    dissolveConfig: DissolveConfig | null;
+    /** Raycast mesh for view lookup */
+    raycastMesh: THREE.Mesh | null;
+    /** AAA LOD: Whether animations should freeze at LOD1 distance */
+    freezeAnimationAtLOD1: boolean;
+  } | null = null;
+
+  // Temp objects for HLOD update loop (avoid allocations)
+  private _hlodViewDir = new THREE.Vector3();
+  private _hlodRayOrigin = new THREE.Vector3();
+  private _hlodRayDirection = new THREE.Vector3();
+  private _hlodRaycaster = new THREE.Raycaster();
   protected lastUpdate = 0;
 
   protected health: number = 0;
@@ -1392,7 +1459,540 @@ export class Entity implements IEntity {
       this._entityHealthBarHandle.move(this._uiPositionMatrix);
     }
 
+    // Update HLOD impostor if initialized
+    if (this.hlodState && this.world.camera) {
+      this.updateHLOD(this.world.camera.position);
+    }
+
     // Subclasses can override for additional client-specific logic
+  }
+
+  // ============================================================================
+  // HLOD IMPOSTOR METHODS
+  // ============================================================================
+
+  /**
+   * Initialize HLOD (Hierarchical Level of Detail) impostor support for this entity.
+   * Call this after the entity's mesh is loaded to enable billboard rendering at distance.
+   *
+   * AAA LOD System:
+   * - **LOD0 (close)**: Full detail mesh with animations playing
+   * - **LOD1 (medium)**: 3D mesh frozen in idle pose (no animation updates)
+   * - **IMPOSTOR (far)**: Billboard baked in idle pose
+   * - **CULLED (very far)**: Not rendered
+   *
+   * @param modelId - Unique identifier for caching (e.g., "bank_booth", "tree_oak")
+   * @param options - HLOD configuration options including prepareForBake and freezeAnimationAtLOD1
+   */
+  protected async initHLOD(
+    modelId: string,
+    options: ImpostorInitOptions = {},
+  ): Promise<void> {
+    // Skip on server
+    if (this.world.isServer || !this.mesh) return;
+
+    const category = options.category ?? "resource";
+
+    // Use size-based LOD scaling: larger objects visible from farther away
+    // Compute bounding size from mesh if not explicitly provided
+    const lodConfig = getLODConfig(category, options.boundingSize ?? this.mesh);
+
+    // Detect if we're using WebGPU (TSL) or WebGL (GLSL)
+    // WebGPU backend has isWebGPUBackend = true on renderer.backend
+    const renderer = this.world.graphics?.renderer;
+    const backend = renderer?.backend as
+      | { isWebGPUBackend?: boolean }
+      | undefined;
+    const isWebGPU = !!backend?.isWebGPUBackend;
+
+    // Diagnostic logging for renderer detection
+    console.log(`[Entity HLOD] Renderer detection for ${this.name}:`, {
+      hasGraphics: !!this.world.graphics,
+      hasRenderer: !!renderer,
+      hasBackend: !!backend,
+      isWebGPUBackend: backend?.isWebGPUBackend,
+      usesTSL: isWebGPU,
+      rendererType: renderer?.constructor?.name ?? "unknown",
+    });
+
+    // Initialize HLOD state
+    this.hlodState = {
+      modelId,
+      category,
+      lodConfig,
+      currentLOD: LODLevel.LOD0,
+      lod0Mesh: this.mesh,
+      lod1Mesh: options.lod1Mesh ?? null,
+      impostorMesh: null,
+      impostorMaterial: null,
+      bakeResult: null,
+      impostorReady: false,
+      impostorPending: false,
+      dissolveConfig:
+        options.dissolve ??
+        (options.enableDissolve !== false
+          ? {
+              enabled: true,
+              fadeStart: lodConfig.imposterDistance + 20,
+              fadeEnd: lodConfig.fadeDistance,
+            }
+          : null),
+      raycastMesh: null,
+      freezeAnimationAtLOD1: options.freezeAnimationAtLOD1 ?? false,
+      usesTSL: isWebGPU,
+    };
+
+    // Request impostor generation (non-blocking)
+    // prepareForBake is passed through and called by ImpostorManager RIGHT BEFORE baking
+    this.requestHLODImpostor(this.mesh, options);
+  }
+
+  /**
+   * AAA LOD: Check if animations should update based on current HLOD level.
+   *
+   * Returns true only at LOD0 (close range) when freezeAnimationAtLOD1 is enabled.
+   * At LOD1 (medium distance), animations freeze to save CPU - entity shows static idle pose.
+   * At IMPOSTOR/CULLED distances, entity uses billboard or is hidden entirely.
+   *
+   * Use this in clientUpdate() to determine if animation mixer should run:
+   * ```typescript
+   * if (this.shouldUpdateAnimationsForLOD()) {
+   *   this.mixer.update(deltaTime);
+   * }
+   * ```
+   *
+   * @returns true if animations should update, false if frozen
+   */
+  protected shouldUpdateAnimationsForLOD(): boolean {
+    if (!this.hlodState) return true; // No HLOD = always animate
+    if (!this.hlodState.freezeAnimationAtLOD1) return true; // Not configured to freeze = always animate
+
+    // Only animate at LOD0 (close range)
+    // At LOD1+, show frozen idle pose to save CPU
+    return this.hlodState.currentLOD === LODLevel.LOD0;
+  }
+
+  /**
+   * Request impostor generation from ImpostorManager
+   */
+  private async requestHLODImpostor(
+    source: THREE.Object3D,
+    options: ImpostorInitOptions,
+  ): Promise<void> {
+    if (!this.hlodState || this.hlodState.impostorPending) return;
+
+    const manager = ImpostorManager.getInstance(this.world);
+
+    // Initialize baker if needed
+    if (!manager.initBaker()) {
+      console.warn(
+        `[Entity] Cannot init HLOD for ${this.name}: baker not ready`,
+      );
+      return;
+    }
+
+    this.hlodState.impostorPending = true;
+
+    const impostorOptions: ImpostorOptions = {
+      atlasSize: options.atlasSize ?? 1024,
+      hemisphere: options.hemisphere ?? true,
+      priority: options.priority ?? BakePriority.NORMAL,
+      category: this.hlodState.category,
+      // AAA LOD: Pass prepareForBake to ImpostorManager - it calls it RIGHT BEFORE baking
+      prepareForBake: options.prepareForBake,
+    };
+
+    try {
+      const bakeResult = await manager.getOrCreate(
+        this.hlodState.modelId,
+        source,
+        impostorOptions,
+      );
+
+      this.createHLODImpostorMesh(bakeResult);
+      this.hlodState.bakeResult = bakeResult;
+      this.hlodState.impostorReady = true;
+      this.hlodState.impostorPending = false;
+    } catch (err) {
+      console.warn(
+        `[Entity] Failed to create HLOD impostor for ${this.name}:`,
+        err,
+      );
+      this.hlodState.impostorPending = false;
+    }
+  }
+
+  /**
+   * Create the impostor mesh from bake result
+   */
+  private createHLODImpostorMesh(bakeResult: ImpostorBakeResult): void {
+    if (!this.hlodState || !this.node) return;
+
+    const { gridSizeX, gridSizeY, atlasTexture, boundingSphere, boundingBox } =
+      bakeResult;
+
+    // Calculate mesh size from bounding sphere/box
+    let width: number;
+    let height: number;
+
+    if (boundingBox) {
+      const size = new THREE.Vector3();
+      boundingBox.getSize(size);
+      const maxDim = Math.max(size.x, size.y, size.z);
+      width = maxDim;
+      height = maxDim;
+    } else {
+      width = boundingSphere.radius * 2;
+      height = boundingSphere.radius * 2;
+    }
+
+    // Debug: Log bake result info
+    console.log(`[Entity HLOD] Creating impostor mesh for ${this.name}:`, {
+      gridSizeX,
+      gridSizeY,
+      atlasSize: atlasTexture?.image?.width ?? "no image",
+      boundingSphereRadius: boundingSphere?.radius,
+      dissolveEnabled: !!this.hlodState.dissolveConfig,
+      fadeStart: this.hlodState.dissolveConfig?.fadeStart,
+      fadeEnd: this.hlodState.dissolveConfig?.fadeEnd,
+      usesTSL: this.hlodState.usesTSL,
+    });
+
+    // Create material based on renderer type (WebGPU uses TSL, WebGL uses GLSL)
+    console.log(`[Entity HLOD] Creating material for ${this.name}:`, {
+      usesTSL: this.hlodState.usesTSL,
+      atlasTextureValid: !!atlasTexture,
+      atlasHasImage: !!atlasTexture?.image,
+      atlasImageWidth: atlasTexture?.image?.width ?? "none",
+      atlasImageHeight: atlasTexture?.image?.height ?? "none",
+      atlasColorSpace: atlasTexture?.colorSpace ?? "none",
+      gridSizeX,
+      gridSizeY,
+      dissolveEnabled: !!this.hlodState.dissolveConfig,
+    });
+
+    let material: TSLImpostorMaterial | THREE.ShaderMaterial;
+
+    if (this.hlodState.usesTSL) {
+      console.log(`[Entity HLOD] Creating TSL material for ${this.name}`);
+      // Use debugMode 4 (solid red) temporarily to verify shader runs
+      // Change to 0 for normal rendering once verified
+      const TSL_DEBUG_MODE = 0 as 0 | 1 | 2 | 3 | 4;
+      material = createTSLImpostorMaterial({
+        atlasTexture,
+        gridSizeX,
+        gridSizeY,
+        transparent: true,
+        depthWrite: true,
+        dissolve: this.hlodState.dissolveConfig ?? undefined,
+        debugMode: TSL_DEBUG_MODE,
+      });
+      console.log(`[Entity HLOD] TSL material created:`, {
+        materialType: material.constructor.name,
+        hasColorNode: !!(material as TSLImpostorMaterial).colorNode,
+        hasImpostorUniforms: !!(material as TSLImpostorMaterial)
+          .impostorUniforms,
+        debugMode: TSL_DEBUG_MODE,
+      });
+    } else {
+      console.log(`[Entity HLOD] Creating GLSL material for ${this.name}`);
+      material = createImpostorMaterial({
+        atlasTexture,
+        gridSizeX,
+        gridSizeY,
+        transparent: true,
+        depthWrite: true,
+        dissolve: this.hlodState.dissolveConfig ?? undefined,
+      });
+    }
+
+    // Create billboard mesh
+    const geometry = new THREE.PlaneGeometry(width, height);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = `HLOD_${this.name}`;
+    mesh.visible = false; // Hidden initially (LOD0 active)
+    mesh.layers.set(1); // Main camera only
+
+    // Add to entity's node
+    this.node.add(mesh);
+
+    this.hlodState.impostorMesh = mesh;
+    this.hlodState.impostorMaterial = material;
+
+    // Create raycast mesh for view direction lookup
+    if (bakeResult.octMeshData?.filledMesh) {
+      const raycastGeometry = bakeResult.octMeshData.filledMesh.geometry;
+      const raycastMesh = new THREE.Mesh(
+        raycastGeometry,
+        new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide }),
+      );
+      raycastMesh.position.set(0, 0, 0);
+      raycastMesh.updateMatrixWorld(true);
+      this.hlodState.raycastMesh = raycastMesh;
+    }
+  }
+
+  /**
+   * Update HLOD level based on camera distance
+   *
+   * AAA LOD System:
+   * - LOD0: Full animations (close range)
+   * - LOD1: Frozen animations (medium distance) - uses lod1Mesh if available, else lod0Mesh
+   * - IMPOSTOR: Billboard (far distance)
+   * - CULLED: Not rendered (very far)
+   */
+  protected updateHLOD(cameraPosition: THREE.Vector3): void {
+    if (!this.hlodState) return;
+
+    const {
+      lodConfig,
+      currentLOD,
+      lod1Mesh,
+      impostorMesh,
+      impostorReady,
+      freezeAnimationAtLOD1,
+    } = this.hlodState;
+
+    // Calculate squared distance to camera (horizontal only)
+    const dx = this.node.position.x - cameraPosition.x;
+    const dz = this.node.position.z - cameraPosition.z;
+    const distSq = dx * dx + dz * dz;
+
+    // Hysteresis factor to prevent flickering at LOD boundaries
+    // Use 10% hysteresis: when moving closer, switch LOD at 90% of the threshold
+    const hysteresis = 0.9;
+    const hysteresisSq = hysteresis * hysteresis; // 0.81
+
+    // Determine target LOD with hysteresis to prevent jitter
+    // When moving AWAY (to higher LOD), use normal thresholds
+    // When moving CLOSER (to lower LOD), require crossing 90% of threshold
+    let targetLOD: LODLevel;
+
+    const canUseLOD1 = lod1Mesh || freezeAnimationAtLOD1;
+
+    // Check from farthest to closest
+    if (distSq >= lodConfig.fadeDistanceSq) {
+      // Far enough to cull
+      targetLOD = LODLevel.CULLED;
+    } else if (
+      currentLOD === LODLevel.CULLED &&
+      distSq >= lodConfig.fadeDistanceSq * hysteresisSq
+    ) {
+      // Hysteresis: stay culled until significantly closer
+      targetLOD = LODLevel.CULLED;
+    } else if (distSq >= lodConfig.imposterDistanceSq && impostorReady) {
+      // Far enough for impostor
+      targetLOD = LODLevel.IMPOSTOR;
+    } else if (
+      currentLOD === LODLevel.IMPOSTOR &&
+      distSq >= lodConfig.imposterDistanceSq * hysteresisSq &&
+      impostorReady
+    ) {
+      // Hysteresis: stay at impostor until significantly closer
+      targetLOD = LODLevel.IMPOSTOR;
+    } else if (distSq >= lodConfig.lod1DistanceSq && canUseLOD1) {
+      // Medium distance - LOD1 (frozen animation)
+      targetLOD = LODLevel.LOD1;
+    } else if (
+      currentLOD === LODLevel.LOD1 &&
+      distSq >= lodConfig.lod1DistanceSq * hysteresisSq &&
+      canUseLOD1
+    ) {
+      // Hysteresis: stay at LOD1 until significantly closer
+      targetLOD = LODLevel.LOD1;
+    } else {
+      // Close range - full detail
+      targetLOD = LODLevel.LOD0;
+    }
+
+    // Transition LOD if changed
+    if (targetLOD !== currentLOD) {
+      this.transitionHLOD(currentLOD, targetLOD);
+    }
+
+    // Update impostor view direction if active
+    if (this.hlodState.currentLOD === LODLevel.IMPOSTOR && impostorMesh) {
+      this.updateHLODImpostorView(cameraPosition);
+
+      // Update dissolve player position uniform based on material type
+      const mat = this.hlodState.impostorMaterial;
+      if (mat) {
+        if (this.hlodState.usesTSL) {
+          // TSL material
+          const tslMat = mat as TSLImpostorMaterial;
+          if (tslMat.impostorUniforms?.playerPos) {
+            tslMat.impostorUniforms.playerPos.value.copy(cameraPosition);
+          }
+        } else {
+          // GLSL material
+          const glslMat = mat as THREE.ShaderMaterial & {
+            dissolveUniforms?: { playerPos: { value: THREE.Vector3 } };
+          };
+          if (glslMat.dissolveUniforms?.playerPos) {
+            glslMat.dissolveUniforms.playerPos.value.copy(cameraPosition);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Transition between LOD levels
+   *
+   * AAA LOD: When transitioning to LOD1 without a lod1Mesh, we keep lod0Mesh visible
+   * but animations will be frozen (checked via shouldUpdateAnimationsForLOD).
+   */
+  private transitionHLOD(from: LODLevel, to: LODLevel): void {
+    if (!this.hlodState) return;
+
+    const { lod0Mesh, lod1Mesh, impostorMesh } = this.hlodState;
+
+    // Hide previous LOD
+    switch (from) {
+      case LODLevel.LOD0:
+        // Only hide lod0Mesh if we're transitioning to a level that has its own mesh
+        // (either lod1Mesh exists, or we're going to IMPOSTOR/CULLED)
+        if (lod0Mesh && (to !== LODLevel.LOD1 || lod1Mesh)) {
+          lod0Mesh.visible = false;
+        }
+        break;
+      case LODLevel.LOD1:
+        // If we have a lod1Mesh, hide it; otherwise lod0Mesh was being shown
+        if (lod1Mesh) {
+          lod1Mesh.visible = false;
+        } else if (lod0Mesh) {
+          lod0Mesh.visible = false;
+        }
+        break;
+      case LODLevel.IMPOSTOR:
+        if (impostorMesh) impostorMesh.visible = false;
+        break;
+    }
+
+    // Show new LOD
+    switch (to) {
+      case LODLevel.LOD0:
+        if (lod0Mesh) lod0Mesh.visible = true;
+        break;
+      case LODLevel.LOD1:
+        // AAA LOD: Use lod1Mesh if available, otherwise keep lod0Mesh visible (frozen)
+        if (lod1Mesh) {
+          lod1Mesh.visible = true;
+        } else if (lod0Mesh) {
+          lod0Mesh.visible = true;
+        }
+        break;
+      case LODLevel.IMPOSTOR:
+        if (impostorMesh) impostorMesh.visible = true;
+        break;
+      case LODLevel.CULLED:
+        // Everything hidden - make sure both meshes are hidden
+        if (lod0Mesh) lod0Mesh.visible = false;
+        if (lod1Mesh) lod1Mesh.visible = false;
+        break;
+    }
+
+    this.hlodState.currentLOD = to;
+  }
+
+  /**
+   * Update impostor view-dependent blending
+   */
+  private updateHLODImpostorView(cameraPosition: THREE.Vector3): void {
+    if (!this.hlodState?.impostorMesh || !this.hlodState.impostorMaterial)
+      return;
+
+    const mesh = this.hlodState.impostorMesh;
+
+    // Billboard towards camera
+    mesh.lookAt(cameraPosition);
+
+    // Compute view direction for octahedral sampling
+    if (this.hlodState.raycastMesh) {
+      this._hlodViewDir
+        .subVectors(cameraPosition, this.node.position)
+        .normalize();
+
+      // Raycast against octahedron to find view cells
+      this._hlodRayOrigin.copy(this._hlodViewDir).multiplyScalar(2);
+      this._hlodRayDirection.copy(this._hlodViewDir).negate();
+
+      this._hlodRaycaster.ray.origin.copy(this._hlodRayOrigin);
+      this._hlodRaycaster.ray.direction.copy(this._hlodRayDirection);
+
+      const intersects = this._hlodRaycaster.intersectObject(
+        this.hlodState.raycastMesh,
+        false,
+      );
+      if (intersects.length > 0) {
+        const hit = intersects[0];
+        if (hit.face && hit.barycoord) {
+          const faceIndices = new THREE.Vector3(
+            hit.face.a,
+            hit.face.b,
+            hit.face.c,
+          );
+          const faceWeights = hit.barycoord.clone();
+
+          // Update material based on type (TSL or GLSL)
+          if (this.hlodState.usesTSL) {
+            // TSL material has updateView method
+            (this.hlodState.impostorMaterial as TSLImpostorMaterial).updateView(
+              faceIndices,
+              faceWeights,
+            );
+          } else {
+            // GLSL material uses updateImpostorMaterial
+            const viewData: ImpostorViewData = { faceIndices, faceWeights };
+            updateImpostorMaterial(
+              this.hlodState.impostorMaterial as THREE.ShaderMaterial,
+              viewData,
+            );
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Get current HLOD level
+   */
+  getHLODLevel(): LODLevel {
+    return this.hlodState?.currentLOD ?? LODLevel.LOD0;
+  }
+
+  /**
+   * Check if HLOD impostor is ready
+   */
+  isHLODReady(): boolean {
+    return this.hlodState?.impostorReady ?? false;
+  }
+
+  /**
+   * Dispose of HLOD resources
+   */
+  protected disposeHLOD(): void {
+    if (!this.hlodState) return;
+
+    const { impostorMesh, impostorMaterial, raycastMesh } = this.hlodState;
+
+    if (impostorMesh) {
+      impostorMesh.geometry.dispose();
+      if (impostorMesh.parent) {
+        impostorMesh.parent.remove(impostorMesh);
+      }
+    }
+
+    if (impostorMaterial) {
+      impostorMaterial.dispose();
+    }
+
+    if (raycastMesh) {
+      raycastMesh.geometry.dispose();
+      (raycastMesh.material as THREE.Material).dispose();
+    }
+
+    this.hlodState = null;
   }
 
   // Fixed timestep update (for physics, etc.)
@@ -1576,8 +2176,7 @@ export class Entity implements IEntity {
 
     // Remove from scene
     if (this.node.parent) {
-      // @ts-ignore - THREE.js type compatibility issue
-      this.node.parent.remove(this.node);
+      (this.node.parent as THREE.Object3D).remove(this.node);
     }
 
     // Clean up physics
@@ -1601,11 +2200,13 @@ export class Entity implements IEntity {
     // Remove from world
     this.worldNodes.forEach((node) => {
       if (node.parent) {
-        // @ts-ignore - THREE.js type compatibility issue
-        node.parent.remove(node);
+        (node.parent as THREE.Object3D).remove(node);
       }
     });
     this.worldNodes.clear();
+
+    // Dispose of HLOD impostor resources
+    this.disposeHLOD();
 
     // Dispose of THREE.js resources
     if (this.mesh) {

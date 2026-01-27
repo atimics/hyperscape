@@ -69,7 +69,6 @@ export interface InventoryItem {
   itemId?: string;
   quantity: number;
   slot?: number;
-  itemId?: string;
   item?: { name?: string };
 }
 

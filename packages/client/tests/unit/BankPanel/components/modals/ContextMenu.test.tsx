@@ -10,6 +10,27 @@ import userEvent from "@testing-library/user-event";
 import { ContextMenu } from "../../../../../src/game/panels/BankPanel/components/modals/ContextMenu";
 import type { ContextMenuState } from "../../../../../src/game/panels/BankPanel/types";
 
+// Mock getItem to return equipable items for testing
+vi.mock("@hyperscape/shared", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    getItem: (itemId: string) => {
+      if (itemId === "bronze_sword") {
+        return {
+          id: "bronze_sword",
+          name: "Bronze Sword",
+          equipSlot: "mainhand",
+        };
+      }
+      if (itemId === "lobster") {
+        return { id: "lobster", name: "Lobster" };
+      }
+      return null;
+    },
+  };
+});
+
 describe("ContextMenu", () => {
   const mockOnAction = vi.fn();
   const mockOnClose = vi.fn();

@@ -8,6 +8,16 @@
  * - GET /health - Basic health check (uptime, timestamp)
  * - GET /status - Detailed status (world time, connected players, commit hash)
  *
+ * ## Production Monitoring Setup
+ *
+ * These endpoints must be configured with external monitoring:
+ * - **Railway**: Use Railway's built-in health checks pointing to /health
+ * - **External**: Configure uptime monitoring (e.g., UptimeRobot, Pingdom) to poll /health
+ * - **Alerting**: Set up alerts for non-200 responses or high response times
+ *
+ * **Important**: These endpoints only provide data - they do NOT send alerts.
+ * You must configure external monitoring to poll these endpoints and trigger alerts.
+ *
  * Usage:
  * ```typescript
  * import { registerHealthRoutes } from './routes/health-routes';

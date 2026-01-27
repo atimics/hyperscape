@@ -24,15 +24,33 @@ import EventEmitter from "eventemitter3";
 import THREE from "../extras/three/three";
 import type { Position3D } from "../types/core/base-types";
 import type { HyperscapeObject3D } from "../types/rendering/three-extensions";
-import { ClientLiveKit } from "../systems/client/ClientLiveKit";
+import type { ClientLiveKit } from "../systems/client/ClientLiveKit";
+import type { ClientActions } from "../systems/client/ClientActions";
 import { EventType } from "../types/events";
+import {
+  FrameBudgetManager,
+  type FrameTimingStats,
+} from "../utils/FrameBudgetManager";
 
-import { Anchors, Anchors as AnchorsSystem } from "../systems/shared";
-import { Chat, Chat as ChatSystem } from "../systems/shared";
-import { ClientActions } from "../systems/client/ClientActions";
-import { Entities, Entities as EntitiesSystem } from "../systems/shared";
-import { EventBus, type EventSubscription } from "../systems/shared";
-import { Events, Events as EventsSystem } from "../systems/shared";
+// NOTE: Import directly to avoid circular dependency through barrel file
+// The barrel imports combat which imports MobEntity which extends Entity (circular)
+import {
+  Anchors,
+  Anchors as AnchorsSystem,
+} from "../systems/shared/presentation/Anchors";
+import { Chat, Chat as ChatSystem } from "../systems/shared/presentation/Chat";
+import {
+  Entities,
+  Entities as EntitiesSystem,
+} from "../systems/shared/entities/Entities";
+import {
+  EventBus,
+  type EventSubscription,
+} from "../systems/shared/infrastructure/EventBus";
+import {
+  Events,
+  Events as EventsSystem,
+} from "../systems/shared/infrastructure/Events";
 import {
   EntityOccupancyMap,
   type IEntityOccupancy,
@@ -41,25 +59,35 @@ import {
   CollisionMatrix,
   type ICollisionMatrix,
 } from "../systems/shared/movement/CollisionMatrix";
-import { LODs } from "../systems/shared";
-import { Particles } from "../systems/shared";
-import { Physics, Physics as PhysicsSystem } from "../systems/shared";
-import { Settings, Settings as SettingsSystem } from "../systems/shared";
-import { Stage, Stage as StageSystem } from "../systems/shared";
-import { System, SystemConstructor } from "../systems/shared";
-import { Environment } from "../systems/shared";
+import { LODs } from "../systems/shared/presentation/LODs";
+import { Particles } from "../systems/shared/presentation/Particles";
 import {
+  Physics,
+  Physics as PhysicsSystem,
+} from "../systems/shared/interaction/Physics";
+import {
+  Settings,
+  Settings as SettingsSystem,
+} from "../systems/shared/infrastructure/Settings";
+import {
+  Stage,
+  Stage as StageSystem,
+} from "../systems/shared/presentation/Stage";
+import {
+  System,
+  SystemConstructor,
+} from "../systems/shared/infrastructure/System";
+import { Environment } from "../systems/shared/world/Environment";
+import { HotReloadable, Player, RaycastHit, WorldOptions } from "../types";
+import type {
   ClientAudio,
   ClientInput,
   ClientGraphics,
   ClientLoader,
   ClientInterface,
-  HotReloadable,
-  Player,
-  RaycastHit,
-  WorldOptions,
+  ClientMonitor,
+  ServerDB,
 } from "../types";
-import type { ClientMonitor, ServerDB } from "../types";
 import type { ServerRuntime } from "../systems/server/ServerRuntime";
 
 /**
@@ -202,6 +230,17 @@ export class World extends EventEmitter {
 
   /** Movement state flag (used by builder/movement systems) */
   moving?: boolean;
+
+  // ============================================================================
+  // FRAME BUDGET MANAGEMENT
+  // ============================================================================
+
+  /**
+   * Frame budget manager for reducing main thread jank.
+   * Tracks frame time and allows deferring heavy work when over budget.
+   * Only active on client (browser) - server does not use frame budget.
+   */
+  frameBudget: FrameBudgetManager | null = null;
 
   // ============================================================================
   // THREE.JS SCENE GRAPH
@@ -1031,6 +1070,81 @@ export class World extends EventEmitter {
   }
 
   /**
+   * Group Systems by Dependency Depth for Parallel Initialization
+   *
+   * Creates "waves" of systems that can be initialized in parallel.
+   * Each wave contains systems whose dependencies have all been initialized
+   * in previous waves.
+   *
+   * Example:
+   * - Wave 0: [settings, anchors, events] - no dependencies
+   * - Wave 1: [chat, physics] - depend on wave 0 systems
+   * - Wave 2: [terrain, entities] - depend on wave 0-1 systems
+   *
+   * @param systems - Array of systems to group
+   * @returns Array of waves, each wave is an array of systems that can init in parallel
+   */
+  groupSystemsByDepth(systems: System[]): System[][] {
+    const waves: System[][] = [];
+    const systemDepths = new Map<System, number>();
+    const systemToName = new Map<System, string>();
+
+    this.systemsByName.forEach((system, name) => {
+      systemToName.set(system, name);
+    });
+
+    // Calculate depth for each system (max dependency depth + 1)
+    const calculateDepth = (system: System, visited: Set<System>): number => {
+      if (systemDepths.has(system)) {
+        return systemDepths.get(system)!;
+      }
+
+      if (visited.has(system)) {
+        const systemName = systemToName.get(system) || system.constructor.name;
+        throw new Error(
+          `Circular dependency detected involving system: ${systemName}`,
+        );
+      }
+
+      visited.add(system);
+
+      const deps = system.getDependencies();
+      let maxDepth = -1;
+
+      if (deps.required) {
+        for (const depName of deps.required) {
+          const depSystem = this.systemsByName.get(depName);
+          if (depSystem) {
+            const depDepth = calculateDepth(depSystem, new Set(visited));
+            maxDepth = Math.max(maxDepth, depDepth);
+          }
+        }
+      }
+
+      const depth = maxDepth + 1;
+      systemDepths.set(system, depth);
+      visited.delete(system);
+      return depth;
+    };
+
+    // Calculate depths for all systems
+    for (const system of systems) {
+      calculateDepth(system, new Set());
+    }
+
+    // Group systems by depth
+    for (const system of systems) {
+      const depth = systemDepths.get(system) || 0;
+      while (waves.length <= depth) {
+        waves.push([]);
+      }
+      waves[depth].push(system);
+    }
+
+    return waves;
+  }
+
+  /**
    * Initialize World and All Systems
    *
    * This is the second step in world lifecycle (after constructor).
@@ -1038,9 +1152,12 @@ export class World extends EventEmitter {
    *
    * Process:
    * 1. Set up storage and asset paths from options
-   * 2. Topologically sort systems based on dependencies
-   * 3. Initialize each system in order, emitting progress events
+   * 2. Group systems by dependency depth for parallel initialization
+   * 3. Initialize each wave of systems in parallel, emitting progress events
    * 4. Start all systems after initialization complete
+   *
+   * PERFORMANCE: Systems at the same dependency depth are initialized in parallel,
+   * significantly reducing overall initialization time on multi-core systems.
    *
    * @param options - Configuration including storage, asset paths, etc.
    */
@@ -1059,11 +1176,11 @@ export class World extends EventEmitter {
     this.assetsDir = options.assetsDir ?? "";
     this.assetsUrl = options.assetsUrl ?? "/assets/";
 
-    // Sort systems to respect dependencies
-    // Example: PhysicsSystem must be initialized before systems that use physics
-    const sortedSystems = this.topologicalSort(this.systems);
+    // Group systems by dependency depth for parallel initialization
+    // Systems in the same wave have no dependencies on each other and can init in parallel
+    const systemWaves = this.groupSystemsByDepth(this.systems);
 
-    const totalSystems = sortedSystems.length;
+    const totalSystems = this.systems.length;
     let initializedSystems = 0;
 
     // Build reverse lookup map for progress reporting
@@ -1072,20 +1189,27 @@ export class World extends EventEmitter {
       systemNameMap.set(system, name);
     }
 
-    // Initialize systems one by one, emitting progress for loading screens
-    for (const system of sortedSystems) {
-      const systemName = systemNameMap.get(system) || "Unknown System";
+    // Initialize systems wave by wave (systems in same wave run in parallel)
+    for (let waveIndex = 0; waveIndex < systemWaves.length; waveIndex++) {
+      const wave = systemWaves[waveIndex];
+      const waveNames = wave
+        .map((s) => systemNameMap.get(s) || "Unknown")
+        .join(", ");
 
-      // Emit progress before initializing (for loading screen updates)
+      // Emit progress before initializing wave
       this.emit(EventType.ASSETS_LOADING_PROGRESS, {
         progress: Math.floor((initializedSystems / totalSystems) * 100),
-        stage: `Initializing ${systemName}...`,
+        stage:
+          wave.length > 1
+            ? `Initializing [${waveNames}]...`
+            : `Initializing ${waveNames}...`,
         total: totalSystems,
         current: initializedSystems,
       });
 
-      await system.init(options);
-      initializedSystems++;
+      // Initialize all systems in this wave in parallel
+      await Promise.all(wave.map((system) => system.init(options)));
+      initializedSystems += wave.length;
     }
 
     // Emit final progress event
@@ -1155,6 +1279,11 @@ export class World extends EventEmitter {
    * @param time - Current time in milliseconds (from requestAnimationFrame)
    */
   tick = (time: number): void => {
+    // Begin frame budget tracking (client only)
+    if (this.frameBudget) {
+      this.frameBudget.beginFrame();
+    }
+
     // Begin performance monitoring
     this.preTick();
 
@@ -1214,12 +1343,177 @@ export class World extends EventEmitter {
     // Commit changes (render on client, send network updates on server)
     this.commit();
 
+    // Process deferred work if we have budget remaining
+    // This runs low-priority work that was deferred from previous frames
+    if (this.frameBudget) {
+      this.frameBudget.processDeferredWork();
+    }
+
     // End performance monitoring
     this.postTick();
+
+    // End frame budget tracking (client only)
+    if (this.frameBudget) {
+      this.frameBudget.endFrame();
+    }
   };
+
+  // ============================================================================
+  // SYSTEM TIMING (Performance Monitoring)
+  // ============================================================================
+
+  /** Whether to measure individual system timing (enabled by DevStats) */
+  private _measureSystemTiming = false;
+
+  /** Per-system timing data for the current frame */
+  private _systemTimings = new Map<
+    string,
+    { update: number; fixedUpdate: number; lateUpdate: number; total: number }
+  >();
+
+  /** Rolling averages for system timing (smoothed display) */
+  private _systemTimingAverages = new Map<
+    string,
+    { samples: number[]; avg: number }
+  >();
+
+  /** Maximum samples to keep for averaging */
+  private readonly _maxTimingSamples = 30;
+
+  /**
+   * Enable system timing measurement
+   * Called by DevStats when system timing is enabled
+   */
+  enableSystemTiming(): void {
+    this._measureSystemTiming = true;
+  }
+
+  /**
+   * Disable system timing measurement
+   * Called by DevStats when system timing is disabled
+   */
+  disableSystemTiming(): void {
+    this._measureSystemTiming = false;
+    this._systemTimings.clear();
+    this._systemTimingAverages.clear();
+  }
+
+  /**
+   * Get all system timing data for the current frame
+   * Returns sorted array of system timings (slowest first)
+   */
+  getSystemTimings(): Array<{
+    name: string;
+    update: number;
+    fixedUpdate: number;
+    lateUpdate: number;
+    total: number;
+    avg: number;
+  }> {
+    const result: Array<{
+      name: string;
+      update: number;
+      fixedUpdate: number;
+      lateUpdate: number;
+      total: number;
+      avg: number;
+    }> = [];
+
+    for (const [name, timing] of this._systemTimings) {
+      const avgData = this._systemTimingAverages.get(name);
+      result.push({
+        name,
+        update: timing.update,
+        fixedUpdate: timing.fixedUpdate,
+        lateUpdate: timing.lateUpdate,
+        total: timing.total,
+        avg: avgData?.avg ?? timing.total,
+      });
+    }
+
+    // Sort by average time (slowest first)
+    result.sort((a, b) => b.avg - a.avg);
+    return result;
+  }
+
+  /**
+   * Get frame budget statistics (client only)
+   * Returns null on server or if frame budget manager is not initialized
+   */
+  getFrameBudgetStats(): FrameTimingStats | null {
+    return this.frameBudget?.getStats() ?? null;
+  }
+
+  /**
+   * Check if we have time remaining in the frame budget
+   * Returns true on server or if frame budget is not initialized
+   */
+  hasFrameBudget(ms: number = 1): boolean {
+    return this.frameBudget?.hasTimeRemaining(ms) ?? true;
+  }
+
+  /**
+   * Record timing for a system and update rolling average
+   */
+  private recordSystemTiming(
+    systemName: string,
+    phase: "update" | "fixedUpdate" | "lateUpdate",
+    timeMs: number,
+  ): void {
+    let timing = this._systemTimings.get(systemName);
+    if (!timing) {
+      timing = { update: 0, fixedUpdate: 0, lateUpdate: 0, total: 0 };
+      this._systemTimings.set(systemName, timing);
+    }
+    timing[phase] += timeMs;
+    timing.total = timing.update + timing.fixedUpdate + timing.lateUpdate;
+
+    // Update rolling average
+    let avgData = this._systemTimingAverages.get(systemName);
+    if (!avgData) {
+      avgData = { samples: [], avg: 0 };
+      this._systemTimingAverages.set(systemName, avgData);
+    }
+  }
+
+  /**
+   * Finalize system timing averages at end of frame
+   */
+  private finalizeSystemTimings(): void {
+    for (const [name, timing] of this._systemTimings) {
+      let avgData = this._systemTimingAverages.get(name);
+      if (!avgData) {
+        avgData = { samples: [], avg: 0 };
+        this._systemTimingAverages.set(name, avgData);
+      }
+      avgData.samples.push(timing.total);
+      if (avgData.samples.length > this._maxTimingSamples) {
+        avgData.samples.shift();
+      }
+      avgData.avg =
+        avgData.samples.reduce((a, b) => a + b, 0) / avgData.samples.length;
+    }
+  }
+
+  /**
+   * Clear per-frame timing data (called at start of each tick)
+   */
+  private clearFrameTimings(): void {
+    for (const timing of this._systemTimings.values()) {
+      timing.update = 0;
+      timing.fixedUpdate = 0;
+      timing.lateUpdate = 0;
+      timing.total = 0;
+    }
+  }
 
   /** Pre-tick phase: Initialize performance monitoring */
   private preTick(): void {
+    // Clear per-frame timing data
+    if (this._measureSystemTiming) {
+      this.clearFrameTimings();
+    }
+
     for (const system of this.systems) {
       system.preTick();
     }
@@ -1246,8 +1540,22 @@ export class World extends EventEmitter {
         item.fixedUpdate(delta);
       }
     }
-    for (const system of this.systems) {
-      system.fixedUpdate(delta);
+
+    if (this._measureSystemTiming) {
+      // Timed path: measure each system
+      for (let i = 0; i < this.systems.length; i++) {
+        const system = this.systems[i];
+        const start = performance.now();
+        system.fixedUpdate(delta);
+        const elapsed = performance.now() - start;
+        const name = this._getSystemName(system);
+        this.recordSystemTiming(name, "fixedUpdate", elapsed);
+      }
+    } else {
+      // Fast path: no timing
+      for (const system of this.systems) {
+        system.fixedUpdate(delta);
+      }
     }
   }
 
@@ -1281,9 +1589,45 @@ export class World extends EventEmitter {
     for (const item of this.hot) {
       item.update(delta);
     }
-    for (const system of this.systems) {
-      system.update(delta);
+
+    if (this._measureSystemTiming) {
+      // Timed path: measure each system
+      for (let i = 0; i < this.systems.length; i++) {
+        const system = this.systems[i];
+        const start = performance.now();
+        system.update(delta);
+        const elapsed = performance.now() - start;
+        const name = this._getSystemName(system);
+        this.recordSystemTiming(name, "update", elapsed);
+      }
+    } else {
+      // Fast path: no timing
+      for (const system of this.systems) {
+        system.update(delta);
+      }
     }
+  }
+
+  /** Cached system name lookups for performance */
+  private _systemNameCache = new Map<System, string>();
+
+  /** Get system name with caching */
+  private _getSystemName(system: System): string {
+    let name = this._systemNameCache.get(system);
+    if (!name) {
+      // Find the registered name for this system
+      for (const [key, sys] of this.systemsByName) {
+        if (sys === system) {
+          name = key;
+          break;
+        }
+      }
+      if (!name) {
+        name = system.constructor.name;
+      }
+      this._systemNameCache.set(system, name);
+    }
+    return name;
   }
 
   /**
@@ -1308,8 +1652,22 @@ export class World extends EventEmitter {
         item.lateUpdate(delta);
       }
     }
-    for (const system of this.systems) {
-      system.lateUpdate(delta);
+
+    if (this._measureSystemTiming) {
+      // Timed path: measure each system
+      for (let i = 0; i < this.systems.length; i++) {
+        const system = this.systems[i];
+        const start = performance.now();
+        system.lateUpdate(delta);
+        const elapsed = performance.now() - start;
+        const name = this._getSystemName(system);
+        this.recordSystemTiming(name, "lateUpdate", elapsed);
+      }
+    } else {
+      // Fast path: no timing
+      for (const system of this.systems) {
+        system.lateUpdate(delta);
+      }
     }
   }
 
@@ -1340,6 +1698,11 @@ export class World extends EventEmitter {
   private postTick(): void {
     for (const system of this.systems) {
       system.postTick();
+    }
+
+    // Finalize system timing averages
+    if (this._measureSystemTiming) {
+      this.finalizeSystemTimings();
     }
   }
 

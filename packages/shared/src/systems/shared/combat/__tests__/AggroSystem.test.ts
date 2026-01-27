@@ -492,5 +492,466 @@ describe("AggroSystem", () => {
 
       expect(privateSystem.mobStates.size).toBe(0);
     });
+
+    it("clears combat level cache on destroy", () => {
+      const privateSystem = system as unknown as {
+        combatLevelCache: Map<string, number>;
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      // Populate cache
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 50, xp: 100000 },
+        strength: { level: 50, xp: 100000 },
+        defense: { level: 50, xp: 100000 },
+        constitution: { level: 50, xp: 100000 },
+      });
+      privateSystem.getPlayerCombatLevel("player1");
+      expect(privateSystem.combatLevelCache.size).toBe(1);
+
+      system.destroy();
+
+      expect(privateSystem.combatLevelCache.size).toBe(0);
+    });
+
+    it("clears player skills cache on destroy", () => {
+      const privateSystem = system as unknown as {
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+      };
+
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 50, xp: 100000 },
+      });
+      expect(privateSystem.playerSkills.size).toBe(1);
+
+      system.destroy();
+
+      expect(privateSystem.playerSkills.size).toBe(0);
+    });
+  });
+
+  describe("combat level caching", () => {
+    it("caches combat level after first calculation", () => {
+      const privateSystem = system as unknown as {
+        combatLevelCache: Map<string, number>;
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 50, xp: 100000 },
+        strength: { level: 45, xp: 80000 },
+        defense: { level: 40, xp: 60000 },
+        constitution: { level: 55, xp: 120000 },
+      });
+
+      // First call - should calculate and cache
+      expect(privateSystem.combatLevelCache.has("player1")).toBe(false);
+      const level1 = privateSystem.getPlayerCombatLevel("player1");
+      expect(privateSystem.combatLevelCache.has("player1")).toBe(true);
+      expect(privateSystem.combatLevelCache.get("player1")).toBe(level1);
+    });
+
+    it("returns cached value on subsequent calls", () => {
+      const privateSystem = system as unknown as {
+        combatLevelCache: Map<string, number>;
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 50, xp: 100000 },
+        strength: { level: 45, xp: 80000 },
+        defense: { level: 40, xp: 60000 },
+        constitution: { level: 55, xp: 120000 },
+      });
+
+      const level1 = privateSystem.getPlayerCombatLevel("player1");
+      const level2 = privateSystem.getPlayerCombatLevel("player1");
+
+      expect(level1).toBe(level2);
+      expect(level1).toBe(54);
+    });
+
+    it("invalidates cache when player skills change", () => {
+      const privateSystem = system as unknown as {
+        combatLevelCache: Map<string, number>;
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      // Set initial skills
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 50, xp: 100000 },
+        strength: { level: 45, xp: 80000 },
+        defense: { level: 40, xp: 60000 },
+        constitution: { level: 55, xp: 120000 },
+      });
+      const initialLevel = privateSystem.getPlayerCombatLevel("player1");
+      expect(privateSystem.combatLevelCache.has("player1")).toBe(true);
+
+      // Simulate skill update (directly delete from cache as the event would)
+      privateSystem.combatLevelCache.delete("player1");
+
+      // Update skills (all combat skills at 99)
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 99, xp: 13000000 },
+        strength: { level: 99, xp: 13000000 },
+        defense: { level: 99, xp: 13000000 },
+        constitution: { level: 99, xp: 13000000 },
+        prayer: { level: 99, xp: 13000000 },
+        ranged: { level: 99, xp: 13000000 },
+        magic: { level: 99, xp: 13000000 },
+      });
+
+      // Should recalculate
+      const newLevel = privateSystem.getPlayerCombatLevel("player1");
+      expect(newLevel).toBeGreaterThan(initialLevel);
+      expect(newLevel).toBe(126); // Max combat level
+    });
+
+    it("handles multiple players with separate caches", () => {
+      const privateSystem = system as unknown as {
+        combatLevelCache: Map<string, number>;
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 10, xp: 1000 },
+        strength: { level: 10, xp: 1000 },
+        defense: { level: 10, xp: 1000 },
+        constitution: { level: 15, xp: 2000 },
+      });
+
+      privateSystem.playerSkills.set("player2", {
+        attack: { level: 99, xp: 13000000 },
+        strength: { level: 99, xp: 13000000 },
+        defense: { level: 99, xp: 13000000 },
+        constitution: { level: 99, xp: 13000000 },
+        prayer: { level: 99, xp: 13000000 },
+        ranged: { level: 99, xp: 13000000 },
+        magic: { level: 99, xp: 13000000 },
+      });
+
+      const level1 = privateSystem.getPlayerCombatLevel("player1");
+      const level2 = privateSystem.getPlayerCombatLevel("player2");
+
+      expect(privateSystem.combatLevelCache.size).toBe(2);
+      expect(level1).toBeLessThan(level2);
+      expect(level2).toBe(126);
+    });
+  });
+
+  describe("combat level boundary conditions", () => {
+    it("handles all skills at level 1 (minimum OSRS state)", () => {
+      const privateSystem = system as unknown as {
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      // All skills at 1 except constitution at 10 (OSRS starting state)
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 1, xp: 0 },
+        strength: { level: 1, xp: 0 },
+        defense: { level: 1, xp: 0 },
+        constitution: { level: 10, xp: 1154 },
+        prayer: { level: 1, xp: 0 },
+        ranged: { level: 1, xp: 0 },
+        magic: { level: 1, xp: 0 },
+      });
+
+      const level = privateSystem.getPlayerCombatLevel("player1");
+      expect(level).toBe(3); // OSRS minimum combat level
+    });
+
+    it("handles all skills at level 99 (maximum OSRS state)", () => {
+      const privateSystem = system as unknown as {
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 99, xp: 13034431 },
+        strength: { level: 99, xp: 13034431 },
+        defense: { level: 99, xp: 13034431 },
+        constitution: { level: 99, xp: 13034431 },
+        prayer: { level: 99, xp: 13034431 },
+        ranged: { level: 99, xp: 13034431 },
+        magic: { level: 99, xp: 13034431 },
+      });
+
+      const level = privateSystem.getPlayerCombatLevel("player1");
+      expect(level).toBe(126); // OSRS maximum combat level
+    });
+
+    it("handles ranged-based combat level correctly", () => {
+      const privateSystem = system as unknown as {
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      // Pure ranger build - high ranged, low melee
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 1, xp: 0 },
+        strength: { level: 1, xp: 0 },
+        defense: { level: 45, xp: 61512 },
+        constitution: { level: 50, xp: 101333 },
+        prayer: { level: 1, xp: 0 },
+        ranged: { level: 99, xp: 13034431 },
+        magic: { level: 1, xp: 0 },
+      });
+
+      const level = privateSystem.getPlayerCombatLevel("player1");
+      // Base = 0.25 * (45 + 50 + 0) = 23.75
+      // Ranged = 0.325 * floor(99 * 1.5) = 0.325 * 148 = 48.1
+      // Total = floor(23.75 + 48.1) = 71
+      expect(level).toBe(71);
+    });
+
+    it("handles magic-based combat level correctly", () => {
+      const privateSystem = system as unknown as {
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      // Pure mage build - high magic, low melee
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 1, xp: 0 },
+        strength: { level: 1, xp: 0 },
+        defense: { level: 45, xp: 61512 },
+        constitution: { level: 50, xp: 101333 },
+        prayer: { level: 1, xp: 0 },
+        ranged: { level: 1, xp: 0 },
+        magic: { level: 99, xp: 13034431 },
+      });
+
+      const level = privateSystem.getPlayerCombatLevel("player1");
+      // Same as ranged formula: floor(23.75 + 48.1) = 71
+      expect(level).toBe(71);
+    });
+
+    it("handles prayer bonus correctly in combat level", () => {
+      const privateSystem = system as unknown as {
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerCombatLevel: (playerId: string) => number;
+      };
+
+      // High prayer affects base
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 60, xp: 273742 },
+        strength: { level: 60, xp: 273742 },
+        defense: { level: 60, xp: 273742 },
+        constitution: { level: 60, xp: 273742 },
+        prayer: { level: 99, xp: 13034431 },
+        ranged: { level: 1, xp: 0 },
+        magic: { level: 1, xp: 0 },
+      });
+
+      // Base = 0.25 * (60 + 60 + floor(99/2)) = 0.25 * (60 + 60 + 49) = 42.25
+      // Melee = 0.325 * (60 + 60) = 39
+      // Total = floor(42.25 + 39) = 81
+      const level = privateSystem.getPlayerCombatLevel("player1");
+      expect(level).toBe(81);
+    });
+  });
+
+  describe("spatial optimization integration", () => {
+    it("entityManager reference is cached on init", async () => {
+      const privateSystem = system as unknown as {
+        entityManager: unknown | undefined;
+        init: () => Promise<void>;
+      };
+
+      // Before init, entityManager should be undefined
+      expect(privateSystem.entityManager).toBeUndefined();
+
+      // After init, it may or may not be set depending on world configuration
+      await privateSystem.init();
+      // Note: In test environment, getSystem may return undefined
+      // The important thing is that init() doesn't throw
+    });
+
+    it("falls back to checking all mobs when entityManager unavailable", () => {
+      const privateSystem = system as unknown as {
+        entityManager: unknown | undefined;
+        mobStates: Map<
+          string,
+          {
+            behavior: string;
+            currentPosition: { x: number; y: number; z: number };
+          }
+        >;
+        updatePlayerPosition: (data: {
+          entityId: string;
+          position: { x: number; y: number; z: number };
+        }) => void;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+        }) => void;
+      };
+
+      // Ensure entityManager is not set
+      privateSystem.entityManager = undefined;
+
+      // Register a passive mob
+      privateSystem.registerMob({
+        id: "mob1",
+        type: "cow",
+        level: 1,
+        position: { x: 10, y: 0, z: 10 },
+      });
+
+      // Update player position - should not throw even without entityManager
+      expect(() => {
+        privateSystem.updatePlayerPosition({
+          entityId: "player1",
+          position: { x: 15, y: 0, z: 15 },
+        });
+      }).not.toThrow();
+    });
+  });
+
+  describe("error handling and edge cases", () => {
+    it("handles getPlayerSkills with missing skills gracefully", () => {
+      const privateSystem = system as unknown as {
+        playerSkills: Map<
+          string,
+          Record<string, { level: number; xp: number }>
+        >;
+        getPlayerSkills: (playerId: string) => {
+          attack: number;
+          strength: number;
+          defense: number;
+          constitution: number;
+          prayer: number;
+          ranged: number;
+          magic: number;
+        };
+      };
+
+      // Set partial skills (missing some)
+      privateSystem.playerSkills.set("player1", {
+        attack: { level: 50, xp: 0 },
+        // Missing strength, defense, etc.
+      });
+
+      const skills = privateSystem.getPlayerSkills("player1");
+
+      // Should return defaults for missing skills
+      expect(skills.attack).toBe(50);
+      expect(skills.strength).toBe(1); // Default
+      expect(skills.defense).toBe(1); // Default
+      expect(skills.constitution).toBe(10); // OSRS default for hitpoints
+    });
+
+    it("handles updateMobPosition with invalid data", () => {
+      const privateSystem = system as unknown as {
+        mobStates: Map<
+          string,
+          { currentPosition: { x: number; y: number; z: number } }
+        >;
+        updateMobPosition: (data: {
+          entityId: string;
+          position: { x: number; y: number; z: number } | undefined;
+        }) => void;
+        registerMob: (data: {
+          id: string;
+          type: string;
+          level: number;
+          position: { x: number; y: number; z: number };
+        }) => void;
+      };
+
+      privateSystem.registerMob({
+        id: "mob1",
+        type: "goblin",
+        level: 1,
+        position: { x: 10, y: 0, z: 10 },
+      });
+
+      // Should not throw when position is provided
+      expect(() => {
+        privateSystem.updateMobPosition({
+          entityId: "mob1",
+          position: { x: 20, y: 0, z: 20 },
+        });
+      }).not.toThrow();
+
+      // Position should be updated
+      const mobState = privateSystem.mobStates.get("mob1");
+      expect(mobState?.currentPosition.x).toBe(20);
+    });
+
+    it("handles unregistered mob in updateMobPosition gracefully", () => {
+      const privateSystem = system as unknown as {
+        updateMobPosition: (data: {
+          entityId: string;
+          position: { x: number; y: number; z: number };
+        }) => void;
+      };
+
+      // Should not throw for unknown mob
+      expect(() => {
+        privateSystem.updateMobPosition({
+          entityId: "unknown_mob",
+          position: { x: 100, y: 0, z: 100 },
+        });
+      }).not.toThrow();
+    });
+
+    it("handles player tolerance tracking correctly", () => {
+      const privateSystem = system as unknown as {
+        playerTolerance: Map<string, unknown>;
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      // Initial tolerance state should be empty
+      expect(privateSystem.playerTolerance.size).toBe(0);
+
+      // Update tolerance
+      privateSystem.updatePlayerTolerance("player1", { x: 100, y: 0, z: 100 });
+      expect(privateSystem.playerTolerance.has("player1")).toBe(true);
+    });
   });
 });

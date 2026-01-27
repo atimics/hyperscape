@@ -262,6 +262,7 @@ describe("BotPoolManager Integration Tests", () => {
         botCount: 3,
         behavior: "idle",
         rampUpDelayMs: 50,
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       expect(pool.running).toBe(true);
@@ -275,6 +276,7 @@ describe("BotPoolManager Integration Tests", () => {
         botCount: 2,
         behavior: "idle",
         rampUpDelayMs: 10,
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       await expect(pool.start()).rejects.toThrow("already running");
@@ -287,6 +289,7 @@ describe("BotPoolManager Integration Tests", () => {
         botCount: 3,
         behavior: "idle",
         rampUpDelayMs: 50,
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       await pool.stop();
@@ -304,6 +307,7 @@ describe("BotPoolManager Integration Tests", () => {
         botCount: 5,
         behavior: "idle",
         rampUpDelayMs: 100,
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       expect(Date.now() - start).toBeGreaterThan(400);
@@ -317,6 +321,7 @@ describe("BotPoolManager Integration Tests", () => {
         botCount: 3,
         behavior: "idle",
         rampUpDelayMs: 50,
+        connectTimeoutMs: 2000,
         onProgress: (c, t) => calls.push(t),
       });
       await pool.start();
@@ -334,6 +339,7 @@ describe("BotPoolManager Integration Tests", () => {
         behavior: "idle",
         rampUpDelayMs: 50,
         namePrefix: "MetricsBot",
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       const metrics = pool.getBotMetrics();
@@ -352,6 +358,7 @@ describe("BotPoolManager Integration Tests", () => {
         botCount: 3,
         behavior: "idle",
         rampUpDelayMs: 50,
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       const m = pool.getAggregatedMetrics();
@@ -403,6 +410,7 @@ describe("BotPoolManager Integration Tests", () => {
         behavior: "wander",
         rampUpDelayMs: 50,
         updateInterval: 500,
+        connectTimeoutMs: 2000,
       });
       await pool.start();
       expect(pool.running).toBe(true);
@@ -421,6 +429,7 @@ describe("BotPoolManager Integration Tests", () => {
         botCount: 100,
         behavior: "idle",
         rampUpDelayMs: 100,
+        connectTimeoutMs: 2000, // Short timeout to prevent test from hanging
       });
       const p = pool.start();
       await new Promise((r) => setTimeout(r, 200));

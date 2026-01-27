@@ -3,7 +3,8 @@ import type { Entity } from "../entities/Entity";
 import THREE from "../extras/three/three";
 import type { Avatar } from "../nodes";
 import type { Node as NodeClass } from "../nodes/Node";
-import type { System } from "../systems/shared";
+// NOTE: Import directly from source to avoid barrel circular dependency
+import type { System } from "../systems/shared/infrastructure/System";
 import type { World } from "../core/World";
 import type { EntityData, Position2D, Position3D } from "./core/base-types";
 
@@ -31,7 +32,8 @@ import type { SystemDatabase } from "./network/database";
  */
 
 // Re-export core Hyperscape types
-export { SystemBase } from "../systems/shared";
+// NOTE: Import directly from source file to avoid circular dependency through systems/shared barrel
+export { SystemBase } from "../systems/shared/infrastructure/SystemBase";
 
 // Import types needed from other modules
 export type { World } from "../core/World";
@@ -97,6 +99,7 @@ export * from "./entities/entity-types";
 export * from "./game/combat-types";
 export * from "./core/misc-types";
 export * from "./world/world-types";
+export * from "./world/building-collision-types";
 export * from "./entities/npc-mob-types";
 export * from "./game/inventory-types";
 export * from "./game/resource-processing-types";
@@ -426,27 +429,33 @@ export interface ChatMessage {
 // Alias for backward compatibility
 export type ExtendedChatMessage = ChatMessage;
 
-// Import actual system classes
-export { Chat } from "../systems/shared";
-export { ClientActions } from "../systems/client/ClientActions";
-export { ClientAudio } from "../systems/client/ClientAudio";
-export { ClientInput } from "../systems/client/ClientInput"; // Keyboard, mouse, touch input handling
-export { ClientGraphics } from "../systems/client/ClientGraphics";
-export { ClientLiveKit } from "../systems/client/ClientLiveKit";
-export { ClientLoader } from "../systems/client/ClientLoader";
-export { ClientNetwork } from "../systems/client/ClientNetwork";
-export { ClientInterface } from "../systems/client/ClientInterface"; // UI state, preferences, stats display
-export { ClientRuntime } from "../systems/client/ClientRuntime"; // Client lifecycle and diagnostics
+// Import actual system classes - import directly from source to avoid barrel circular dependency
+export { Chat } from "../systems/shared/presentation/Chat";
+export { Settings } from "../systems/shared/infrastructure/Settings";
+
+// CLIENT SYSTEMS - Export as types only to avoid circular dependencies
+// The circular dependency chain is: types → ClientNetwork → PlayerLocal → Entity → types
+// By using type-only exports, modules are not evaluated during import
+export type { ClientActions } from "../systems/client/ClientActions";
+export type { ClientAudio } from "../systems/client/ClientAudio";
+export type { ClientInput } from "../systems/client/ClientInput"; // Keyboard, mouse, touch input handling
+export type { ClientGraphics } from "../systems/client/ClientGraphics";
+export type { ClientLiveKit } from "../systems/client/ClientLiveKit";
+export type { ClientLoader } from "../systems/client/ClientLoader";
+export type { ClientNetwork } from "../systems/client/ClientNetwork";
+export type { ClientInterface } from "../systems/client/ClientInterface"; // UI state, preferences, stats display
+export type { ClientRuntime } from "../systems/client/ClientRuntime"; // Client lifecycle and diagnostics
+// NOTE: For runtime instantiation, import directly from systems/client/*, e.g.:
+//   import { ClientNetwork } from "../systems/client/ClientNetwork";
 // ServerRuntime is server-only and should not be exported for client use
 // It's available only in the main index (server-side)
 // ServerNetwork is server-only and should not be exported for client use
 // Use type-only import if needed: import type { ServerNetwork } from '../systems/server/ServerRuntime';
-export { Settings } from "../systems/shared";
 
-// Export missing core system types
-export { Anchors } from "../systems/shared";
-export { Events } from "../systems/shared";
-export { Stage } from "../systems/shared";
+// Export missing core system types - import directly from source to avoid barrel circular dependency
+export { Anchors } from "../systems/shared/presentation/Anchors";
+export { Events } from "../systems/shared/infrastructure/Events";
+export { Stage } from "../systems/shared/presentation/Stage";
 
 // Basic input types
 export interface InputState {
@@ -1345,4 +1354,3 @@ export * from "./systems";
 export * from "./entities";
 export * from "./bank-equipment";
 export * from "./bank-operations";
-export * from "./interface";

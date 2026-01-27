@@ -179,6 +179,10 @@ export class ClientNetwork extends SystemBase {
   isServer: boolean;
   connected: boolean;
   queue: Array<[string, unknown]>;
+  /** Queue read index for O(1) dequeue (avoids shift() which is O(n)) */
+  private _queueReadIndex = 0;
+  /** Cached handler lookups to avoid string operations per packet */
+  private _handlerCache = new Map<string, Function | null>();
   serverTimeOffset: number;
   /** Offset to sync world time with server for day/night cycle */
   worldTimeOffset: number;
@@ -418,13 +422,14 @@ export class ClientNetwork extends SystemBase {
           this.ws?.readyState === WebSocket.CLOSED ||
           this.ws?.readyState === WebSocket.CLOSING;
         if (!isExpectedDisconnect) {
-          this.logger.error(
-            "WebSocket error",
-            e instanceof Error ? e : undefined,
-          );
-          this.logger.error(
-            `WebSocket error: ${e instanceof ErrorEvent ? e.message : String(e)}`,
-          );
+          // Extract error message - handle both browser ErrorEvent and Node.js Event
+          const errorMessage =
+            e instanceof Error
+              ? e.message
+              : typeof ErrorEvent !== "undefined" && e instanceof ErrorEvent
+                ? e.message
+                : String(e);
+          this.logger.error(`WebSocket error: ${errorMessage}`);
           reject(e);
         }
       });
@@ -490,21 +495,46 @@ export class ClientNetwork extends SystemBase {
       return;
     }
 
-    while (this.queue.length) {
-      const [method, data] = this.queue.shift()!;
-      // Support both direct method names (snapshot) and onX handlers (onSnapshot)
-      let handler: unknown = (this as Record<string, unknown>)[method];
-      if (!handler) {
-        const onName = `on${method.charAt(0).toUpperCase()}${method.slice(1)}`;
-        handler = (this as Record<string, unknown>)[onName];
+    // OPTIMIZATION: Use read index instead of shift() - O(1) vs O(n)
+    // Process from _queueReadIndex to queue.length, with per-frame limit to prevent jank
+    const MAX_PACKETS_PER_FRAME = 50; // Prevent packet storm from blocking main thread
+    let packetsProcessed = 0;
+
+    while (
+      this._queueReadIndex < this.queue.length &&
+      packetsProcessed < MAX_PACKETS_PER_FRAME
+    ) {
+      const packet = this.queue[this._queueReadIndex++];
+      const method = packet[0];
+      const data = packet[1];
+      packetsProcessed++;
+
+      // OPTIMIZATION: Cache handler lookups to avoid string operations per packet
+      let handler = this._handlerCache.get(method);
+      if (handler === undefined) {
+        // First time seeing this method - look it up and cache
+        handler = (this as Record<string, unknown>)[method] as
+          | Function
+          | undefined;
+        if (!handler) {
+          // Try onX format (e.g., onSnapshot)
+          const onName = `on${method.charAt(0).toUpperCase()}${method.slice(1)}`;
+          handler = (this as Record<string, unknown>)[onName] as
+            | Function
+            | undefined;
+        }
+        // Cache result (even if null, to avoid repeated lookups)
+        this._handlerCache.set(method, handler ?? null);
       }
+
       if (!handler) {
         console.error(`[ClientNetwork] No handler for packet '${method}'`);
         continue; // Skip unknown packets instead of throwing to avoid breaking queue
       }
+
       try {
         // Strong type assumption - handler is a function
-        const result = (handler as Function).call(this, data);
+        const result = handler.call(this, data);
         if (result instanceof Promise) {
           await result;
         }
@@ -515,6 +545,13 @@ export class ClientNetwork extends SystemBase {
         );
         // Continue processing remaining packets even if one fails
       }
+    }
+
+    // OPTIMIZATION: Only clear queue when it gets large (avoids array reallocation)
+    // Reset read index and clear queue periodically to prevent unbounded growth
+    if (this._queueReadIndex > 1000) {
+      this.queue.length = 0;
+      this._queueReadIndex = 0;
     }
   }
 
@@ -888,6 +925,15 @@ export class ClientNetwork extends SystemBase {
     console.log("[ClientNetwork] Added message to chat:", chatMessage.body);
   };
 
+  /**
+   * Handler for enterWorldApproved packet.
+   * The actual game state transition is handled by CharacterSelectScreen,
+   * this handler just prevents the "no handler" warning.
+   */
+  onEnterWorldApproved = (_data: { playerId: string; characterId: string }) => {
+    // Handled by CharacterSelectScreen socket listener
+  };
+
   onEntityAdded = (data: EntityData) => {
     // Add entity if method exists
     const newEntity = this.world.entities.add(data);
@@ -1053,7 +1099,7 @@ export class ClientNetwork extends SystemBase {
 
       // Clear interpolation buffer for ANY dead entity (defense in depth)
       if (isDead && this.interpolationStates.has(id)) {
-        this.interpolationStates.delete(id);
+        this.deleteInterpolationState(id);
       }
 
       // CRITICAL: Clear tile state when entity dies - they need death/respawn positions
@@ -1133,6 +1179,7 @@ export class ClientNetwork extends SystemBase {
     if (!state) {
       state = this.createInterpolationState(entityId);
       this.interpolationStates.set(entityId, state);
+      this._interpolationStatesDirty = true;
     }
 
     const snapshot = state.snapshots[state.snapshotIndex];
@@ -1197,17 +1244,69 @@ export class ClientNetwork extends SystemBase {
     };
   }
 
+  // PERFORMANCE: Track rotation index for progressive interpolation
+  private _interpolationRotationIndex = 0;
+  private readonly MAX_INTERPOLATIONS_PER_FRAME = 50;
+  // OPTIMIZATION: Cached array for interpolation states to avoid Array.from() every frame
+  private _interpolationStatesArray: Array<[string, InterpolationState]> = [];
+  private _interpolationStatesDirty = true;
+
+  /** Helper to delete interpolation state and mark cache dirty */
+  private deleteInterpolationState(entityId: string): boolean {
+    const deleted = this.interpolationStates.delete(entityId);
+    if (deleted) this._interpolationStatesDirty = true;
+    return deleted;
+  }
+
   /**
    * Update interpolation for remote entities (called in lateUpdate)
+   *
+   * OPTIMIZATION: Uses progressive processing with frame budget awareness.
+   * Prioritizes nearby entities and rotates through others across frames.
    */
   private updateInterpolation(delta: number): void {
     const now = performance.now();
     const renderTime = now - this.interpolationDelay;
 
-    for (const [entityId, state] of this.interpolationStates) {
+    // OPTIMIZATION: Use cached array, only rebuild when states change
+    if (this._interpolationStatesDirty) {
+      this._interpolationStatesArray.length = 0;
+      for (const entry of this.interpolationStates.entries()) {
+        this._interpolationStatesArray.push(entry);
+      }
+      this._interpolationStatesDirty = false;
+      this._interpolationRotationIndex = 0; // Reset rotation on change
+    }
+    const statesArray = this._interpolationStatesArray;
+    const totalStates = statesArray.length;
+    if (totalStates === 0) return;
+
+    const frameBudget = this.world.frameBudget;
+    let processed = 0;
+    const maxInterpolations = Math.min(
+      this.MAX_INTERPOLATIONS_PER_FRAME,
+      totalStates,
+    );
+
+    // Start from rotation index
+    const startIndex = this._interpolationRotationIndex % totalStates;
+    let i = startIndex;
+
+    do {
+      // Check frame budget every 10 entities
+      if (processed > 0 && processed % 10 === 0) {
+        if (frameBudget && !frameBudget.hasTimeRemaining(1)) {
+          break; // Over budget
+        }
+      }
+
+      if (processed >= maxInterpolations) break;
+
+      const [entityId, state] = statesArray[i];
       // Skip local player - tile interpolation handles local player movement
       if (entityId === this.world.entities.player?.id) {
-        this.interpolationStates.delete(entityId);
+        this.deleteInterpolationState(entityId);
+        i = (i + 1) % totalStates;
         continue;
       }
 
@@ -1215,18 +1314,21 @@ export class ClientNetwork extends SystemBase {
       // Once an entity uses tile movement, ALL position updates should come from tile packets
       // Using hasState() instead of isInterpolating() prevents position conflicts when entity is stationary
       if (this.tileInterpolator.hasState(entityId)) {
+        i = (i + 1) % totalStates;
         continue;
       }
 
       const entity = this.world.entities.get(entityId);
       if (!entity) {
-        this.interpolationStates.delete(entityId);
+        this.deleteInterpolationState(entityId);
+        i = (i + 1) % totalStates;
         continue;
       }
 
       // CRITICAL: Skip interpolation for entities controlled by TileInterpolator
       // TileInterpolator handles position and rotation for tile-based movement
       if (entity.data?.tileInterpolatorControlled === true) {
+        i = (i + 1) % totalStates;
         continue; // Don't interpolate - TileInterpolator handles this entity
       }
 
@@ -1235,11 +1337,17 @@ export class ClientNetwork extends SystemBase {
       // Check if entity has aiState property (indicates it's a MobEntity)
       const mobData = entity.serialize();
       if (mobData.aiState === "dead") {
+        i = (i + 1) % totalStates;
         continue; // Don't interpolate - let MobEntity maintain locked death position
       }
 
       this.interpolateEntityPosition(entity, state, renderTime, now, delta);
-    }
+      processed++;
+      i = (i + 1) % totalStates;
+    } while (i !== startIndex && processed < maxInterpolations);
+
+    // Save rotation index for next frame
+    this._interpolationRotationIndex = i;
   }
 
   /**
@@ -2260,7 +2368,7 @@ export class ClientNetwork extends SystemBase {
 
   onEntityRemoved = (id: string) => {
     // Remove from interpolation tracking
-    this.interpolationStates.delete(id);
+    this.deleteInterpolationState(id);
     // Remove from tile interpolation tracking (RuneScape-style movement)
     this.tileInterpolator.removeEntity(id);
     // Clean up pending modifications tracking
@@ -2468,7 +2576,7 @@ export class ClientNetwork extends SystemBase {
           this.tileInterpolator.removeEntity(data.playerId);
         }
         if (this.interpolationStates.has(data.playerId)) {
-          this.interpolationStates.delete(data.playerId);
+          this.deleteInterpolationState(data.playerId);
         }
 
         // AAA QUALITY: Set entity.data.deathState (single source of truth)
@@ -2569,7 +2677,7 @@ export class ClientNetwork extends SystemBase {
           this.tileInterpolator.removeEntity(data.playerId);
         }
         if (this.interpolationStates.has(data.playerId)) {
-          this.interpolationStates.delete(data.playerId);
+          this.deleteInterpolationState(data.playerId);
         }
         // Death animation continues until onPlayerRespawned sets idle emote
       }
@@ -2605,7 +2713,7 @@ export class ClientNetwork extends SystemBase {
         this.tileInterpolator.removeEntity(data.playerId);
       }
       if (this.interpolationStates.has(data.playerId)) {
-        this.interpolationStates.delete(data.playerId);
+        this.deleteInterpolationState(data.playerId);
       }
 
       // Convert spawnPosition to array format if needed

@@ -76,17 +76,17 @@ export const availableActionsProvider: Provider = {
 
     // Cooking/firemaking
     const hasTinderbox = playerEntity.items.some((item) =>
-      item.name.toLowerCase().includes("tinderbox"),
+      item.name?.toLowerCase().includes("tinderbox"),
     );
     const hasLogs = playerEntity.items.some((item) =>
-      item.name.toLowerCase().includes("logs"),
+      item.name?.toLowerCase().includes("logs"),
     );
     if (hasTinderbox && hasLogs) {
       actions.push("LIGHT_FIRE (firemaking)");
     }
 
     const hasRawFood = playerEntity.items.some((item) =>
-      item.name.toLowerCase().includes("raw"),
+      item.name?.toLowerCase().includes("raw"),
     );
     if (hasRawFood) {
       actions.push("COOK_FOOD (cooking)");

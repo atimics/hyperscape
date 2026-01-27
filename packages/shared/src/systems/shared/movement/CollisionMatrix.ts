@@ -70,23 +70,46 @@ export interface ICollisionMatrix {
 
 /**
  * CollisionMatrix implementation with zone-based storage
+ *
+ * OPTIMIZATION: Uses BigInt keys instead of string concatenation for zone lookup.
+ * This eliminates string allocation overhead in hot paths (isWalkable, isBlocked).
  */
 export class CollisionMatrix implements ICollisionMatrix {
-  /** Zone storage: Map<"zoneX,zoneZ", Int32Array[64]> */
-  private zones: Map<string, Int32Array>;
+  /** Zone storage: Map<bigint, Int32Array[64]> - uses packed coordinate key */
+  private zones: Map<bigint, Int32Array>;
+
+  // Pre-allocated for getFlags/setFlags hot path
+  private _cachedZoneKey: bigint = 0n;
+  private _cachedZoneX: number = NaN;
+  private _cachedZoneZ: number = NaN;
 
   constructor() {
     this.zones = new Map();
   }
 
   /**
-   * Get zone key from tile coordinates
+   * Get zone key from tile coordinates as BigInt
    * Uses Math.floor for correct negative coordinate handling
+   *
+   * OPTIMIZATION: Packs two 32-bit coordinates into a 64-bit BigInt key
+   * This avoids string allocation/concatenation overhead in hot paths.
+   * BigInt operations are fast in modern JS engines.
    */
-  private getZoneKey(tileX: number, tileZ: number): string {
+  private getZoneKeyBigInt(tileX: number, tileZ: number): bigint {
     const zoneX = Math.floor(tileX / ZONE_SIZE);
     const zoneZ = Math.floor(tileZ / ZONE_SIZE);
-    return `${zoneX},${zoneZ}`;
+
+    // Check cache (common case: sequential tiles in same zone)
+    if (zoneX === this._cachedZoneX && zoneZ === this._cachedZoneZ) {
+      return this._cachedZoneKey;
+    }
+
+    // Pack two signed 32-bit ints into BigInt
+    // Shift zoneX by 32 bits and OR with zoneZ (treated as unsigned)
+    this._cachedZoneX = zoneX;
+    this._cachedZoneZ = zoneZ;
+    this._cachedZoneKey = (BigInt(zoneX) << 32n) | BigInt(zoneZ >>> 0);
+    return this._cachedZoneKey;
   }
 
   /**
@@ -103,7 +126,7 @@ export class CollisionMatrix implements ICollisionMatrix {
    * Get or create a zone for the given tile coordinates
    */
   private getOrCreateZone(tileX: number, tileZ: number): Int32Array {
-    const key = this.getZoneKey(tileX, tileZ);
+    const key = this.getZoneKeyBigInt(tileX, tileZ);
     let zone = this.zones.get(key);
     if (!zone) {
       zone = new Int32Array(TILES_PER_ZONE);
@@ -116,7 +139,7 @@ export class CollisionMatrix implements ICollisionMatrix {
    * Get zone if it exists (returns null if not allocated)
    */
   private getZone(tileX: number, tileZ: number): Int32Array | null {
-    const key = this.getZoneKey(tileX, tileZ);
+    const key = this.getZoneKeyBigInt(tileX, tileZ);
     return this.zones.get(key) ?? null;
   }
 
@@ -245,6 +268,8 @@ export class CollisionMatrix implements ICollisionMatrix {
    */
   clear(): void {
     this.zones.clear();
+    this._cachedZoneX = NaN;
+    this._cachedZoneZ = NaN;
   }
 
   /**
@@ -252,7 +277,8 @@ export class CollisionMatrix implements ICollisionMatrix {
    * Returns null if zone not allocated
    */
   getZoneData(zoneX: number, zoneZ: number): Int32Array | null {
-    const key = `${zoneX},${zoneZ}`;
+    // Direct BigInt key computation (no caching needed for zone-coord API)
+    const key = (BigInt(zoneX) << 32n) | BigInt(zoneZ >>> 0);
     return this.zones.get(key) ?? null;
   }
 
@@ -267,8 +293,7 @@ export class CollisionMatrix implements ICollisionMatrix {
       );
       return;
     }
-    const key = `${zoneX},${zoneZ}`;
-    // Create a copy to prevent external mutation
+    const key = (BigInt(zoneX) << 32n) | BigInt(zoneZ >>> 0);
     this.zones.set(key, new Int32Array(data));
   }
 
@@ -280,10 +305,19 @@ export class CollisionMatrix implements ICollisionMatrix {
   }
 
   /**
-   * Get all zone keys (for debugging/serialization)
+   * Get all zone keys as coordinate pairs (for debugging/serialization)
    */
-  getZoneKeys(): string[] {
-    return Array.from(this.zones.keys());
+  getZoneKeys(): Array<{ zoneX: number; zoneZ: number }> {
+    const result: Array<{ zoneX: number; zoneZ: number }> = [];
+    for (const key of this.zones.keys()) {
+      // Unpack BigInt key back to coordinates
+      const zoneX = Number(key >> 32n);
+      const zoneZ = Number(key & 0xffffffffn);
+      // Handle sign extension for negative zoneZ
+      const signedZoneZ = zoneZ > 0x7fffffff ? zoneZ - 0x100000000 : zoneZ;
+      result.push({ zoneX, zoneZ: signedZoneZ });
+    }
+    return result;
   }
 
   /**

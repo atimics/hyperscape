@@ -64,8 +64,10 @@ export function loadSkillUnlocks(manifest: SkillUnlocksManifest): void {
 
   // Normalize British/American spelling: "defence" -> "defense"
   // JSON uses OSRS-accurate British spelling, but UI uses American spelling
+  // Replace the British spelling entirely to keep skill count at 12
   if (loadedUnlocks["defence"] && !loadedUnlocks["defense"]) {
     loadedUnlocks["defense"] = loadedUnlocks["defence"];
+    delete loadedUnlocks["defence"];
   }
 
   const skillCount = Object.keys(loadedUnlocks).length;

@@ -222,6 +222,13 @@ export class AltarEntity extends InteractableEntity {
           this.node.userData.altarId = this.altarId;
         }
 
+        // Initialize HLOD impostor support
+        await this.initHLOD(`station_altar_${modelPath}`, {
+          category: "station",
+          atlasSize: 1024,
+          hemisphere: true,
+        });
+
         return;
       } catch (error) {
         console.warn(

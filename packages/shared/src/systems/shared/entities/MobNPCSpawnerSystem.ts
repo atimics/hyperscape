@@ -10,7 +10,9 @@ import { EventType } from "../../../types/events";
 import type { World } from "../../../types/index";
 import type { EntitySpawnedEvent } from "../../../types/systems/system-interfaces";
 import { SystemBase } from "../infrastructure/SystemBase";
-import { EntityManager, TerrainSystem } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import { EntityManager } from "./EntityManager";
+import { TerrainSystem } from "../world/TerrainSystem";
 import type { TownSystem } from "../world/TownSystem";
 
 // Types are now imported from shared type files

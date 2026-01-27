@@ -98,6 +98,15 @@ logs/
 
 eliza/
 
+# Eliza database directories
+.eliza/
+**/.eliza/
+
+# External GitHub projects (cloned for reference/development)
+Procedural-Plant-and-Foliage-Generator/
+SeamAwareDecimater/
+three-octahedral-impostor/
+
 # Server world assets - ignore large binaries, keep manifests
 # The manifests/ directory contains essential JSON data and MUST be tracked
 packages/server/world/assets/

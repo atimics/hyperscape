@@ -1,4 +1,4 @@
-import * as THREE from "three";
+import { THREE } from "@hyperscape/shared";
 
 /**
  * Create Emote Factory - Animation Retargeting for VRM
@@ -84,7 +84,7 @@ export function retargetAnimationToVRM(
   const yOffset = allowHipsTranslationY ? 0 : -0.05 / scale;
 
   // Filter tracks - keep only root/hips position (or all bone positions)
-  clip.tracks = clip.tracks.filter((track) => {
+  clip.tracks = clip.tracks.filter((track: THREE.KeyframeTrack) => {
     if (track instanceof THREE.VectorKeyframeTrack) {
       const [name, type] = track.name.split(".");
       if (type !== "position") return false;
@@ -97,7 +97,7 @@ export function retargetAnimationToVRM(
   });
 
   // Fix normalized bones (from pixiv/three-vrm PR #1032)
-  clip.tracks.forEach((track) => {
+  clip.tracks.forEach((track: THREE.KeyframeTrack) => {
     const trackSplitted = track.name.split(".");
     const mixamoRigName = trackSplitted[0];
     const mixamoRigNode = animationGLTF.scene.getObjectByName(mixamoRigName);
@@ -116,16 +116,19 @@ export function retargetAnimationToVRM(
         q1.fromArray(flatQuaternion);
         q1.premultiply(parentRestWorldRotation).multiply(restRotationInverse);
         q1.toArray(flatQuaternion);
-        flatQuaternion.forEach((v, index) => {
+        flatQuaternion.forEach((v: number, index: number) => {
           track.values[index + i] = v;
         });
       }
     } else if (track instanceof THREE.VectorKeyframeTrack) {
       if (yOffset) {
-        track.values = track.values.map((v, i) => {
-          if (i % 3 === 1) return v + yOffset;
-          return v;
-        });
+        track.values = Float32Array.from(
+          track.values,
+          (v: number, i: number) => {
+            if (i % 3 === 1) return v + yOffset;
+            return v;
+          },
+        );
       }
     }
   });
@@ -136,7 +139,7 @@ export function retargetAnimationToVRM(
   const retargetedTracks: THREE.KeyframeTrack[] = [];
   const _scaler = _rootToHips * scale;
 
-  clip.tracks.forEach((track) => {
+  clip.tracks.forEach((track: THREE.KeyframeTrack) => {
     const trackSplitted = track.name.split(".");
     const ogBoneName = trackSplitted[0];
     const vrmBoneName = normalizedBoneNames[ogBoneName];

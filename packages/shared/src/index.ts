@@ -1036,3 +1036,58 @@ export type {
   BotPoolConfig,
   AggregatedMetrics,
 } from "./testing";
+
+// ============================================================================
+// Worker utilities for off-main-thread processing
+// ============================================================================
+
+// Frame budget manager for reducing main thread jank
+export {
+  FrameBudgetManager,
+  getFrameBudget,
+  WorkPriority,
+  budgeted,
+} from "./utils/FrameBudgetManager";
+export type { FrameTimingStats } from "./utils/FrameBudgetManager";
+
+// Physics Worker - Offloads PhysX simulation to web worker
+export {
+  isPhysicsWorkerAvailable,
+  initPhysicsWorker,
+  isPhysicsWorkerReady,
+  simulateInWorker,
+  addActorToWorker,
+  removeActorFromWorker,
+  setWorkerActorTransform,
+  setWorkerActorVelocity,
+  destroyPhysicsWorker,
+  type PhysicsActorType,
+  type SerializedShape,
+  type SerializedActor,
+  type ActorTransform,
+  type ActorVelocity,
+  type SerializedContactEvent,
+  type SerializedTriggerEvent,
+  type PhysicsWorkerInput,
+  type PhysicsWorkerOutput,
+} from "./utils/workers/PhysicsWorker";
+
+// Minimap Worker - 2D Canvas minimap rendering in web worker
+export {
+  MinimapWorkerManager,
+  isMinimapWorkerSupported,
+  createMinimapWorkerWithCanvas,
+  createMinimapWorker,
+  type MinimapTile,
+  type MinimapEntity,
+  type MinimapCamera,
+  type MinimapConfig,
+  type MinimapWorkerInput,
+  type MinimapWorkerOutput,
+} from "./utils/workers/MinimapWorker";
+
+// Renderer capabilities including OffscreenCanvas support
+export {
+  isOffscreenCanvasAvailable,
+  canTransferCanvas,
+} from "./utils/rendering/RendererFactory";

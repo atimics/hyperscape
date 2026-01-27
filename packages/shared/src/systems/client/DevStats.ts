@@ -132,6 +132,8 @@ export class DevStats extends System {
     // Auto-show stats in dev mode
     if (this.enabled) {
       this.show();
+      // Auto-enable system timing in dev mode for immediate visibility
+      this.enableSystemTiming();
     }
     super.start();
   }
@@ -275,7 +277,7 @@ export class DevStats extends System {
     `;
     this.container.appendChild(this.waterElement);
 
-    // Systems section (initially hidden)
+    // Systems section (collapsible, initially hidden)
     this.systemsElement = document.createElement("div");
     this.systemsElement.style.cssText = `
       margin-top: 6px;
@@ -284,8 +286,23 @@ export class DevStats extends System {
       color: #94a3b8;
       font-size: 9px;
       display: none;
+      max-height: 400px;
+      overflow-y: auto;
     `;
     this.container.appendChild(this.systemsElement);
+
+    // Add toggle hint at bottom
+    const toggleHint = document.createElement("div");
+    toggleHint.style.cssText = `
+      margin-top: 6px;
+      padding-top: 4px;
+      border-top: 1px solid rgba(100, 200, 255, 0.1);
+      color: #666;
+      font-size: 9px;
+      text-align: center;
+    `;
+    toggleHint.textContent = "F5/\\ toggle • S systems";
+    this.container.appendChild(toggleHint);
 
     document.body.appendChild(this.container);
   }
@@ -293,23 +310,41 @@ export class DevStats extends System {
   /**
    * Setup keyboard toggle (F5 or backslash key)
    * F5 matches Minecraft's debug screen keybind
+   * S toggles system timing display
    */
   private setupKeyboardToggle(): void {
     document.addEventListener("keydown", (e) => {
+      // Prevent typing in inputs
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
+
       const isToggleKey =
         e.key === "F5" ||
         (e.key === "\\" && !e.ctrlKey && !e.metaKey && !e.altKey);
 
       if (isToggleKey) {
-        // Prevent typing in inputs
-        if (
-          e.target instanceof HTMLInputElement ||
-          e.target instanceof HTMLTextAreaElement
-        ) {
-          return;
-        }
         e.preventDefault();
         this.toggle();
+      }
+
+      // S key toggles system timing (only when stats are visible)
+      if (
+        (e.key === "s" || e.key === "S") &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        this.visible
+      ) {
+        e.preventDefault();
+        if (this.measureSystems) {
+          this.disableSystemTiming();
+        } else {
+          this.enableSystemTiming();
+        }
       }
     });
   }
@@ -404,6 +439,8 @@ export class DevStats extends System {
    */
   enableSystemTiming(): void {
     this.measureSystems = true;
+    // Enable timing in World's tick loop
+    this.world.enableSystemTiming();
     if (this.systemsElement) {
       this.systemsElement.style.display = "block";
     }
@@ -414,6 +451,8 @@ export class DevStats extends System {
    */
   disableSystemTiming(): void {
     this.measureSystems = false;
+    // Disable timing in World's tick loop
+    this.world.disableSystemTiming();
     if (this.systemsElement) {
       this.systemsElement.style.display = "none";
     }
@@ -866,35 +905,107 @@ export class DevStats extends System {
 
   /**
    * Update system timing display
+   * Uses World's built-in system timing infrastructure
    */
   private updateSystemTimings(): void {
     if (!this.systemsElement) return;
 
-    // Get top 5 slowest systems
-    const sortedSystems = Array.from(this.systemTimings.values())
-      .sort((a, b) => b.avgTime - a.avgTime)
-      .slice(0, 5);
+    // Get system timings from World
+    const timings = this.world.getSystemTimings();
 
-    if (sortedSystems.length === 0) {
+    if (timings.length === 0) {
       this.systemsElement.innerHTML =
-        '<div style="color: #666;">No system data</div>';
+        '<div style="color: #666;">No system data (waiting...)</div>';
       return;
     }
 
-    let html =
-      '<div style="font-weight: 600; margin-bottom: 4px;">Systems</div>';
-    for (const sys of sortedSystems) {
-      const barWidth = Math.min(100, (sys.avgTime / 5) * 100);
+    // Calculate total frame time from systems
+    const totalSystemTime = timings.reduce((sum, t) => sum + t.avg, 0);
+
+    // Header with total
+    let html = `
+      <div style="display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid rgba(100, 200, 255, 0.1);">
+        <span>Systems (${timings.length})</span>
+        <span style="color: ${totalSystemTime > 16 ? "#ef4444" : totalSystemTime > 8 ? "#fbbf24" : "#4ade80"};">${totalSystemTime.toFixed(1)}ms</span>
+      </div>
+    `;
+
+    // Show all systems with > 0.1ms avg, or top 15 if more
+    const significantSystems = timings.filter((t) => t.avg > 0.05);
+    const displaySystems = significantSystems.slice(0, 20);
+
+    // Category labels based on timing
+    const getCategory = (
+      avgMs: number,
+    ): { label: string; color: string; bgColor: string } => {
+      if (avgMs >= 4)
+        return {
+          label: "SLOW",
+          color: "#ef4444",
+          bgColor: "rgba(239, 68, 68, 0.2)",
+        };
+      if (avgMs >= 2)
+        return {
+          label: "WARN",
+          color: "#fbbf24",
+          bgColor: "rgba(251, 191, 36, 0.2)",
+        };
+      if (avgMs >= 0.5)
+        return {
+          label: "OK",
+          color: "#4ade80",
+          bgColor: "rgba(74, 222, 128, 0.1)",
+        };
+      return { label: "", color: "#94a3b8", bgColor: "transparent" };
+    };
+
+    for (const sys of displaySystems) {
+      const category = getCategory(sys.avg);
+      // Bar width: 8ms = 100%
+      const barWidth = Math.min(100, (sys.avg / 8) * 100);
+
+      // Show phase breakdown if significant
+      const hasPhaseBreakdown =
+        sys.fixedUpdate > 0.1 || sys.update > 0.1 || sys.lateUpdate > 0.1;
+      const phaseInfo = hasPhaseBreakdown
+        ? ` <span style="color: #666; font-size: 8px;">(f:${sys.fixedUpdate.toFixed(1)} u:${sys.update.toFixed(1)} l:${sys.lateUpdate.toFixed(1)})</span>`
+        : "";
+
       html += `
-        <div style="display: flex; align-items: center; gap: 4px; margin: 2px 0;">
-          <span style="width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${sys.name}</span>
-          <div style="flex: 1; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden;">
-            <div style="width: ${barWidth}%; height: 100%; background: ${sys.avgTime > 2 ? "#ef4444" : sys.avgTime > 1 ? "#fbbf24" : "#4ade80"};"></div>
+        <div style="display: flex; align-items: center; gap: 4px; margin: 3px 0; padding: 2px 4px; background: ${category.bgColor}; border-radius: 3px;">
+          <span style="width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px;" title="${sys.name}">${sys.name}</span>
+          <div style="flex: 1; height: 6px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden;">
+            <div style="width: ${barWidth}%; height: 100%; background: ${category.color}; transition: width 0.1s;"></div>
           </div>
-          <span style="width: 35px; text-align: right;">${sys.avgTime.toFixed(1)}ms</span>
+          <span style="width: 45px; text-align: right; color: ${category.color}; font-weight: ${sys.avg >= 2 ? "600" : "400"};">${sys.avg.toFixed(2)}ms</span>
         </div>
       `;
     }
+
+    // Show count of hidden systems
+    const hiddenCount = significantSystems.length - displaySystems.length;
+    if (hiddenCount > 0) {
+      html += `<div style="color: #666; font-size: 8px; text-align: center; margin-top: 4px;">+${hiddenCount} more systems</div>`;
+    }
+
+    // Footer with frame budget indicator
+    const frameBudget = 16.67; // 60fps
+    const budgetUsed = (totalSystemTime / frameBudget) * 100;
+    const budgetColor =
+      budgetUsed > 100 ? "#ef4444" : budgetUsed > 75 ? "#fbbf24" : "#4ade80";
+
+    html += `
+      <div style="margin-top: 6px; padding-top: 4px; border-top: 1px solid rgba(100, 200, 255, 0.1); font-size: 9px;">
+        <div style="display: flex; justify-content: space-between;">
+          <span>Frame Budget (60fps):</span>
+          <span style="color: ${budgetColor};">${budgetUsed.toFixed(0)}%</span>
+        </div>
+        <div style="height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; margin-top: 2px; overflow: hidden;">
+          <div style="width: ${Math.min(100, budgetUsed)}%; height: 100%; background: ${budgetColor};"></div>
+        </div>
+      </div>
+    `;
+
     this.systemsElement.innerHTML = html;
   }
 

@@ -61,7 +61,9 @@ import {
 } from "../../../types/entities";
 import { NPCBehavior, NPCState } from "../../../types/core/core";
 import { EventType } from "../../../types/events";
-import { TerrainSystem } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+// The barrel imports combat which imports MobEntity which extends Entity
+import { TerrainSystem } from "../world/TerrainSystem";
 import { SystemBase } from "../infrastructure/SystemBase";
 import { getItem } from "../../../data/items";
 import { getNPCById } from "../../../data/npcs";
@@ -78,9 +80,30 @@ export class EntityManager extends SystemBase {
   /** Spatial partitioning registry for efficient entity queries */
   private spatialRegistry = new SpatialEntityRegistry();
 
+  /** Type-indexed entity cache for O(1) getEntitiesByType queries */
+  private entitiesByType = new Map<string, Set<string>>();
+
   /** Broadcast distance squared for network filtering */
   private readonly BROADCAST_DISTANCE_SQ =
     DISTANCE_CONSTANTS.SIMULATION_SQ.NETWORK_BROADCAST;
+
+  // PERFORMANCE: Progressive entity update system to prevent main thread blocking
+  /** Maximum entities to update per frame (prevents jank) */
+  private readonly MAX_ENTITY_UPDATES_PER_FRAME = 100;
+  /** Maximum network updates to send per frame */
+  private readonly MAX_NETWORK_UPDATES_PER_FRAME = 50;
+  /** Rotation index for round-robin entity processing */
+  private _entityUpdateRotationIndex = 0;
+  /** Cached array for iteration (avoids Set->Array conversion each frame) */
+  private _entityUpdateArray: string[] = [];
+  /** Flag to track if entity array needs refresh */
+  private _entityArrayDirty = true;
+
+  // OPTIMIZATION: Reusable Set for active entity checks (avoids allocation every frame)
+  /** Cached Set for active entity IDs - reused each frame */
+  private _activeEntityIdsCache = new Set<string>();
+  /** Tick when active entities were last cached */
+  private _activeEntitiesCacheTick = -1;
 
   /** Network stats for monitoring interest filtering effectiveness */
   private networkStats = {
@@ -454,39 +477,89 @@ export class EntityManager extends SystemBase {
   /**
    * Server-side entity update - only processes entities in active chunks
    * This significantly reduces CPU load when players are spread out
+   *
+   * OPTIMIZATION: Uses progressive updates to prevent main thread blocking.
+   * Updates MAX_ENTITY_UPDATES_PER_FRAME entities per frame using round-robin rotation.
+   * All entities still get updated, just spread across multiple frames.
    */
   private updateServerEntities(deltaTime: number): void {
-    // Get set of active entities (in chunks near players)
-    const activeEntityIds = new Set(this.spatialRegistry.getActiveEntities());
-
-    // Update entities in active chunks
-    for (const entityId of this.entitiesNeedingUpdate) {
-      const entity = this.entities.get(entityId);
-      if (!entity) continue;
-
-      // Always update players (they're the source of active chunks)
-      // Also update entities in active chunks
-      const isPlayer = entity.type === "player";
-      const isInActiveChunk = activeEntityIds.has(entityId);
-
-      if (isPlayer || isInActiveChunk) {
-        entity.update(deltaTime);
-
-        // Check if entity marked itself as dirty and needs network sync
-        if (entity.networkDirty) {
-          this.networkDirtyEntities.add(entityId);
-          entity.networkDirty = false;
-
-          // Update spatial registry with new position
-          const pos = entity.position;
-          this.spatialRegistry.updateEntityPosition(entityId, pos.x, pos.z);
-        }
-      }
-      // Entities NOT in active chunks skip their update entirely
-      // This is where the CPU savings come from
+    // Refresh cached entity array if needed
+    if (this._entityArrayDirty) {
+      this._entityUpdateArray = Array.from(this.entitiesNeedingUpdate);
+      this._entityArrayDirty = false;
+      // Reset rotation when array changes to ensure fair distribution
+      this._entityUpdateRotationIndex = 0;
     }
 
-    // Send network updates
+    const entityArray = this._entityUpdateArray;
+    const entityCount = entityArray.length;
+    if (entityCount === 0) return;
+
+    // OPTIMIZATION: Reuse cached Set for active entities (avoids allocation every frame)
+    // Refresh cache once per tick (not once per call)
+    const worldTick = this.world.currentTick ?? 0;
+    if (this._activeEntitiesCacheTick !== worldTick) {
+      this._activeEntityIdsCache.clear();
+      for (const entityId of this.spatialRegistry.getActiveEntities()) {
+        this._activeEntityIdsCache.add(entityId);
+      }
+      this._activeEntitiesCacheTick = worldTick;
+    }
+    const activeEntityIds = this._activeEntityIdsCache;
+
+    // PERFORMANCE: Process entities in batches using round-robin
+    // This ensures all entities get updated fairly, just spread across frames
+    const frameBudget = this.world.frameBudget;
+    let updatesThisFrame = 0;
+    const maxUpdates = this.MAX_ENTITY_UPDATES_PER_FRAME;
+
+    // Start from where we left off last frame
+    const startIndex = this._entityUpdateRotationIndex % entityCount;
+    let i = startIndex;
+
+    do {
+      // Check frame budget every 20 entities to avoid overhead
+      if (updatesThisFrame > 0 && updatesThisFrame % 20 === 0) {
+        if (frameBudget && !frameBudget.hasTimeRemaining(2)) {
+          break; // Over budget, continue next frame
+        }
+      }
+
+      if (updatesThisFrame >= maxUpdates) break;
+
+      const entityId = entityArray[i];
+      const entity = this.entities.get(entityId);
+
+      if (entity) {
+        // Always update players (they're the source of active chunks)
+        // Also update entities in active chunks
+        const isPlayer = entity.type === "player";
+        const isInActiveChunk = activeEntityIds.has(entityId);
+
+        if (isPlayer || isInActiveChunk) {
+          entity.update(deltaTime);
+          updatesThisFrame++;
+
+          // Check if entity marked itself as dirty and needs network sync
+          if (entity.networkDirty) {
+            this.networkDirtyEntities.add(entityId);
+            entity.networkDirty = false;
+
+            // Update spatial registry with new position
+            const pos = entity.position;
+            this.spatialRegistry.updateEntityPosition(entityId, pos.x, pos.z);
+          }
+        }
+      }
+
+      // Move to next entity (wrap around)
+      i = (i + 1) % entityCount;
+    } while (i !== startIndex);
+
+    // Save rotation index for next frame
+    this._entityUpdateRotationIndex = i;
+
+    // Send network updates (also rate-limited)
     if (this.networkDirtyEntities.size > 0) {
       this.sendNetworkUpdates();
     }
@@ -495,14 +568,52 @@ export class EntityManager extends SystemBase {
   /**
    * Client-side entity update - updates all entities
    * Client only receives entities in visible range from server
+   *
+   * OPTIMIZATION: Uses progressive updates with frame budget checks.
+   * Visual smoothness is prioritized over updating all entities every frame.
    */
   private updateClientEntities(deltaTime: number): void {
-    for (const entityId of this.entitiesNeedingUpdate) {
+    // Refresh cached entity array if needed
+    if (this._entityArrayDirty) {
+      this._entityUpdateArray = Array.from(this.entitiesNeedingUpdate);
+      this._entityArrayDirty = false;
+      this._entityUpdateRotationIndex = 0;
+    }
+
+    const entityArray = this._entityUpdateArray;
+    const entityCount = entityArray.length;
+    if (entityCount === 0) return;
+
+    const frameBudget = this.world.frameBudget;
+    let updatesThisFrame = 0;
+    const maxUpdates = this.MAX_ENTITY_UPDATES_PER_FRAME;
+
+    // Start from where we left off last frame
+    const startIndex = this._entityUpdateRotationIndex % entityCount;
+    let i = startIndex;
+
+    do {
+      // Check frame budget periodically
+      if (updatesThisFrame > 0 && updatesThisFrame % 20 === 0) {
+        if (frameBudget && !frameBudget.hasTimeRemaining(1)) {
+          break; // Over budget
+        }
+      }
+
+      if (updatesThisFrame >= maxUpdates) break;
+
+      const entityId = entityArray[i];
       const entity = this.entities.get(entityId);
       if (entity) {
         entity.update(deltaTime);
+        updatesThisFrame++;
       }
-    }
+
+      i = (i + 1) % entityCount;
+    } while (i !== startIndex);
+
+    // Save rotation index for next frame
+    this._entityUpdateRotationIndex = i;
   }
 
   fixedUpdate(deltaTime: number): void {
@@ -610,6 +721,15 @@ export class EntityManager extends SystemBase {
     // Store entity
     this.entities.set(config.id, entity);
     this.entitiesNeedingUpdate.add(config.id);
+    this._entityArrayDirty = true; // Mark for cache refresh
+
+    // Update type index for O(1) getEntitiesByType queries
+    let typeSet = this.entitiesByType.get(config.type);
+    if (!typeSet) {
+      typeSet = new Set();
+      this.entitiesByType.set(config.type, typeSet);
+    }
+    typeSet.add(config.id);
 
     // Register with world entities system so other systems can find it
     this.world.entities.set(config.id, entity);
@@ -704,6 +824,13 @@ export class EntityManager extends SystemBase {
     this.entities.delete(entityId);
     this.entitiesNeedingUpdate.delete(entityId);
     this.networkDirtyEntities.delete(entityId);
+    this._entityArrayDirty = true; // Mark for cache refresh
+
+    // Remove from type index
+    const typeSet = this.entitiesByType.get(entity.type);
+    if (typeSet) {
+      typeSet.delete(entityId);
+    }
 
     // Remove from spatial registry (server-side only)
     if (this.world.isServer) {
@@ -799,27 +926,54 @@ export class EntityManager extends SystemBase {
   }
 
   /**
-   * Get all entities of a specific type
+   * Get all entities of a specific type.
+   * OPTIMIZATION: Uses type-indexed cache for O(n) where n = entities of that type,
+   * instead of O(total entities) linear scan.
    */
   getEntitiesByType(type: string): Entity[] {
-    return Array.from(this.entities.values()).filter(
-      (entity) => entity.type === type,
-    );
+    const typeSet = this.entitiesByType.get(type);
+    if (!typeSet || typeSet.size === 0) return [];
+
+    const entities: Entity[] = [];
+    for (const entityId of typeSet) {
+      const entity = this.entities.get(entityId);
+      if (entity) {
+        entities.push(entity);
+      }
+    }
+    return entities;
   }
 
   /**
-   * Get entities within range of a position
+   * Get entities within range of a position.
+   * OPTIMIZATION: Uses spatial registry for O(1) chunk-based query instead of O(n) linear scan.
    */
   getEntitiesInRange(
     center: { x: number; y: number; z: number },
     range: number,
     type?: string,
   ): Entity[] {
-    return Array.from(this.entities.values()).filter((entity) => {
-      if (type && entity.type !== type) return false;
+    // Use spatial registry for efficient 2D query, then filter by 3D distance
+    const results = this.spatialRegistry.getEntitiesInRange(
+      center.x,
+      center.z,
+      range,
+      type,
+    );
+    const entities: Entity[] = [];
+
+    for (const result of results) {
+      const entity = this.entities.get(result.entityId);
+      if (!entity) continue;
+
+      // Verify 3D distance (spatial registry only checks 2D)
       const distance = entity.getDistanceTo(center);
-      return distance <= range;
-    });
+      if (distance <= range) {
+        entities.push(entity);
+      }
+    }
+
+    return entities;
   }
 
   // ========== PLAYER SPATIAL REGISTRATION ==========
@@ -1179,7 +1333,27 @@ export class EntityManager extends SystemBase {
     // Use interest-based filtering if sendToPlayer is available
     const useInterestFiltering = typeof network.sendToPlayer === "function";
 
-    this.networkDirtyEntities.forEach((entityId) => {
+    // PERFORMANCE: Process network updates with frame budget awareness
+    // Convert to array for iteration with budget checks
+    const dirtyEntities = Array.from(this.networkDirtyEntities);
+    let updatesThisFrame = 0;
+    const maxUpdates = this.MAX_NETWORK_UPDATES_PER_FRAME;
+    const frameBudget = this.world.frameBudget;
+
+    for (const entityId of dirtyEntities) {
+      // Check frame budget periodically
+      if (updatesThisFrame > 0 && updatesThisFrame % 10 === 0) {
+        if (frameBudget && !frameBudget.hasTimeRemaining(1)) {
+          // Over budget - remaining entities will be processed next frame
+          // (they'll still be in networkDirtyEntities)
+          break;
+        }
+      }
+
+      if (updatesThisFrame >= maxUpdates) break;
+
+      // Remove from dirty set BEFORE processing (even if we skip, don't re-send)
+      this.networkDirtyEntities.delete(entityId);
       // CRITICAL FIX: Players are in world.players, not EntityManager.entities
       // Check both locations to find the entity
       let entity = this.entities.get(entityId);
@@ -1257,16 +1431,18 @@ export class EntityManager extends SystemBase {
           network.send!("entityModified", updatePacket);
           this.networkStats.broadcastUpdates++;
         }
+
+        updatesThisFrame++;
       }
       // Entity not found - this is expected when:
       // - Items are picked up between marking dirty and sync
       // - Mobs die between marking dirty and sync
       // - Any entity is removed during the frame
       // Silently skip - not an error condition
-    });
+    }
 
-    // Clear dirty entities
-    this.networkDirtyEntities.clear();
+    // Note: We don't clear all dirty entities anymore - only processed ones are removed above
+    // This allows remaining entities to be processed in the next frame
   }
 
   /**
@@ -1443,34 +1619,45 @@ export class EntityManager extends SystemBase {
   private getMobMaxHealth(mobType: string, level: number): number {
     const npcData = getNPCById(mobType);
     if (!npcData) {
-      return 100 + (level - 1) * 10;
+      return Math.max(1, 100 + (level - 1) * 10);
     }
-    return npcData.stats.health + (level - npcData.stats.level) * 10;
+    // Scale health based on level difference from base level
+    // Clamp to minimum of 1 to prevent negative/zero health when spawned below base level
+    return Math.max(
+      1,
+      npcData.stats.health + (level - npcData.stats.level) * 10,
+    );
   }
 
   private getMobAttack(mobType: string, level: number): number {
     const npcData = getNPCById(mobType);
     if (!npcData) {
-      return 1 + (level - 1); // Default attack scaling
+      return Math.max(1, 1 + (level - 1)); // Default attack scaling
     }
-    return npcData.stats.attack + (level - npcData.stats.level);
+    // Clamp to minimum of 1 to prevent negative attack when spawned below base level
+    return Math.max(1, npcData.stats.attack + (level - npcData.stats.level));
   }
 
   private getMobAttackPower(mobType: string, level: number): number {
     const npcData = getNPCById(mobType);
     if (!npcData) {
-      return 5 + (level - 1) * 2;
+      return Math.max(1, 5 + (level - 1) * 2);
     }
     // FIX: Use strength for attackPower (max hit), not attack (accuracy)
-    return npcData.stats.strength + (level - npcData.stats.level) * 2;
+    // Clamp to minimum of 1 to prevent negative attack power when spawned below base level
+    return Math.max(
+      1,
+      npcData.stats.strength + (level - npcData.stats.level) * 2,
+    );
   }
 
   private getMobDefense(mobType: string, level: number): number {
     const npcData = getNPCById(mobType);
     if (!npcData) {
-      return 2 + (level - 1);
+      return Math.max(0, 2 + (level - 1));
     }
-    return npcData.stats.defense + (level - npcData.stats.level);
+    // Defense can be 0 for very weak mobs (no armor)
+    return Math.max(0, npcData.stats.defense + (level - npcData.stats.level));
   }
 
   private getMobDefenseBonus(mobType: string): number {
@@ -1856,6 +2043,8 @@ export class EntityManager extends SystemBase {
     // Clear tracking sets
     this.entitiesNeedingUpdate.clear();
     this.networkDirtyEntities.clear();
+    this._entityArrayDirty = true; // Mark for cache refresh
+    this._entityUpdateArray = []; // Clear cached array
 
     // Clear spatial registry
     this.spatialRegistry.clear();

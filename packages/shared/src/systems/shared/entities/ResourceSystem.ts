@@ -1,5 +1,6 @@
 import { SystemBase } from "../infrastructure/SystemBase";
-import { TerrainSystem } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import { TerrainSystem } from "../world/TerrainSystem";
 import { uuid } from "../../../utils";
 import type { World } from "../../../types";
 import { EventType } from "../../../types/events";

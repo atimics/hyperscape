@@ -258,16 +258,17 @@ export function useMapNavigation(
   );
 
   const goBack = useCallback((): NavigationHistoryEntry | null => {
-    let entry: NavigationHistoryEntry | null = null;
+    // Compute the entry to return BEFORE updating state
+    // This avoids race conditions with React 18's concurrent features
+    if (historyIndex <= 0) return null;
+
+    const entry = history[historyIndex - 1];
 
     setHistoryState((prev) => {
       if (prev.index <= 0) return prev;
-
-      const newIndex = prev.index - 1;
-      entry = prev.entries[newIndex];
       return {
         ...prev,
-        index: newIndex,
+        index: prev.index - 1,
       };
     });
 
@@ -275,19 +276,19 @@ export function useMapNavigation(
       onNavigate?.(entry);
     }
     return entry;
-  }, [onNavigate]);
+  }, [historyIndex, history, onNavigate]);
 
   const goForward = useCallback((): NavigationHistoryEntry | null => {
-    let entry: NavigationHistoryEntry | null = null;
+    // Compute the entry to return BEFORE updating state
+    if (historyIndex >= history.length - 1) return null;
+
+    const entry = history[historyIndex + 1];
 
     setHistoryState((prev) => {
       if (prev.index >= prev.entries.length - 1) return prev;
-
-      const newIndex = prev.index + 1;
-      entry = prev.entries[newIndex];
       return {
         ...prev,
-        index: newIndex,
+        index: prev.index + 1,
       };
     });
 
@@ -295,7 +296,7 @@ export function useMapNavigation(
       onNavigate?.(entry);
     }
     return entry;
-  }, [onNavigate]);
+  }, [historyIndex, history, onNavigate]);
 
   const clearHistory = useCallback(() => {
     setHistoryState({ entries: [], index: -1 });

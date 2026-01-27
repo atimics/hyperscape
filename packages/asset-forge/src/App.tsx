@@ -1,21 +1,25 @@
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
 import Navigation from "./components/shared/Navigation";
 import NotificationBar from "./components/shared/NotificationBar";
-import { NAVIGATION_VIEWS, APP_BACKGROUND_STYLES } from "./constants";
+import { APP_BACKGROUND_STYLES, ROUTES } from "./constants";
 import { AppProvider } from "./contexts/AppContext";
 import { NavigationProvider } from "./contexts/NavigationContext";
-import { useNavigation } from "./hooks/useNavigation";
 import { ArmorFittingPage } from "./pages/ArmorFittingPage";
 import { AssetsPage } from "./pages/AssetsPage";
 import { EquipmentPage } from "./pages/EquipmentPage";
 import { GenerationPage } from "./pages/GenerationPage";
 import { HandRiggingPage } from "./pages/HandRiggingPage";
+import { ManifestsPage } from "./pages/ManifestsPage";
 import { RetargetAnimatePage } from "./pages/RetargetAnimatePage";
 import { WorldBuilderPage } from "./pages/WorldBuilderPage";
+// Procedural generator pages
+import { BuildingGenPage } from "./pages/BuildingGenPage";
+import { TreeGenPage } from "./pages/TreeGenPage";
+import { RockGenPage } from "./pages/RockGenPage";
+import { PlantGenPage } from "./pages/PlantGenPage";
 
-function AppContent() {
-  const { currentView, navigateTo, navigateToAsset } = useNavigation();
-
+function AppLayout() {
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-bg-primary to-bg-secondary relative">
       {/* Subtle grid background */}
@@ -31,32 +35,49 @@ function AppContent() {
 
       {/* Main content */}
       <div className="relative z-10 flex flex-col min-h-screen">
-        <Navigation currentView={currentView} onViewChange={navigateTo} />
+        <Navigation />
         <NotificationBar />
 
         <main className="flex-1">
-          {currentView === NAVIGATION_VIEWS.ASSETS && (
-            <div className="h-full overflow-hidden">
-              <AssetsPage />
-            </div>
-          )}
-          {currentView === NAVIGATION_VIEWS.GENERATION && (
-            <GenerationPage
-              onNavigateToAssets={() => navigateTo(NAVIGATION_VIEWS.ASSETS)}
-              onNavigateToAsset={navigateToAsset}
+          <Routes>
+            {/* Default redirect to generate */}
+            <Route
+              path="/"
+              element={<Navigate to={ROUTES.GENERATION} replace />}
             />
-          )}
-          {currentView === NAVIGATION_VIEWS.EQUIPMENT && <EquipmentPage />}
-          {currentView === NAVIGATION_VIEWS.HAND_RIGGING && <HandRiggingPage />}
-          {currentView === NAVIGATION_VIEWS.ARMOR_FITTING && (
-            <ArmorFittingPage />
-          )}
-          {currentView === NAVIGATION_VIEWS.RETARGET_ANIMATE && (
-            <RetargetAnimatePage />
-          )}
-          {currentView === NAVIGATION_VIEWS.WORLD_BUILDER && (
-            <WorldBuilderPage />
-          )}
+
+            {/* Main pages */}
+            <Route path={ROUTES.GENERATION} element={<GenerationPage />} />
+            <Route
+              path={ROUTES.ASSETS}
+              element={
+                <div className="h-full overflow-hidden">
+                  <AssetsPage />
+                </div>
+              }
+            />
+            <Route path={ROUTES.EQUIPMENT} element={<EquipmentPage />} />
+            <Route path={ROUTES.HAND_RIGGING} element={<HandRiggingPage />} />
+            <Route path={ROUTES.ARMOR_FITTING} element={<ArmorFittingPage />} />
+            <Route
+              path={ROUTES.RETARGET_ANIMATE}
+              element={<RetargetAnimatePage />}
+            />
+            <Route path={ROUTES.WORLD_BUILDER} element={<WorldBuilderPage />} />
+            <Route path={ROUTES.MANIFESTS} element={<ManifestsPage />} />
+
+            {/* Procedural Generators */}
+            <Route path={ROUTES.BUILDING_GEN} element={<BuildingGenPage />} />
+            <Route path={ROUTES.TREE_GEN} element={<TreeGenPage />} />
+            <Route path={ROUTES.ROCK_GEN} element={<RockGenPage />} />
+            <Route path={ROUTES.PLANT_GEN} element={<PlantGenPage />} />
+
+            {/* Catch-all redirect */}
+            <Route
+              path="*"
+              element={<Navigate to={ROUTES.GENERATION} replace />}
+            />
+          </Routes>
         </main>
       </div>
     </div>
@@ -66,11 +87,13 @@ function AppContent() {
 function App() {
   return (
     <AppProvider>
-      <NavigationProvider>
-        <ErrorBoundary>
-          <AppContent />
-        </ErrorBoundary>
-      </NavigationProvider>
+      <ErrorBoundary>
+        <BrowserRouter>
+          <NavigationProvider>
+            <AppLayout />
+          </NavigationProvider>
+        </BrowserRouter>
+      </ErrorBoundary>
     </AppProvider>
   );
 }

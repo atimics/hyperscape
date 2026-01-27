@@ -117,6 +117,9 @@ type MoonMaterialUniforms = {
 // SkySystem
 // -----------------------------
 export class SkySystem extends System {
+  // PERFORMANCE: Static shared TextureLoader (avoids creating new loader per texture)
+  private static _textureLoader = new THREE.TextureLoader();
+
   private scene: THREE.Scene | null = null;
   private group: THREE.Group | null = null;
   private skyMesh: THREE.Mesh | null = null;
@@ -207,10 +210,12 @@ export class SkySystem extends System {
     this.noiseA = createNoiseTexture(128);
     this.noiseB = createNoiseTexture(128);
 
+    // PERFORMANCE: Reuse a single TextureLoader instance
+    const cachedLoader = SkySystem._textureLoader;
+
     const loadTex = (url: string): Promise<THREE.Texture> => {
       return new Promise((resolve, reject) => {
-        const loader = new THREE.TextureLoader();
-        loader.load(
+        cachedLoader.load(
           url,
           (t) => {
             const shouldRepeat = /noise|star|galaxy/.test(url);

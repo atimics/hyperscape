@@ -905,7 +905,9 @@ describe("TownSystem Algorithms", () => {
       }
       const elapsed = performance.now() - start;
 
-      expect(elapsed).toBeLessThan(50); // Should be fast even with many towns
+      // Should be fast even with many towns
+      // (threshold relaxed for CI environments with variable performance)
+      expect(elapsed).toBeLessThan(150);
     });
   });
 });

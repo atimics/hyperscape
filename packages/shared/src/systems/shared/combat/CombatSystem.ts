@@ -9,7 +9,8 @@ import { AttackType } from "../../../types/core/core";
 import { EntityID } from "../../../types/core/identifiers";
 import { MobEntity } from "../../../entities/npc/MobEntity";
 import { Entity } from "../../../entities/Entity";
-import { PlayerSystem } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import { PlayerSystem } from "../character/PlayerSystem";
 import {
   isAttackOnCooldownTicks,
   calculateRetaliationDelay,
@@ -18,8 +19,9 @@ import {
 } from "../../../utils/game/CombatCalculations";
 import { PrayerSystem } from "../character/PrayerSystem";
 import { createEntityID } from "../../../utils/IdentifierUtils";
-import { EntityManager } from "..";
-import { MobNPCSystem } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import { EntityManager } from "../entities/EntityManager";
+import { MobNPCSystem } from "../entities/MobNPCSystem";
 import { SystemBase } from "../infrastructure/SystemBase";
 import { tilesWithinMeleeRange, worldToTile } from "../movement/TileSystem";
 import { tilePool, PooledTile } from "../../../utils/pools/TilePool";
@@ -95,6 +97,11 @@ export class CombatSystem extends SystemBase {
   private mobSystem?: MobNPCSystem;
   private entityManager?: EntityManager;
   private playerSystem?: PlayerSystem; // Cached for auto-retaliate checks (hot path optimization)
+
+  // OPTIMIZATION: Cache frequently used systems to avoid getSystem() lookups in hot paths
+  private prayerSystem?: PrayerSystem | null;
+  private zoneDetectionSystem?: ZoneDetectionSystem | null;
+  private _systemsCached = false;
 
   // Public for GameTickProcessor access during tick processing
   public readonly stateService: CombatStateService;
@@ -178,6 +185,12 @@ export class CombatSystem extends SystemBase {
     // Cache PlayerSystem for auto-retaliate checks (hot path optimization)
     // Optional dependency - combat still works without it (defaults to retaliate)
     this.playerSystem = this.world.getSystem<PlayerSystem>("player");
+
+    // OPTIMIZATION: Cache other systems used in hot paths (damage calc, PvP zone checks)
+    this.prayerSystem = this.world.getSystem<PrayerSystem>("prayer") ?? null;
+    this.zoneDetectionSystem =
+      this.world.getSystem<ZoneDetectionSystem>("zone-detection") ?? null;
+    this._systemsCached = true;
 
     // Cache PlayerSystem into PlayerDamageHandler for damage application
     const playerHandler = this.damageHandlers.get("player");
@@ -647,7 +660,6 @@ export class CombatSystem extends SystemBase {
       position: targetPosition,
     });
 
-    // Check if target died - skip remaining logic if so
     if (!this.entityResolver.isAlive(target, targetType)) {
       return;
     }
@@ -738,7 +750,6 @@ export class CombatSystem extends SystemBase {
    * @see https://oldschool.runescape.wiki/w/Pathfinding
    */
   private handlePlayerDisengage(playerId: string): void {
-    // Check if player is currently attacking something
     const combatState = this.stateService.getCombatData(playerId);
     if (!combatState || combatState.attackerType !== "player") {
       return; // Not in combat as an attacker, nothing to cancel
@@ -803,11 +814,11 @@ export class CombatSystem extends SystemBase {
     let attackerPrayerBonuses: PrayerCombatBonuses | undefined;
     let defenderPrayerBonuses: PrayerCombatBonuses | undefined;
 
-    const prayerSystem = this.world.getSystem("prayer") as PrayerSystem | null;
-    if (prayerSystem) {
+    // OPTIMIZATION: Use cached prayerSystem instead of getSystem() per damage calc
+    if (this.prayerSystem) {
       // Attacker prayer bonuses (if player)
       if (!(attacker instanceof MobEntity)) {
-        const bonuses = prayerSystem.getCombinedBonuses(attacker.id);
+        const bonuses = this.prayerSystem.getCombinedBonuses(attacker.id);
         if (bonuses.attackMultiplier || bonuses.strengthMultiplier) {
           attackerPrayerBonuses = bonuses;
         }
@@ -815,7 +826,7 @@ export class CombatSystem extends SystemBase {
 
       // Defender prayer bonuses (if player)
       if (!(target instanceof MobEntity)) {
-        const bonuses = prayerSystem.getCombinedBonuses(target.id);
+        const bonuses = this.prayerSystem.getCombinedBonuses(target.id);
         if (bonuses.defenseMultiplier) {
           defenderPrayerBonuses = bonuses;
         }
@@ -947,13 +958,12 @@ export class CombatSystem extends SystemBase {
     // - Combat resuming after respawn in safe zone
     // - Players attacking each other in towns/banks
     // - Auto-retaliate triggering in non-PvP areas
+    // OPTIMIZATION: Use cached zoneDetectionSystem
     if (attackerType === "player" && targetType === "player") {
-      const zoneSystem =
-        this.world.getSystem<ZoneDetectionSystem>("zone-detection");
-      if (zoneSystem) {
+      if (this.zoneDetectionSystem) {
         const attackerPos = getEntityPosition(attackerEntity);
         if (attackerPos) {
-          const isPvPAllowed = zoneSystem.isPvPEnabled({
+          const isPvPAllowed = this.zoneDetectionSystem.isPvPEnabled({
             x: attackerPos.x,
             z: attackerPos.z,
           });
@@ -1395,7 +1405,6 @@ export class CombatSystem extends SystemBase {
       ...options,
     };
 
-    // Check if entities exist
     const attacker = this.entityResolver.resolve(attackerId, opts.attackerType);
     const target = this.entityResolver.resolve(targetId, opts.targetType);
 
@@ -1632,12 +1641,20 @@ export class CombatSystem extends SystemBase {
     // This is called by TickSystem at TickPriority.COMBAT
   }
 
+  // Track when PID order needs re-sorting (optimization)
+  private _pidSortDirty = true;
+  private _lastSortedCombatCount = 0;
+
   /**
    * Process combat on each server tick (OSRS-accurate)
    * Called by TickSystem at COMBAT priority (after movement, before AI)
    */
   public processCombatTick(tickNumber: number): void {
-    this.pidManager.update(tickNumber);
+    // Update PIDs - returns true if shuffle happened
+    const pidShuffled = this.pidManager.update(tickNumber);
+    if (pidShuffled) {
+      this._pidSortDirty = true;
+    }
 
     // Process scheduled emote resets (tick-aligned animation timing)
     // Delegated to AnimationManager for better separation of concerns
@@ -1647,10 +1664,39 @@ export class CombatSystem extends SystemBase {
     const combatStates = this.stateService.getAllCombatStates();
     const combatStatesMap = this.stateService.getCombatStatesMap();
 
-    // Lower PID attacks first when multiple attacks on same tick
-    combatStates.sort((a, b) => this.pidManager.comparePriority(a[0], b[0]));
+    // OPTIMIZED: Only sort when needed
+    // - Skip if <= 1 combatants (nothing to sort)
+    // - Mark dirty when PIDs shuffle or combatant count changes
+    const combatCount = combatStates.length;
+    if (combatCount !== this._lastSortedCombatCount) {
+      this._pidSortDirty = true;
+      this._lastSortedCombatCount = combatCount;
+    }
+
+    if (combatCount > 1 && this._pidSortDirty) {
+      // Lower PID attacks first when multiple attacks on same tick
+      combatStates.sort((a, b) => this.pidManager.comparePriority(a[0], b[0]));
+      this._pidSortDirty = false;
+    }
+
+    // PERFORMANCE: Process combat with frame budget awareness
+    // Combat ticks are critical gameplay - always process, but track budget
+    const frameBudget = this.world.frameBudget;
+    let processed = 0;
 
     for (const [entityId, combatState] of combatStates) {
+      // Check frame budget every 20 combatants (combat is time-critical, be lenient)
+      if (processed > 0 && processed % 20 === 0) {
+        if (frameBudget && !frameBudget.hasTimeRemaining(1)) {
+          // Over budget - log warning but don't skip combat (would break gameplay)
+          // This is a signal to optimize elsewhere
+          console.warn(
+            `[CombatSystem] Frame budget exhausted with ${combatStates.length - processed} combats remaining`,
+          );
+          // Continue processing - combat must complete for fairness
+        }
+      }
+
       if (!combatStatesMap.has(entityId)) {
         continue;
       }
@@ -1659,10 +1705,10 @@ export class CombatSystem extends SystemBase {
       if (combatState.inCombat && tickNumber >= combatState.combatEndTick) {
         const entityIdStr = String(entityId);
         this.endCombat({ entityId: entityIdStr });
+        processed++;
         continue;
       }
 
-      // Skip if not in combat or doesn't have valid target
       if (!combatState.inCombat || !combatState.targetId) continue;
 
       // OSRS-style: Check range EVERY tick and follow if needed (not just on attack ticks)
@@ -1671,10 +1717,11 @@ export class CombatSystem extends SystemBase {
         this.checkRangeAndFollow(combatState, tickNumber);
       }
 
-      // Check if this entity can attack on this tick
       if (tickNumber >= combatState.nextAttackTick) {
         this.processAutoAttackOnTick(combatState, tickNumber);
       }
+
+      processed++;
     }
   }
 
@@ -1700,7 +1747,6 @@ export class CombatSystem extends SystemBase {
       return;
     }
 
-    // Skip if not in combat or doesn't have valid target
     if (!combatState.inCombat || !combatState.targetId) return;
 
     // Only process mob attackers (not mobs being attacked)
@@ -1709,7 +1755,6 @@ export class CombatSystem extends SystemBase {
     // Process emote resets for this mob
     this.animationManager.processEntityEmoteReset(mobId, tickNumber);
 
-    // Check if this mob can attack on this tick
     if (tickNumber >= combatState.nextAttackTick) {
       this.processAutoAttackOnTick(combatState, tickNumber);
     }
@@ -1737,7 +1782,6 @@ export class CombatSystem extends SystemBase {
       return;
     }
 
-    // Skip if not in combat or doesn't have valid target
     if (!combatState.inCombat || !combatState.targetId) return;
 
     // Only process player attackers (not players being attacked)
@@ -1757,7 +1801,6 @@ export class CombatSystem extends SystemBase {
     // OSRS-style: Check range EVERY tick and follow if needed
     this.checkRangeAndFollow(combatState, tickNumber);
 
-    // Check if this player can attack on this tick
     if (tickNumber >= combatState.nextAttackTick) {
       this.processAutoAttackOnTick(combatState, tickNumber);
     }
@@ -1812,13 +1855,15 @@ export class CombatSystem extends SystemBase {
       combatState.attackerType === "player" &&
       combatState.targetType === "player"
     ) {
-      const zoneSystem =
-        this.world.getSystem<ZoneDetectionSystem>("zone-detection");
-      if (zoneSystem) {
+      // OPTIMIZATION: Use cached zoneDetectionSystem
+      if (this.zoneDetectionSystem) {
         const attackerPos = getEntityPosition(attacker);
         if (
           attackerPos &&
-          !zoneSystem.isPvPEnabled({ x: attackerPos.x, z: attackerPos.z })
+          !this.zoneDetectionSystem.isPvPEnabled({
+            x: attackerPos.x,
+            z: attackerPos.z,
+          })
         ) {
           // Attacker is in safe zone - end combat instead of extending
           return; // Don't extend timeout - let combat expire
@@ -1886,12 +1931,10 @@ export class CombatSystem extends SystemBase {
       return null;
     }
 
-    // Check if attacker is still alive (prevent dead attackers from auto-attacking)
     if (!this.entityResolver.isAlive(attacker, combatState.attackerType)) {
       return null;
     }
 
-    // Check if target is still alive
     if (!this.entityResolver.isAlive(target, combatState.targetType)) {
       return null;
     }

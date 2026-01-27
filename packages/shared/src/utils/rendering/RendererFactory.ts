@@ -65,11 +65,14 @@ export interface RendererOptions {
   powerPreference?: "high-performance" | "low-power" | "default";
   preserveDrawingBuffer?: boolean;
   canvas?: HTMLCanvasElement;
+  /** If true, will try to use OffscreenCanvas for WebGL fallback (experimental) */
+  useOffscreenCanvas?: boolean;
 }
 
 export interface RenderingCapabilities {
   supportsWebGPU: boolean;
   supportsWebGL: boolean;
+  supportsOffscreenCanvas: boolean;
   backend: RendererBackend;
 }
 
@@ -109,6 +112,38 @@ export function isWebGLAvailable(): boolean {
 }
 
 /**
+ * Check if OffscreenCanvas is supported for WebGL rendering.
+ * This allows moving rendering to a web worker to reduce main thread jank.
+ */
+export function isOffscreenCanvasAvailable(): boolean {
+  if (typeof OffscreenCanvas === "undefined") {
+    return false;
+  }
+
+  // Check if we can create a WebGL context on OffscreenCanvas
+  try {
+    const testCanvas = new OffscreenCanvas(1, 1);
+    const gl =
+      testCanvas.getContext("webgl2") || testCanvas.getContext("webgl");
+    return gl !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if an HTMLCanvas can be transferred to OffscreenCanvas.
+ * This is required for worker-based rendering.
+ */
+export function canTransferCanvas(
+  canvas: HTMLCanvasElement,
+): canvas is HTMLCanvasElement & {
+  transferControlToOffscreen: () => OffscreenCanvas;
+} {
+  return "transferControlToOffscreen" in canvas;
+}
+
+/**
  * Detect rendering capabilities.
  *
  * Note: Some platforms (notably WKWebView) may have a newer Safari installed but still
@@ -116,10 +151,13 @@ export function isWebGLAvailable(): boolean {
  */
 export async function detectRenderingCapabilities(): Promise<RenderingCapabilities> {
   const supportsWebGPU = await isWebGPUAvailable();
+  const supportsOffscreenCanvas = isOffscreenCanvasAvailable();
+
   if (supportsWebGPU) {
     return {
       supportsWebGPU: true,
       supportsWebGL: true,
+      supportsOffscreenCanvas,
       backend: "webgpu",
     };
   }
@@ -129,6 +167,7 @@ export async function detectRenderingCapabilities(): Promise<RenderingCapabiliti
     return {
       supportsWebGPU: false,
       supportsWebGL: true,
+      supportsOffscreenCanvas,
       backend: "webgl",
     };
   }

@@ -529,4 +529,192 @@ describe("CollisionMatrix", () => {
       expect(grid[0][0]).toBe("@");
     });
   });
+
+  describe("getZoneKeys", () => {
+    it("returns empty array for empty matrix", () => {
+      expect(matrix.getZoneKeys()).toEqual([]);
+    });
+
+    it("returns zone coordinates for allocated zones", () => {
+      matrix.setFlags(0, 0, CollisionFlag.BLOCKED);
+      const keys = matrix.getZoneKeys();
+      expect(keys.length).toBe(1);
+      expect(keys[0]).toEqual({ zoneX: 0, zoneZ: 0 });
+    });
+
+    it("returns correct coordinates for positive zones", () => {
+      // Zone at x=100, z=200 (zone coords depend on ZONE_SIZE)
+      matrix.setFlags(ZONE_SIZE * 3, ZONE_SIZE * 5, CollisionFlag.BLOCKED);
+      const keys = matrix.getZoneKeys();
+      expect(keys.length).toBe(1);
+      expect(keys[0]).toEqual({ zoneX: 3, zoneZ: 5 });
+    });
+
+    it("returns correct coordinates for negative zones", () => {
+      matrix.setFlags(-ZONE_SIZE, -ZONE_SIZE, CollisionFlag.BLOCKED);
+      const keys = matrix.getZoneKeys();
+      expect(keys.length).toBe(1);
+      expect(keys[0]).toEqual({ zoneX: -1, zoneZ: -1 });
+    });
+
+    it("returns correct coordinates for mixed positive/negative zones", () => {
+      matrix.setFlags(-ZONE_SIZE * 2, ZONE_SIZE * 3, CollisionFlag.BLOCKED);
+      const keys = matrix.getZoneKeys();
+      expect(keys.length).toBe(1);
+      expect(keys[0]).toEqual({ zoneX: -2, zoneZ: 3 });
+    });
+
+    it("handles large positive zone coordinates", () => {
+      // Large positive zone (near int32 max range)
+      const largeCoord = ZONE_SIZE * 10000;
+      matrix.setFlags(largeCoord, largeCoord, CollisionFlag.BLOCKED);
+      const keys = matrix.getZoneKeys();
+      expect(keys.length).toBe(1);
+      expect(keys[0]).toEqual({ zoneX: 10000, zoneZ: 10000 });
+    });
+
+    it("handles large negative zone coordinates", () => {
+      const largeCoord = -ZONE_SIZE * 10000;
+      matrix.setFlags(largeCoord, largeCoord, CollisionFlag.BLOCKED);
+      const keys = matrix.getZoneKeys();
+      expect(keys.length).toBe(1);
+      expect(keys[0]).toEqual({ zoneX: -10000, zoneZ: -10000 });
+    });
+
+    it("returns all zone keys when multiple zones exist", () => {
+      matrix.setFlags(0, 0, CollisionFlag.BLOCKED);
+      matrix.setFlags(ZONE_SIZE * 2, ZONE_SIZE * 3, CollisionFlag.WATER);
+      matrix.setFlags(-ZONE_SIZE, -ZONE_SIZE * 2, CollisionFlag.STEEP_SLOPE);
+
+      const keys = matrix.getZoneKeys();
+      expect(keys.length).toBe(3);
+
+      // Convert to set of strings for easier comparison
+      const keySet = new Set(keys.map((k) => `${k.zoneX},${k.zoneZ}`));
+      expect(keySet.has("0,0")).toBe(true);
+      expect(keySet.has("2,3")).toBe(true);
+      expect(keySet.has("-1,-2")).toBe(true);
+    });
+  });
+
+  describe("zone cache consistency", () => {
+    it("maintains consistent state across sequential lookups", () => {
+      // Fill multiple zones
+      for (let i = 0; i < 10; i++) {
+        matrix.setFlags(i * ZONE_SIZE, i * ZONE_SIZE, CollisionFlag.BLOCKED);
+      }
+
+      // Sequential lookups should all succeed
+      for (let i = 0; i < 10; i++) {
+        expect(matrix.getFlags(i * ZONE_SIZE, i * ZONE_SIZE)).toBe(
+          CollisionFlag.BLOCKED,
+        );
+      }
+    });
+
+    it("clear() resets cache state", () => {
+      matrix.setFlags(0, 0, CollisionFlag.BLOCKED);
+      matrix.setFlags(ZONE_SIZE, ZONE_SIZE, CollisionFlag.WATER);
+
+      // Access tiles to potentially warm any internal cache
+      matrix.getFlags(0, 0);
+      matrix.getFlags(ZONE_SIZE, ZONE_SIZE);
+
+      matrix.clear();
+
+      // After clear, all should return 0
+      expect(matrix.getFlags(0, 0)).toBe(0);
+      expect(matrix.getFlags(ZONE_SIZE, ZONE_SIZE)).toBe(0);
+      expect(matrix.getZoneCount()).toBe(0);
+    });
+
+    it("handles interleaved reads and writes to different zones", () => {
+      // Interleave operations to stress cache
+      matrix.setFlags(0, 0, CollisionFlag.BLOCKED);
+      expect(matrix.getFlags(ZONE_SIZE * 5, ZONE_SIZE * 5)).toBe(0);
+      matrix.setFlags(ZONE_SIZE * 5, ZONE_SIZE * 5, CollisionFlag.WATER);
+      expect(matrix.getFlags(0, 0)).toBe(CollisionFlag.BLOCKED);
+      matrix.setFlags(-ZONE_SIZE, -ZONE_SIZE, CollisionFlag.STEEP_SLOPE);
+      expect(matrix.getFlags(ZONE_SIZE * 5, ZONE_SIZE * 5)).toBe(
+        CollisionFlag.WATER,
+      );
+      expect(matrix.getFlags(-ZONE_SIZE, -ZONE_SIZE)).toBe(
+        CollisionFlag.STEEP_SLOPE,
+      );
+    });
+  });
+
+  describe("high-volume operations (performance sanity)", () => {
+    it("handles 1000 sequential tile operations", () => {
+      const start = Date.now();
+
+      for (let i = 0; i < 1000; i++) {
+        matrix.setFlags(i, 0, CollisionFlag.BLOCKED);
+      }
+
+      for (let i = 0; i < 1000; i++) {
+        expect(matrix.getFlags(i, 0)).toBe(CollisionFlag.BLOCKED);
+      }
+
+      const elapsed = Date.now() - start;
+      // Should complete in under 100ms
+      expect(elapsed).toBeLessThan(100);
+    });
+
+    it("handles scattered tiles across many zones", () => {
+      const start = Date.now();
+
+      // Scatter tiles across 100 different zones
+      for (let i = 0; i < 100; i++) {
+        matrix.setFlags(
+          i * ZONE_SIZE + 5,
+          i * ZONE_SIZE + 5,
+          CollisionFlag.BLOCKED,
+        );
+      }
+
+      expect(matrix.getZoneCount()).toBe(100);
+
+      // Verify all can be read back
+      for (let i = 0; i < 100; i++) {
+        expect(matrix.getFlags(i * ZONE_SIZE + 5, i * ZONE_SIZE + 5)).toBe(
+          CollisionFlag.BLOCKED,
+        );
+      }
+
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeLessThan(100);
+    });
+  });
+
+  describe("edge cases for isBlocked", () => {
+    it("handles stationary movement (dx=0, dz=0)", () => {
+      // Moving to same tile should not be blocked
+      expect(matrix.isBlocked(5, 5, 5, 5)).toBe(false);
+    });
+
+    it("handles long-distance movement (multiple tiles)", () => {
+      // isBlocked should still work for non-adjacent tiles
+      matrix.setFlags(100, 100, CollisionFlag.BLOCKED);
+      expect(matrix.isBlocked(0, 0, 100, 100)).toBe(true);
+    });
+
+    it("handles destination at exact zone boundary", () => {
+      matrix.setFlags(ZONE_SIZE, 0, CollisionFlag.BLOCKED);
+      expect(matrix.isBlocked(ZONE_SIZE - 1, 0, ZONE_SIZE, 0)).toBe(true);
+    });
+
+    it("handles source at exact zone boundary", () => {
+      matrix.setFlags(ZONE_SIZE + 1, 0, CollisionFlag.BLOCKED);
+      expect(matrix.isBlocked(ZONE_SIZE, 0, ZONE_SIZE + 1, 0)).toBe(true);
+    });
+
+    it("handles movement crossing zone boundary (both zones blocked)", () => {
+      matrix.setFlags(ZONE_SIZE - 1, 0, CollisionFlag.WALL_EAST);
+      matrix.setFlags(ZONE_SIZE, 0, CollisionFlag.WALL_WEST);
+      // Should be blocked in both directions
+      expect(matrix.isBlocked(ZONE_SIZE - 1, 0, ZONE_SIZE, 0)).toBe(true);
+      expect(matrix.isBlocked(ZONE_SIZE, 0, ZONE_SIZE - 1, 0)).toBe(true);
+    });
+  });
 });

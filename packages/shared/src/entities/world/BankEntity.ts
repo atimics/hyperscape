@@ -210,6 +210,13 @@ export class BankEntity extends InteractableEntity {
           this.node.userData.bankId = this.bankId;
         }
 
+        // Initialize HLOD impostor support
+        await this.initHLOD(`station_bank_${modelPath}`, {
+          category: "station",
+          atlasSize: 1024,
+          hemisphere: true,
+        });
+
         return;
       } catch (error) {
         console.warn(

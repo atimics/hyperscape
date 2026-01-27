@@ -272,9 +272,10 @@ export class HyperscapeService
     }
 
     // Try to connect with retry logic (ElizaOS expects services to be ready when start() completes)
-    // Retry for up to 25 seconds (within ElizaOS's 30-second service startup timeout)
-    const maxRetries = 5;
-    const retryDelay = 5000; // 5 seconds between retries
+    // Retry for up to 12 seconds (well within ElizaOS's 30-second service startup timeout)
+    // Reduced from 5×5s=25s to 3×4s=12s to avoid timeout edge cases during shutdown
+    const maxRetries = 3;
+    const retryDelay = 4000; // 4 seconds between retries
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -438,9 +439,8 @@ export class HyperscapeService
         };
 
         // Import all available actions for matching
-        const { moveToAction, stopMovementAction } = await import(
-          "../actions/movement.js"
-        );
+        const { moveToAction, stopMovementAction } =
+          await import("../actions/movement.js");
         const {
           pickupItemAction,
           equipItemAction,
@@ -852,6 +852,45 @@ Respond with ONLY the action name, nothing else.`;
     this.hasReceivedSnapshot = false;
 
     return new Promise((resolve, reject) => {
+      // Connection timeout - fail fast to avoid hitting ElizaOS's 30s service registration timeout
+      // With 3 retries x 4s delay, we need each connection attempt to complete within 6s
+      // Total worst case: 6 + 4 + 6 + 4 + 6 = 26 seconds, well within 30s limit
+      const CONNECTION_TIMEOUT_MS = 6000;
+      let connectionTimeout: NodeJS.Timeout | null = null;
+      let hasSettled = false;
+
+      const cleanup = () => {
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          connectionTimeout = null;
+        }
+      };
+
+      const settleResolve = () => {
+        if (hasSettled) return;
+        hasSettled = true;
+        cleanup();
+        resolve();
+      };
+
+      const settleReject = (error: Error) => {
+        if (hasSettled) return;
+        hasSettled = true;
+        cleanup();
+        this.connectionState.connecting = false;
+        // Clean up the WebSocket if it exists
+        if (this.ws) {
+          try {
+            this.ws.removeAllListeners();
+            this.ws.close();
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+          this.ws = null;
+        }
+        reject(error);
+      };
+
       try {
         // Build WebSocket URL with auth tokens
         const wsUrl = this.buildWebSocketUrl(serverUrl);
@@ -860,6 +899,15 @@ Respond with ONLY the action name, nothing else.`;
           `[HyperscapeService] Connecting to ${wsUrl.replace(/authToken=[^&]+/, "authToken=***")}`,
         );
         this.ws = new WebSocket(wsUrl);
+
+        // Set connection timeout
+        connectionTimeout = setTimeout(() => {
+          settleReject(
+            new Error(
+              `WebSocket connection timeout (${CONNECTION_TIMEOUT_MS}ms)`,
+            ),
+          );
+        }, CONNECTION_TIMEOUT_MS);
 
         // Add unique identifier to track this WebSocket
         const wsId = `WS-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -928,7 +976,7 @@ Respond with ONLY the action name, nothing else.`;
             );
           }
 
-          resolve();
+          settleResolve();
         });
 
         this.ws.on("message", (data: WebSocket.Data) => {
@@ -974,16 +1022,14 @@ Respond with ONLY the action name, nothing else.`;
 
         this.ws.on("error", (error: Error) => {
           logger.error("[HyperscapeService] WebSocket error:", error.message);
-          this.connectionState.connecting = false;
-          reject(error);
+          settleReject(error);
         });
       } catch (error) {
-        this.connectionState.connecting = false;
         logger.error(
           "[HyperscapeService] Failed to connect:",
           error instanceof Error ? error.message : String(error),
         );
-        reject(error);
+        settleReject(error instanceof Error ? error : new Error(String(error)));
       }
     });
   }

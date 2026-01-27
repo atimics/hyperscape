@@ -1,5 +1,19 @@
 // Math utilities for movement calculations
-import { THREE } from "@hyperscape/shared";
+import {
+  THREE,
+  BFSPathfinder,
+  worldToTile,
+  tileToWorld,
+} from "@hyperscape/shared";
+import type {
+  World,
+  Player,
+  Vector3,
+  TileCoord,
+  WalkabilityChecker,
+} from "@hyperscape/shared";
+import { Entity } from "@hyperscape/shared";
+import { EventEmitter } from "events";
 
 // Pre-allocated temp objects for hot path optimizations (avoid GC pressure)
 // Each operation gets its own temp vector to allow safe chaining without overwrites
@@ -41,9 +55,6 @@ const MathUtils = {
       a.z + (b.z - a.z) * t,
     ),
 };
-import type { World, Player, Vector3 } from "@hyperscape/shared";
-import { Entity } from "@hyperscape/shared";
-import { EventEmitter } from "events";
 
 interface MovablePlayer extends Entity {
   id: string;
@@ -55,19 +66,6 @@ interface MovablePlayer extends Entity {
   speed?: number;
 }
 
-// Movement player interface
-interface _MovementPlayer extends Player {
-  // Additional movement properties can be added here
-}
-
-interface PathNode {
-  position: Vector3;
-  f: number;
-  g: number;
-  h: number;
-  parent?: PathNode;
-}
-
 export class PlayerMovementSystem extends EventEmitter {
   private world: World;
   private movingPlayers: Map<string, { target: Vector3; path?: Vector3[] }> =
@@ -75,6 +73,9 @@ export class PlayerMovementSystem extends EventEmitter {
   private lastUpdateTime: number = Date.now();
   private updateInterval: number = 50; // Network update interval in ms
   private lastNetworkUpdate: number = Date.now();
+
+  /** Shared BFSPathfinder instance - same algorithm used by server for OSRS-accurate movement */
+  private pathfinder: BFSPathfinder = new BFSPathfinder();
 
   constructor(world: World) {
     super();
@@ -203,168 +204,49 @@ export class PlayerMovementSystem extends EventEmitter {
     }
   }
 
+  /**
+   * Find a path from start to end using the shared BFSPathfinder.
+   *
+   * Uses the same OSRS-accurate pathfinding algorithm as the server:
+   * - Naive diagonal pathing first (walk diagonally toward target, then straight)
+   * - Falls back to BFS if obstacles block the naive path
+   *
+   * @see packages/shared/src/systems/shared/movement/BFSPathfinder.ts
+   */
   findPath(start: Vector3, end: Vector3): Vector3[] | null {
-    // Simple A* pathfinding implementation
-    const openSet: PathNode[] = [];
-    const closedSet: Set<string> = new Set();
-    const gridSize = 1; // 1 unit grid
+    // Convert world coordinates to tile coordinates
+    const startTile = worldToTile(start.x, start.z);
+    const endTile = worldToTile(end.x, end.z);
 
-    const startNode: PathNode = {
-      position: this.snapToGrid(start, gridSize),
-      f: 0,
-      g: 0,
-      h: MathUtils.distance2D(start, end),
+    // Create walkability checker that uses world collision
+    const isWalkable: WalkabilityChecker = (
+      tile: TileCoord,
+      _fromTile?: TileCoord,
+    ): boolean => {
+      // Convert tile back to world position for collision check
+      const worldPos = tileToWorld(tile);
+      return !this.checkWorldCollision(worldPos as Vector3);
     };
 
-    openSet.push(startNode);
+    // Use shared BFSPathfinder (same as server uses for player movement)
+    const tilePath = this.pathfinder.findPath(startTile, endTile, isWalkable);
 
-    while (openSet.length > 0) {
-      // Get node with lowest f score
-      openSet.sort((a, b) => a.f - b.f);
-      const current = openSet.shift()!;
-
-      // Check if reached goal
-      if (MathUtils.distance2D(current.position, end) < gridSize) {
-        return this.reconstructPath(current);
-      }
-
-      const key = `${Math.round(current.position.x)},${Math.round(current.position.z)}`;
-      closedSet.add(key);
-
-      // Check neighbors
-      const neighbors = this.getNeighbors(current.position, gridSize);
-
-      for (const neighborPos of neighbors) {
-        const neighborKey = `${Math.round(neighborPos.x)},${Math.round(neighborPos.z)}`;
-        if (closedSet.has(neighborKey)) continue;
-
-        // Check if walkable
-        if (this.checkWorldCollision(neighborPos)) continue;
-
-        const g =
-          current.g + MathUtils.distance2D(current.position, neighborPos);
-        const h = MathUtils.distance2D(neighborPos, end);
-        const f = g + h;
-
-        // Check if already in open set
-        const existing = openSet.find(
-          (n) =>
-            Math.abs(n.position.x - neighborPos.x) < 0.1 &&
-            Math.abs(n.position.z - neighborPos.z) < 0.1,
-        );
-
-        if (existing && existing.g <= g) continue;
-
-        const neighbor: PathNode = {
-          position: neighborPos,
-          f,
-          g,
-          h,
-          parent: current,
-        };
-
-        if (existing) {
-          // Update existing node
-          const index = openSet.indexOf(existing);
-          openSet[index] = neighbor;
-        } else {
-          openSet.push(neighbor);
-        }
-      }
-
-      // Limit search
-      if (closedSet.size > 1000) {
-        return null; // Path too complex
-      }
+    // No path found
+    if (tilePath.length === 0) {
+      return null;
     }
 
-    return null; // No path found
-  }
+    // Convert tile path back to world coordinates
+    const worldPath: Vector3[] = tilePath.map((tile) => {
+      const worldPos = tileToWorld(tile);
+      return {
+        x: worldPos.x,
+        y: start.y, // Preserve original Y height
+        z: worldPos.z,
+      } as Vector3;
+    });
 
-  private snapToGrid(pos: Vector3, gridSize: number): Vector3 {
-    return {
-      x: Math.round(pos.x / gridSize) * gridSize,
-      y: pos.y,
-      z: Math.round(pos.z / gridSize) * gridSize,
-    } as Vector3;
-  }
-
-  private getNeighbors(pos: Vector3, gridSize: number): Vector3[] {
-    const neighbors: Vector3[] = [];
-    const directions = [
-      { x: gridSize, z: 0 }, // Right
-      { x: -gridSize, z: 0 }, // Left
-      { x: 0, z: gridSize }, // Down
-      { x: 0, z: -gridSize }, // Up
-      { x: gridSize, z: gridSize }, // Diagonal
-      { x: -gridSize, z: gridSize },
-      { x: gridSize, z: -gridSize },
-      { x: -gridSize, z: -gridSize },
-    ];
-
-    for (const dir of directions) {
-      neighbors.push({
-        x: pos.x + dir.x,
-        y: pos.y,
-        z: pos.z + dir.z,
-      } as Vector3);
-    }
-
-    return neighbors;
-  }
-
-  private reconstructPath(node: PathNode): Vector3[] {
-    const path: Vector3[] = [];
-    let current: PathNode | undefined = node;
-
-    while (current) {
-      path.unshift(current.position);
-      current = current.parent;
-    }
-
-    // Smooth path
-    return this.smoothPath(path);
-  }
-
-  private smoothPath(path: Vector3[]): Vector3[] {
-    if (path.length <= 2) return path;
-
-    const smoothed: Vector3[] = [path[0]];
-    let current = 0;
-
-    while (current < path.length - 1) {
-      let furthest = current + 1;
-
-      // Find furthest point we can reach directly
-      for (let i = current + 2; i < path.length; i++) {
-        if (this.hasDirectPath(path[current], path[i])) {
-          furthest = i;
-        } else {
-          break;
-        }
-      }
-
-      smoothed.push(path[furthest]);
-      current = furthest;
-    }
-
-    return smoothed;
-  }
-
-  private hasDirectPath(start: Vector3, end: Vector3): boolean {
-    // Check if direct path is clear
-    const steps = Math.ceil(MathUtils.distance2D(start, end));
-
-    for (let i = 1; i < steps; i++) {
-      const t = i / steps;
-      const pos = MathUtils.lerp(start, end, t);
-
-      if (this.checkWorldCollision(pos)) {
-        return false;
-      }
-    }
-
-    return true;
+    return worldPath;
   }
 
   private updatePlayerVelocity(player: MovablePlayer, target: Vector3): void {

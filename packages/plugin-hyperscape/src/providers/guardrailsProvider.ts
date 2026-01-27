@@ -17,6 +17,7 @@ import type {
   Memory,
   State,
   ProviderResult,
+  ProviderDataRecord,
 } from "@elizaos/core";
 import type { HyperscapeService } from "../services/HyperscapeService.js";
 import type { InventoryItem, Entity } from "../types.js";
@@ -45,7 +46,6 @@ export interface GuardrailsData {
   softConstraints: string[];
   activeWarnings: Warning[];
   blockedActions: BlockedAction[];
-  [key: string]: unknown;
 }
 
 // ============================================================================
@@ -512,7 +512,8 @@ export const guardrailsProvider: Provider = {
         // Include full data in values so it's accessible in composed state
         guardrailsData: data,
       },
-      data,
+      // Type assertion needed due to ElizaOS ProviderDataRecord type restrictions
+      data: data as unknown as ProviderDataRecord,
     };
   },
 };

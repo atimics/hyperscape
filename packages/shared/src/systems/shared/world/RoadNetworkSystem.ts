@@ -1,7 +1,15 @@
 /**
  * RoadNetworkSystem - Procedural Road Generation
- * Uses MST + A* pathfinding + Chaikin smoothing for organic roads.
- * Configuration can be loaded from world-config.json via DataManager.
+ * Uses MST + BFS pathfinding + Chaikin smoothing for organic roads.
+ *
+ * Configuration loaded from world-config.json via DataManager.
+ * IMPORTANT: DataManager.loadManifests*() must be called BEFORE RoadNetworkSystem.init()
+ * otherwise default configuration values will be used.
+ *
+ * **Worker Optimization:**
+ * - Path smoothing (Chaikin algorithm) is offloaded to ProcgenWorker
+ * - BFS pathfinding remains on main thread due to terrain height dependency
+ * - Future: Could pre-compute passability grid and move BFS to worker
  */
 
 import { System } from "../infrastructure/System";
@@ -18,6 +26,10 @@ import type { TownSystem } from "./TownSystem";
 import { EventType } from "../../../types/events";
 import { Logger } from "../../../utils/Logger";
 import { DataManager } from "../../../data/DataManager";
+import {
+  smoothPathAsync,
+  isProcgenWorkerAvailable,
+} from "../../../utils/workers";
 
 // Default configuration values
 const DEFAULTS = {
@@ -115,89 +127,11 @@ const WATER_THRESHOLD = 5.4;
 const dist2D = (x1: number, z1: number, x2: number, z2: number): number =>
   Math.sqrt((x2 - x1) ** 2 + (z2 - z1) ** 2);
 
-interface PathNode {
+/** Simple BFS path node */
+interface BFSNode {
   x: number;
   z: number;
-  g: number;
-  h: number;
-  f: number;
-  parent: PathNode | null;
-  heapIndex: number;
-}
-
-/**
- * Binary min-heap for efficient priority queue operations.
- * O(log n) insert and extract-min instead of O(n).
- */
-class PathNodeHeap {
-  private nodes: PathNode[] = [];
-
-  get length(): number {
-    return this.nodes.length;
-  }
-
-  push(node: PathNode): void {
-    node.heapIndex = this.nodes.length;
-    this.nodes.push(node);
-    this.bubbleUp(this.nodes.length - 1);
-  }
-
-  pop(): PathNode | undefined {
-    if (this.nodes.length === 0) return undefined;
-    const result = this.nodes[0];
-    const last = this.nodes.pop()!;
-    if (this.nodes.length > 0) {
-      this.nodes[0] = last;
-      last.heapIndex = 0;
-      this.bubbleDown(0);
-    }
-    return result;
-  }
-
-  updateNode(node: PathNode): void {
-    this.bubbleUp(node.heapIndex);
-    this.bubbleDown(node.heapIndex);
-  }
-
-  private bubbleUp(index: number): void {
-    const node = this.nodes[index];
-    while (index > 0) {
-      const parentIndex = (index - 1) >> 1;
-      const parent = this.nodes[parentIndex];
-      if (node.f >= parent.f) break;
-      this.nodes[index] = parent;
-      parent.heapIndex = index;
-      index = parentIndex;
-    }
-    this.nodes[index] = node;
-    node.heapIndex = index;
-  }
-
-  private bubbleDown(index: number): void {
-    const node = this.nodes[index];
-    const length = this.nodes.length;
-    const halfLength = length >> 1;
-
-    while (index < halfLength) {
-      const leftIndex = (index << 1) + 1;
-      const rightIndex = leftIndex + 1;
-      let bestIndex = leftIndex;
-      let best = this.nodes[leftIndex];
-
-      if (rightIndex < length && this.nodes[rightIndex].f < best.f) {
-        bestIndex = rightIndex;
-        best = this.nodes[rightIndex];
-      }
-
-      if (node.f <= best.f) break;
-
-      this.nodes[index] = best;
-      best.heapIndex = index;
-      index = bestIndex;
-    }
-    this.nodes[index] = node;
-    node.heapIndex = index;
-  }
+  parent: BFSNode | null;
 }
 
 interface Edge {
@@ -265,13 +199,18 @@ export class RoadNetworkSystem extends System {
       return;
     }
 
-    this.generateRoadNetwork(towns);
+    // Generate roads - uses worker for path smoothing when available
+    const startTime = performance.now();
+    await this.generateRoadNetworkAsync(towns);
+    const elapsed = performance.now() - startTime;
+
     this.validateNetworkConnectivity(towns);
-    this.buildTileCache();
+    await this.buildTileCacheAsync();
 
     Logger.system(
       "RoadNetworkSystem",
-      `Generated ${this.roads.length} roads connecting ${towns.length} towns`,
+      `Generated ${this.roads.length} roads connecting ${towns.length} towns in ${elapsed.toFixed(0)}ms` +
+        (isProcgenWorkerAvailable() ? " (worker-assisted)" : ""),
     );
     this.world.emit(EventType.ROADS_GENERATED, {
       roadCount: this.roads.length,
@@ -327,6 +266,50 @@ export class RoadNetworkSystem extends System {
     this.randomState = seed;
   }
 
+  /**
+   * Generate road network asynchronously.
+   * Uses worker for path smoothing when available.
+   */
+  private async generateRoadNetworkAsync(
+    towns: ProceduralTown[],
+  ): Promise<void> {
+    const edges = this.calculateAllEdges(towns);
+    const mstEdges = this.buildMST(towns, edges);
+    const extraEdges = this.selectExtraEdges(edges, mstEdges, towns.length);
+    const allEdges = [...mstEdges, ...extraEdges];
+    this.roads = [];
+
+    // Process roads in parallel batches for better performance
+    const BATCH_SIZE = 4;
+    for (let i = 0; i < allEdges.length; i += BATCH_SIZE) {
+      const batch = allEdges.slice(i, i + BATCH_SIZE);
+      const roadPromises = batch.map(async (edge, batchIndex) => {
+        const roadIndex = i + batchIndex;
+        const fromTown = towns.find((t) => t.id === edge.fromId);
+        const toTown = towns.find((t) => t.id === edge.toId);
+        if (!fromTown || !toTown) return null;
+
+        return this.generateRoadAsync(fromTown, toTown, roadIndex);
+      });
+
+      const results = await Promise.all(roadPromises);
+      for (let j = 0; j < results.length; j++) {
+        const road = results[j];
+        if (road) {
+          const edge = batch[j];
+          const fromTown = towns.find((t) => t.id === edge.fromId);
+          const toTown = towns.find((t) => t.id === edge.toId);
+          if (fromTown && toTown) {
+            this.roads.push(road);
+            fromTown.connectedRoads.push(road.id);
+            toTown.connectedRoads.push(road.id);
+          }
+        }
+      }
+    }
+  }
+
+  /** @deprecated Use generateRoadNetworkAsync instead */
   private generateRoadNetwork(towns: ProceduralTown[]): void {
     const edges = this.calculateAllEdges(towns);
     const mstEdges = this.buildMST(towns, edges);
@@ -422,16 +405,101 @@ export class RoadNetworkSystem extends System {
     );
   }
 
+  /**
+   * Generate a single road asynchronously.
+   * Uses worker for path smoothing when available.
+   */
+  private async generateRoadAsync(
+    fromTown: ProceduralTown,
+    toTown: ProceduralTown,
+    roadIndex: number,
+  ): Promise<ProceduralRoad | null> {
+    // Find the best entry points for each town (closest to the other town)
+    const fromEntry = this.findBestEntryPoint(fromTown, toTown.position);
+    const toEntry = this.findBestEntryPoint(toTown, fromTown.position);
+
+    // BFS pathfinding - async with yielding to prevent main thread blocking
+    // Still on main thread due to terrain height dependency
+    // TODO: Could pre-compute passability grid and move to worker entirely
+    const rawPath = await this.findPathAsync(
+      fromEntry.x,
+      fromEntry.z,
+      toEntry.x,
+      toEntry.z,
+    );
+    if (rawPath.length < 2) {
+      Logger.systemWarn(
+        "RoadNetworkSystem",
+        `No path between ${fromTown.name} and ${toTown.name}`,
+      );
+      return null;
+    }
+
+    // Try to smooth path using worker (Chaikin algorithm offloaded)
+    let smoothedPath: RoadPathPoint[];
+    if (isProcgenWorkerAvailable()) {
+      const smoothResult = await smoothPathAsync(
+        rawPath.map((p) => ({ x: p.x, z: p.z })),
+        {
+          iterations: this.config.smoothingIterations,
+          noiseScale: this.config.noiseDisplacementScale,
+          noiseStrength: this.config.noiseDisplacementStrength,
+          seed: this.seed + roadIndex * 7793,
+        },
+      );
+
+      if (smoothResult) {
+        // Add Y coordinates from terrain (requires main thread)
+        smoothedPath = smoothResult.path.map((p) => ({
+          x: p.x,
+          z: p.z,
+          y: this.terrainSystem!.getHeightAt(p.x, p.z),
+        }));
+      } else {
+        // Fallback to sync smoothing
+        smoothedPath = this.smoothPath(rawPath, roadIndex);
+      }
+    } else {
+      // No worker available - use sync path
+      smoothedPath = this.smoothPath(rawPath, roadIndex);
+    }
+
+    let totalLength = 0;
+    for (let i = 1; i < smoothedPath.length; i++) {
+      totalLength += dist2D(
+        smoothedPath[i - 1].x,
+        smoothedPath[i - 1].z,
+        smoothedPath[i].x,
+        smoothedPath[i].z,
+      );
+    }
+
+    return {
+      id: `road_${roadIndex}`,
+      fromTownId: fromTown.id,
+      toTownId: toTown.id,
+      path: smoothedPath,
+      width: this.config.roadWidth,
+      material: "dirt",
+      length: totalLength,
+    };
+  }
+
+  /** @deprecated Use generateRoadAsync instead */
   private generateRoad(
     fromTown: ProceduralTown,
     toTown: ProceduralTown,
     roadIndex: number,
   ): ProceduralRoad | null {
+    // Find the best entry points for each town (closest to the other town)
+    const fromEntry = this.findBestEntryPoint(fromTown, toTown.position);
+    const toEntry = this.findBestEntryPoint(toTown, fromTown.position);
+
     const rawPath = this.findPath(
-      fromTown.position.x,
-      fromTown.position.z,
-      toTown.position.x,
-      toTown.position.z,
+      fromEntry.x,
+      fromEntry.z,
+      toEntry.x,
+      toEntry.z,
     );
     if (rawPath.length < 2) {
       Logger.systemWarn(
@@ -463,141 +531,220 @@ export class RoadNetworkSystem extends System {
     };
   }
 
+  /**
+   * Find the best entry point for a town when connecting to a target position.
+   * Returns the entry point position closest to the target, or the town center
+   * offset toward the target if no entry points exist.
+   */
+  private findBestEntryPoint(
+    town: ProceduralTown,
+    targetPos: { x: number; z: number },
+  ): { x: number; z: number } {
+    const entryPoints = town.entryPoints;
+
+    if (!entryPoints || entryPoints.length === 0) {
+      // No entry points - calculate position at edge of town toward target
+      const dx = targetPos.x - town.position.x;
+      const dz = targetPos.z - town.position.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist < 1) return { x: town.position.x, z: town.position.z };
+
+      // Return position at safe zone edge toward target
+      const edgeDist = town.safeZoneRadius * 0.8;
+      return {
+        x: town.position.x + (dx / dist) * edgeDist,
+        z: town.position.z + (dz / dist) * edgeDist,
+      };
+    }
+
+    // Find entry point closest to target direction
+    const angleToTarget = Math.atan2(
+      targetPos.z - town.position.z,
+      targetPos.x - town.position.x,
+    );
+
+    let bestEntry = entryPoints[0];
+    let bestAngleDiff = Math.PI * 2;
+
+    for (const entry of entryPoints) {
+      let angleDiff = Math.abs(entry.angle - angleToTarget);
+      if (angleDiff > Math.PI) angleDiff = Math.PI * 2 - angleDiff;
+
+      if (angleDiff < bestAngleDiff) {
+        bestAngleDiff = angleDiff;
+        bestEntry = entry;
+      }
+    }
+
+    return bestEntry.position;
+  }
+
+  /**
+   * BFS pathfinding - Simple and reliable path finding (sync version).
+   * Finds path avoiding water tiles without complex heuristics.
+   * @deprecated Use findPathAsync for non-blocking operation
+   */
   private findPath(
     startX: number,
     startZ: number,
     endX: number,
     endZ: number,
   ): RoadPathPoint[] {
-    const {
-      pathStepSize,
-      maxPathIterations,
-      costBase,
-      costWaterPenalty,
-      heuristicWeight,
-    } = this.config;
+    const { pathStepSize, maxPathIterations } = this.config;
     const gridStartX = Math.round(startX / pathStepSize) * pathStepSize;
     const gridStartZ = Math.round(startZ / pathStepSize) * pathStepSize;
     const gridEndX = Math.round(endX / pathStepSize) * pathStepSize;
     const gridEndZ = Math.round(endZ / pathStepSize) * pathStepSize;
 
-    const openHeap = new PathNodeHeap();
-    const openMap = new Map<string, PathNode>();
-    const closedSet = new Set<string>();
+    // BFS uses a simple queue (FIFO)
+    const queue: BFSNode[] = [];
+    const visited = new Set<string>();
 
-    const startH =
-      dist2D(gridStartX, gridStartZ, gridEndX, gridEndZ) *
-      costBase *
-      heuristicWeight;
-    const startNode: PathNode = {
+    const startNode: BFSNode = {
       x: gridStartX,
       z: gridStartZ,
-      g: 0,
-      h: startH,
-      f: startH,
       parent: null,
-      heapIndex: 0,
     };
-    openHeap.push(startNode);
-    openMap.set(`${gridStartX},${gridStartZ}`, startNode);
+    queue.push(startNode);
+    visited.add(`${gridStartX},${gridStartZ}`);
 
     let iterations = 0;
-    while (openHeap.length > 0 && iterations < maxPathIterations) {
+    while (queue.length > 0 && iterations < maxPathIterations) {
       iterations++;
-      const current = openHeap.pop()!;
-      const currentKey = `${current.x},${current.z}`;
-      openMap.delete(currentKey);
+      const current = queue.shift()!;
 
+      // Check if we reached the goal
       if (
         Math.abs(current.x - gridEndX) <= pathStepSize &&
         Math.abs(current.z - gridEndZ) <= pathStepSize
       ) {
-        return this.reconstructPath(current, endX, endZ);
+        return this.reconstructBFSPath(current, endX, endZ);
       }
 
-      closedSet.add(currentKey);
-
+      // Explore neighbors
       for (const dir of this.directions) {
         const neighborX = current.x + dir.dx;
         const neighborZ = current.z + dir.dz;
         const neighborKey = `${neighborX},${neighborZ}`;
-        if (closedSet.has(neighborKey)) continue;
 
-        const moveCost = this.calculateMovementCost(
-          current.x,
-          current.z,
-          neighborX,
-          neighborZ,
-        );
-        if (moveCost >= costWaterPenalty) continue;
+        if (visited.has(neighborKey)) continue;
 
-        const tentativeG = current.g + moveCost;
-        const existing = openMap.get(neighborKey);
+        // Check if tile is passable (not water)
+        if (!this.isPassable(neighborX, neighborZ)) continue;
 
-        if (!existing) {
-          const h =
-            dist2D(neighborX, neighborZ, gridEndX, gridEndZ) *
-            costBase *
-            heuristicWeight;
-          const neighbor: PathNode = {
-            x: neighborX,
-            z: neighborZ,
-            g: tentativeG,
-            h,
-            f: tentativeG + h,
-            parent: current,
-            heapIndex: 0,
-          };
-          openHeap.push(neighbor);
-          openMap.set(neighborKey, neighbor);
-        } else if (tentativeG < existing.g) {
-          existing.g = tentativeG;
-          existing.f = tentativeG + existing.h;
-          existing.parent = current;
-          openHeap.updateNode(existing);
-        }
+        visited.add(neighborKey);
+        queue.push({
+          x: neighborX,
+          z: neighborZ,
+          parent: current,
+        });
       }
     }
 
+    // BFS completed without finding path - use direct path as fallback
     Logger.systemWarn(
       "RoadNetworkSystem",
-      `A* fallback after ${iterations} iterations`,
+      `BFS completed in ${iterations} iterations, using direct path`,
     );
     return this.generateDirectPath(startX, startZ, endX, endZ);
   }
 
-  private calculateMovementCost(
-    fromX: number,
-    fromZ: number,
-    toX: number,
-    toZ: number,
-  ): number {
-    if (!this.terrainSystem) throw new Error("terrainSystem required");
+  /**
+   * Async BFS pathfinding with yielding to prevent main thread blocking.
+   * Yields every YIELD_INTERVAL iterations to allow frame rendering.
+   */
+  private async findPathAsync(
+    startX: number,
+    startZ: number,
+    endX: number,
+    endZ: number,
+  ): Promise<RoadPathPoint[]> {
+    const { pathStepSize, maxPathIterations } = this.config;
+    const gridStartX = Math.round(startX / pathStepSize) * pathStepSize;
+    const gridStartZ = Math.round(startZ / pathStepSize) * pathStepSize;
+    const gridEndX = Math.round(endX / pathStepSize) * pathStepSize;
+    const gridEndZ = Math.round(endZ / pathStepSize) * pathStepSize;
 
-    const fromHeight = this.terrainSystem.getHeightAt(fromX, fromZ);
-    const toHeight = this.terrainSystem.getHeightAt(toX, toZ);
-    if (toHeight < WATER_THRESHOLD) return this.config.costWaterPenalty;
+    // Yield every 200 iterations to allow frame rendering
+    const YIELD_INTERVAL = 200;
 
-    const { costBase, costSlopeMultiplier, biomeCosts } = this.config;
-    const horizontalDistance = dist2D(fromX, fromZ, toX, toZ);
-    const slope = Math.abs(toHeight - fromHeight) / horizontalDistance;
-    const biome = this.terrainSystem.getBiomeAtWorldPosition?.(toX, toZ);
-    const biomeCost = biome ? (biomeCosts[biome] ?? 1.0) : 1.0;
+    // BFS uses a simple queue (FIFO)
+    const queue: BFSNode[] = [];
+    const visited = new Set<string>();
 
-    return (
-      (horizontalDistance * costBase +
-        slope * costSlopeMultiplier * horizontalDistance) *
-      biomeCost
+    const startNode: BFSNode = {
+      x: gridStartX,
+      z: gridStartZ,
+      parent: null,
+    };
+    queue.push(startNode);
+    visited.add(`${gridStartX},${gridStartZ}`);
+
+    let iterations = 0;
+    while (queue.length > 0 && iterations < maxPathIterations) {
+      iterations++;
+      const current = queue.shift()!;
+
+      // Check if we reached the goal
+      if (
+        Math.abs(current.x - gridEndX) <= pathStepSize &&
+        Math.abs(current.z - gridEndZ) <= pathStepSize
+      ) {
+        return this.reconstructBFSPath(current, endX, endZ);
+      }
+
+      // Explore neighbors
+      for (const dir of this.directions) {
+        const neighborX = current.x + dir.dx;
+        const neighborZ = current.z + dir.dz;
+        const neighborKey = `${neighborX},${neighborZ}`;
+
+        if (visited.has(neighborKey)) continue;
+
+        // Check if tile is passable (not water)
+        if (!this.isPassable(neighborX, neighborZ)) continue;
+
+        visited.add(neighborKey);
+        queue.push({
+          x: neighborX,
+          z: neighborZ,
+          parent: current,
+        });
+      }
+
+      // Yield to main thread periodically to prevent blocking
+      if (iterations % YIELD_INTERVAL === 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+    }
+
+    // BFS completed without finding path - use direct path as fallback
+    Logger.systemWarn(
+      "RoadNetworkSystem",
+      `BFS completed in ${iterations} iterations, using direct path`,
     );
+    return this.generateDirectPath(startX, startZ, endX, endZ);
   }
 
-  private reconstructPath(
-    endNode: PathNode,
+  /**
+   * Check if a tile is passable (not underwater)
+   */
+  private isPassable(x: number, z: number): boolean {
+    if (!this.terrainSystem) return true;
+    const height = this.terrainSystem.getHeightAt(x, z);
+    return height >= WATER_THRESHOLD;
+  }
+
+  /**
+   * Reconstruct path from BFS end node
+   */
+  private reconstructBFSPath(
+    endNode: BFSNode,
     finalX: number,
     finalZ: number,
   ): RoadPathPoint[] {
     const path: RoadPathPoint[] = [];
-    let current: PathNode | null = endNode;
+    let current: BFSNode | null = endNode;
     while (current) {
       path.unshift({
         x: current.x,
@@ -717,6 +864,10 @@ export class RoadNetworkSystem extends System {
     return finalPath;
   }
 
+  /**
+   * Build tile cache synchronously (deprecated - use buildTileCacheAsync)
+   * @deprecated Use buildTileCacheAsync for non-blocking operation
+   */
   private buildTileCache(): void {
     this.tileRoadCache.clear();
 
@@ -761,6 +912,74 @@ export class RoadNetworkSystem extends System {
             }
           }
         }
+      }
+    }
+  }
+
+  /**
+   * Build tile cache asynchronously with yielding to prevent main thread blocking.
+   * Processes roads in batches, yielding between batches.
+   */
+  private async buildTileCacheAsync(): Promise<void> {
+    this.tileRoadCache.clear();
+    const ROAD_BATCH_SIZE = 5; // Process 5 roads per batch
+
+    for (
+      let roadIdx = 0;
+      roadIdx < this.roads.length;
+      roadIdx += ROAD_BATCH_SIZE
+    ) {
+      const batchEnd = Math.min(roadIdx + ROAD_BATCH_SIZE, this.roads.length);
+
+      for (let r = roadIdx; r < batchEnd; r++) {
+        const road = this.roads[r];
+
+        for (let i = 0; i < road.path.length - 1; i++) {
+          const p1 = road.path[i];
+          const p2 = road.path[i + 1];
+
+          const minTileX = Math.floor(Math.min(p1.x, p2.x) / TILE_SIZE);
+          const maxTileX = Math.floor(Math.max(p1.x, p2.x) / TILE_SIZE);
+          const minTileZ = Math.floor(Math.min(p1.z, p2.z) / TILE_SIZE);
+          const maxTileZ = Math.floor(Math.max(p1.z, p2.z) / TILE_SIZE);
+
+          for (let tileX = minTileX; tileX <= maxTileX; tileX++) {
+            for (let tileZ = minTileZ; tileZ <= maxTileZ; tileZ++) {
+              const tileKey = `${tileX}_${tileZ}`;
+              const tileMinX = tileX * TILE_SIZE;
+              const tileMaxX = (tileX + 1) * TILE_SIZE;
+              const tileMinZ = tileZ * TILE_SIZE;
+              const tileMaxZ = (tileZ + 1) * TILE_SIZE;
+
+              const clipped = this.clipSegmentToTile(
+                p1.x,
+                p1.z,
+                p2.x,
+                p2.z,
+                tileMinX,
+                tileMaxX,
+                tileMinZ,
+                tileMaxZ,
+              );
+              if (clipped) {
+                const segment: RoadTileSegment = {
+                  start: { x: clipped.x1 - tileMinX, z: clipped.z1 - tileMinZ },
+                  end: { x: clipped.x2 - tileMinX, z: clipped.z2 - tileMinZ },
+                  width: road.width,
+                  roadId: road.id,
+                };
+                if (!this.tileRoadCache.has(tileKey))
+                  this.tileRoadCache.set(tileKey, []);
+                this.tileRoadCache.get(tileKey)!.push(segment);
+              }
+            }
+          }
+        }
+      }
+
+      // Yield to main thread between batches
+      if (batchEnd < this.roads.length) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
     }
   }
@@ -839,8 +1058,57 @@ export class RoadNetworkSystem extends System {
     return this.roads.find((r) => r.id === id);
   }
 
+  /**
+   * Get distance to nearest road segment.
+   *
+   * OPTIMIZATION: Uses tile-based spatial cache to avoid checking all road segments.
+   * Only checks segments in the current tile and adjacent tiles (9 tiles total).
+   * Falls back to full search if no cached segments found nearby.
+   */
   getDistanceToNearestRoad(x: number, z: number): number {
+    // Get tile coordinates (assuming 100-unit tiles like TerrainSystem)
+    const tileSize = 100;
+    const tileX = Math.floor(x / tileSize);
+    const tileZ = Math.floor(z / tileSize);
+
+    // Check current tile and 8 adjacent tiles (3x3 grid)
     let minDistance = Infinity;
+    let foundSegments = false;
+
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const segments = this.tileRoadCache.get(`${tileX + dx}_${tileZ + dz}`);
+        if (!segments) continue;
+
+        foundSegments = true;
+        for (const segment of segments) {
+          // RoadTileSegment uses local tile coordinates, convert to world
+          const worldStartX = (tileX + dx) * tileSize + segment.start.x;
+          const worldStartZ = (tileZ + dz) * tileSize + segment.start.z;
+          const worldEndX = (tileX + dx) * tileSize + segment.end.x;
+          const worldEndZ = (tileZ + dz) * tileSize + segment.end.z;
+
+          minDistance = Math.min(
+            minDistance,
+            this.distanceToSegment(
+              x,
+              z,
+              worldStartX,
+              worldStartZ,
+              worldEndX,
+              worldEndZ,
+            ),
+          );
+        }
+      }
+    }
+
+    // If we found segments in nearby tiles, use that result
+    if (foundSegments) {
+      return minDistance;
+    }
+
+    // Fallback: full search if no cached segments (roads not yet generated for this area)
     for (const road of this.roads) {
       for (let i = 0; i < road.path.length - 1; i++) {
         const p1 = road.path[i];

@@ -47,6 +47,7 @@ export interface ClientPrefsData {
   voice?: number;
   voiceEnabled?: boolean;
   chatVisible?: boolean;
+  waterReflections?: boolean;
   v?: number;
 }
 
@@ -84,6 +85,7 @@ export class ClientInterface extends SystemBase {
   voice: number = 1;
   voiceEnabled: boolean = false;
   chatVisible: boolean = true;
+  waterReflections: boolean = true;
   v: number = 0;
   changes: Record<string, { prev: PrefsValue; value: PrefsValue }> | null =
     null;
@@ -160,6 +162,8 @@ export class ClientInterface extends SystemBase {
       if (parsed.voice !== undefined) this.voice = parsed.voice;
       if (parsed.voiceEnabled !== undefined)
         this.voiceEnabled = parsed.voiceEnabled;
+      if (parsed.waterReflections !== undefined)
+        this.waterReflections = parsed.waterReflections;
       if (parsed.v !== undefined) this.v = parsed.v;
     }
   }
@@ -498,6 +502,7 @@ export class ClientInterface extends SystemBase {
       voice: this.voice,
       voiceEnabled: this.voiceEnabled,
       chatVisible: this.chatVisible,
+      waterReflections: this.waterReflections,
       v: this.v,
     };
 
@@ -547,6 +552,9 @@ export class ClientInterface extends SystemBase {
   }
   setChatVisible(value: boolean) {
     this.modify("chatVisible", value);
+  }
+  setWaterReflections(value: boolean) {
+    this.modify("waterReflections", value);
   }
 
   // Event handlers

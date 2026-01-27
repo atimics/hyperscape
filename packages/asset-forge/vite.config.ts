@@ -20,7 +20,49 @@ export default defineConfig(({ mode }) => {
           __dirname,
           "../../node_modules/react/jsx-runtime",
         ),
-        // three is resolved from local node_modules, not root
+        // Workspace package aliases
+        "@hyperscape/decimation": path.resolve(
+          __dirname,
+          "../decimation/dist/index.js",
+        ),
+        "@hyperscape/impostor": path.resolve(
+          __dirname,
+          "../impostors/dist/index.js",
+        ),
+        // Procgen package aliases for terrain, vegetation, etc.
+        // NOTE: More specific paths must come BEFORE less specific paths
+        "@hyperscape/procgen/terrain": path.resolve(
+          __dirname,
+          "../procgen/dist/terrain/index.js",
+        ),
+        "@hyperscape/procgen/vegetation": path.resolve(
+          __dirname,
+          "../procgen/dist/vegetation/index.js",
+        ),
+        "@hyperscape/procgen/building/viewer": path.resolve(
+          __dirname,
+          "../procgen/dist/building/viewer/index.js",
+        ),
+        "@hyperscape/procgen/building/town": path.resolve(
+          __dirname,
+          "../procgen/dist/building/town/index.js",
+        ),
+        "@hyperscape/procgen/building": path.resolve(
+          __dirname,
+          "../procgen/dist/building/index.js",
+        ),
+        "@hyperscape/procgen/rock": path.resolve(
+          __dirname,
+          "../procgen/dist/rock/index.js",
+        ),
+        "@hyperscape/procgen/plant": path.resolve(
+          __dirname,
+          "../procgen/dist/plant/index.js",
+        ),
+        "@hyperscape/procgen": path.resolve(
+          __dirname,
+          "../procgen/dist/index.js",
+        ),
       },
     },
     optimizeDeps: {

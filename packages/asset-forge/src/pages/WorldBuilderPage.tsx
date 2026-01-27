@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Building2,
   RefreshCw,
   Eye,
@@ -11,8 +12,37 @@ import {
   Route,
   Save,
   Upload,
+  Video,
+  User,
+  Compass,
+  TreePine,
+  Flower2,
+  Gem,
 } from "lucide-react";
 import React, { useEffect, useRef, useState, useCallback } from "react";
+
+// Procgen imports for tree, rock, plant, and terrain editors
+import {
+  generateTree,
+  getPresetNames as getTreePresetNames,
+  disposeTreeMesh,
+  type TreeMeshResult,
+  TerrainGen,
+  BuildingGen,
+} from "@hyperscape/procgen";
+import {
+  RockGenerator,
+  SHAPE_PRESETS as ROCK_SHAPE_PRESETS,
+  ROCK_TYPE_PRESETS,
+  type GeneratedRock,
+} from "@hyperscape/procgen/rock";
+import {
+  generateFromPreset as generatePlant,
+  getPresetNames as getPlantPresetNames,
+  RenderQualityEnum,
+  type PlantPresetName,
+  type PlantGenerationResult,
+} from "@hyperscape/procgen/plant";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
@@ -26,6 +56,9 @@ import {
   CardTitle,
 } from "@/components/common";
 import { notify } from "@/utils/notify";
+
+// API base URL for manifest loading
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3401";
 
 // ============================================================
 // BUILDING RECIPES AND CONSTANTS
@@ -325,8 +358,11 @@ function applyVertexColors(
 }
 
 function removeInternalFaces(
-  geometry: THREE.BufferGeometry,
+  geometry: THREE.BufferGeometry | null,
 ): THREE.BufferGeometry {
+  if (!geometry) {
+    return new THREE.BufferGeometry();
+  }
   const nonIndexed = geometry.toNonIndexed();
   const position = nonIndexed.attributes.position;
   const color = nonIndexed.attributes.color;
@@ -389,6 +425,9 @@ function removeInternalFaces(
     dst += 9;
   }
 
+  // Dispose the intermediate non-indexed geometry
+  nonIndexed.dispose();
+
   const cleaned = new THREE.BufferGeometry();
   cleaned.setAttribute("position", new THREE.BufferAttribute(newPos, 3));
   if (newColor) {
@@ -396,6 +435,15 @@ function removeInternalFaces(
   }
   cleaned.computeVertexNormals();
   return cleaned;
+}
+
+// Helper to dispose Three.js objects recursively
+function disposeObject(obj: THREE.Object3D): void {
+  if (obj instanceof THREE.Mesh) {
+    obj.geometry?.dispose();
+    // Don't dispose shared material (uberMaterial)
+  }
+  obj.children.forEach((child) => disposeObject(child));
 }
 
 // ============================================================
@@ -2884,13 +2932,24 @@ function buildBuilding(
   let mesh: THREE.Mesh | THREE.Group;
   if (geometries.length > 0) {
     const mergedGeometry = mergeGeometries(geometries, false);
-    const cleanedGeometry = removeInternalFaces(mergedGeometry);
-    mergedGeometry.dispose();
-    for (const geometry of geometries) {
-      geometry.dispose();
+    if (mergedGeometry) {
+      const cleanedGeometry = removeInternalFaces(mergedGeometry);
+      mergedGeometry.dispose();
+      for (const geometry of geometries) {
+        geometry.dispose();
+      }
+      mesh = new THREE.Mesh(cleanedGeometry, uberMaterial);
+      mesh.userData = { layout, recipe, stats };
+    } else {
+      // Fallback if merge fails - create individual meshes
+      console.warn("mergeGeometries returned null, using group fallback");
+      mesh = new THREE.Group();
+      for (const geometry of geometries) {
+        const m = new THREE.Mesh(geometry, uberMaterial);
+        mesh.add(m);
+      }
+      mesh.userData = { layout, recipe, stats };
     }
-    mesh = new THREE.Mesh(cleanedGeometry, uberMaterial);
-    mesh.userData = { layout, recipe, stats };
   } else {
     mesh = new THREE.Group();
   }
@@ -2911,7 +2970,21 @@ interface GeneratedBuilding {
   mesh: THREE.Mesh | THREE.Group;
 }
 
-// World Configuration Types
+// World Configuration Types - must match WorldConfigManifest from shared package
+
+interface TownSizeConfig {
+  minBuildings: number;
+  maxBuildings: number;
+  radius: number;
+  safeZoneRadius: number;
+}
+
+interface BuildingTypeConfig {
+  width: number;
+  depth: number;
+  priority: number;
+}
+
 interface TerrainConfig {
   tileSize: number;
   worldSize: number;
@@ -2919,28 +2992,46 @@ interface TerrainConfig {
   maxHeight: number;
   waterThreshold: number;
   biomeScale: number;
+  fogNear: number;
+  fogFar: number;
+  cameraFar: number;
 }
 
 interface TownConfig {
   townCount: number;
   minTownSpacing: number;
-  flatnessRadius: number;
+  flatnessSampleRadius: number;
+  flatnessSampleCount: number;
+  waterThreshold: number;
+  optimalWaterDistanceMin: number;
+  optimalWaterDistanceMax: number;
   townSizes: {
-    hamlet: { minBuildings: number; maxBuildings: number; radius: number };
-    village: { minBuildings: number; maxBuildings: number; radius: number };
-    town: { minBuildings: number; maxBuildings: number; radius: number };
+    hamlet: TownSizeConfig;
+    village: TownSizeConfig;
+    town: TownSizeConfig;
   };
-  buildingTypes: string[];
+  buildingTypes: Record<string, BuildingTypeConfig>;
+  biomeSuitability: Record<string, number>;
 }
 
 interface RoadConfig {
   roadWidth: number;
   pathStepSize: number;
+  maxPathIterations: number;
   extraConnectionsRatio: number;
   smoothingIterations: number;
+  noiseDisplacementScale: number;
+  noiseDisplacementStrength: number;
+  minPointSpacing: number;
+  costBiomeMultipliers: Record<string, number>;
+  costBase: number;
+  costSlopeMultiplier: number;
+  costWaterPenalty: number;
+  heuristicWeight: number;
 }
 
 interface WorldConfig {
+  version: number;
   terrain: TerrainConfig;
   towns: TownConfig;
   roads: RoadConfig;
@@ -2948,6 +3039,7 @@ interface WorldConfig {
 }
 
 const DEFAULT_WORLD_CONFIG: WorldConfig = {
+  version: 1,
   terrain: {
     tileSize: 100,
     worldSize: 100,
@@ -2955,28 +3047,579 @@ const DEFAULT_WORLD_CONFIG: WorldConfig = {
     maxHeight: 30,
     waterThreshold: 5.4,
     biomeScale: 1.0,
+    fogNear: 150,
+    fogFar: 350,
+    cameraFar: 400,
   },
   towns: {
     townCount: 25,
     minTownSpacing: 800,
-    flatnessRadius: 40,
+    flatnessSampleRadius: 40,
+    flatnessSampleCount: 16,
+    waterThreshold: 5.4,
+    optimalWaterDistanceMin: 30,
+    optimalWaterDistanceMax: 150,
     townSizes: {
-      hamlet: { minBuildings: 3, maxBuildings: 5, radius: 25 },
-      village: { minBuildings: 6, maxBuildings: 10, radius: 40 },
-      town: { minBuildings: 11, maxBuildings: 16, radius: 60 },
+      hamlet: {
+        minBuildings: 3,
+        maxBuildings: 5,
+        radius: 25,
+        safeZoneRadius: 40,
+      },
+      village: {
+        minBuildings: 6,
+        maxBuildings: 10,
+        radius: 40,
+        safeZoneRadius: 60,
+      },
+      town: {
+        minBuildings: 11,
+        maxBuildings: 16,
+        radius: 60,
+        safeZoneRadius: 80,
+      },
     },
-    buildingTypes: ["bank", "store", "smithy", "inn", "house", "well"],
+    buildingTypes: {
+      bank: { width: 8, depth: 6, priority: 1 },
+      store: { width: 7, depth: 5, priority: 2 },
+      anvil: { width: 5, depth: 4, priority: 3 },
+      well: { width: 3, depth: 3, priority: 4 },
+      house: { width: 6, depth: 5, priority: 5 },
+    },
+    biomeSuitability: {
+      plains: 1.0,
+      valley: 0.95,
+      forest: 0.7,
+      tundra: 0.4,
+      desert: 0.3,
+      swamp: 0.2,
+      mountains: 0.15,
+      lakes: 0.0,
+    },
   },
   roads: {
     roadWidth: 4,
     pathStepSize: 20,
+    maxPathIterations: 10000,
     extraConnectionsRatio: 0.25,
     smoothingIterations: 2,
+    noiseDisplacementScale: 0.01,
+    noiseDisplacementStrength: 3,
+    minPointSpacing: 4,
+    costBiomeMultipliers: {
+      plains: 1.0,
+      valley: 1.0,
+      forest: 1.3,
+      tundra: 1.5,
+      desert: 2.0,
+      swamp: 2.5,
+      mountains: 3.0,
+      lakes: 100,
+    },
+    costBase: 1.0,
+    costSlopeMultiplier: 5.0,
+    costWaterPenalty: 1000,
+    heuristicWeight: 2.5,
   },
   seed: 12345,
 };
 
-type WorldBuilderTab = "buildings" | "terrain" | "towns" | "roads";
+type WorldBuilderTab =
+  | "buildings"
+  | "terrain"
+  | "towns"
+  | "roads"
+  | "assets"
+  | "trees"
+  | "rocks"
+  | "plants";
+type CameraMode = "orbit" | "flythrough" | "player";
+
+// Flythrough camera state
+interface FlythroughState {
+  moveForward: boolean;
+  moveBackward: boolean;
+  moveLeft: boolean;
+  moveRight: boolean;
+  moveUp: boolean;
+  moveDown: boolean;
+  sprint: boolean;
+  euler: THREE.Euler;
+  velocity: THREE.Vector3;
+}
+
+// LOD category type
+type LODCategory =
+  | "tree"
+  | "bush"
+  | "rock"
+  | "fern"
+  | "flower"
+  | "building"
+  | "prop";
+
+// Assets & LOD Panel Component
+const AssetsLODPanel: React.FC = () => {
+  const [assets, setAssets] = useState<
+    Array<{
+      assetId: string;
+      name: string;
+      category: string;
+      path: string;
+      hasBundle: boolean;
+      isComplete: boolean;
+      missingLevels: string[];
+      variants: Array<{ level: string; vertices: number; fileSize: number }>;
+    }>
+  >([]);
+  const [selectedCategory, setSelectedCategory] = useState<LODCategory | "all">(
+    "all",
+  );
+  const [bakeJob, setBakeJob] = useState<{
+    jobId: string;
+    status: string;
+    progress: number;
+    currentAsset?: string;
+    currentLevel?: string;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [selectedLevels, setSelectedLevels] = useState<string[]>([
+    "lod1",
+    "lod2",
+  ]);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch assets (discovers all assets, not just those with bundles)
+  const fetchAssets = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/lod/assets");
+      if (response.ok) {
+        const data = await response.json();
+        setAssets(data);
+      } else {
+        setError("Failed to fetch assets");
+      }
+    } catch (err) {
+      console.error("Failed to fetch assets:", err);
+      setError(err instanceof Error ? err.message : "Failed to fetch assets");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAssets();
+  }, [fetchAssets]);
+
+  // Poll job status
+  useEffect(() => {
+    if (
+      !bakeJob ||
+      bakeJob.status === "completed" ||
+      bakeJob.status === "failed"
+    ) {
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/lod/jobs/${bakeJob.jobId}`);
+        if (response.ok) {
+          const data = await response.json();
+          setBakeJob({
+            jobId: data.jobId,
+            status: data.status,
+            progress: data.progress,
+            currentAsset: data.currentAsset,
+            currentLevel: data.currentLevel,
+          });
+
+          if (data.status === "completed" || data.status === "failed") {
+            // Refresh assets list to get updated LOD status
+            await fetchAssets();
+          }
+        }
+      } catch (err) {
+        console.error("Failed to poll job status:", err);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [bakeJob, fetchAssets]);
+
+  const handleBakeAll = async () => {
+    try {
+      const categories =
+        selectedCategory === "all" ? undefined : [selectedCategory];
+      const response = await fetch("/api/lod/bake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          categories,
+          levels: selectedLevels,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setBakeJob({
+          jobId: data.jobId,
+          status: data.status,
+          progress: 0,
+        });
+      }
+    } catch (error) {
+      console.error("Failed to start bake job:", error);
+    }
+  };
+
+  const handleBakeCategory = async (category: string) => {
+    try {
+      const response = await fetch("/api/lod/bake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          categories: [category],
+          levels: selectedLevels,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setBakeJob({
+          jobId: data.jobId,
+          status: data.status,
+          progress: 0,
+        });
+      }
+    } catch (error) {
+      console.error("Failed to start bake job:", error);
+    }
+  };
+
+  const handleCancelJob = async () => {
+    if (!bakeJob) return;
+    try {
+      await fetch(`/api/lod/jobs/${bakeJob.jobId}`, { method: "DELETE" });
+      setBakeJob(null);
+    } catch (error) {
+      console.error("Failed to cancel job:", error);
+    }
+  };
+
+  const filteredAssets =
+    selectedCategory === "all"
+      ? assets
+      : assets.filter((a) => a.category === selectedCategory);
+
+  const incompleteAssets = filteredAssets.filter((a) => !a.isComplete);
+  const completeAssets = filteredAssets.filter((a) => a.isComplete);
+
+  const categories: {
+    id: LODCategory | "all";
+    label: string;
+    count: number;
+  }[] = [
+    { id: "all", label: "All", count: assets.length },
+    {
+      id: "tree",
+      label: "Trees",
+      count: assets.filter((a) => a.category === "tree").length,
+    },
+    {
+      id: "bush",
+      label: "Bushes",
+      count: assets.filter((a) => a.category === "bush").length,
+    },
+    {
+      id: "rock",
+      label: "Rocks",
+      count: assets.filter((a) => a.category === "rock").length,
+    },
+    {
+      id: "fern",
+      label: "Ferns",
+      count: assets.filter((a) => a.category === "fern").length,
+    },
+    {
+      id: "flower",
+      label: "Flowers",
+      count: assets.filter((a) => a.category === "flower").length,
+    },
+    {
+      id: "building",
+      label: "Buildings",
+      count: assets.filter((a) => a.category === "building").length,
+    },
+    {
+      id: "prop",
+      label: "Props",
+      count: assets.filter((a) => a.category === "prop").length,
+    },
+  ];
+
+  return (
+    <>
+      <div className="flex items-center gap-2 mb-4">
+        <Grid3x3 className="w-5 h-5 text-primary" />
+        <h2 className="text-lg font-semibold text-text-primary">
+          Assets & LOD
+        </h2>
+      </div>
+
+      {/* LOD Level Selection */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">LOD Levels to Bake</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <label className="flex items-center gap-2 text-sm text-text-secondary">
+            <input
+              type="checkbox"
+              checked={selectedLevels.includes("lod1")}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  setSelectedLevels([...selectedLevels, "lod1"]);
+                } else {
+                  setSelectedLevels(selectedLevels.filter((l) => l !== "lod1"));
+                }
+              }}
+              className="rounded border-border-primary"
+            />
+            LOD1 (~30% vertices)
+          </label>
+          <label className="flex items-center gap-2 text-sm text-text-secondary">
+            <input
+              type="checkbox"
+              checked={selectedLevels.includes("lod2")}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  setSelectedLevels([...selectedLevels, "lod2"]);
+                } else {
+                  setSelectedLevels(selectedLevels.filter((l) => l !== "lod2"));
+                }
+              }}
+              className="rounded border-border-primary"
+            />
+            LOD2 (~10% vertices)
+          </label>
+          <label className="flex items-center gap-2 text-sm text-text-secondary">
+            <input
+              type="checkbox"
+              checked={selectedLevels.includes("imposter")}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  setSelectedLevels([...selectedLevels, "imposter"]);
+                } else {
+                  setSelectedLevels(
+                    selectedLevels.filter((l) => l !== "imposter"),
+                  );
+                }
+              }}
+              className="rounded border-border-primary"
+            />
+            Imposter (billboard)
+          </label>
+        </CardContent>
+      </Card>
+
+      {/* Category Filter */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Category Filter</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap gap-1">
+            {categories
+              .filter((c) => c.count > 0 || c.id === "all")
+              .map((cat) => (
+                <button
+                  key={cat.id}
+                  onClick={() => setSelectedCategory(cat.id)}
+                  className={`px-2 py-1 text-xs rounded transition-colors ${
+                    selectedCategory === cat.id
+                      ? "bg-primary text-white"
+                      : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover"
+                  }`}
+                >
+                  {cat.label} ({cat.count})
+                </button>
+              ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Batch Actions */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Batch LOD Baking</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {bakeJob && bakeJob.status === "running" ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-text-secondary">
+                  {bakeJob.currentAsset
+                    ? `Processing: ${bakeJob.currentAsset}`
+                    : "Starting..."}
+                </span>
+                <span className="text-primary font-medium">
+                  {Math.round(bakeJob.progress)}%
+                </span>
+              </div>
+              <div className="h-2 bg-bg-tertiary rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary transition-all duration-300"
+                  style={{ width: `${bakeJob.progress}%` }}
+                />
+              </div>
+              <Button
+                onClick={handleCancelJob}
+                variant="secondary"
+                className="w-full text-xs"
+              >
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <>
+              <Button
+                onClick={handleBakeAll}
+                disabled={selectedLevels.length === 0}
+                className="w-full"
+              >
+                Bake{" "}
+                {selectedCategory === "all" ? "All Assets" : selectedCategory}
+              </Button>
+              <p className="text-xs text-text-tertiary text-center">
+                {incompleteAssets.length} assets need LOD baking
+              </p>
+            </>
+          )}
+
+          {bakeJob &&
+            (bakeJob.status === "completed" || bakeJob.status === "failed") && (
+              <div
+                className={`text-xs text-center py-2 rounded ${
+                  bakeJob.status === "completed"
+                    ? "bg-success bg-opacity-20 text-success"
+                    : "bg-error bg-opacity-20 text-error"
+                }`}
+              >
+                {bakeJob.status === "completed"
+                  ? "Baking completed!"
+                  : "Baking failed"}
+              </div>
+            )}
+
+          {error && (
+            <div className="text-xs text-center py-2 rounded bg-error bg-opacity-20 text-error">
+              {error}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Asset List */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center justify-between">
+            <span>Assets ({filteredAssets.length})</span>
+            <span className="text-xs font-normal text-text-tertiary">
+              {completeAssets.length} complete
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <div className="text-center py-4 text-text-tertiary text-sm">
+              Loading assets...
+            </div>
+          ) : filteredAssets.length === 0 ? (
+            <div className="text-center py-4 text-text-tertiary text-sm">
+              No assets found in vegetation directories
+            </div>
+          ) : (
+            <div className="space-y-1 max-h-64 overflow-y-auto">
+              {filteredAssets.map((asset) => (
+                <div
+                  key={asset.assetId}
+                  className="flex items-center justify-between p-2 bg-bg-tertiary rounded text-xs"
+                >
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`w-2 h-2 rounded-full ${
+                        asset.isComplete
+                          ? "bg-success"
+                          : asset.hasBundle
+                            ? "bg-warning"
+                            : "bg-text-muted"
+                      }`}
+                    />
+                    <span className="text-text-primary truncate max-w-32">
+                      {asset.name}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-text-tertiary capitalize">
+                      {asset.category}
+                    </span>
+                    {!asset.isComplete && (
+                      <button
+                        onClick={() => handleBakeCategory(asset.category)}
+                        className="px-2 py-0.5 bg-primary bg-opacity-20 text-primary rounded hover:bg-opacity-30 transition-colors"
+                        disabled={bakeJob?.status === "running"}
+                      >
+                        Bake
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Quick Stats */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">LOD Statistics</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="p-2 bg-bg-tertiary rounded">
+              <div className="text-text-tertiary">Total Assets</div>
+              <div className="text-lg font-semibold text-text-primary">
+                {assets.length}
+              </div>
+            </div>
+            <div className="p-2 bg-bg-tertiary rounded">
+              <div className="text-text-tertiary">Complete</div>
+              <div className="text-lg font-semibold text-success">
+                {assets.filter((a) => a.isComplete).length}
+              </div>
+            </div>
+            <div className="p-2 bg-bg-tertiary rounded">
+              <div className="text-text-tertiary">Missing LOD1</div>
+              <div className="text-lg font-semibold text-warning">
+                {assets.filter((a) => a.missingLevels.includes("lod1")).length}
+              </div>
+            </div>
+            <div className="p-2 bg-bg-tertiary rounded">
+              <div className="text-text-tertiary">Missing LOD2</div>
+              <div className="text-lg font-semibold text-warning">
+                {assets.filter((a) => a.missingLevels.includes("lod2")).length}
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </>
+  );
+};
 
 export const WorldBuilderPage: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -2988,6 +3631,19 @@ export const WorldBuilderPage: React.FC = () => {
   const currentBuildingRef = useRef<THREE.Mesh | THREE.Group | null>(null);
   const uberMaterialRef = useRef<THREE.MeshStandardMaterial | null>(null);
   const animationIdRef = useRef<number>(0);
+  const flythroughStateRef = useRef<FlythroughState>({
+    moveForward: false,
+    moveBackward: false,
+    moveLeft: false,
+    moveRight: false,
+    moveUp: false,
+    moveDown: false,
+    sprint: false,
+    euler: new THREE.Euler(0, 0, 0, "YXZ"),
+    velocity: new THREE.Vector3(),
+  });
+  const pointerLockRef = useRef<boolean>(false);
+  const lastTimeRef = useRef<number>(performance.now());
 
   const [buildingType, setBuildingType] = useState<string>("inn");
   const [seed, setSeed] = useState<string>("inn-001");
@@ -3003,6 +3659,150 @@ export const WorldBuilderPage: React.FC = () => {
   const [worldConfig, setWorldConfig] =
     useState<WorldConfig>(DEFAULT_WORLD_CONFIG);
   const [configDirty, setConfigDirty] = useState<boolean>(false);
+
+  // Camera mode state
+  const [cameraMode, setCameraMode] = useState<CameraMode>("orbit");
+  const [cameraHeight, setCameraHeight] = useState<number>(1.7); // Player eye height
+  const [moveSpeed, setMoveSpeed] = useState<number>(10); // m/s
+
+  // Tree editor state
+  const [treePreset, setTreePreset] = useState("quakingAspen");
+  const [treeSeed, setTreeSeed] = useState(12345);
+  const [showLeaves, setShowLeaves] = useState(true);
+  const [treeStats, setTreeStats] = useState<{
+    stems: number;
+    leaves: number;
+    vertices: number;
+    triangles: number;
+    time: number;
+  } | null>(null);
+  const currentTreeRef = useRef<TreeMeshResult | null>(null);
+  const treePresetNames = getTreePresetNames();
+
+  // Rock editor state
+  const [rockPreset, setRockPreset] = useState("boulder");
+  const [rockSeed, setRockSeed] = useState("rock-001");
+  const [rockSubdivisions, setRockSubdivisions] = useState(4);
+  const [rockFlatShading, setRockFlatShading] = useState(false);
+  const [rockWireframe, setRockWireframe] = useState(false);
+  const [rockStats, setRockStats] = useState<{
+    vertices: number;
+    triangles: number;
+    time: number;
+  } | null>(null);
+  const rockGeneratorRef = useRef<RockGenerator | null>(null);
+  const currentRockRef = useRef<GeneratedRock | null>(null);
+
+  // Plant editor state
+  const [plantPreset, setPlantPreset] = useState<PlantPresetName>("monstera");
+  const [plantSeed, setPlantSeed] = useState(12345);
+  const [plantStats, setPlantStats] = useState<{
+    leaves: number;
+    vertices: number;
+    triangles: number;
+    time: number;
+  } | null>(null);
+  const currentPlantRef = useRef<PlantGenerationResult | null>(null);
+  const plantPresetNames = getPlantPresetNames();
+
+  // Terrain preview state
+  const terrainMeshRef = useRef<THREE.Mesh | null>(null);
+  const waterMeshRef = useRef<THREE.Mesh | null>(null);
+  const townMarkersRef = useRef<THREE.Group | null>(null);
+  const [terrainStats, setTerrainStats] = useState<{
+    tiles: number;
+    vertices: number;
+    time: number;
+  } | null>(null);
+
+  // Manifest loading state
+  const [isLoadingManifest, setIsLoadingManifest] = useState(true);
+  const [manifestError, setManifestError] = useState<string | null>(null);
+
+  // Store the full manifest to preserve fields not editable in UI
+  // This prevents LARP - we won't lose noise/island/biomes/vegetation configs
+  const originalManifestRef = useRef<Record<string, unknown> | null>(null);
+
+  // Load world config from manifest on mount
+  useEffect(() => {
+    const loadWorldConfig = async () => {
+      setIsLoadingManifest(true);
+      setManifestError(null);
+
+      try {
+        const response = await fetch(`${API_BASE}/api/manifests/world-config`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.content) {
+            // Store the full manifest to preserve non-editable fields when saving
+            originalManifestRef.current = data.content;
+
+            // Map manifest config to our WorldConfig format
+            // Use ?? (nullish coalescing) to preserve 0 values
+            const manifestConfig = data.content;
+            setWorldConfig((prev) => ({
+              ...prev,
+              version: manifestConfig.version ?? prev.version,
+              seed: manifestConfig.terrain?.seed ?? prev.seed,
+              terrain: {
+                ...prev.terrain,
+                tileSize:
+                  manifestConfig.terrain?.tileSize ?? prev.terrain.tileSize,
+                worldSize:
+                  manifestConfig.terrain?.worldSize ?? prev.terrain.worldSize,
+                tileResolution:
+                  manifestConfig.terrain?.tileResolution ??
+                  prev.terrain.tileResolution,
+                maxHeight:
+                  manifestConfig.terrain?.maxHeight ?? prev.terrain.maxHeight,
+                waterThreshold:
+                  manifestConfig.terrain?.waterThreshold ??
+                  prev.terrain.waterThreshold,
+              },
+              towns: {
+                ...prev.towns,
+                townCount: manifestConfig.towns?.count ?? prev.towns.townCount,
+                minTownSpacing:
+                  manifestConfig.towns?.minTownSpacing ??
+                  prev.towns.minTownSpacing,
+              },
+              roads: {
+                ...prev.roads,
+                roadWidth: manifestConfig.roads?.width ?? prev.roads.roadWidth,
+                pathStepSize:
+                  manifestConfig.roads?.pathStepSize ?? prev.roads.pathStepSize,
+                smoothingIterations:
+                  manifestConfig.roads?.smoothingIterations ??
+                  prev.roads.smoothingIterations,
+                extraConnectionsRatio:
+                  manifestConfig.roads?.extraConnectionsRatio ??
+                  prev.roads.extraConnectionsRatio,
+                costSlopeMultiplier:
+                  manifestConfig.roads?.pathfinding?.costSlopeMultiplier ??
+                  prev.roads.costSlopeMultiplier,
+                costWaterPenalty:
+                  manifestConfig.roads?.pathfinding?.costWaterPenalty ??
+                  prev.roads.costWaterPenalty,
+                heuristicWeight:
+                  manifestConfig.roads?.pathfinding?.heuristicWeight ??
+                  prev.roads.heuristicWeight,
+              },
+            }));
+            notify.success("Loaded world config from manifest");
+          }
+        } else {
+          console.warn("Could not load world config manifest, using defaults");
+        }
+      } catch (error) {
+        console.error("Failed to load world config:", error);
+        setManifestError("Failed to load world configuration");
+      } finally {
+        setIsLoadingManifest(false);
+      }
+    };
+
+    loadWorldConfig();
+  }, []);
 
   // Initialize Three.js scene
   useEffect(() => {
@@ -3070,13 +3870,165 @@ export const WorldBuilderPage: React.FC = () => {
       roughness: 0.9,
     });
 
-    // Animation loop
+    // Animation loop with flythrough support
     const animate = () => {
       animationIdRef.current = requestAnimationFrame(animate);
-      controls.update();
+
+      const now = performance.now();
+      const delta = (now - lastTimeRef.current) / 1000;
+      lastTimeRef.current = now;
+
+      // Handle flythrough movement
+      if (pointerLockRef.current) {
+        const state = flythroughStateRef.current;
+        const speed = state.sprint ? moveSpeed * 2.5 : moveSpeed;
+        const direction = new THREE.Vector3();
+
+        // Calculate movement direction
+        const forward = new THREE.Vector3(0, 0, -1);
+        const right = new THREE.Vector3(1, 0, 0);
+
+        forward.applyQuaternion(camera.quaternion);
+        right.applyQuaternion(camera.quaternion);
+
+        // Keep movement horizontal for player mode
+        forward.y = 0;
+        forward.normalize();
+        right.y = 0;
+        right.normalize();
+
+        if (state.moveForward) direction.add(forward);
+        if (state.moveBackward) direction.sub(forward);
+        if (state.moveRight) direction.add(right);
+        if (state.moveLeft) direction.sub(right);
+        if (state.moveUp) direction.y += 1;
+        if (state.moveDown) direction.y -= 1;
+
+        direction.normalize();
+
+        // Apply velocity with smooth damping
+        state.velocity.lerp(direction.multiplyScalar(speed), 0.1);
+        camera.position.add(state.velocity.clone().multiplyScalar(delta));
+      } else {
+        controls.update();
+      }
+
       renderer.render(scene, camera);
     };
     animate();
+
+    // Keyboard controls for flythrough
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!pointerLockRef.current) return;
+
+      const state = flythroughStateRef.current;
+      switch (e.code) {
+        case "KeyW":
+        case "ArrowUp":
+          state.moveForward = true;
+          break;
+        case "KeyS":
+        case "ArrowDown":
+          state.moveBackward = true;
+          break;
+        case "KeyA":
+        case "ArrowLeft":
+          state.moveLeft = true;
+          break;
+        case "KeyD":
+        case "ArrowRight":
+          state.moveRight = true;
+          break;
+        case "Space":
+          state.moveUp = true;
+          break;
+        case "ShiftLeft":
+        case "ShiftRight":
+          state.sprint = true;
+          break;
+        case "ControlLeft":
+        case "ControlRight":
+          state.moveDown = true;
+          break;
+        case "Escape":
+          document.exitPointerLock();
+          break;
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const state = flythroughStateRef.current;
+      switch (e.code) {
+        case "KeyW":
+        case "ArrowUp":
+          state.moveForward = false;
+          break;
+        case "KeyS":
+        case "ArrowDown":
+          state.moveBackward = false;
+          break;
+        case "KeyA":
+        case "ArrowLeft":
+          state.moveLeft = false;
+          break;
+        case "KeyD":
+        case "ArrowRight":
+          state.moveRight = false;
+          break;
+        case "Space":
+          state.moveUp = false;
+          break;
+        case "ShiftLeft":
+        case "ShiftRight":
+          state.sprint = false;
+          break;
+        case "ControlLeft":
+        case "ControlRight":
+          state.moveDown = false;
+          break;
+      }
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!pointerLockRef.current) return;
+
+      const state = flythroughStateRef.current;
+      const sensitivity = 0.002;
+
+      state.euler.setFromQuaternion(camera.quaternion);
+      state.euler.y -= e.movementX * sensitivity;
+      state.euler.x -= e.movementY * sensitivity;
+
+      // Clamp vertical look
+      state.euler.x = Math.max(
+        -Math.PI / 2,
+        Math.min(Math.PI / 2, state.euler.x),
+      );
+
+      camera.quaternion.setFromEuler(state.euler);
+    };
+
+    const handlePointerLockChange = () => {
+      pointerLockRef.current =
+        document.pointerLockElement === renderer.domElement;
+      if (!pointerLockRef.current) {
+        // Reset movement state when exiting pointer lock
+        const state = flythroughStateRef.current;
+        state.moveForward = false;
+        state.moveBackward = false;
+        state.moveLeft = false;
+        state.moveRight = false;
+        state.moveUp = false;
+        state.moveDown = false;
+        state.sprint = false;
+        state.velocity.set(0, 0, 0);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("pointerlockchange", handlePointerLockChange);
 
     // Handle resize
     const handleResize = () => {
@@ -3091,7 +4043,28 @@ export const WorldBuilderPage: React.FC = () => {
 
     return () => {
       window.removeEventListener("resize", handleResize);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener(
+        "pointerlockchange",
+        handlePointerLockChange,
+      );
       cancelAnimationFrame(animationIdRef.current);
+
+      // Dispose current building
+      if (currentBuildingRef.current) {
+        scene.remove(currentBuildingRef.current);
+        disposeObject(currentBuildingRef.current);
+        currentBuildingRef.current = null;
+      }
+
+      // Dispose shared material
+      if (uberMaterialRef.current) {
+        uberMaterialRef.current.dispose();
+        uberMaterialRef.current = null;
+      }
+
       renderer.dispose();
       if (
         containerRef.current &&
@@ -3100,7 +4073,7 @@ export const WorldBuilderPage: React.FC = () => {
         containerRef.current.removeChild(renderer.domElement);
       }
     };
-  }, []);
+  }, [moveSpeed]);
 
   // Generate building
   const generateBuilding = useCallback(() => {
@@ -3120,12 +4093,10 @@ export const WorldBuilderPage: React.FC = () => {
       uberMaterialRef.current,
     );
 
-    // Remove old building
+    // Remove old building and dispose all geometries
     if (currentBuildingRef.current) {
       sceneRef.current.remove(currentBuildingRef.current);
-      if (currentBuildingRef.current instanceof THREE.Mesh) {
-        currentBuildingRef.current.geometry.dispose();
-      }
+      disposeObject(currentBuildingRef.current);
     }
 
     // Add new building
@@ -3152,11 +4123,6 @@ export const WorldBuilderPage: React.FC = () => {
     setLayout(newLayout);
   }, [buildingType, seed, showRoof]);
 
-  // Initial generation
-  useEffect(() => {
-    generateBuilding();
-  }, [generateBuilding]);
-
   // Toggle grid visibility
   useEffect(() => {
     if (gridRef.current) {
@@ -3164,9 +4130,573 @@ export const WorldBuilderPage: React.FC = () => {
     }
   }, [showGrid]);
 
+  // Clear all scene objects (buildings, trees, rocks, plants, terrain)
+  const clearSceneObjects = useCallback(() => {
+    if (!sceneRef.current) return;
+
+    // Clear building
+    if (currentBuildingRef.current) {
+      sceneRef.current.remove(currentBuildingRef.current);
+      disposeObject(currentBuildingRef.current);
+      currentBuildingRef.current = null;
+    }
+
+    // Clear tree
+    if (currentTreeRef.current) {
+      sceneRef.current.remove(currentTreeRef.current.group);
+      disposeTreeMesh(currentTreeRef.current);
+      currentTreeRef.current = null;
+    }
+
+    // Clear rock
+    if (currentRockRef.current) {
+      sceneRef.current.remove(currentRockRef.current.mesh);
+      currentRockRef.current.geometry.dispose();
+      if (currentRockRef.current.mesh.material) {
+        (currentRockRef.current.mesh.material as THREE.Material).dispose();
+      }
+      currentRockRef.current = null;
+    }
+
+    // Clear plant
+    if (currentPlantRef.current) {
+      sceneRef.current.remove(currentPlantRef.current.group);
+      currentPlantRef.current.group.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          if (child.material instanceof THREE.Material) {
+            child.material.dispose();
+          }
+        }
+      });
+      currentPlantRef.current = null;
+    }
+
+    // Clear terrain
+    if (terrainMeshRef.current) {
+      sceneRef.current.remove(terrainMeshRef.current);
+      terrainMeshRef.current.geometry.dispose();
+      if (terrainMeshRef.current.material instanceof THREE.Material) {
+        terrainMeshRef.current.material.dispose();
+      }
+      terrainMeshRef.current = null;
+    }
+    if (waterMeshRef.current) {
+      sceneRef.current.remove(waterMeshRef.current);
+      waterMeshRef.current.geometry.dispose();
+      if (waterMeshRef.current.material instanceof THREE.Material) {
+        waterMeshRef.current.material.dispose();
+      }
+      waterMeshRef.current = null;
+    }
+    if (townMarkersRef.current) {
+      sceneRef.current.remove(townMarkersRef.current);
+      townMarkersRef.current.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          if (child.material instanceof THREE.Material) {
+            child.material.dispose();
+          }
+        }
+      });
+      townMarkersRef.current = null;
+    }
+  }, []);
+
+  // Handle tab switching - update viewer content based on active tab
+  // Note: Functions are intentionally excluded from deps - they're stable (memoized via useCallback)
+  // and we only want to regenerate content when the active tab changes, not when the functions update
+  useEffect(() => {
+    // Clear current scene objects first
+    clearSceneObjects();
+
+    // Generate appropriate content for the new tab
+    switch (activeTab) {
+      case "buildings":
+        generateBuilding();
+        break;
+      case "trees":
+        generateTreeMesh();
+        break;
+      case "rocks":
+        generateRockMesh();
+        break;
+      case "plants":
+        generatePlantMesh();
+        break;
+      case "terrain":
+        // Show terrain without town markers
+        generateTerrainPreview(false);
+        break;
+      case "towns":
+        // Show terrain with town markers
+        generateTerrainPreview(true);
+        break;
+      case "roads":
+        // Show terrain with town markers (roads connect towns)
+        generateTerrainPreview(true);
+        break;
+      case "assets":
+        // Assets tab shows the LOD panel, no 3D preview
+        break;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
   const handleRandomSeed = () => {
     setSeed(Math.random().toString(36).slice(2, 8));
   };
+
+  // Generate tree
+  const generateTreeMesh = useCallback(() => {
+    if (!sceneRef.current) return;
+
+    // Clean up previous tree
+    if (currentTreeRef.current) {
+      sceneRef.current.remove(currentTreeRef.current.group);
+      disposeTreeMesh(currentTreeRef.current);
+      currentTreeRef.current = null;
+    }
+
+    const startTime = performance.now();
+
+    try {
+      const result = generateTree(treePreset, {
+        generation: { seed: treeSeed },
+        mesh: { useInstancedLeaves: showLeaves },
+      });
+
+      // Position at center
+      result.group.position.set(0, 0, 0);
+      result.group.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      sceneRef.current.add(result.group);
+      currentTreeRef.current = result;
+
+      const time = performance.now() - startTime;
+      setTreeStats({
+        stems: result.branches.length,
+        leaves: result.leafInstanceCount,
+        vertices: result.vertexCount,
+        triangles: result.triangleCount,
+        time,
+      });
+    } catch (err) {
+      console.error("Failed to generate tree:", err);
+    }
+  }, [treePreset, treeSeed, showLeaves]);
+
+  // Generate rock
+  const generateRockMesh = useCallback(() => {
+    if (!sceneRef.current) return;
+
+    // Clean up previous rock
+    if (currentRockRef.current) {
+      sceneRef.current.remove(currentRockRef.current.mesh);
+      currentRockRef.current.geometry.dispose();
+      if (currentRockRef.current.mesh.material) {
+        (currentRockRef.current.mesh.material as THREE.Material).dispose();
+      }
+      currentRockRef.current = null;
+    }
+
+    const startTime = performance.now();
+
+    try {
+      if (!rockGeneratorRef.current) {
+        rockGeneratorRef.current = new RockGenerator();
+      }
+
+      const rockResult = rockGeneratorRef.current.generateFromPreset(
+        rockPreset,
+        {
+          seed: rockSeed,
+          params: { subdivisions: rockSubdivisions },
+        },
+      );
+
+      if (!rockResult) {
+        console.error("Failed to generate rock - invalid preset");
+        return;
+      }
+
+      rockResult.mesh.castShadow = true;
+      rockResult.mesh.receiveShadow = true;
+      rockResult.mesh.position.set(0, 0.5, 0);
+
+      // Apply wireframe/flat shading
+      if (rockResult.mesh.material instanceof THREE.MeshStandardMaterial) {
+        rockResult.mesh.material.wireframe = rockWireframe;
+        rockResult.mesh.material.flatShading = rockFlatShading;
+        rockResult.mesh.material.needsUpdate = true;
+      }
+
+      sceneRef.current.add(rockResult.mesh);
+      currentRockRef.current = rockResult;
+
+      const time = performance.now() - startTime;
+      setRockStats({
+        vertices: rockResult.stats.vertices,
+        triangles: rockResult.stats.triangles,
+        time,
+      });
+    } catch (err) {
+      console.error("Failed to generate rock:", err);
+    }
+  }, [rockPreset, rockSeed, rockSubdivisions, rockFlatShading, rockWireframe]);
+
+  // Generate plant
+  const generatePlantMesh = useCallback(() => {
+    if (!sceneRef.current) return;
+
+    // Clean up previous plant
+    if (currentPlantRef.current) {
+      sceneRef.current.remove(currentPlantRef.current.group);
+      currentPlantRef.current.group.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          if (child.material instanceof THREE.Material) {
+            child.material.dispose();
+          }
+        }
+      });
+      currentPlantRef.current = null;
+    }
+
+    const startTime = performance.now();
+
+    try {
+      const result = generatePlant(plantPreset, plantSeed, {
+        quality: RenderQualityEnum.Maximum,
+      });
+
+      result.group.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      result.group.position.set(0, 0, 0);
+      sceneRef.current.add(result.group);
+      currentPlantRef.current = result;
+
+      const time = performance.now() - startTime;
+      setPlantStats({
+        leaves: result.stats.leafCount,
+        vertices: result.stats.vertexCount,
+        triangles: result.stats.triangleCount,
+        time,
+      });
+    } catch (err) {
+      console.error("Failed to generate plant:", err);
+    }
+  }, [plantPreset, plantSeed]);
+
+  // Generate terrain preview
+  const generateTerrainPreview = useCallback(
+    (showTowns = false) => {
+      if (!sceneRef.current) return;
+
+      const startTime = performance.now();
+
+      try {
+        // Clean up previous terrain
+        if (terrainMeshRef.current) {
+          sceneRef.current.remove(terrainMeshRef.current);
+          terrainMeshRef.current.geometry.dispose();
+          if (terrainMeshRef.current.material instanceof THREE.Material) {
+            terrainMeshRef.current.material.dispose();
+          }
+          terrainMeshRef.current = null;
+        }
+        if (waterMeshRef.current) {
+          sceneRef.current.remove(waterMeshRef.current);
+          waterMeshRef.current.geometry.dispose();
+          if (waterMeshRef.current.material instanceof THREE.Material) {
+            waterMeshRef.current.material.dispose();
+          }
+          waterMeshRef.current = null;
+        }
+        if (townMarkersRef.current) {
+          sceneRef.current.remove(townMarkersRef.current);
+          townMarkersRef.current.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              child.geometry.dispose();
+              if (child.material instanceof THREE.Material) {
+                child.material.dispose();
+              }
+            }
+          });
+          townMarkersRef.current = null;
+        }
+
+        // Use a smaller preview size for performance
+        const previewSize = Math.min(worldConfig.terrain.worldSize, 20);
+        const resolution = 32;
+        const totalSize = previewSize * worldConfig.terrain.tileSize;
+
+        // Generate heightmap using simple noise (TerrainGen may not be available)
+        const vertices: number[] = [];
+        const indices: number[] = [];
+        const colors: number[] = [];
+
+        const segments = previewSize * resolution;
+        const segmentSize = totalSize / segments;
+
+        // Biome colors for visualization
+        const biomeColors: Record<string, THREE.Color> = {
+          plains: new THREE.Color(0x7cba5f),
+          forest: new THREE.Color(0x3a6b35),
+          valley: new THREE.Color(0x5a8a4f),
+          desert: new THREE.Color(0xc4a35a),
+          tundra: new THREE.Color(0xb8c8c8),
+          swamp: new THREE.Color(0x4a5a3a),
+          mountains: new THREE.Color(0x8a8a8a),
+          lakes: new THREE.Color(0x4a7ab8),
+        };
+
+        // Simple noise function for terrain
+        const noise2D = (
+          x: number,
+          z: number,
+          scale: number,
+          seed: number,
+        ): number => {
+          const sx = x * scale + seed;
+          const sz = z * scale + seed * 0.7;
+          return (
+            (Math.sin(sx * 1.3 + sz * 0.7) * 0.5 +
+              Math.sin(sx * 2.1 + sz * 1.9) * 0.25 +
+              Math.sin(sx * 4.3 + sz * 3.7) * 0.125) /
+            0.875
+          );
+        };
+
+        // Generate terrain mesh
+        for (let z = 0; z <= segments; z++) {
+          for (let x = 0; x <= segments; x++) {
+            const worldX = (x / segments - 0.5) * totalSize;
+            const worldZ = (z / segments - 0.5) * totalSize;
+
+            // Calculate height with multiple octaves
+            let height = 0;
+            let amplitude = 1;
+            let frequency = 0.005;
+            for (let i = 0; i < 4; i++) {
+              height +=
+                noise2D(worldX, worldZ, frequency, worldConfig.seed) *
+                amplitude;
+              amplitude *= 0.5;
+              frequency *= 2;
+            }
+
+            // Apply island falloff
+            const distFromCenter =
+              Math.sqrt(worldX * worldX + worldZ * worldZ) / (totalSize * 0.5);
+            const falloff = Math.max(0, 1 - Math.pow(distFromCenter, 2));
+            height =
+              height * falloff * worldConfig.terrain.maxHeight +
+              worldConfig.terrain.maxHeight * 0.2;
+
+            vertices.push(worldX, height, worldZ);
+
+            // Color based on height/biome
+            const normalizedHeight = height / worldConfig.terrain.maxHeight;
+            let color: THREE.Color;
+            if (height < worldConfig.terrain.waterThreshold + 0.5) {
+              color = biomeColors.lakes;
+            } else if (normalizedHeight < 0.3) {
+              color = biomeColors.plains;
+            } else if (normalizedHeight < 0.5) {
+              color = biomeColors.forest;
+            } else if (normalizedHeight < 0.7) {
+              color = biomeColors.valley;
+            } else {
+              color = biomeColors.mountains;
+            }
+            colors.push(color.r, color.g, color.b);
+          }
+        }
+
+        // Generate indices
+        for (let z = 0; z < segments; z++) {
+          for (let x = 0; x < segments; x++) {
+            const a = z * (segments + 1) + x;
+            const b = a + 1;
+            const c = a + segments + 1;
+            const d = c + 1;
+            indices.push(a, c, b);
+            indices.push(b, c, d);
+          }
+        }
+
+        // Create terrain geometry
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(vertices, 3),
+        );
+        geometry.setAttribute(
+          "color",
+          new THREE.Float32BufferAttribute(colors, 3),
+        );
+        geometry.setIndex(indices);
+        geometry.computeVertexNormals();
+
+        const material = new THREE.MeshStandardMaterial({
+          vertexColors: true,
+          roughness: 0.9,
+          flatShading: true,
+        });
+
+        const terrainMesh = new THREE.Mesh(geometry, material);
+        terrainMesh.receiveShadow = true;
+        sceneRef.current.add(terrainMesh);
+        terrainMeshRef.current = terrainMesh;
+
+        // Add water plane
+        const waterGeometry = new THREE.PlaneGeometry(totalSize, totalSize);
+        const waterMaterial = new THREE.MeshStandardMaterial({
+          color: 0x4a90d9,
+          transparent: true,
+          opacity: 0.7,
+          roughness: 0.1,
+        });
+        const waterMesh = new THREE.Mesh(waterGeometry, waterMaterial);
+        waterMesh.rotation.x = -Math.PI / 2;
+        waterMesh.position.y = worldConfig.terrain.waterThreshold;
+        sceneRef.current.add(waterMesh);
+        waterMeshRef.current = waterMesh;
+
+        // Add town markers if requested
+        if (showTowns) {
+          const townsGroup = new THREE.Group();
+
+          // Generate some town positions
+          const townCount = worldConfig.towns.townCount;
+          for (let i = 0; i < townCount; i++) {
+            const angle = (i / townCount) * Math.PI * 2;
+            const radius = totalSize * 0.25 + Math.random() * totalSize * 0.15;
+            const x = Math.cos(angle) * radius;
+            const z = Math.sin(angle) * radius;
+
+            // Sample height at position
+            const nx = Math.floor((x / totalSize + 0.5) * segments);
+            const nz = Math.floor((z / totalSize + 0.5) * segments);
+            const idx = (nz * (segments + 1) + nx) * 3 + 1;
+            const y = vertices[idx] || 5;
+
+            // Create marker
+            const markerGeometry = new THREE.ConeGeometry(2, 5, 8);
+            const markerMaterial = new THREE.MeshStandardMaterial({
+              color: i < 2 ? 0xff0000 : i < 5 ? 0xff8800 : 0xffff00,
+              emissive: i < 2 ? 0x330000 : i < 5 ? 0x331100 : 0x333300,
+            });
+            const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+            marker.position.set(x, y + 3, z);
+            townsGroup.add(marker);
+
+            // Add safe zone ring
+            const ringGeometry = new THREE.RingGeometry(
+              worldConfig.towns.townSizes.hamlet.safeZoneRadius * 0.8,
+              worldConfig.towns.townSizes.hamlet.safeZoneRadius,
+              32,
+            );
+            const ringMaterial = new THREE.MeshBasicMaterial({
+              color: 0x00ff00,
+              transparent: true,
+              opacity: 0.3,
+              side: THREE.DoubleSide,
+            });
+            const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+            ring.rotation.x = -Math.PI / 2;
+            ring.position.set(x, y + 0.1, z);
+            townsGroup.add(ring);
+          }
+
+          sceneRef.current.add(townsGroup);
+          townMarkersRef.current = townsGroup;
+        }
+
+        // Adjust camera for terrain view
+        if (cameraRef.current && controlsRef.current) {
+          const viewDistance = totalSize * 0.8;
+          cameraRef.current.position.set(
+            viewDistance * 0.5,
+            viewDistance * 0.4,
+            viewDistance * 0.5,
+          );
+          controlsRef.current.target.set(0, 0, 0);
+          controlsRef.current.update();
+        }
+
+        const time = performance.now() - startTime;
+        setTerrainStats({
+          tiles: previewSize * previewSize,
+          vertices: vertices.length / 3,
+          time,
+        });
+      } catch (err) {
+        console.error("Failed to generate terrain preview:", err);
+        notify.error("Failed to generate terrain preview");
+      }
+    },
+    [worldConfig],
+  );
+
+  // Enter flythrough mode
+  const enterFlythroughMode = useCallback(() => {
+    if (!rendererRef.current || !cameraRef.current || !controlsRef.current)
+      return;
+
+    setCameraMode("flythrough");
+    controlsRef.current.enabled = false;
+
+    // Request pointer lock
+    rendererRef.current.domElement.requestPointerLock();
+  }, []);
+
+  // Exit flythrough mode
+  const exitFlythroughMode = useCallback(() => {
+    if (!controlsRef.current) return;
+
+    setCameraMode("orbit");
+    controlsRef.current.enabled = true;
+
+    // Exit pointer lock
+    document.exitPointerLock();
+  }, []);
+
+  // Toggle camera mode
+  const toggleCameraMode = useCallback(() => {
+    if (cameraMode === "orbit") {
+      enterFlythroughMode();
+    } else {
+      exitFlythroughMode();
+    }
+  }, [cameraMode, enterFlythroughMode, exitFlythroughMode]);
+
+  // Set camera to player perspective height
+  const setPlayerPerspective = useCallback(() => {
+    if (!cameraRef.current) return;
+
+    setCameraMode("player");
+    cameraRef.current.position.y = cameraHeight;
+
+    // Look forward
+    const forward = new THREE.Vector3(0, 0, -1);
+    cameraRef.current.lookAt(
+      cameraRef.current.position.x + forward.x,
+      cameraRef.current.position.y + forward.y,
+      cameraRef.current.position.z + forward.z,
+    );
+
+    enterFlythroughMode();
+  }, [cameraHeight, enterFlythroughMode]);
 
   const handleAddToCollection = () => {
     if (!currentBuildingRef.current || !stats) return;
@@ -3252,6 +4782,150 @@ export const WorldBuilderPage: React.FC = () => {
     setConfigDirty(false);
   };
 
+  // Save world config to manifest
+  // CRITICAL: Merges UI-editable fields with preserved manifest fields
+  // This prevents LARP - we don't lose noise/island/biomes/vegetation configs
+  const handleSaveWorldConfig = async () => {
+    try {
+      // Get the original manifest or use sensible defaults
+      const original = originalManifestRef.current as Record<
+        string,
+        Record<string, unknown>
+      > | null;
+
+      // Build manifest by merging UI changes with preserved original values
+      const manifestConfig = {
+        version: worldConfig.version,
+        terrain: {
+          // UI-editable fields
+          seed: worldConfig.seed,
+          tileSize: worldConfig.terrain.tileSize,
+          tileResolution: worldConfig.terrain.tileResolution,
+          maxHeight: worldConfig.terrain.maxHeight,
+          waterThreshold: worldConfig.terrain.waterThreshold,
+          // Preserved from original manifest (not editable in UI yet)
+          preset: original?.terrain?.preset ?? "small-island",
+          noise: original?.terrain?.noise ?? {
+            continent: {
+              scale: 0.005,
+              octaves: 4,
+              persistence: 0.5,
+              lacunarity: 2.0,
+            },
+            detail: {
+              scale: 0.02,
+              octaves: 3,
+              persistence: 0.4,
+              lacunarity: 2.2,
+            },
+            erosion: { enabled: true, iterations: 3, strength: 0.3 },
+          },
+          island: original?.terrain?.island ?? {
+            enabled: true,
+            falloffTiles: 8,
+            coastlineNoise: { scale: 0.02, amount: 0.1 },
+            ponds: { enabled: true, count: 5, sizeRange: [3, 8], depth: 0.15 },
+          },
+          shoreline: original?.terrain?.shoreline ?? {
+            slopeMultiplier: 2.5,
+            colorBlendDistance: 3.0,
+          },
+        },
+        // Preserved from original manifest (biomes not editable in UI yet)
+        biomes: original?.biomes ?? {
+          placementSeed: 54321,
+          cellSize: 200,
+          jitterAmount: 0.4,
+          boundaryNoiseScale: 0.003,
+          blendRadius: 50,
+          heightCoupling: {
+            enabled: true,
+            mountainThreshold: 0.65,
+            valleyThreshold: 0.25,
+          },
+          distribution: {
+            plains: 0.25,
+            forest: 0.25,
+            valley: 0.15,
+            mountains: 0.1,
+            desert: 0.08,
+            swamp: 0.07,
+            tundra: 0.05,
+            lakes: 0.05,
+          },
+        },
+        towns: {
+          // Preserved from original
+          seed: (original?.towns?.seed as number) ?? 67890,
+          enabled: (original?.towns?.enabled as boolean) ?? true,
+          // UI-editable fields
+          count: worldConfig.towns.townCount,
+          worldSize:
+            worldConfig.terrain.worldSize * worldConfig.terrain.tileSize,
+          minTownSpacing: worldConfig.towns.minTownSpacing,
+          waterThreshold: worldConfig.terrain.waterThreshold,
+          // Preserved from original (town sizes not editable in UI yet)
+          sizes: original?.towns?.sizes ?? {
+            town: { count: 2, safeZoneRadius: 80, buildingCount: [8, 12] },
+            village: { count: 3, safeZoneRadius: 60, buildingCount: [4, 6] },
+            hamlet: { count: 3, safeZoneRadius: 40, buildingCount: [2, 3] },
+          },
+          preferredBiomes: original?.towns?.preferredBiomes ?? [
+            "plains",
+            "forest",
+            "valley",
+          ],
+          avoidBiomes: original?.towns?.avoidBiomes ?? [
+            "swamp",
+            "tundra",
+            "desert",
+          ],
+        },
+        roads: {
+          enabled: (original?.roads?.enabled as boolean) ?? true,
+          // UI-editable fields
+          width: worldConfig.roads.roadWidth,
+          pathStepSize: worldConfig.roads.pathStepSize,
+          smoothingIterations: worldConfig.roads.smoothingIterations,
+          extraConnectionsRatio: worldConfig.roads.extraConnectionsRatio,
+          pathfinding: {
+            costSlopeMultiplier: worldConfig.roads.costSlopeMultiplier,
+            costWaterPenalty: worldConfig.roads.costWaterPenalty,
+            heuristicWeight: worldConfig.roads.heuristicWeight,
+          },
+        },
+        // Preserved from original manifest (vegetation not editable in UI yet)
+        vegetation: original?.vegetation ?? {
+          enabled: true,
+          globalDensityMultiplier: 1.0,
+          viewDistance: 200,
+          lodDistances: { lod0: 50, lod1: 150, lod2: 300 },
+          chunkSize: 100,
+          maxInstancesPerChunk: 500,
+        },
+      };
+
+      const response = await fetch(`${API_BASE}/api/manifests/world-config`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(manifestConfig),
+      });
+
+      if (response.ok) {
+        // Update the stored manifest with our saved version
+        originalManifestRef.current = manifestConfig;
+        notify.success("World config saved to manifest");
+        setConfigDirty(false);
+      } else {
+        const error = await response.json();
+        notify.error(error.message || "Failed to save world config");
+      }
+    } catch (error) {
+      console.error("Failed to save world config:", error);
+      notify.error("Failed to save world config");
+    }
+  };
+
   const handleImportWorldConfig = (
     event: React.ChangeEvent<HTMLInputElement>,
   ) => {
@@ -3277,6 +4951,257 @@ export const WorldBuilderPage: React.FC = () => {
     setWorldConfig(DEFAULT_WORLD_CONFIG);
     setConfigDirty(false);
     notify.info("Config reset to defaults");
+  };
+
+  // Export entire world (all manifests bundled)
+  const handleExportWorld = async () => {
+    try {
+      notify.info("Exporting world data...");
+
+      // Fetch all world-related manifests
+      const [
+        worldConfigRes,
+        biomesRes,
+        buildingsRes,
+        vegetationRes,
+        worldAreasRes,
+      ] = await Promise.all([
+        fetch(`${API_BASE}/api/manifests/world-config`),
+        fetch(`${API_BASE}/api/manifests/biomes`),
+        fetch(`${API_BASE}/api/manifests/buildings`),
+        fetch(`${API_BASE}/api/manifests/vegetation`),
+        fetch(`${API_BASE}/api/manifests/world-areas`),
+      ]);
+
+      const worldBundle = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        manifests: {
+          "world-config": worldConfigRes.ok
+            ? (await worldConfigRes.json()).content
+            : null,
+          biomes: biomesRes.ok ? (await biomesRes.json()).content : null,
+          buildings: buildingsRes.ok
+            ? (await buildingsRes.json()).content
+            : null,
+          vegetation: vegetationRes.ok
+            ? (await vegetationRes.json()).content
+            : null,
+          "world-areas": worldAreasRes.ok
+            ? (await worldAreasRes.json()).content
+            : null,
+        },
+      };
+
+      const blob = new Blob([JSON.stringify(worldBundle, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `world-export-${new Date().toISOString().split("T")[0]}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      notify.success("World exported successfully");
+    } catch (error) {
+      console.error("Export failed:", error);
+      notify.error("Failed to export world");
+    }
+  };
+
+  // Import entire world (all manifests from bundle)
+  const handleImportWorld = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      let worldBundle: {
+        version?: number;
+        exportedAt?: string;
+        manifests?: Record<string, unknown>;
+      };
+
+      try {
+        worldBundle = JSON.parse(text);
+      } catch {
+        notify.error("Invalid JSON file");
+        event.target.value = "";
+        return;
+      }
+
+      // Validate bundle structure
+      if (!worldBundle.manifests || typeof worldBundle.manifests !== "object") {
+        notify.error("Invalid world bundle format: missing 'manifests' object");
+        event.target.value = "";
+        return;
+      }
+
+      // Validate at least one manifest exists
+      const manifestKeys = Object.keys(worldBundle.manifests);
+      if (manifestKeys.length === 0) {
+        notify.error("World bundle contains no manifests");
+        event.target.value = "";
+        return;
+      }
+
+      // Validate world-config if present (it's the most critical)
+      if (worldBundle.manifests["world-config"]) {
+        const worldConfig = worldBundle.manifests["world-config"] as Record<
+          string,
+          unknown
+        >;
+        if (!worldConfig.terrain && !worldConfig.version) {
+          notify.error(
+            "Invalid world-config manifest: missing terrain or version",
+          );
+          event.target.value = "";
+          return;
+        }
+      }
+
+      notify.info(`Importing ${manifestKeys.length} manifest(s)...`);
+
+      // Import each manifest
+      const imports: Promise<Response>[] = [];
+
+      if (worldBundle.manifests["world-config"]) {
+        imports.push(
+          fetch(`${API_BASE}/api/manifests/world-config`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(worldBundle.manifests["world-config"]),
+          }),
+        );
+      }
+
+      if (worldBundle.manifests["biomes"]) {
+        imports.push(
+          fetch(`${API_BASE}/api/manifests/biomes`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(worldBundle.manifests["biomes"]),
+          }),
+        );
+      }
+
+      if (worldBundle.manifests["buildings"]) {
+        imports.push(
+          fetch(`${API_BASE}/api/manifests/buildings`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(worldBundle.manifests["buildings"]),
+          }),
+        );
+      }
+
+      if (worldBundle.manifests["vegetation"]) {
+        imports.push(
+          fetch(`${API_BASE}/api/manifests/vegetation`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(worldBundle.manifests["vegetation"]),
+          }),
+        );
+      }
+
+      if (worldBundle.manifests["world-areas"]) {
+        imports.push(
+          fetch(`${API_BASE}/api/manifests/world-areas`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(worldBundle.manifests["world-areas"]),
+          }),
+        );
+      }
+
+      await Promise.all(imports);
+
+      // Reload the world config and store as original manifest
+      if (worldBundle.manifests["world-config"]) {
+        // Cast to manifest config type for accessing properties
+        interface ManifestConfig {
+          version?: number;
+          terrain?: {
+            seed?: number;
+            tileSize?: number;
+            worldSize?: number;
+            tileResolution?: number;
+            maxHeight?: number;
+            waterThreshold?: number;
+          };
+          towns?: { count?: number; minTownSpacing?: number };
+          roads?: {
+            width?: number;
+            pathStepSize?: number;
+            smoothingIterations?: number;
+            extraConnectionsRatio?: number;
+            pathfinding?: {
+              costSlopeMultiplier?: number;
+              costWaterPenalty?: number;
+              heuristicWeight?: number;
+            };
+          };
+        }
+        const config = worldBundle.manifests["world-config"] as ManifestConfig;
+        // Store the full imported manifest to preserve non-editable fields
+        originalManifestRef.current = config as Record<string, unknown>;
+
+        // Use ?? (nullish coalescing) to preserve 0 values
+        setWorldConfig((prev) => ({
+          ...prev,
+          version: config.version ?? prev.version,
+          seed: config.terrain?.seed ?? prev.seed,
+          terrain: {
+            ...prev.terrain,
+            tileSize: config.terrain?.tileSize ?? prev.terrain.tileSize,
+            worldSize: config.terrain?.worldSize ?? prev.terrain.worldSize,
+            tileResolution:
+              config.terrain?.tileResolution ?? prev.terrain.tileResolution,
+            maxHeight: config.terrain?.maxHeight ?? prev.terrain.maxHeight,
+            waterThreshold:
+              config.terrain?.waterThreshold ?? prev.terrain.waterThreshold,
+          },
+          towns: {
+            ...prev.towns,
+            townCount: config.towns?.count ?? prev.towns.townCount,
+            minTownSpacing:
+              config.towns?.minTownSpacing ?? prev.towns.minTownSpacing,
+          },
+          roads: {
+            ...prev.roads,
+            roadWidth: config.roads?.width ?? prev.roads.roadWidth,
+            pathStepSize: config.roads?.pathStepSize ?? prev.roads.pathStepSize,
+            smoothingIterations:
+              config.roads?.smoothingIterations ??
+              prev.roads.smoothingIterations,
+            extraConnectionsRatio:
+              config.roads?.extraConnectionsRatio ??
+              prev.roads.extraConnectionsRatio,
+            costSlopeMultiplier:
+              config.roads?.pathfinding?.costSlopeMultiplier ??
+              prev.roads.costSlopeMultiplier,
+            costWaterPenalty:
+              config.roads?.pathfinding?.costWaterPenalty ??
+              prev.roads.costWaterPenalty,
+            heuristicWeight:
+              config.roads?.pathfinding?.heuristicWeight ??
+              prev.roads.heuristicWeight,
+          },
+        }));
+      }
+
+      notify.success("World imported successfully");
+      setConfigDirty(false);
+    } catch (error) {
+      console.error("Import failed:", error);
+      notify.error("Failed to import world");
+    }
+
+    // Reset file input
+    event.target.value = "";
   };
 
   // Tab button component
@@ -3347,6 +5272,26 @@ export const WorldBuilderPage: React.FC = () => {
               tab="roads"
               icon={<Route className="w-3 h-3" />}
               label="Roads"
+            />
+            <TabButton
+              tab="assets"
+              icon={<Grid3x3 className="w-3 h-3" />}
+              label="Assets & LOD"
+            />
+            <TabButton
+              tab="trees"
+              icon={<TreePine className="w-3 h-3" />}
+              label="Trees"
+            />
+            <TabButton
+              tab="rocks"
+              icon={<Gem className="w-3 h-3" />}
+              label="Rocks"
+            />
+            <TabButton
+              tab="plants"
+              icon={<Flower2 className="w-3 h-3" />}
+              label="Plants"
             />
           </div>
 
@@ -3519,7 +5464,26 @@ export const WorldBuilderPage: React.FC = () => {
                     <h2 className="text-lg font-semibold text-text-primary">
                       Terrain Config
                     </h2>
+                    {isLoadingManifest && (
+                      <span className="text-xs text-text-muted animate-pulse">
+                        Loading...
+                      </span>
+                    )}
                   </div>
+
+                  {/* Manifest loading error banner */}
+                  {manifestError && (
+                    <div className="mb-4 p-3 rounded-md bg-red-500/10 border border-red-500/20 text-red-400 text-sm flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                      <span>{manifestError}</span>
+                      <button
+                        onClick={() => setManifestError(null)}
+                        className="ml-auto text-red-400 hover:text-red-300"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )}
 
                   <Card>
                     <CardHeader>
@@ -3629,8 +5593,10 @@ export const WorldBuilderPage: React.FC = () => {
                       />
                       <NumberInput
                         label="Flatness Sample Radius"
-                        value={worldConfig.towns.flatnessRadius}
-                        onChange={(v) => updateTownConfig("flatnessRadius", v)}
+                        value={worldConfig.towns.flatnessSampleRadius}
+                        onChange={(v) =>
+                          updateTownConfig("flatnessSampleRadius", v)
+                        }
                         min={10}
                         max={100}
                       />
@@ -3800,30 +5766,21 @@ export const WorldBuilderPage: React.FC = () => {
                     <CardHeader>
                       <CardTitle className="text-sm">Building Types</CardTitle>
                     </CardHeader>
-                    <CardContent className="space-y-2">
-                      {["bank", "store", "smithy", "inn", "house", "well"].map(
-                        (type) => (
-                          <label
+                    <CardContent className="space-y-3">
+                      {Object.entries(worldConfig.towns.buildingTypes).map(
+                        ([type, config]) => (
+                          <div
                             key={type}
-                            className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer"
+                            className="flex items-center justify-between text-sm text-text-secondary border-b border-border pb-2"
                           >
-                            <input
-                              type="checkbox"
-                              checked={worldConfig.towns.buildingTypes.includes(
-                                type,
-                              )}
-                              onChange={(e) => {
-                                const newTypes = e.target.checked
-                                  ? [...worldConfig.towns.buildingTypes, type]
-                                  : worldConfig.towns.buildingTypes.filter(
-                                      (t) => t !== type,
-                                    );
-                                updateTownConfig("buildingTypes", newTypes);
-                              }}
-                              className="w-4 h-4"
-                            />
-                            {type.charAt(0).toUpperCase() + type.slice(1)}
-                          </label>
+                            <span className="font-medium capitalize">
+                              {type}
+                            </span>
+                            <span className="text-xs">
+                              {config.width}x{config.depth} (p:{config.priority}
+                              )
+                            </span>
+                          </div>
                         ),
                       )}
                     </CardContent>
@@ -3884,71 +5841,505 @@ export const WorldBuilderPage: React.FC = () => {
                 </>
               )}
 
-              {/* Config Actions (shown on all tabs except buildings) */}
-              {activeTab !== "buildings" && (
-                <div className="space-y-2 pt-4 border-t border-border-primary">
-                  <div className="flex items-center gap-2 mb-2">
-                    <h3 className="text-sm font-medium text-text-primary">
-                      World Seed
-                    </h3>
-                  </div>
-                  <input
-                    type="number"
-                    value={worldConfig.seed}
-                    onChange={(e) => {
-                      setWorldConfig((prev) => ({
-                        ...prev,
-                        seed: Number(e.target.value),
-                      }));
-                      setConfigDirty(true);
-                    }}
-                    className="w-full px-3 py-2 bg-bg-primary border border-border-primary rounded-md text-text-primary text-sm"
-                  />
+              {/* Assets & LOD Tab */}
+              {activeTab === "assets" && <AssetsLODPanel />}
 
-                  <div className="flex gap-2 mt-4">
-                    <Button
-                      onClick={handleExportWorldConfig}
-                      variant="secondary"
-                      className="flex-1"
-                    >
-                      <Save className="w-4 h-4 mr-1" />
-                      Export
-                    </Button>
-                    <label className="flex-1">
-                      <Button variant="secondary" className="w-full" as="span">
-                        <Upload className="w-4 h-4 mr-1" />
-                        Import
-                      </Button>
+              {/* Trees Tab */}
+              {activeTab === "trees" && (
+                <>
+                  <div className="flex items-center gap-2 mb-4">
+                    <TreePine className="w-5 h-5 text-primary" />
+                    <h2 className="text-lg font-semibold text-text-primary">
+                      Tree Generator
+                    </h2>
+                  </div>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-sm">Preset</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <select
+                        value={treePreset}
+                        onChange={(e) => setTreePreset(e.target.value)}
+                        className="w-full px-3 py-2 bg-bg-primary border border-border-primary rounded-md text-text-primary text-sm"
+                      >
+                        {treePresetNames.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-sm">Seed</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
                       <input
-                        type="file"
-                        accept=".json"
-                        onChange={handleImportWorldConfig}
-                        className="hidden"
+                        type="number"
+                        value={treeSeed}
+                        onChange={(e) => setTreeSeed(Number(e.target.value))}
+                        className="w-full px-3 py-2 bg-bg-primary border border-border-primary rounded-md text-text-primary text-sm"
                       />
-                    </label>
-                  </div>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() =>
+                          setTreeSeed(Math.floor(Math.random() * 99999))
+                        }
+                        className="w-full"
+                      >
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                        Randomize
+                      </Button>
+                    </CardContent>
+                  </Card>
 
-                  <Button
-                    onClick={handleResetConfig}
-                    variant="ghost"
-                    className="w-full text-text-muted"
-                  >
-                    Reset to Defaults
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-sm">Options</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={showLeaves}
+                          onChange={(e) => setShowLeaves(e.target.checked)}
+                          className="w-4 h-4"
+                        />
+                        Show Leaves
+                      </label>
+                    </CardContent>
+                  </Card>
+
+                  <Button onClick={generateTreeMesh} className="w-full">
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    Generate Tree
                   </Button>
 
-                  {configDirty && (
-                    <div className="text-xs text-amber-500 text-center mt-2">
-                      Config has unsaved changes
-                    </div>
+                  {treeStats && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-sm">Statistics</CardTitle>
+                      </CardHeader>
+                      <CardContent className="text-xs text-text-secondary space-y-1">
+                        <p>Stems: {treeStats.stems}</p>
+                        <p>Leaves: {treeStats.leaves}</p>
+                        <p>Vertices: {treeStats.vertices.toLocaleString()}</p>
+                        <p>Triangles: {treeStats.triangles.toLocaleString()}</p>
+                        <p>Time: {treeStats.time.toFixed(1)}ms</p>
+                      </CardContent>
+                    </Card>
                   )}
-                </div>
+                </>
               )}
+
+              {/* Rocks Tab */}
+              {activeTab === "rocks" && (
+                <>
+                  <div className="flex items-center gap-2 mb-4">
+                    <Gem className="w-5 h-5 text-primary" />
+                    <h2 className="text-lg font-semibold text-text-primary">
+                      Rock Generator
+                    </h2>
+                  </div>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-sm">Shape Preset</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <select
+                        value={rockPreset}
+                        onChange={(e) => setRockPreset(e.target.value)}
+                        className="w-full px-3 py-2 bg-bg-primary border border-border-primary rounded-md text-text-primary text-sm"
+                      >
+                        {Object.keys(ROCK_SHAPE_PRESETS).map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-sm">Seed</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      <input
+                        type="text"
+                        value={rockSeed}
+                        onChange={(e) => setRockSeed(e.target.value)}
+                        className="w-full px-3 py-2 bg-bg-primary border border-border-primary rounded-md text-text-primary text-sm"
+                      />
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() =>
+                          setRockSeed(
+                            `rock-${Math.random().toString(36).slice(2, 8)}`,
+                          )
+                        }
+                        className="w-full"
+                      >
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                        Randomize
+                      </Button>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-sm">Quality</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs text-text-secondary">
+                          Subdivisions
+                        </label>
+                        <input
+                          type="number"
+                          value={rockSubdivisions}
+                          onChange={(e) =>
+                            setRockSubdivisions(Number(e.target.value))
+                          }
+                          min={1}
+                          max={6}
+                          className="w-20 px-2 py-1 bg-bg-primary border border-border-primary rounded text-text-primary text-xs text-right"
+                        />
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-sm">Display</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={rockFlatShading}
+                          onChange={(e) => setRockFlatShading(e.target.checked)}
+                          className="w-4 h-4"
+                        />
+                        Flat Shading
+                      </label>
+                      <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={rockWireframe}
+                          onChange={(e) => setRockWireframe(e.target.checked)}
+                          className="w-4 h-4"
+                        />
+                        Wireframe
+                      </label>
+                    </CardContent>
+                  </Card>
+
+                  <Button onClick={generateRockMesh} className="w-full">
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    Generate Rock
+                  </Button>
+
+                  {rockStats && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-sm">Statistics</CardTitle>
+                      </CardHeader>
+                      <CardContent className="text-xs text-text-secondary space-y-1">
+                        <p>Vertices: {rockStats.vertices.toLocaleString()}</p>
+                        <p>Triangles: {rockStats.triangles.toLocaleString()}</p>
+                        <p>Time: {rockStats.time.toFixed(1)}ms</p>
+                      </CardContent>
+                    </Card>
+                  )}
+                </>
+              )}
+
+              {/* Plants Tab */}
+              {activeTab === "plants" && (
+                <>
+                  <div className="flex items-center gap-2 mb-4">
+                    <Flower2 className="w-5 h-5 text-primary" />
+                    <h2 className="text-lg font-semibold text-text-primary">
+                      Plant Generator
+                    </h2>
+                  </div>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-sm">Preset</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <select
+                        value={plantPreset}
+                        onChange={(e) =>
+                          setPlantPreset(e.target.value as PlantPresetName)
+                        }
+                        className="w-full px-3 py-2 bg-bg-primary border border-border-primary rounded-md text-text-primary text-sm"
+                      >
+                        {plantPresetNames.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-sm">Seed</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      <input
+                        type="number"
+                        value={plantSeed}
+                        onChange={(e) => setPlantSeed(Number(e.target.value))}
+                        className="w-full px-3 py-2 bg-bg-primary border border-border-primary rounded-md text-text-primary text-sm"
+                      />
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() =>
+                          setPlantSeed(Math.floor(Math.random() * 99999))
+                        }
+                        className="w-full"
+                      >
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                        Randomize
+                      </Button>
+                    </CardContent>
+                  </Card>
+
+                  <Button onClick={generatePlantMesh} className="w-full">
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    Generate Plant
+                  </Button>
+
+                  {plantStats && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-sm">Statistics</CardTitle>
+                      </CardHeader>
+                      <CardContent className="text-xs text-text-secondary space-y-1">
+                        <p>Leaves: {plantStats.leaves}</p>
+                        <p>Vertices: {plantStats.vertices.toLocaleString()}</p>
+                        <p>
+                          Triangles: {plantStats.triangles.toLocaleString()}
+                        </p>
+                        <p>Time: {plantStats.time.toFixed(1)}ms</p>
+                      </CardContent>
+                    </Card>
+                  )}
+                </>
+              )}
+
+              {/* Config Actions (shown on all tabs except buildings and assets) */}
+              {activeTab !== "buildings" &&
+                activeTab !== "assets" &&
+                activeTab !== "trees" &&
+                activeTab !== "rocks" &&
+                activeTab !== "plants" && (
+                  <div className="space-y-2 pt-4 border-t border-border-primary">
+                    <div className="flex items-center gap-2 mb-2">
+                      <h3 className="text-sm font-medium text-text-primary">
+                        World Seed
+                      </h3>
+                    </div>
+                    <input
+                      type="number"
+                      value={worldConfig.seed}
+                      onChange={(e) => {
+                        setWorldConfig((prev) => ({
+                          ...prev,
+                          seed: Number(e.target.value),
+                        }));
+                        setConfigDirty(true);
+                      }}
+                      className="w-full px-3 py-2 bg-bg-primary border border-border-primary rounded-md text-text-primary text-sm"
+                    />
+
+                    {/* Save to Manifest */}
+                    <Button
+                      onClick={handleSaveWorldConfig}
+                      variant="primary"
+                      className="w-full"
+                      disabled={!configDirty}
+                    >
+                      <Save className="w-4 h-4 mr-1" />
+                      Save to Manifest
+                    </Button>
+
+                    <div className="flex gap-2 mt-2">
+                      <Button
+                        onClick={handleExportWorldConfig}
+                        variant="secondary"
+                        className="flex-1"
+                      >
+                        <Download className="w-4 h-4 mr-1" />
+                        Export JSON
+                      </Button>
+                      <label className="flex-1 cursor-pointer">
+                        <span className="inline-flex items-center justify-center w-full px-4 py-2 text-sm font-medium rounded-md border border-border bg-background hover:bg-surface text-text-secondary">
+                          <Upload className="w-4 h-4 mr-1" />
+                          Import
+                        </span>
+                        <input
+                          type="file"
+                          accept=".json"
+                          onChange={handleImportWorldConfig}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+
+                    <Button
+                      onClick={handleResetConfig}
+                      variant="ghost"
+                      className="w-full text-text-muted mt-2"
+                    >
+                      Reset to Defaults
+                    </Button>
+
+                    {configDirty && (
+                      <div className="text-xs text-amber-500 text-center mt-2">
+                        Config has unsaved changes
+                      </div>
+                    )}
+
+                    {/* World Bundle Export/Import */}
+                    <div className="border-t border-border-primary pt-4 mt-4">
+                      <h4 className="text-xs font-medium text-text-secondary mb-2">
+                        World Bundle (All Data)
+                      </h4>
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={handleExportWorld}
+                          variant="secondary"
+                          size="sm"
+                          className="flex-1"
+                        >
+                          <Download className="w-3 h-3 mr-1" />
+                          Export All
+                        </Button>
+                        <label className="flex-1 cursor-pointer">
+                          <span className="inline-flex items-center justify-center w-full px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-background hover:bg-surface text-text-secondary">
+                            <Upload className="w-3 h-3 mr-1" />
+                            Import All
+                          </span>
+                          <input
+                            type="file"
+                            accept=".json"
+                            onChange={handleImportWorld}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+                      <p className="text-xs text-text-muted mt-1">
+                        Exports/imports all world manifests together
+                      </p>
+                    </div>
+                  </div>
+                )}
             </div>
           </div>
         </div>
 
         {/* 3D Viewport */}
-        <div ref={containerRef} className="flex-1 relative" />
+        <div ref={containerRef} className="flex-1 relative">
+          {/* Camera Controls Overlay */}
+          <div className="absolute top-4 right-4 flex flex-col gap-2 z-10">
+            {/* Camera Mode Toggle */}
+            <div className="bg-bg-secondary bg-opacity-90 backdrop-blur-sm rounded-lg p-2 shadow-lg">
+              <div className="flex gap-1">
+                <button
+                  onClick={() => {
+                    setCameraMode("orbit");
+                    if (controlsRef.current) controlsRef.current.enabled = true;
+                    document.exitPointerLock();
+                  }}
+                  className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                    cameraMode === "orbit"
+                      ? "bg-primary text-white"
+                      : "text-text-secondary hover:text-text-primary hover:bg-bg-tertiary"
+                  }`}
+                >
+                  Orbit
+                </button>
+                <button
+                  onClick={enterFlythroughMode}
+                  className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                    cameraMode === "flythrough"
+                      ? "bg-primary text-white"
+                      : "text-text-secondary hover:text-text-primary hover:bg-bg-tertiary"
+                  }`}
+                >
+                  Fly
+                </button>
+                <button
+                  onClick={setPlayerPerspective}
+                  className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                    cameraMode === "player"
+                      ? "bg-primary text-white"
+                      : "text-text-secondary hover:text-text-primary hover:bg-bg-tertiary"
+                  }`}
+                >
+                  Player
+                </button>
+              </div>
+            </div>
+
+            {/* Flythrough Help */}
+            {(cameraMode === "flythrough" || cameraMode === "player") && (
+              <div className="bg-bg-secondary bg-opacity-90 backdrop-blur-sm rounded-lg p-3 shadow-lg text-xs">
+                <div className="text-text-primary font-medium mb-2">
+                  Controls
+                </div>
+                <div className="space-y-1 text-text-secondary">
+                  <div>WASD - Move</div>
+                  <div>Mouse - Look</div>
+                  <div>Space - Up</div>
+                  <div>Ctrl - Down</div>
+                  <div>Shift - Sprint</div>
+                  <div>Esc - Exit</div>
+                </div>
+              </div>
+            )}
+
+            {/* Speed Control (when in flythrough) */}
+            {(cameraMode === "flythrough" || cameraMode === "player") && (
+              <div className="bg-bg-secondary bg-opacity-90 backdrop-blur-sm rounded-lg p-3 shadow-lg">
+                <label className="text-xs text-text-secondary block mb-1">
+                  Speed: {moveSpeed} m/s
+                </label>
+                <input
+                  type="range"
+                  min="2"
+                  max="50"
+                  value={moveSpeed}
+                  onChange={(e) => setMoveSpeed(Number(e.target.value))}
+                  className="w-full h-1 bg-bg-tertiary rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Click to fly prompt (when not in flythrough and clicking viewport) */}
+          {cameraMode === "orbit" && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-0 hover:opacity-100 transition-opacity">
+              <div className="bg-black bg-opacity-50 text-white px-4 py-2 rounded-lg text-sm">
+                Click Fly or Player mode to enter first-person view
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

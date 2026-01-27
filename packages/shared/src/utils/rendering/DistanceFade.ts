@@ -1,16 +1,20 @@
 /**
  * Distance-based entity fade using dithered dissolve shader.
+ * Includes camera-to-player occlusion dissolve (RuneScape-style).
  * Falls back to opacity for VRM/incompatible materials.
  */
 
 import THREE from "../../extras/three/three";
 import { DISTANCE_CONSTANTS } from "../../constants/GameConstants";
+import { GPU_VEG_CONFIG } from "../../systems/shared/world/GPUVegetation";
 
 export interface DistanceFadeConfig {
   fadeStart: number;
   fadeEnd: number;
   fadeStartSq?: number;
   fadeEndSq?: number;
+  /** Enable camera-to-player occlusion dissolve (default: true) */
+  enableOcclusionDissolve?: boolean;
 }
 
 /** Pre-built configs for entity types */
@@ -41,46 +45,134 @@ export const enum FadeState {
   CULLED = 2,
 }
 
-// Shader code for dithered dissolve (uses discard, not alpha blending)
+// Shader uniforms for dithered dissolve with occlusion support
 const DISSOLVE_SHADER_UNIFORMS = `
 uniform float uFadeAmount;
 uniform float uDitherScale;
+uniform vec3 uCameraPos;
+uniform vec3 uPlayerPos;
+uniform float uOcclusionEnabled;
 `;
 
+// Vertex shader addition to pass world position to fragment
+const DISSOLVE_VERTEX_ADDITION = `
+varying vec3 vWorldPositionDissolve;
+`;
+
+const DISSOLVE_VERTEX_WORLDPOS = `
+vWorldPositionDissolve = (modelMatrix * vec4(position, 1.0)).xyz;
+`;
+
+// Fragment shader addition for receiving world position
+const DISSOLVE_FRAGMENT_VARYING = `
+varying vec3 vWorldPositionDissolve;
+`;
+
+// Fragment shader code for dithered dissolve with RuneScape-style cone occlusion
 const DISSOLVE_SHADER_FRAGMENT = `
+// Distance-based dithering
 vec2 ditherCoord = gl_FragCoord.xy * uDitherScale;
 float hash = fract(sin(dot(ditherCoord, vec2(12.9898, 78.233))) * 43758.5453);
-float threshold = hash + uFadeAmount - 0.5;
+
+// Base fade from distance
+float fadeValue = uFadeAmount;
+
+// Camera-to-player occlusion dissolve (RuneScape-style cone)
+if (uOcclusionEnabled > 0.5) {
+  vec3 camToPlayer = uPlayerPos - uCameraPos;
+  vec3 camToFrag = vWorldPositionDissolve - uCameraPos;
+  
+  float ctLengthSq = dot(camToPlayer, camToPlayer);
+  float ctLength = sqrt(ctLengthSq);
+  vec3 ctDir = camToPlayer / ctLength;
+  
+  // Project fragment onto camera-player line
+  float projDist = dot(camToFrag, ctDir);
+  
+  // Check if in occlusion range
+  float nearMargin = ${GPU_VEG_CONFIG.OCCLUSION_NEAR_MARGIN.toFixed(1)};
+  float farMargin = ${GPU_VEG_CONFIG.OCCLUSION_FAR_MARGIN.toFixed(1)};
+  float inRange = step(nearMargin, projDist) * step(projDist, ctLength - farMargin);
+  
+  // Calculate perpendicular distance
+  vec3 projPoint = uCameraPos + projDist * ctDir;
+  float perpDist = distance(vWorldPositionDissolve, projPoint);
+  
+  // CONE RADIUS - expands from camera toward player (RuneScape-style)
+  float cameraRadius = ${GPU_VEG_CONFIG.OCCLUSION_CAMERA_RADIUS.toFixed(2)};
+  float playerRadius = ${GPU_VEG_CONFIG.OCCLUSION_PLAYER_RADIUS.toFixed(2)};
+  float distanceScale = ${GPU_VEG_CONFIG.OCCLUSION_DISTANCE_SCALE.toFixed(3)};
+  float t = clamp(projDist / ctLength, 0.0, 1.0);
+  float coneRadius = cameraRadius + t * (playerRadius - cameraRadius) + ctLength * distanceScale;
+  
+  // Sharp edge falloff (RuneScape-style binary disappearance)
+  float edgeSharpness = ${GPU_VEG_CONFIG.OCCLUSION_EDGE_SHARPNESS.toFixed(2)};
+  float edgeStart = coneRadius * (1.0 - edgeSharpness);
+  float occlusionFade = (1.0 - smoothstep(edgeStart, coneRadius, perpDist)) * ${GPU_VEG_CONFIG.OCCLUSION_STRENGTH.toFixed(2)} * inRange;
+  
+  // Combine with distance fade
+  fadeValue = max(fadeValue, occlusionFade);
+}
+
+float threshold = hash + fadeValue - 0.5;
 if (threshold > 0.5) discard;
 `;
 
-/** Apply dissolve shader to material, returns uniform refs for updating fade */
-function applyDissolveShader(material: THREE.Material): {
+/** Dissolve uniforms structure with occlusion support */
+export type DissolveUniforms = {
   fadeAmount: { value: number };
   ditherScale: { value: number };
-} | null {
+  cameraPos: { value: THREE.Vector3 };
+  playerPos: { value: THREE.Vector3 };
+  occlusionEnabled: { value: number };
+};
+
+/** Apply dissolve shader to material, returns uniform refs for updating fade */
+function applyDissolveShader(
+  material: THREE.Material,
+  enableOcclusion: boolean = true,
+): DissolveUniforms | null {
   if (!material || typeof material.onBeforeCompile !== "function") return null;
 
   // Check if already patched
   const matWithUniforms = material as THREE.Material & {
-    _dissolveUniforms?: {
-      fadeAmount: { value: number };
-      ditherScale: { value: number };
-    };
+    _dissolveUniforms?: DissolveUniforms;
   };
   if (matWithUniforms._dissolveUniforms)
     return matWithUniforms._dissolveUniforms;
 
-  const uniforms = { fadeAmount: { value: 0.0 }, ditherScale: { value: 0.01 } };
+  const uniforms: DissolveUniforms = {
+    fadeAmount: { value: 0.0 },
+    ditherScale: { value: 0.01 },
+    cameraPos: { value: new THREE.Vector3() },
+    playerPos: { value: new THREE.Vector3() },
+    occlusionEnabled: { value: enableOcclusion ? 1.0 : 0.0 },
+  };
   const originalOnBeforeCompile = material.onBeforeCompile;
 
   material.onBeforeCompile = (shader, renderer) => {
     originalOnBeforeCompile?.call(material, shader, renderer);
 
+    // Add uniforms
     shader.uniforms.uFadeAmount = uniforms.fadeAmount;
     shader.uniforms.uDitherScale = uniforms.ditherScale;
-    shader.vertexShader = DISSOLVE_SHADER_UNIFORMS + shader.vertexShader;
-    shader.fragmentShader = DISSOLVE_SHADER_UNIFORMS + shader.fragmentShader;
+    shader.uniforms.uCameraPos = uniforms.cameraPos;
+    shader.uniforms.uPlayerPos = uniforms.playerPos;
+    shader.uniforms.uOcclusionEnabled = uniforms.occlusionEnabled;
+
+    // Patch vertex shader
+    shader.vertexShader =
+      DISSOLVE_SHADER_UNIFORMS + DISSOLVE_VERTEX_ADDITION + shader.vertexShader;
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <worldpos_vertex>",
+      `#include <worldpos_vertex>\n${DISSOLVE_VERTEX_WORLDPOS}`,
+    );
+
+    // Patch fragment shader
+    shader.fragmentShader =
+      DISSOLVE_SHADER_UNIFORMS +
+      DISSOLVE_FRAGMENT_VARYING +
+      shader.fragmentShader;
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <alphatest_fragment>",
       `#include <alphatest_fragment>\n${DISSOLVE_SHADER_FRAGMENT}`,
@@ -109,12 +201,11 @@ const _fadeResult: FadeUpdateResult = {
 
 /** Manages distance-based fade for an entity (shader dissolve or opacity fallback) */
 export class DistanceFadeController {
-  private config: Required<DistanceFadeConfig>;
+  private config: Required<DistanceFadeConfig> & {
+    enableOcclusionDissolve: boolean;
+  };
   private rootObject: THREE.Object3D;
-  private materialUniforms: Array<{
-    fadeAmount: { value: number };
-    ditherScale: { value: number };
-  }> = [];
+  private materialUniforms: DissolveUniforms[] = [];
   private useShaderFade: boolean = false;
   private lastState: FadeState = FadeState.VISIBLE;
   private lastFadeAmount: number = 0;
@@ -123,7 +214,7 @@ export class DistanceFadeController {
    * Create a new DistanceFadeController
    *
    * @param rootObject - The root Object3D of the entity (typically entity.node or entity.mesh)
-   * @param config - Fade configuration (fadeStart, fadeEnd distances)
+   * @param config - Fade configuration (fadeStart, fadeEnd distances, occlusion settings)
    * @param enableShaderFade - Whether to attempt shader-based dissolve (default: true)
    */
   constructor(
@@ -137,6 +228,7 @@ export class DistanceFadeController {
       fadeEnd: config.fadeEnd,
       fadeStartSq: config.fadeStartSq ?? config.fadeStart * config.fadeStart,
       fadeEndSq: config.fadeEndSq ?? config.fadeEnd * config.fadeEnd,
+      enableOcclusionDissolve: config.enableOcclusionDissolve !== false, // Default: enabled
     };
 
     if (enableShaderFade) {
@@ -160,7 +252,10 @@ export class DistanceFadeController {
             continue;
           }
 
-          const uniforms = applyDissolveShader(material);
+          const uniforms = applyDissolveShader(
+            material,
+            this.config.enableOcclusionDissolve,
+          );
           if (uniforms) {
             this.materialUniforms.push(uniforms);
             this.useShaderFade = true;
@@ -185,12 +280,28 @@ export class DistanceFadeController {
     return false;
   }
 
-  /** Update fade based on XZ distance from camera */
+  /**
+   * Update fade based on XZ distance from camera.
+   * Also updates camera/player positions for occlusion dissolve.
+   *
+   * @param cameraX - Camera X position
+   * @param cameraZ - Camera Z position (for distance calculation)
+   * @param entityX - Entity X position
+   * @param entityZ - Entity Z position
+   * @param cameraY - Camera Y position (for occlusion, optional)
+   * @param playerX - Player X position (for occlusion target, optional)
+   * @param playerY - Player Y position (for occlusion target, optional)
+   * @param playerZ - Player Z position (for occlusion target, optional)
+   */
   update(
     cameraX: number,
     cameraZ: number,
     entityX: number,
     entityZ: number,
+    cameraY?: number,
+    playerX?: number,
+    playerY?: number,
+    playerZ?: number,
   ): FadeUpdateResult {
     const dx = entityX - cameraX;
     const dz = entityZ - cameraZ;
@@ -221,11 +332,44 @@ export class DistanceFadeController {
       this.lastFadeAmount = fadeAmount;
     }
 
+    // Update occlusion uniforms if shader fade is active
+    if (this.useShaderFade && this.materialUniforms.length > 0) {
+      const camY = cameraY ?? 0;
+      const plrX = playerX ?? cameraX;
+      const plrY = playerY ?? camY;
+      const plrZ = playerZ ?? cameraZ;
+
+      for (const uniforms of this.materialUniforms) {
+        uniforms.cameraPos.value.set(cameraX, camY, cameraZ);
+        uniforms.playerPos.value.set(plrX, plrY, plrZ);
+      }
+    }
+
     _fadeResult.state = state;
     _fadeResult.fadeAmount = fadeAmount;
     _fadeResult.distanceSq = distanceSq;
     _fadeResult.visible = state !== FadeState.CULLED;
     return _fadeResult;
+  }
+
+  /**
+   * Update only the camera and player positions for occlusion dissolve.
+   * Call this when positions change but you don't need full distance-based update.
+   */
+  updateOcclusionPositions(
+    cameraX: number,
+    cameraY: number,
+    cameraZ: number,
+    playerX: number,
+    playerY: number,
+    playerZ: number,
+  ): void {
+    if (!this.useShaderFade) return;
+
+    for (const uniforms of this.materialUniforms) {
+      uniforms.cameraPos.value.set(cameraX, cameraY, cameraZ);
+      uniforms.playerPos.value.set(playerX, playerY, playerZ);
+    }
   }
 
   private applyFade(state: FadeState, fadeAmount: number): void {
@@ -280,6 +424,15 @@ export class DistanceFadeController {
       this.config.fadeEnd = config.fadeEnd;
       this.config.fadeEndSq = config.fadeEnd * config.fadeEnd;
     }
+    if (config.enableOcclusionDissolve !== undefined) {
+      this.config.enableOcclusionDissolve = config.enableOcclusionDissolve;
+      // Update shader uniforms
+      for (const uniforms of this.materialUniforms) {
+        uniforms.occlusionEnabled.value = config.enableOcclusionDissolve
+          ? 1.0
+          : 0.0;
+      }
+    }
   }
 
   getState(): FadeState {
@@ -293,6 +446,9 @@ export class DistanceFadeController {
   }
   hasShaderFade(): boolean {
     return this.useShaderFade;
+  }
+  hasOcclusionDissolve(): boolean {
+    return this.config.enableOcclusionDissolve && this.useShaderFade;
   }
 
   dispose(): void {

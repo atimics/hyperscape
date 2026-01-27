@@ -10,7 +10,8 @@ import {
   calculateDistance,
   groundToTerrain,
 } from "../../../utils/game/EntityUtils";
-import { EntityManager } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import { EntityManager } from "./EntityManager";
 
 /**
  * Mob NPC System - GDD Compliant

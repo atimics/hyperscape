@@ -73,13 +73,14 @@ function getPositionArray(
 }
 
 function selectScriptedGoal(
-  availableGoals: ReturnType<typeof getAvailableGoals>,
+  templates: ScoredGoalTemplate[],
   role: string,
-) {
+): ScoredGoalTemplate {
   const normalizedRole = role.toLowerCase();
+  // Match role to template type (note: ScoredGoalTemplate uses "combat" not "combat_training")
   const preferredType =
     normalizedRole === "combat"
-      ? "combat_training"
+      ? "combat"
       : normalizedRole === "woodcutting"
         ? "woodcutting"
         : normalizedRole === "fishing"
@@ -89,15 +90,13 @@ function selectScriptedGoal(
             : null;
 
   if (preferredType) {
-    const preferred = availableGoals.find(
-      (goal) => goal.type === preferredType,
-    );
+    const preferred = templates.find((goal) => goal.type === preferredType);
     if (preferred) {
       return preferred;
     }
   }
 
-  return availableGoals[0];
+  return templates[0];
 }
 
 /**
@@ -152,7 +151,7 @@ export const setGoalAction: Action = {
 
   handler: async (
     runtime: IAgentRuntime,
-    _message: Memory,
+    message: Memory,
     _state?: State,
     _options?: HandlerOptionsParam,
     callback?: HandlerCallback,
@@ -211,9 +210,9 @@ export const setGoalAction: Action = {
 
       // Get top goal templates (already scored and sorted by goalTemplatesProvider)
       const allTemplates = goalTemplatesData?.templates || [];
-      const goalTemplates = goalTemplatesData?.topTemplates || allTemplates;
+      const availableGoals = goalTemplatesData?.topTemplates || allTemplates;
 
-      if (goalTemplates.length === 0) {
+      if (availableGoals.length === 0) {
         logger.warn("[SET_GOAL] No goal templates available from provider");
         await callback?.({
           text: "🤔 I don't have any goals available right now. Something may be wrong with my goal system.",
@@ -318,7 +317,7 @@ What You Can Do NOW:
 
       // Identify blocked goals for thought process
       const blockedGoals = allTemplates.filter((g) => !g.applicable);
-      const applicableGoals = goalTemplates.filter((g) => g.applicable);
+      const applicableGoals = availableGoals.filter((g) => g.applicable);
 
       // Send thought process message - Available Goals
       let goalsMsg = `🎯 **Evaluating possible goals...**\n\n`;
@@ -346,7 +345,7 @@ What You Can Do NOW:
       service.syncAgentThought("evaluation", goalsMsg);
 
       // Format goal templates for LLM selection
-      const goalsText = goalTemplates
+      const goalsText = availableGoals
         .slice(0, 5) // Top 5 recommended goals
         .map(
           (g, i) =>
@@ -736,7 +735,7 @@ export const navigateToAction: Action = {
 
   handler: async (
     runtime: IAgentRuntime,
-    _message: Memory,
+    message: Memory,
     _state?: State,
     _options?: HandlerOptionsParam,
     callback?: HandlerCallback,

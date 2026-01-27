@@ -11,3 +11,5 @@ export * from "./Wind";
 export * from "./VegetationSystem";
 export * from "./TownSystem";
 export * from "./RoadNetworkSystem";
+export * from "./BuildingRenderingSystem";
+export * from "./BuildingCollisionService";

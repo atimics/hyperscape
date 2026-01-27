@@ -426,9 +426,11 @@ function createDefaultWindows(): WindowConfig[] {
 function FullscreenWorldMap({
   world,
   onClose,
+  debugMode = false,
 }: {
   world: ClientWorld;
   onClose: () => void;
+  debugMode?: boolean;
 }): React.ReactElement {
   const theme = useThemeStore((s) => s.theme);
 
@@ -635,6 +637,7 @@ function FullscreenWorldMap({
             embedded={true}
             resizable={false}
             isVisible={true}
+            debugMode={debugMode}
           />
         </div>
 
@@ -1202,6 +1205,9 @@ function DesktopInterfaceManager({
   // World map modal state
   const [worldMapOpen, setWorldMapOpen] = useState(false);
 
+  // Map debug mode state (Fn+F10 to toggle) - shows camera frustum and visible vs nearby entities
+  const [mapDebugMode, setMapDebugMode] = useState(false);
+
   // Stats modal state
   const [statsModalOpen, setStatsModalOpen] = useState(false);
 
@@ -1245,7 +1251,7 @@ function DesktopInterfaceManager({
     xpAmount: number;
   } | null>(null);
 
-  // World map hotkey listener (M key)
+  // World map hotkey listener (M key) and debug mode (F10)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Ignore if typing in an input field
@@ -1262,6 +1268,19 @@ function DesktopInterfaceManager({
       if (e.key === "m" || e.key === "M") {
         e.preventDefault();
         setWorldMapOpen((prev) => !prev);
+      }
+
+      // F10 toggles map debug mode (shows camera frustum and visible vs nearby entities)
+      if (e.key === "F10") {
+        e.preventDefault();
+        setMapDebugMode((prev) => {
+          const newValue = !prev;
+          // Log to help users discover this feature
+          console.log(
+            `[Map Debug] ${newValue ? "Enabled" : "Disabled"} - showing camera frustum and visible entities`,
+          );
+          return newValue;
+        });
       }
     };
 
@@ -2326,6 +2345,7 @@ function DesktopInterfaceManager({
                       <MinimapWrapper
                         world={world}
                         isUnlocked={isUnlocked && editModeEnabled}
+                        debugMode={mapDebugMode}
                       />
                     ) : showTabBar ? (
                       <TabBar windowId={windowState.id} />
@@ -2492,6 +2512,7 @@ function DesktopInterfaceManager({
           <FullscreenWorldMap
             world={world}
             onClose={() => setWorldMapOpen(false)}
+            debugMode={mapDebugMode}
           />
         )}
 
@@ -3153,12 +3174,15 @@ interface MinimapWrapperProps {
     style: React.CSSProperties;
   };
   isUnlocked?: boolean;
+  /** Debug mode - shows camera frustum and visible vs nearby entities (F10 to toggle) */
+  debugMode?: boolean;
 }
 
 function MinimapWrapper({
   world,
   dragHandleProps,
   isUnlocked,
+  debugMode,
 }: MinimapWrapperProps): React.ReactElement {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = React.useState<{
@@ -3215,6 +3239,7 @@ function MinimapWrapper({
         embedded={true}
         dragHandleProps={dragHandleProps}
         isUnlocked={isUnlocked}
+        debugMode={debugMode}
       />
     </div>
   );

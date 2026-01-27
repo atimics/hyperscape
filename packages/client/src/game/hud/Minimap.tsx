@@ -33,6 +33,12 @@ const _tempDestVec = new THREE.Vector3();
 /** Temp vector for screenToWorldXZ unprojection */
 const _tempUnprojectVec = new THREE.Vector3();
 
+/** Main camera frustum for visibility checking in debug mode */
+const _mainCameraFrustum = new THREE.Frustum();
+
+/** Temp matrix for frustum calculation */
+const _tempMatrix = new THREE.Matrix4();
+
 interface EntityPip {
   id: string;
   type: "player" | "enemy" | "building" | "item" | "resource" | "quest";
@@ -44,6 +50,8 @@ interface EntityPip {
   icon?: "star" | "circle" | "diamond";
   /** Group member index for color assignment (-1 or undefined = not in group) */
   groupIndex?: number;
+  /** Whether entity is in main camera frustum (visible) vs just nearby */
+  inFrustum?: boolean;
 }
 
 /** Color palette for group members (up to 8 unique) */
@@ -145,6 +153,8 @@ interface MinimapProps {
   dragHandleProps?: DragHandleProps;
   /** Whether edit mode is unlocked (shows drag border) */
   isUnlocked?: boolean;
+  /** Debug mode - shows camera frustum and visible vs nearby entities (F10 to toggle) */
+  debugMode?: boolean;
 }
 
 export function Minimap({
@@ -166,6 +176,7 @@ export function Minimap({
   onCollapseChange,
   dragHandleProps,
   isUnlocked = false,
+  debugMode = false,
 }: MinimapProps) {
   const theme = useThemeStore((s) => s.theme);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -179,6 +190,11 @@ export function Minimap({
   const [isTouchDevice, setIsTouchDevice] = useState<boolean>(false);
   const entityCacheRef = useRef<Map<string, EntityPip>>(new Map());
   const rendererInitializedRef = useRef<boolean>(false);
+
+  // Debug mode: store main camera frustum corners (projected to XZ plane) for visualization
+  // Format: array of 4 corner points on the near plane projected to ground
+  const _frustumCornersRef = useRef<{ x: number; z: number }[]>([]);
+  const debugModeRef = useRef(debugMode);
 
   // Collapsed state for collapsible minimap
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
@@ -333,7 +349,6 @@ export function Minimap({
 
     // Only create renderer if it doesn't exist
     if (!rendererRef.current || !rendererInitializedRef.current) {
-      // console.log('[Minimap] Creating new renderer');
       createRenderer({
         canvas,
         alpha: true,
@@ -420,6 +435,7 @@ export function Minimap({
   // Cleanup renderer when component is actually unmounted
   useEffect(() => {
     return () => {
+      // Dispose renderer
       if (rendererRef.current && rendererInitializedRef.current) {
         // console.log('[Minimap] Disposing renderer on component unmount');
         if ("dispose" in rendererRef.current) {
@@ -459,6 +475,10 @@ export function Minimap({
   useEffect(() => {
     rotateWithCameraRef.current = rotateWithCamera;
   }, [rotateWithCamera]);
+
+  useEffect(() => {
+    debugModeRef.current = debugMode;
+  }, [debugMode]);
 
   useEffect(() => {
     lastDestinationWorldRef.current = lastDestinationWorld;
@@ -661,6 +681,29 @@ export function Minimap({
         }
       }
 
+      // In debug mode, check which entities are in the main camera's frustum
+      // This distinguishes "visible" entities from just "nearby" ones
+      if (debugMode && world.camera) {
+        // Update frustum from main camera's projection * view matrix
+        _tempMatrix.multiplyMatrices(
+          world.camera.projectionMatrix,
+          world.camera.matrixWorldInverse,
+        );
+        _mainCameraFrustum.setFromProjectionMatrix(_tempMatrix);
+
+        // Check each pip against frustum
+        for (let i = 0; i < workingPips.length; i++) {
+          const pip = workingPips[i];
+          // Use actual Y position for frustum check (entities have height)
+          const checkPos = new THREE.Vector3(
+            pip.position.x,
+            pip.position.y || 1, // Default 1m height for ground check
+            pip.position.z,
+          );
+          pip.inFrustum = _mainCameraFrustum.containsPoint(checkPos);
+        }
+      }
+
       setEntityPips(workingPips);
     };
 
@@ -672,7 +715,7 @@ export function Minimap({
         // console.log('[Minimap] Stopped entity detection updates');
       }
     };
-  }, [world, isVisible]);
+  }, [world, isVisible, debugMode]);
 
   // Single unified render loop - handles camera position, frustum, and rendering
   // Uses refs for all state access to avoid restarting the RAF loop
@@ -859,6 +902,162 @@ export function Minimap({
           ctx.fillRect(0, 0, overlayCanvas.width, overlayCanvas.height);
         }
 
+        // --- DEBUG MODE: Draw camera frustum visualization ---
+        if (debugModeRef.current && world.camera && cameraRef.current) {
+          const mainCam = world.camera as THREE.PerspectiveCamera;
+
+          // Get camera position and direction
+          const camPos = mainCam.position;
+          const camDir = new THREE.Vector3();
+          mainCam.getWorldDirection(camDir);
+
+          // Calculate frustum corners projected to ground (XZ plane at y=0)
+          // We'll trace rays from the camera through the frustum corners to the ground
+          const fov = mainCam.fov * (Math.PI / 180);
+          const aspect = mainCam.aspect;
+          const _nearDist = 5; // Start projecting from near plane (reserved for future use)
+          const farDist = 100; // How far out to show the frustum
+
+          // Calculate the frustum half-angles
+          const halfVFov = fov / 2;
+          const halfHFov = Math.atan(Math.tan(halfVFov) * aspect);
+
+          // Get camera right and up vectors in world space
+          const right = new THREE.Vector3();
+          const up = new THREE.Vector3();
+          right.setFromMatrixColumn(mainCam.matrixWorld, 0).normalize();
+          up.setFromMatrixColumn(mainCam.matrixWorld, 1).normalize();
+
+          // Calculate frustum corner directions (normalized)
+          const corners: THREE.Vector3[] = [];
+          const signs = [
+            [-1, -1],
+            [1, -1],
+            [1, 1],
+            [-1, 1],
+          ]; // BL, BR, TR, TL
+          for (const [hSign, vSign] of signs) {
+            const dir = camDir
+              .clone()
+              .add(right.clone().multiplyScalar(Math.tan(halfHFov) * hSign))
+              .add(up.clone().multiplyScalar(Math.tan(halfVFov) * vSign))
+              .normalize();
+
+            // Project to ground (y=0) - find t where camPos.y + dir.y * t = 0
+            // If dir.y is negative (looking down), we can intersect the ground
+            if (dir.y < -0.01) {
+              const t = -camPos.y / dir.y;
+              if (t > 0 && t < 500) {
+                // Reasonable distance
+                corners.push(
+                  new THREE.Vector3(
+                    camPos.x + dir.x * t,
+                    0,
+                    camPos.z + dir.z * t,
+                  ),
+                );
+              } else {
+                // Too far, use far distance
+                corners.push(
+                  new THREE.Vector3(
+                    camPos.x + dir.x * farDist,
+                    0,
+                    camPos.z + dir.z * farDist,
+                  ),
+                );
+              }
+            } else {
+              // Looking up or horizontal, use far distance projected forward
+              corners.push(
+                new THREE.Vector3(
+                  camPos.x + dir.x * farDist,
+                  0,
+                  camPos.z + dir.z * farDist,
+                ),
+              );
+            }
+          }
+
+          // Project camera position to minimap
+          _tempProjectVec.set(camPos.x, 0, camPos.z);
+          _tempProjectVec.project(cameraRef.current);
+          const camScreenX = (_tempProjectVec.x * 0.5 + 0.5) * width;
+          const camScreenY = (_tempProjectVec.y * -0.5 + 0.5) * height;
+
+          // Project frustum corners to minimap and draw
+          if (corners.length >= 4) {
+            ctx.save();
+            ctx.strokeStyle = "#00ffff";
+            ctx.lineWidth = 2;
+            ctx.fillStyle = "rgba(0, 255, 255, 0.1)";
+            ctx.beginPath();
+
+            // Start from camera position
+            ctx.moveTo(camScreenX, camScreenY);
+
+            // Draw lines to each corner and connect them
+            const screenCorners: { x: number; y: number }[] = [];
+            for (const corner of corners) {
+              _tempProjectVec.copy(corner);
+              _tempProjectVec.project(cameraRef.current);
+              const sx = (_tempProjectVec.x * 0.5 + 0.5) * width;
+              const sy = (_tempProjectVec.y * -0.5 + 0.5) * height;
+              screenCorners.push({ x: sx, y: sy });
+            }
+
+            // Draw the frustum as a filled polygon
+            ctx.beginPath();
+            ctx.moveTo(camScreenX, camScreenY);
+            ctx.lineTo(screenCorners[0].x, screenCorners[0].y);
+            ctx.lineTo(screenCorners[1].x, screenCorners[1].y);
+            ctx.lineTo(camScreenX, camScreenY);
+            ctx.moveTo(camScreenX, camScreenY);
+            ctx.lineTo(screenCorners[1].x, screenCorners[1].y);
+            ctx.lineTo(screenCorners[2].x, screenCorners[2].y);
+            ctx.lineTo(camScreenX, camScreenY);
+            ctx.moveTo(camScreenX, camScreenY);
+            ctx.lineTo(screenCorners[2].x, screenCorners[2].y);
+            ctx.lineTo(screenCorners[3].x, screenCorners[3].y);
+            ctx.lineTo(camScreenX, camScreenY);
+            ctx.moveTo(camScreenX, camScreenY);
+            ctx.lineTo(screenCorners[3].x, screenCorners[3].y);
+            ctx.lineTo(screenCorners[0].x, screenCorners[0].y);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+
+            // Draw outline of far edge
+            ctx.beginPath();
+            ctx.moveTo(screenCorners[0].x, screenCorners[0].y);
+            for (let i = 1; i < screenCorners.length; i++) {
+              ctx.lineTo(screenCorners[i].x, screenCorners[i].y);
+            }
+            ctx.closePath();
+            ctx.strokeStyle = "#00ffff";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // Draw camera indicator (small triangle)
+            ctx.beginPath();
+            ctx.fillStyle = "#00ffff";
+            ctx.arc(camScreenX, camScreenY, 4, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
+          }
+
+          // Draw debug legend in corner
+          ctx.save();
+          ctx.font = "10px monospace";
+          ctx.fillStyle = "#00ffff";
+          ctx.fillText("DEBUG MODE (F10)", 4, 12);
+          ctx.fillStyle = "#00ff00";
+          ctx.fillText("● Visible", 4, 24);
+          ctx.fillStyle = "#888888";
+          ctx.fillText("○ Nearby", 4, 36);
+          ctx.restore();
+        }
+
         // Draw entity pips (use ref to avoid re-creating the render loop)
         // Use for-loop instead of forEach to avoid creating callback functions every frame
         const pipsArray = entityPipsRefForRender.current;
@@ -924,6 +1123,18 @@ export function Minimap({
                 pip.groupIndex >= 0
               ) {
                 pipColor = GROUP_COLORS[pip.groupIndex % GROUP_COLORS.length];
+              }
+
+              // In debug mode, modify colors to show visible vs nearby
+              // Visible entities (in camera frustum) are bright, nearby are dimmed
+              const isDebug = debugModeRef.current;
+              const isVisible = pip.inFrustum === true;
+              if (isDebug && pip.type !== "player") {
+                if (!isVisible) {
+                  // Dim nearby entities that aren't visible
+                  pipColor = "#666666";
+                  borderColor = "#444444";
+                }
               }
 
               // Apply pulse animation for active pips (quests, etc.)

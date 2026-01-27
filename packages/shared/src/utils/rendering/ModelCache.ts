@@ -5,12 +5,24 @@
  * This prevents loading the same GLB file hundreds of times for items/mobs.
  *
  * IMPORTANT: Materials are set up for WebGPU/CSM compatibility automatically.
+ *
+ * LOD Integration:
+ * - Automatically generates LOD levels (LOD1, LOD2) via mesh decimation
+ * - Automatically bakes octahedral impostors for distant rendering
+ * - LODs are cached in IndexedDB for persistence across sessions
+ * - Enable via options.generateLODs when loading
  */
 
 import THREE from "../../extras/three/three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import type { World } from "../../core/World";
+import {
+  lodManager,
+  type LODBundle,
+  type LODCategory,
+  type LODGenerationOptions,
+} from "./LODManager";
 
 /**
  * Collision data embedded in GLB extras by inject-model-collision.ts
@@ -37,6 +49,8 @@ interface CachedModel {
   sharedMaterials: Map<number, THREE.Material | THREE.Material[]>;
   /** Collision data from GLB extras (if present) */
   collision?: ModelCollisionData;
+  /** LOD bundle with decimated meshes and impostor (if generated) */
+  lodBundle?: LODBundle;
 }
 
 export class ModelCache {
@@ -96,12 +110,9 @@ export class ModelCache {
       vertexColors?: boolean;
     };
 
-    // NOTE: Use undefined instead of null for optional textures
-    // Setting null causes WebGPU texture cache corruption (WeakMap key error)
-    const newMat = new THREE.MeshStandardMaterial({
-      map: originalMat.map || undefined,
-      normalMap: originalMat.normalMap || undefined,
-      emissiveMap: originalMat.emissiveMap || undefined,
+    // NOTE: Only include texture properties if they have valid values
+    // Passing undefined/null causes Three.js to log warnings
+    const materialParams: THREE.MeshStandardMaterialParameters = {
       color: originalMat.color?.clone() || new THREE.Color(0xffffff),
       emissive: originalMat.emissive?.clone() || new THREE.Color(0x000000),
       emissiveIntensity: originalMat.emissiveIntensity ?? 0,
@@ -114,7 +125,15 @@ export class ModelCache {
       envMapIntensity: 1.0, // Respond to environment map
       // Enable vertex colors if the geometry has them
       vertexColors: hasVertexColors || originalMat.vertexColors || false,
-    });
+    };
+
+    // Only set texture properties if they have actual texture values
+    if (originalMat.map) materialParams.map = originalMat.map;
+    if (originalMat.normalMap) materialParams.normalMap = originalMat.normalMap;
+    if (originalMat.emissiveMap)
+      materialParams.emissiveMap = originalMat.emissiveMap;
+
+    const newMat = new THREE.MeshStandardMaterial(materialParams);
 
     // Copy name for debugging
     newMat.name = originalMat.name || "GLB_Standard";
@@ -358,31 +377,59 @@ export class ModelCache {
    * @param path - Model path (can be asset:// URL or absolute URL)
    * @param world - World instance for URL resolution and material setup
    * @param options.shareMaterials - If true, all instances share the same material (reduces draw calls)
+   * @param options.generateLODs - If true, generates LOD1/LOD2 meshes and impostor atlas
+   * @param options.lodCategory - Category for LOD presets (tree, bush, rock, etc.)
+   * @param options.priority - Loading priority (uses LoadPriority enum from types)
+   * @param options.position - World position for distance-based priority calculation
+   * @param options.tile - Tile coordinates for tile-based priority calculation
    */
   async loadModel(
     path: string,
     world?: World,
-    options?: { shareMaterials?: boolean },
+    options?: {
+      shareMaterials?: boolean;
+      generateLODs?: boolean;
+      lodCategory?: LODCategory;
+      lodOptions?: Omit<LODGenerationOptions, "category">;
+      /** Loading priority (0=CRITICAL, 1=HIGH, 2=NORMAL, 3=LOW, 4=PREFETCH) */
+      priority?: number;
+      /** World position for distance-based priority calculation */
+      position?: THREE.Vector3;
+      /** Tile coordinates for tile-based priority calculation */
+      tile?: { x: number; z: number };
+    },
   ): Promise<{
     scene: THREE.Object3D;
     animations: THREE.AnimationClip[];
     fromCache: boolean;
     /** Collision data from GLB extras (if present) */
     collision?: ModelCollisionData;
+    /** LOD bundle with decimated meshes and impostor (if generateLODs was true) */
+    lodBundle?: LODBundle;
   }> {
     const shareMaterials = options?.shareMaterials ?? true; // Default to sharing
+    const generateLODs = options?.generateLODs ?? false;
     // Resolve asset:// URLs to actual URLs
     // NOTE: World.resolveURL already adds cache-busting for localhost URLs
     let resolvedPath = world ? world.resolveURL(path) : path;
 
     // CRITICAL: If resolveURL failed (returned asset:// unchanged), manually resolve
     if (resolvedPath.startsWith("asset://")) {
-      // Fallback: Use CDN URL from window or default to localhost
+      // Fallback: Use CDN URL from window or assetsUrl
       const cdnUrl =
         (typeof window !== "undefined" &&
           (window as Window & { __CDN_URL?: string }).__CDN_URL) ||
-        world?.assetsUrl?.replace(/\/$/, "") ||
-        "http://localhost:8080";
+        world?.assetsUrl?.replace(/\/$/, "");
+
+      if (!cdnUrl) {
+        console.error(
+          `[ModelCache] CRITICAL: Cannot resolve asset:// URL - no CDN configured. ` +
+            `Set window.__CDN_URL or world.assetsUrl. Path: ${path}`,
+        );
+        throw new Error(
+          `Cannot resolve asset:// URL: no CDN configured for ${path}`,
+        );
+      }
       resolvedPath = resolvedPath.replace("asset://", `${cdnUrl}/`);
     }
 
@@ -425,11 +472,25 @@ export class ModelCache {
         this.setupMaterials(clonedScene, world);
       }
 
+      // Generate LODs if requested and not already cached
+      let lodBundle = cached.lodBundle;
+      if (generateLODs && !lodBundle && world) {
+        lodBundle = await this.generateLODsForModel(
+          resolvedPath,
+          cached.scene,
+          world,
+          options?.lodCategory,
+          options?.lodOptions,
+        );
+        cached.lodBundle = lodBundle;
+      }
+
       return {
         scene: clonedScene,
         animations: cached.animations,
         fromCache: true,
         collision: cached.collision,
+        lodBundle,
       };
     }
 
@@ -448,22 +509,64 @@ export class ModelCache {
         this.setupMaterials(clonedScene, world);
       }
 
+      // Generate LODs if requested and not already cached
+      let lodBundle = result.lodBundle;
+      if (generateLODs && !lodBundle && world) {
+        lodBundle = await this.generateLODsForModel(
+          resolvedPath,
+          result.scene,
+          world,
+          options?.lodCategory,
+          options?.lodOptions,
+        );
+        result.lodBundle = lodBundle;
+      }
+
       return {
         scene: clonedScene,
         animations: result.animations,
         fromCache: true,
         collision: result.collision,
+        lodBundle,
       };
     }
 
     // Load for the first time
-    // Use ClientLoader for file fetching to benefit from IndexedDB caching
+    // Use ClientLoader for file fetching to benefit from IndexedDB caching and priority loading
     const promise = (async () => {
       let gltf: Awaited<ReturnType<typeof this.gltfLoader.parseAsync>>;
 
       // Try to use ClientLoader for caching benefits (IndexedDB, deduplication)
-      if (world?.loader?.loadFile) {
-        const file = await world.loader.loadFile(resolvedPath);
+      if (world?.loader) {
+        const loader = world.loader as {
+          loadFile: (url: string) => Promise<File | undefined>;
+          loadFileWithPriority?: (
+            url: string,
+            priority: number,
+            opts?: {
+              position?: THREE.Vector3;
+              tile?: { x: number; z: number };
+            },
+          ) => Promise<File | undefined>;
+        };
+
+        let file: File | undefined;
+
+        // Use priority-based loading if priority is specified and loader supports it
+        if (options?.priority !== undefined && loader.loadFileWithPriority) {
+          file = await loader.loadFileWithPriority(
+            resolvedPath,
+            options.priority,
+            {
+              position: options.position,
+              tile: options.tile,
+            },
+          );
+        } else {
+          // Standard loading (immediate, high priority)
+          file = await loader.loadFile(resolvedPath);
+        }
+
         if (file) {
           const buffer = await file.arrayBuffer();
           gltf = await this.gltfLoader.parseAsync(buffer, "");
@@ -568,12 +671,99 @@ export class ModelCache {
       this.setupMaterials(clonedScene, world);
     }
 
+    // Generate LODs if requested
+    let lodBundle: LODBundle | undefined;
+    if (generateLODs && world) {
+      lodBundle = await this.generateLODsForModel(
+        resolvedPath,
+        result.scene,
+        world,
+        options?.lodCategory,
+        options?.lodOptions,
+      );
+      result.lodBundle = lodBundle;
+    }
+
     return {
       scene: clonedScene,
       animations: result.animations,
       fromCache: false,
       collision: result.collision,
+      lodBundle,
     };
+  }
+
+  /**
+   * Generate LOD bundle for a model using worker-based decimation and GPU impostor baking.
+   * Results are cached in IndexedDB for persistence across sessions.
+   */
+  private async generateLODsForModel(
+    modelPath: string,
+    scene: THREE.Object3D,
+    world: World,
+    category?: LODCategory,
+    lodOptions?: Omit<LODGenerationOptions, "category">,
+  ): Promise<LODBundle | undefined> {
+    // Initialize LODManager if not already done
+    lodManager.initialize(world);
+
+    // Generate a stable ID from the model path
+    const lodId = `model_${modelPath.replace(/[^a-zA-Z0-9]/g, "_")}`;
+
+    // Determine category from path if not provided
+    const effectiveCategory = category ?? this.inferCategoryFromPath(modelPath);
+
+    const bundle = await lodManager.generateLODBundle(lodId, scene, {
+      category: effectiveCategory,
+      generateLOD1: true,
+      generateLOD2: true,
+      generateImpostor: true,
+      useWorkers: true,
+      ...lodOptions,
+    });
+
+    return bundle;
+  }
+
+  /**
+   * Infer LOD category from model path based on common naming conventions.
+   */
+  private inferCategoryFromPath(path: string): LODCategory {
+    const lowerPath = path.toLowerCase();
+    if (lowerPath.includes("tree")) return "tree";
+    if (lowerPath.includes("bush") || lowerPath.includes("shrub"))
+      return "bush";
+    if (
+      lowerPath.includes("rock") ||
+      lowerPath.includes("stone") ||
+      lowerPath.includes("boulder")
+    )
+      return "rock";
+    if (
+      lowerPath.includes("plant") ||
+      lowerPath.includes("flower") ||
+      lowerPath.includes("grass")
+    )
+      return "plant";
+    if (
+      lowerPath.includes("building") ||
+      lowerPath.includes("house") ||
+      lowerPath.includes("structure")
+    )
+      return "building";
+    if (
+      lowerPath.includes("character") ||
+      lowerPath.includes("npc") ||
+      lowerPath.includes("mob")
+    )
+      return "character";
+    if (
+      lowerPath.includes("item") ||
+      lowerPath.includes("weapon") ||
+      lowerPath.includes("armor")
+    )
+      return "item";
+    return "default";
   }
 
   /**
@@ -581,6 +771,102 @@ export class ModelCache {
    */
   has(path: string): boolean {
     return this.cache.has(path);
+  }
+
+  /**
+   * Preload multiple models in parallel
+   *
+   * Efficiently loads many models at once by:
+   * - Deduplicating requests (same path only loads once)
+   * - Running loads in parallel (no unnecessary serialization)
+   * - Caching results for instant subsequent access
+   *
+   * @param paths - Array of model paths to preload
+   * @param world - World instance for URL resolution
+   * @param options - Loading options
+   * @returns Promise that resolves when all models are loaded (with success/failure info)
+   */
+  async preloadModels(
+    paths: string[],
+    world?: World,
+    options?: {
+      shareMaterials?: boolean;
+      /** Callback for progress updates */
+      onProgress?: (loaded: number, total: number, path: string) => void;
+    },
+  ): Promise<{
+    loaded: number;
+    failed: number;
+    errors: Array<{ path: string; error: string }>;
+  }> {
+    // Deduplicate paths
+    const uniquePaths = [...new Set(paths)];
+    const total = uniquePaths.length;
+    let loaded = 0;
+    const errors: Array<{ path: string; error: string }> = [];
+
+    // Load all models in parallel
+    const results = await Promise.allSettled(
+      uniquePaths.map(async (path) => {
+        try {
+          await this.loadModel(path, world, {
+            shareMaterials: options?.shareMaterials,
+          });
+          loaded++;
+          options?.onProgress?.(loaded, total, path);
+          return { path, success: true };
+        } catch (error) {
+          const errorMsg =
+            error instanceof Error ? error.message : String(error);
+          errors.push({ path, error: errorMsg });
+          loaded++;
+          options?.onProgress?.(loaded, total, path);
+          throw error;
+        }
+      }),
+    );
+
+    const failed = results.filter((r) => r.status === "rejected").length;
+
+    return {
+      loaded: total - failed,
+      failed,
+      errors,
+    };
+  }
+
+  /**
+   * Warm up the cache by preloading models that are likely to be used soon
+   *
+   * This is useful for vegetation systems, entity pools, etc. where we know
+   * which models will be needed but don't need them immediately.
+   *
+   * @param pathsWithPriority - Array of { path, priority } where higher priority loads first
+   * @param world - World instance
+   */
+  async warmupCache(
+    pathsWithPriority: Array<{ path: string; priority: number }>,
+    world?: World,
+  ): Promise<void> {
+    // Sort by priority (highest first)
+    const sorted = [...pathsWithPriority].sort(
+      (a, b) => b.priority - a.priority,
+    );
+
+    // Group by priority for wave-based loading
+    const priorityGroups = new Map<number, string[]>();
+    for (const item of sorted) {
+      const paths = priorityGroups.get(item.priority) || [];
+      paths.push(item.path);
+      priorityGroups.set(item.priority, paths);
+    }
+
+    // Load each priority group in parallel, groups sequentially
+    const priorities = [...priorityGroups.keys()].sort((a, b) => b - a);
+    for (const priority of priorities) {
+      const paths = priorityGroups.get(priority)!;
+      await this.preloadModels(paths, world);
+    }
   }
 
   /**

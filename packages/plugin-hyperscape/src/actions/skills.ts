@@ -84,7 +84,7 @@ function isTree(e: Entity): boolean {
   const id = (e.id || "").toLowerCase();
 
   // Exclude depleted resources - they can't be gathered
-  if (entityAny.depleted === true) {
+  if (e.depleted === true) {
     return false;
   }
 
@@ -449,7 +449,10 @@ export const chopTreeAction: Action = {
         // Check if there are trees but all too high level
         const allNearbyTrees = allTrees.filter((t) => {
           const entityAny = t as unknown as Record<string, unknown>;
-          const entityPos = entityAny.position;
+          const entityPos = entityAny.position as
+            | PositionLike
+            | null
+            | undefined;
           if (!entityPos) return false;
           const dist = getEntityDistance(playerPos, entityPos);
           return dist !== null && dist <= 20;
@@ -709,7 +712,7 @@ export const mineRockAction: Action = {
     const allRocks = entities.filter(isRock);
     const approachableRocks = allRocks.filter((e) => {
       const entityAny = e as unknown as Record<string, unknown>;
-      const entityPos = entityAny.position;
+      const entityPos = entityAny.position as PositionLike | null | undefined;
       if (!entityPos) return false;
       const dist = getEntityDistance(playerPos, entityPos);
       return dist !== null && dist <= 20;
@@ -791,7 +794,10 @@ export const mineRockAction: Action = {
         .filter((rock) => canMineRock(rock, miningLevel)) // Only rocks we can mine
         .map((e) => {
           const entityAny = e as unknown as Record<string, unknown>;
-          const entityPos = entityAny.position;
+          const entityPos = entityAny.position as
+            | PositionLike
+            | null
+            | undefined;
           const dist = entityPos
             ? getEntityDistance(playerPos, entityPos)
             : null;
@@ -914,7 +920,10 @@ export const mineRockAction: Action = {
         // Check if there are rocks but all too high level
         const allNearbyRocks = allRocks.filter((r) => {
           const entityAny = r as unknown as Record<string, unknown>;
-          const entityPos = entityAny.position;
+          const entityPos = entityAny.position as
+            | PositionLike
+            | null
+            | undefined;
           if (!entityPos) return false;
           const dist = getEntityDistance(playerPos, entityPos);
           return dist !== null && dist <= 20;
@@ -1311,248 +1320,6 @@ export const catchFishAction: Action = {
   ],
 };
 
-export const mineRockAction: Action = {
-  name: "MINE_ROCK",
-  similes: ["MINE", "MINING", "DIG"],
-  description: "Mine a rock to gather ore. Requires a pickaxe.",
-
-  validate: async (runtime: IAgentRuntime) => {
-    const service = runtime.getService<HyperscapeService>("hyperscapeService");
-    if (!service) return false;
-    const playerEntity = service.getPlayerEntity();
-    const entities = service.getNearbyEntities() || [];
-
-    if (!service.isConnected() || !playerEntity || playerEntity.alive === false)
-      return false;
-
-    const hasPickaxe =
-      playerEntity.items?.some((i) => {
-        const name = getInventoryItemName(i);
-        return name.includes("pickaxe") || name.includes("pick");
-      }) ?? false;
-
-    const miningLevel = playerEntity.skills?.mining?.level ?? 1;
-    const playerPos = playerEntity.position;
-    const rocks = entities.filter(isMiningRock);
-
-    const approachableRocks = rocks.filter((rock) => {
-      if (rock.depleted) return false;
-      const requiredLevel = rock.requiredLevel ?? 1;
-      if (requiredLevel > miningLevel) return false;
-      const dist = getEntityDistance(playerPos, rock.position);
-      return dist !== null && dist <= 20;
-    });
-
-    return hasPickaxe && approachableRocks.length > 0;
-  },
-
-  handler: async (
-    runtime: IAgentRuntime,
-    _message: Memory,
-    _state?: State,
-    _options?: HandlerOptionsParam,
-    callback?: HandlerCallback,
-  ) => {
-    try {
-      const service =
-        runtime.getService<HyperscapeService>("hyperscapeService");
-      if (!service) {
-        return {
-          success: false,
-          error: new Error("Hyperscape service not available"),
-        };
-      }
-      const entities = service.getNearbyEntities();
-      const player = service.getPlayerEntity();
-      const playerPos = player?.position;
-      const miningLevel = player?.skills?.mining?.level ?? 1;
-
-      const allRocks = entities.filter(isMiningRock).filter((rock) => {
-        if (rock.depleted) return false;
-        const requiredLevel = rock.requiredLevel ?? 1;
-        return requiredLevel <= miningLevel;
-      });
-
-      const rocksWithDistance = allRocks
-        .map((e) => {
-          const dist = getEntityDistance(playerPos, e.position);
-          return { entity: e, distance: dist, position: e.position };
-        })
-        .filter((t) => t.distance !== null)
-        .sort((a, b) => (a.distance ?? 999) - (b.distance ?? 999));
-
-      const nearbyRocks = rocksWithDistance.filter(
-        (t) => t.distance !== null && t.distance <= MAX_GATHER_DISTANCE,
-      );
-      const approachableRocks = rocksWithDistance.filter(
-        (t) => t.distance !== null && t.distance <= 20,
-      );
-
-      if (nearbyRocks.length === 0 && approachableRocks.length > 0) {
-        const nearest = approachableRocks[0];
-        const rockPos = nearest.position as
-          | [number, number, number]
-          | { x: number; y?: number; z: number };
-
-        let rockX: number, rockY: number, rockZ: number;
-        if (Array.isArray(rockPos)) {
-          [rockX, rockY, rockZ] = rockPos;
-        } else {
-          rockX = rockPos.x;
-          rockY = rockPos.y ?? 0;
-          rockZ = rockPos.z;
-        }
-
-        let px = 0,
-          pz = 0;
-        if (Array.isArray(playerPos)) {
-          px = playerPos[0];
-          pz = playerPos[2];
-        } else if (playerPos && typeof playerPos === "object") {
-          const pos = playerPos as { x?: number; z?: number };
-          px = pos.x ?? 0;
-          pz = pos.z ?? 0;
-        }
-
-        const rockTileX = Math.floor(rockX);
-        const rockTileZ = Math.floor(rockZ);
-        const cardinalPositions = [
-          { x: rockTileX, z: rockTileZ - 1, dir: "South" },
-          { x: rockTileX, z: rockTileZ + 1, dir: "North" },
-          { x: rockTileX - 1, z: rockTileZ, dir: "West" },
-          { x: rockTileX + 1, z: rockTileZ, dir: "East" },
-        ];
-
-        let nearestCardinal = cardinalPositions[0];
-        let minDist = Infinity;
-        for (const pos of cardinalPositions) {
-          const dist = Math.sqrt(
-            Math.pow(px - pos.x, 2) + Math.pow(pz - pos.z, 2),
-          );
-          if (dist < minDist) {
-            minDist = dist;
-            nearestCardinal = pos;
-          }
-        }
-
-        const targetPos: [number, number, number] = [
-          nearestCardinal.x + 0.5,
-          rockY,
-          nearestCardinal.z + 0.5,
-        ];
-
-        await service.executeMove({ target: targetPos, runMode: false });
-        await callback?.({
-          text: `Walking to ${nearest.entity.name}...`,
-          action: "MINE_ROCK",
-        });
-        return { success: true, text: `Walking to ${nearest.entity.name}` };
-      }
-
-      const rock = nearbyRocks[0]?.entity;
-      if (!rock) {
-        await callback?.({ text: "No rock found nearby.", error: true });
-        return { success: false };
-      }
-
-      const rockPos = rock.position as
-        | [number, number, number]
-        | { x: number; y?: number; z: number };
-
-      let rockX = 0,
-        rockZ = 0;
-      if (Array.isArray(rockPos)) {
-        rockX = rockPos[0];
-        rockZ = rockPos[2];
-      } else {
-        rockX = rockPos.x;
-        rockZ = rockPos.z;
-      }
-
-      let px = 0,
-        pz = 0;
-      if (Array.isArray(playerPos)) {
-        px = playerPos[0];
-        pz = playerPos[2];
-      } else if (playerPos && typeof playerPos === "object") {
-        const pos = playerPos as { x?: number; z?: number };
-        px = pos.x ?? 0;
-        pz = pos.z ?? 0;
-      }
-
-      const rockTileX = Math.floor(rockX);
-      const rockTileZ = Math.floor(rockZ);
-      const playerTileX = Math.floor(px);
-      const playerTileZ = Math.floor(pz);
-
-      const isCardinalAdjacent =
-        (playerTileX === rockTileX &&
-          Math.abs(playerTileZ - rockTileZ) === 1) ||
-        (playerTileZ === rockTileZ && Math.abs(playerTileX - rockTileX) === 1);
-
-      if (!isCardinalAdjacent) {
-        const cardinalPositions = [
-          { x: rockTileX, z: rockTileZ - 1, dir: "South" },
-          { x: rockTileX, z: rockTileZ + 1, dir: "North" },
-          { x: rockTileX - 1, z: rockTileZ, dir: "West" },
-          { x: rockTileX + 1, z: rockTileZ, dir: "East" },
-        ];
-
-        let nearestCardinal = cardinalPositions[0];
-        let minDist = Infinity;
-        for (const pos of cardinalPositions) {
-          const dist = Math.sqrt(
-            Math.pow(px - pos.x, 2) + Math.pow(pz - pos.z, 2),
-          );
-          if (dist < minDist) {
-            minDist = dist;
-            nearestCardinal = pos;
-          }
-        }
-
-        const targetPos: [number, number, number] = [
-          nearestCardinal.x + 0.5,
-          Array.isArray(rockPos) ? rockPos[1] : (rockPos.y ?? 0),
-          nearestCardinal.z + 0.5,
-        ];
-
-        await service.executeMove({ target: targetPos, runMode: false });
-        await callback?.({
-          text: `Positioning to mine ${rock.name}...`,
-          action: "MINE_ROCK",
-        });
-        return { success: true, text: `Positioning to mine ${rock.name}` };
-      }
-
-      const command: GatherResourceCommand = {
-        resourceEntityId: rock.id,
-        skill: "mining",
-      };
-      await service.executeGatherResource(command);
-
-      await callback?.({ text: `Mining ${rock.name}`, action: "MINE_ROCK" });
-
-      return { success: true, text: `Started mining ${rock.name}` };
-    } catch (error) {
-      await callback?.({
-        text: `Failed to mine: ${error instanceof Error ? error.message : ""}`,
-        error: true,
-      });
-      return { success: false, error: error as Error };
-    }
-  },
-
-  examples: [
-    [
-      { name: "user", content: { text: "Mine that rock" } },
-      {
-        name: "agent",
-        content: { text: "Mining rock...", action: "MINE_ROCK" },
-      },
-    ],
-  ],
-};
-
 export const lightFireAction: Action = {
   name: "LIGHT_FIRE",
   similes: ["FIREMAKING", "MAKE_FIRE", "BURN_LOGS"],
@@ -1630,7 +1397,7 @@ export const cookFoodAction: Action = {
     if (!service.isConnected() || !playerEntity?.alive) return false;
 
     const hasRawFood = playerEntity.items.some((i) =>
-      i.name.toLowerCase().includes("raw"),
+      i.name?.toLowerCase().includes("raw"),
     );
 
     return hasRawFood;
@@ -1657,8 +1424,8 @@ export const cookFoodAction: Action = {
 
       const rawFood = playerEntity?.items.find(
         (i) =>
-          i.name.toLowerCase().includes("raw") &&
-          i.name.toLowerCase().includes(content.toLowerCase()),
+          i.name?.toLowerCase().includes("raw") &&
+          i.name?.toLowerCase().includes(content.toLowerCase()),
       );
 
       if (!rawFood) {

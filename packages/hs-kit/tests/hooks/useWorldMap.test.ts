@@ -527,11 +527,21 @@ describe("useMapNavigation", () => {
   it("should navigate back and forward", () => {
     const { result } = renderHook(() => useMapNavigation());
 
+    // Navigate to three locations (separate act calls to avoid React 18 batching)
     act(() => {
       result.current.navigateTo({ x: 100, y: 100 }, 1.0, "First");
+    });
+    expect(result.current.history.length).toBe(1);
+
+    act(() => {
       result.current.navigateTo({ x: 200, y: 200 }, 1.5, "Second");
+    });
+    expect(result.current.history.length).toBe(2);
+
+    act(() => {
       result.current.navigateTo({ x: 300, y: 300 }, 2.0, "Third");
     });
+    expect(result.current.history.length).toBe(3);
 
     expect(result.current.canGoBack).toBe(true);
     expect(result.current.canGoForward).toBe(false);

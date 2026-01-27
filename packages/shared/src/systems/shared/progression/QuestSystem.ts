@@ -1080,8 +1080,23 @@ export class QuestSystem extends SystemBase implements IQuestSystem {
       }
     }
 
-    // TODO: Check skill requirements
-    // TODO: Check item requirements
+    // Check skill requirements
+    const skills = definition.requirements.skills;
+    for (const [skillName, requiredLevel] of Object.entries(skills)) {
+      const playerLevel = this.world.getSkillLevel?.(playerId, skillName) ?? 1;
+      if (playerLevel < requiredLevel) {
+        return false;
+      }
+    }
+
+    // Check item requirements - player must have all required items
+    const items = definition.requirements.items;
+    for (const itemId of items) {
+      const hasItem = this.world.hasItem?.(playerId, itemId, 1) ?? false;
+      if (!hasItem) {
+        return false;
+      }
+    }
 
     return true;
   }

@@ -117,8 +117,10 @@ export class ClientLiveKit extends System {
     this.room.localParticipant.on(
       ParticipantEvent.IsSpeakingChanged,
       (speaking: boolean) => {
-        // @ts-ignore - setSpeaking might not exist
-        this.world.entities.player?.setSpeaking(speaking);
+        const player = this.world.entities.player as {
+          setSpeaking?: (speaking: boolean) => void;
+        } | null;
+        player?.setSpeaking?.(speaking);
       },
     );
     // Get LiveKit URL from server snapshot (wsUrl is included in livekit opts)
@@ -233,15 +235,16 @@ export class ClientLiveKit extends System {
   override fixedUpdate(_delta: number) {
     // update voice positions
     for (const [playerId, voice] of this.voices) {
-      const player = this.world.entities.players?.get(playerId);
-      if (!player) continue;
-      // @ts-ignore - position might not exist
+      const player = this.world.entities.players?.get(playerId) as
+        | {
+            node?: { position?: { x: number; y: number; z: number } };
+          }
+        | undefined;
+      if (!player?.node?.position) continue;
       const position = player.node.position;
-      if (position) {
-        voice.pannerNode.positionX.value = position.x;
-        voice.pannerNode.positionY.value = position.y;
-        voice.pannerNode.positionZ.value = position.z;
-      }
+      voice.pannerNode.positionX.value = position.x;
+      voice.pannerNode.positionY.value = position.y;
+      voice.pannerNode.positionZ.value = position.z;
     }
   }
 

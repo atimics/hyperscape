@@ -236,7 +236,7 @@ export const useItemAction: Action = {
       const content = message.content.text || "";
 
       const item = playerEntity?.items.find((i) =>
-        i.name.toLowerCase().includes(content.toLowerCase()),
+        i.name?.toLowerCase().includes(content.toLowerCase()),
       );
 
       if (!item) {
@@ -709,7 +709,7 @@ export const pickupItemAction: Action = {
       // Higher score = better match. We prioritize items that match more words from the user's request
       // Uses word boundary checks to prevent false matches (e.g., "log" in "dialogue")
       const scoreItem = (item: { entity: Entity }) => {
-        const itemName = item.entity.name.toLowerCase();
+        const itemName = (item.entity.name ?? "").toLowerCase();
         const itemWords = itemName.split(/\s+/);
         const contentWords = content.split(/\s+/).filter((w) => w.length > 2);
 

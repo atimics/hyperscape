@@ -16,6 +16,7 @@ import type {
   Memory,
   State,
   ProviderResult,
+  ProviderDataRecord,
 } from "@elizaos/core";
 import type { HyperscapeService } from "../services/HyperscapeService.js";
 import type { InventoryItem, Entity, Skills } from "../types.js";
@@ -367,7 +368,6 @@ export interface PossibilitiesData {
   trainableSkills: TrainableSkill[];
   hasFood: boolean;
   inventorySlotsFree: number;
-  [key: string]: unknown;
 }
 
 /**
@@ -531,7 +531,7 @@ function getGatherableResources(
     if (group.type === "tree") {
       requiredSkill = "woodcutting";
       const wcLevel = getSkillLevel(skills, "woodcutting");
-      const name = group.name.toLowerCase();
+      const name = (group.name ?? "").toLowerCase();
       if (name.includes("oak")) {
         levelRequired = 15;
         canGather = wcLevel >= 15;
@@ -551,7 +551,7 @@ function getGatherableResources(
     } else if (group.type === "rock") {
       requiredSkill = "mining";
       const miningLevel = getSkillLevel(skills, "mining");
-      const name = group.name.toLowerCase();
+      const name = (group.name ?? "").toLowerCase();
       if (name.includes("iron")) {
         levelRequired = 15;
         canGather = miningLevel >= 15;
@@ -901,7 +901,8 @@ export const possibilitiesProvider: Provider = {
         // Include full data in values so it's accessible in composed state
         possibilitiesData: data,
       },
-      data,
+      // Type assertion needed due to ElizaOS ProviderDataRecord type restrictions
+      data: data as unknown as ProviderDataRecord,
     };
   },
 };

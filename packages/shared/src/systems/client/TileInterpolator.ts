@@ -104,6 +104,8 @@ interface EntityMovementState {
   // ========== Sync State ==========
   // Last tile confirmed by server
   serverConfirmedTile: TileCoord;
+  // Last Y position confirmed by server (preserves building floor elevation)
+  serverConfirmedY: number | null;
   // Last tick number from server
   lastServerTick: number;
   // Catch-up multiplier for when client is behind server (current, smoothly lerped)
@@ -134,6 +136,37 @@ export class TileInterpolator {
   private _up = new THREE.Vector3(0, 1, 0);
   // Pre-allocated Vector3 for tile transitions in update()
   private _nextPos = new THREE.Vector3();
+
+  // OPTIMIZATION: Pre-allocated objects for onMovementStart/onTileUpdate
+  // Avoids creating new Vector3/Quaternion per movement start
+  private _startPos = new THREE.Vector3();
+  private _rotationTarget = new THREE.Vector3();
+  private _initialRotation = new THREE.Quaternion();
+  private _usePos = new THREE.Vector3();
+  private _initialQuat = new THREE.Quaternion();
+
+  // OPTIMIZATION: Progressive processing with frame budget
+  /** Maximum entities to process per frame */
+  private readonly MAX_ENTITIES_PER_FRAME = 100;
+  /** Rotation index for round-robin processing when over budget */
+  private _entityRotationIndex = 0;
+  /** Cached array for iteration - avoids Map->Array conversion */
+  private _entityStateArray: Array<[string, EntityMovementState]> = [];
+  /** Flag indicating array needs refresh */
+  private _entityArrayDirty = true;
+
+  /** Helper to set entity state and mark cache dirty */
+  private setEntityState(entityId: string, state: EntityMovementState): void {
+    this.entityStates.set(entityId, state);
+    this._entityArrayDirty = true;
+  }
+
+  /** Helper to delete entity state and mark cache dirty */
+  private deleteEntityState(entityId: string): boolean {
+    const deleted = this.entityStates.delete(entityId);
+    if (deleted) this._entityArrayDirty = true;
+    return deleted;
+  }
 
   /**
    * Calculate Chebyshev distance between two tiles (max of dx, dz)
@@ -222,19 +255,23 @@ export class TileInterpolator {
 
     if (path.length === 0) {
       // No path - clear any existing state
-      this.entityStates.delete(entityId);
+      this.deleteEntityState(entityId);
       return;
     }
 
     // Get or create state
     let state = this.entityStates.get(entityId);
 
-    // Starting visual position for interpolation
-    // Prioritize current visual position for smooth path interruption
-    const startPos =
-      state?.visualPosition?.clone() ||
-      currentPosition?.clone() ||
-      new THREE.Vector3();
+    // OPTIMIZATION: Reuse pre-allocated vector instead of clone()/new
+    // Starting visual position for interpolation - prioritize current visual position
+    if (state?.visualPosition) {
+      this._startPos.copy(state.visualPosition);
+    } else if (currentPosition) {
+      this._startPos.copy(currentPosition);
+    } else {
+      this._startPos.set(0, 0, 0);
+    }
+    const startPos = this._startPos;
 
     // SERVER PATH IS AUTHORITATIVE - no client path calculation
     // Server sends complete path from its known position. Client follows exactly.
@@ -267,15 +304,23 @@ export class TileInterpolator {
     const rotationTargetTile =
       destinationTile || finalPath[finalPath.length - 1];
     const rotationTargetWorld = tileToWorld(rotationTargetTile);
-    const initialRotation =
-      this.calculateFacingRotation(
-        startPos,
-        new THREE.Vector3(
-          rotationTargetWorld.x,
-          startPos.y,
-          rotationTargetWorld.z,
-        ),
-      ) ?? new THREE.Quaternion(); // Default to identity if too close
+    // OPTIMIZATION: Reuse pre-allocated vector instead of new THREE.Vector3()
+    this._rotationTarget.set(
+      rotationTargetWorld.x,
+      startPos.y,
+      rotationTargetWorld.z,
+    );
+    const calculatedRotation = this.calculateFacingRotation(
+      startPos,
+      this._rotationTarget,
+    );
+    // OPTIMIZATION: Reuse pre-allocated quaternion for identity fallback
+    if (calculatedRotation) {
+      this._initialRotation.copy(calculatedRotation);
+    } else {
+      this._initialRotation.identity();
+    }
+    const initialRotation = this._initialRotation;
 
     // Use server's startTile for confirmed position tracking
     const serverConfirmed = startTile ?? worldToTile(startPos.x, startPos.z);
@@ -295,6 +340,7 @@ export class TileInterpolator {
       state.emote = emote ?? (running ? "run" : "walk");
       state.pendingArrivalEmote = null;
       state.serverConfirmedTile = { ...serverConfirmed };
+      state.serverConfirmedY = startPos.y; // Preserve server Y (building floor elevation)
       state.lastServerTick = 0;
       state.catchUpMultiplier = 1.0;
       state.targetCatchUpMultiplier = 1.0;
@@ -319,13 +365,14 @@ export class TileInterpolator {
         emote: emote ?? (running ? "run" : "walk"),
         pendingArrivalEmote: null,
         serverConfirmedTile: { ...serverConfirmed },
+        serverConfirmedY: startPos.y, // Preserve server Y (building floor elevation)
         lastServerTick: 0,
         catchUpMultiplier: 1.0,
         targetCatchUpMultiplier: 1.0,
         moveSeq: moveSeq ?? 0,
         tilesPerTick: tilesPerTick ?? null,
       };
-      this.entityStates.set(entityId, state);
+      this.setEntityState(entityId, state);
     }
 
     if (this.debugMode) {
@@ -409,13 +456,14 @@ export class TileInterpolator {
         emote: emote,
         pendingArrivalEmote: null,
         serverConfirmedTile: { ...serverTile },
+        serverConfirmedY: worldPos.y, // Preserve server Y (building floor elevation)
         lastServerTick: tickNumber ?? 0,
         catchUpMultiplier: 1.0,
         targetCatchUpMultiplier: 1.0,
         moveSeq: moveSeq ?? 0,
         tilesPerTick: null, // Will be set when movement starts
       };
-      this.entityStates.set(entityId, newState);
+      this.setEntityState(entityId, newState);
       return;
     }
 
@@ -433,8 +481,9 @@ export class TileInterpolator {
       state.lastServerTick = tickNumber;
     }
 
-    // Update server confirmed position
+    // Update server confirmed position and Y (for building floor elevation)
     state.serverConfirmedTile = { ...serverTile };
+    state.serverConfirmedY = worldPos.y;
 
     // Update emote/running state from server
     state.emote = emote;
@@ -611,11 +660,12 @@ export class TileInterpolator {
     // This prevents switching to idle while still moving (short paths can finish fast)
     state.pendingArrivalEmote = emote ?? null;
 
-    // Update server confirmed position
+    // Update server confirmed position and Y (for building floor elevation)
     state.serverConfirmedTile = { ...tile };
+    state.serverConfirmedY = worldPos.y;
     state.destinationTile = { ...tile };
 
-    // Update Y from server (terrain height)
+    // Update Y from server (includes building floor elevation)
     state.targetWorldPos.y = worldPos.y;
     state.visualPosition.y = worldPos.y;
 
@@ -717,8 +767,34 @@ export class TileInterpolator {
       position: { x: number; y: number; z: number },
     ) => void,
   ): void {
-    for (const [entityId, state] of this.entityStates) {
+    // OPTIMIZATION: Use cached array to avoid Map->Array conversion each frame
+    if (this._entityArrayDirty) {
+      this._entityStateArray.length = 0;
+      for (const entry of this.entityStates.entries()) {
+        this._entityStateArray.push(entry);
+      }
+      this._entityArrayDirty = false;
+      this._entityRotationIndex = 0;
+    }
+
+    const statesArray = this._entityStateArray;
+    const totalStates = statesArray.length;
+    if (totalStates === 0) return;
+
+    // Process up to MAX_ENTITIES_PER_FRAME using round-robin
+    const maxToProcess = Math.min(this.MAX_ENTITIES_PER_FRAME, totalStates);
+    let processed = 0;
+    const startIndex = this._entityRotationIndex % totalStates;
+    let i = startIndex;
+
+    do {
+      if (processed >= maxToProcess) break;
+
+      const [entityId, state] = statesArray[i];
       const entity = getEntity(entityId);
+
+      i = (i + 1) % totalStates;
+
       if (!entity) continue;
 
       // No path or finished path - just ensure position is synced
@@ -960,13 +1036,28 @@ export class TileInterpolator {
       }
 
       // Update Y from terrain for smooth ground following
+      // IMPORTANT: Preserve server Y if it's significantly higher than terrain
+      // This handles building floors where server sends floor elevation
       if (getTerrainHeight) {
         const height = getTerrainHeight(
           state.visualPosition.x,
           state.visualPosition.z,
         );
         if (height !== null && Number.isFinite(height)) {
-          state.visualPosition.y = height; // Feet at ground level
+          // Only use terrain height if server Y isn't significantly above terrain
+          // Building floors have elevation = terrainY + FOUNDATION_HEIGHT + floorIndex * FLOOR_HEIGHT
+          // FOUNDATION_HEIGHT is ~0.3m, FLOOR_HEIGHT is ~3m, so any floor is at least 0.3m above terrain
+          const serverY = state.serverConfirmedY ?? state.visualPosition.y;
+          const heightDiff = serverY - height;
+
+          // If server Y is more than 0.2m above terrain, preserve it (building floor)
+          // Otherwise use terrain height for smooth ground following
+          if (heightDiff < 0.2) {
+            state.visualPosition.y = height; // Use terrain - on ground level
+          } else {
+            // Preserve server Y - on a building floor
+            state.visualPosition.y = serverY;
+          }
         }
       }
 
@@ -1022,7 +1113,12 @@ export class TileInterpolator {
           `[TileInterpolator] ${entityId}: tile ${state.targetTileIndex}/${state.fullPath.length}`,
         );
       }
-    }
+
+      processed++;
+    } while (i !== startIndex && processed < maxToProcess);
+
+    // Save rotation index for next frame
+    this._entityRotationIndex = i;
   }
 
   /**
@@ -1052,7 +1148,7 @@ export class TileInterpolator {
    * Remove interpolation state for an entity
    */
   removeEntity(entityId: string): void {
-    this.entityStates.delete(entityId);
+    this.deleteEntityState(entityId);
   }
 
   /**
@@ -1158,13 +1254,14 @@ export class TileInterpolator {
         emote: "idle",
         pendingArrivalEmote: null,
         serverConfirmedTile: { ...newTile },
+        serverConfirmedY: position.y, // Preserve initial Y (floor elevation)
         lastServerTick: 0,
         catchUpMultiplier: 1.0,
         targetCatchUpMultiplier: 1.0,
         moveSeq: 0,
         tilesPerTick: null,
       };
-      this.entityStates.set(entityId, state);
+      this.setEntityState(entityId, state);
     }
   }
 
@@ -1173,6 +1270,7 @@ export class TileInterpolator {
    */
   clear(): void {
     this.entityStates.clear();
+    this._entityArrayDirty = true;
   }
 
   /**

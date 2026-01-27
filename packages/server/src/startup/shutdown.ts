@@ -128,6 +128,28 @@ export function registerShutdownHandlers(
   });
 
   process.on("unhandledRejection", (reason, promise) => {
+    // During shutdown, suppress expected agent-related errors
+    if (isShuttingDown) {
+      const reasonStr =
+        reason instanceof Error ? reason.message : String(reason);
+      // Suppress known shutdown-related errors
+      if (
+        reasonStr.includes("registration timed out") ||
+        reasonStr.includes("initialization aborted") ||
+        reasonStr.includes("shutdown in progress")
+      ) {
+        console.log(
+          "[Shutdown] Suppressing expected shutdown error:",
+          reasonStr.substring(0, 100),
+        );
+        return;
+      }
+      console.error(
+        "[Shutdown] Already shutting down, ignoring unhandledRejection",
+      );
+      return;
+    }
+
     console.error(
       "[Shutdown] Unhandled rejection at:",
       promise,

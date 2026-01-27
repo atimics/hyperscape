@@ -103,6 +103,34 @@ export class PlayerSystem extends SystemBase {
   private _tempVec3_1 = new THREE.Vector3();
   private _tempVec3_2 = new THREE.Vector3();
   private _tempVec3_3 = new THREE.Vector3();
+
+  // OPTIMIZATION: Pre-allocated payload object for emitPlayerUpdate
+  // Reused to avoid allocation per update (called very frequently)
+  private _playerUpdatePayload = {
+    id: "",
+    playerId: "",
+    name: "",
+    level: 0,
+    combatLevel: 0,
+    health: { current: 0, max: 0 },
+    alive: true,
+    position: { x: 0, y: 0, z: 0 },
+    skills: null as unknown,
+    stamina: 100,
+    maxStamina: 100,
+    coins: 0,
+    combatStyle: "attack" as string,
+  };
+  private _playerUpdatedEvent = {
+    playerId: "",
+    component: "player" as const,
+    data: null as unknown,
+  };
+  private _uiUpdateEvent = {
+    component: "player" as const,
+    data: null as unknown,
+  };
+
   /** Starter equipment for new players */
   private readonly STARTER_EQUIPMENT: Array<{
     itemId: string;
@@ -868,44 +896,37 @@ export class PlayerSystem extends SystemBase {
   private emitPlayerUpdate(playerId: string): void {
     const player = this.players.get(playerId)!;
 
-    const playerData = {
-      id: player.id,
-      playerId: playerId,
-      name: player.name,
-      level: player.combat.combatLevel,
-      combatLevel: player.combat.combatLevel, // Add explicit combatLevel field
-      health: {
-        current: player.health.current,
-        max: player.health.max,
-      },
-      alive: player.alive,
-      position: {
-        x: player.position.x,
-        y: player.position.y,
-        z: player.position.z,
-      },
-      skills: player.skills,
-      stamina: player.stamina?.current || 100,
-      maxStamina: player.stamina?.max || 100,
-      coins: player.coins || 0,
-      combatStyle: player.combat.combatStyle || "attack",
-    };
+    // OPTIMIZATION: Reuse pre-allocated payload object instead of creating new one
+    const playerData = this._playerUpdatePayload;
+    playerData.id = player.id;
+    playerData.playerId = playerId;
+    playerData.name = player.name;
+    playerData.level = player.combat.combatLevel;
+    playerData.combatLevel = player.combat.combatLevel;
+    playerData.health.current = player.health.current;
+    playerData.health.max = player.health.max;
+    playerData.alive = player.alive;
+    playerData.position.x = player.position.x;
+    playerData.position.y = player.position.y;
+    playerData.position.z = player.position.z;
+    playerData.skills = player.skills;
+    playerData.stamina = player.stamina?.current || 100;
+    playerData.maxStamina = player.stamina?.max || 100;
+    playerData.coins = player.coins || 0;
+    playerData.combatStyle = player.combat.combatStyle || "attack";
 
+    // OPTIMIZATION: Reuse pre-allocated event objects
     // Emit PLAYER_UPDATED for systems
-    this.emitTypedEvent(EventType.PLAYER_UPDATED, {
-      playerId,
-      component: "player",
-      data: playerData,
-    });
+    this._playerUpdatedEvent.playerId = playerId;
+    this._playerUpdatedEvent.data = playerData;
+    this.emitTypedEvent(EventType.PLAYER_UPDATED, this._playerUpdatedEvent);
 
     // Emit STATS_UPDATE for systems that depend on it
     this.emitTypedEvent(EventType.STATS_UPDATE, playerData);
 
     // Emit UI_UPDATE for client UI
-    this.emitTypedEvent(EventType.UI_UPDATE, {
-      component: "player",
-      data: playerData,
-    });
+    this._uiUpdateEvent.data = playerData;
+    this.emitTypedEvent(EventType.UI_UPDATE, this._uiUpdateEvent);
   }
 
   // Public API methods

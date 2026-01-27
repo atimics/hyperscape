@@ -1057,6 +1057,9 @@ export class ClientInput extends SystemBase {
   private navigationToken: { aborted: boolean; abort: () => void } | null =
     null;
   private isRandomWalking = false;
+  private randomWalkTimer: ReturnType<typeof setTimeout> | null = null;
+  private randomWalkRadius = 10;
+  private randomWalkInterval = 3000; // ms between random walks
   private tempVec3Agent = new THREE.Vector3();
 
   // Navigation constants
@@ -1317,10 +1320,61 @@ export class ClientInput extends SystemBase {
 
   /**
    * Start random walk behavior (for AI agents)
+   *
+   * Picks random positions within the configured radius and walks to them.
+   * Uses OSRS-style probabilistic wandering with configurable interval.
+   *
+   * @param radius - Max distance from current position (default 10)
+   * @param interval - Time between random walks in ms (default 3000)
    */
-  startRandomWalk(): void {
+  startRandomWalk(radius = 10, interval = 3000): void {
+    if (this.isRandomWalking) return;
+
     this.isRandomWalking = true;
-    // TODO: Implement random walk behavior
+    this.randomWalkRadius = radius;
+    this.randomWalkInterval = interval;
+
+    // Start the random walk loop
+    this.executeRandomWalkStep();
+  }
+
+  /**
+   * Execute a single random walk step, then schedule the next one.
+   */
+  private async executeRandomWalkStep(): Promise<void> {
+    if (!this.isRandomWalking) return;
+
+    const player = this.world.entities.player;
+    if (!player?.node) {
+      // No player yet, retry later
+      this.randomWalkTimer = setTimeout(
+        () => this.executeRandomWalkStep(),
+        1000,
+      );
+      return;
+    }
+
+    // Get current position
+    const currentPos = player.node.position;
+
+    // Pick a random angle and distance
+    const angle = Math.random() * Math.PI * 2;
+    const distance = Math.random() * this.randomWalkRadius;
+
+    // Calculate target position
+    const targetX = currentPos.x + Math.cos(angle) * distance;
+    const targetZ = currentPos.z + Math.sin(angle) * distance;
+
+    // Navigate to the random position
+    await this.goto(targetX, targetZ);
+
+    // Schedule next random walk if still active
+    if (this.isRandomWalking) {
+      this.randomWalkTimer = setTimeout(
+        () => this.executeRandomWalkStep(),
+        this.randomWalkInterval,
+      );
+    }
   }
 
   /**
@@ -1328,6 +1382,11 @@ export class ClientInput extends SystemBase {
    */
   stopRandomWalk(): void {
     this.isRandomWalking = false;
+    if (this.randomWalkTimer) {
+      clearTimeout(this.randomWalkTimer);
+      this.randomWalkTimer = null;
+    }
+    this.stopNavigation();
   }
 
   /**

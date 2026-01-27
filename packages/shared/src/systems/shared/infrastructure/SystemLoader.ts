@@ -110,7 +110,10 @@ import { ResourceSystem } from "..";
 import { StoreSystem } from "..";
 
 // New MMO-style Systems
-import { InteractionRouter } from "../../client";
+// NOTE: Import directly from specific files to avoid circular dependency through barrel file
+// The barrel file (systems/client/index.ts) exports ClientNetwork which imports PlayerLocal
+// which extends Entity, causing a circular dependency during module initialization
+import { InteractionRouter } from "../../client/interaction";
 import { LootSystem } from "..";
 import { GroundItemSystem } from "../economy/GroundItemSystem";
 import { generateKillToken } from "../../../utils/game/KillTokenUtils";
@@ -123,7 +126,7 @@ import { NPCSystem } from "..";
 import { DialogueSystem } from "..";
 
 // Client-only visual systems
-import { DamageSplatSystem } from "../../client";
+import { DamageSplatSystem } from "../../client/DamageSplatSystem";
 
 // Zone systems
 import { ZoneDetectionSystem } from "../death/ZoneDetectionSystem";

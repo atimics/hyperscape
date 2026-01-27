@@ -1,0 +1,342 @@
+/**
+ * Tree Impostor - High-level API for tree-specific impostor generation
+ *
+ * Wraps @hyperscape/impostor for tree-specific functionality.
+ */
+
+import * as THREE from "three";
+import {
+  OctahedralImpostor,
+  OctahedronType,
+  updateImpostorLighting,
+  type CompatibleRenderer,
+  type ImpostorBakeResult,
+  type ImpostorInstance,
+  type OctahedronTypeValue,
+} from "@hyperscape/impostor";
+import type { TreeMeshResult } from "../rendering/TreeMesh.js";
+
+/**
+ * Bake mode for impostors
+ * - 'standard': Regular bake without normals (no dynamic lighting)
+ * - 'withNormals': Bake with normals for dynamic lighting (may have color issues)
+ * - 'hybrid': Use standard bake for colors + separate normal pass (best of both)
+ */
+export type BakeMode = "standard" | "withNormals" | "hybrid";
+
+/**
+ * Options for tree impostor generation.
+ *
+ * Grid Size Convention (matching @hyperscape/impostor):
+ * - gridSizeX/Y = number of points/cells per axis
+ * - 31x31 is the default (matching the demo)
+ * - buildOctahedronMesh(gridSize) creates gridSize points
+ */
+export type TreeImpostorOptions = {
+  /** Atlas texture size in pixels (default: 2048) */
+  atlasSize?: number;
+  /** Horizontal grid divisions (default: 31 to match demo) */
+  gridSizeX?: number;
+  /** Vertical grid divisions (default: 31 to match demo) */
+  gridSizeY?: number;
+  /** Octahedron type - HEMI for trees viewed from ground (default) */
+  octType?: OctahedronTypeValue;
+  /** Alpha test threshold (default: 0.1) */
+  alphaTest?: number;
+  /** Enable dynamic lighting with normal maps (default: true) */
+  enableLighting?: boolean;
+  /** Bake mode (default: 'hybrid' when enableLighting is true) */
+  bakeMode?: BakeMode;
+};
+
+const DEFAULT_OPTIONS: Required<TreeImpostorOptions> = {
+  atlasSize: 2048,
+  gridSizeX: 31, // Match demo GRID_SIZE
+  gridSizeY: 31, // Match demo GRID_SIZE
+  octType: OctahedronType.HEMI, // HEMI for ground-based viewing (demo default)
+  alphaTest: 0.1,
+  enableLighting: true, // Enable dynamic lighting by default
+  bakeMode: "hybrid", // Use hybrid by default for best results
+};
+
+/**
+ * TreeImpostor - Manages impostor generation for procedural trees.
+ *
+ * Optimized for trees:
+ * - Uses hemisphere mapping (trees are typically viewed from ground level)
+ * - Default 31x31 grid matching the demo for high quality
+ * - Handles instanced leaf meshes during baking
+ * - Supports dynamic lighting via normal atlas
+ *
+ * Grid Size Convention:
+ * - gridSizeX/Y = number of points/cells per axis
+ * - 31 is the default (creates 31x31 = 961 view angles)
+ * - Lower values (e.g., 16) for faster baking and smaller atlas
+ *
+ * @example
+ * ```typescript
+ * const impostor = new TreeImpostor({ atlasSize: 2048, enableLighting: true });
+ * impostor.bake(treeMesh, renderer);
+ *
+ * const impostorMesh = impostor.createInstance();
+ * impostorMesh.position.set(100, 0, 50);
+ * scene.add(impostorMesh.mesh);
+ *
+ * // In render loop
+ * impostorMesh.update(camera);
+ *
+ * // Update lighting when sun changes
+ * impostorMesh.updateLighting?.({
+ *   lightDirection: sunDirection,
+ *   lightIntensity: 1.2,
+ * });
+ * ```
+ */
+export class TreeImpostor {
+  private options: Required<TreeImpostorOptions>;
+  private impostor: OctahedralImpostor | null = null;
+  private bakeResult: ImpostorBakeResult | null = null;
+  private treeSize = 1;
+  private treeWidth = 1;
+  private treeHeight = 1;
+  private heightOffset = 0;
+
+  constructor(options: TreeImpostorOptions = {}) {
+    this.options = { ...DEFAULT_OPTIONS, ...options };
+  }
+
+  /**
+   * Bake an impostor atlas from a tree mesh.
+   * If enableLighting is true (default), also bakes a normal atlas for dynamic lighting.
+   *
+   * @param treeMesh - Tree mesh result from TreeGenerator
+   * @param renderer - Three.js WebGL renderer
+   * @returns This instance for chaining
+   */
+  bake(treeMesh: TreeMeshResult, renderer: THREE.WebGLRenderer): this {
+    // Create impostor system if not exists
+    if (!this.impostor) {
+      // Cast renderer - WebGLRenderer implements all required CompatibleRenderer methods
+      this.impostor = new OctahedralImpostor(
+        renderer as unknown as CompatibleRenderer,
+      );
+    }
+
+    const bakeConfig = {
+      atlasWidth: this.options.atlasSize,
+      atlasHeight: this.options.atlasSize,
+      gridSizeX: this.options.gridSizeX,
+      gridSizeY: this.options.gridSizeY,
+      octType: this.options.octType,
+      backgroundColor: 0x000000,
+      backgroundAlpha: 0,
+    };
+
+    // Determine bake mode
+    const bakeMode =
+      this.options.bakeMode ??
+      (this.options.enableLighting ? "hybrid" : "standard");
+    console.log(`[TreeImpostor] Baking with mode: ${bakeMode}`);
+
+    // Bake based on mode
+    switch (bakeMode) {
+      case "hybrid":
+        // Best of both: correct colors + normal maps
+        this.bakeResult = this.impostor.bakeHybrid(treeMesh.group, bakeConfig);
+        break;
+      case "withNormals":
+        // Original method (may have color issues)
+        this.bakeResult = this.impostor.bakeWithNormals(
+          treeMesh.group,
+          bakeConfig,
+        );
+        break;
+      case "standard":
+      default:
+        // Simple bake without normals
+        this.bakeResult = this.impostor.bake(treeMesh.group, bakeConfig);
+        break;
+    }
+
+    // Calculate tree dimensions from bounding box (for proper aspect ratio)
+    if (this.bakeResult.boundingBox) {
+      const boxSize = new THREE.Vector3();
+      this.bakeResult.boundingBox.getSize(boxSize);
+      this.treeWidth = Math.max(boxSize.x, boxSize.z); // Horizontal extent
+      this.treeHeight = boxSize.y; // Vertical extent
+      this.treeSize = Math.max(this.treeWidth, this.treeHeight); // For backward compat
+
+      // Height offset: distance from bottom of bbox to its center
+      const boxCenter = new THREE.Vector3();
+      this.bakeResult.boundingBox.getCenter(boxCenter);
+      this.heightOffset = boxCenter.y - boxSize.y / 2;
+    } else {
+      // Fallback to sphere-based calculation
+      this.treeSize = this.bakeResult.boundingSphere.radius * 2;
+      this.treeWidth = this.treeSize;
+      this.treeHeight = this.treeSize;
+      this.heightOffset =
+        this.bakeResult.boundingSphere.center.y -
+        this.bakeResult.boundingSphere.radius;
+    }
+
+    return this;
+  }
+
+  /**
+   * Extended impostor instance with lighting support
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private lastInstance:
+    | (ImpostorInstance & { updateLighting?: (lighting: any) => void })
+    | null = null;
+
+  /**
+   * Create a single impostor instance for this tree.
+   *
+   * @param scale - Scale factor (default: 1)
+   * @returns Impostor instance with mesh, update, and optionally updateLighting functions
+   */
+  createInstance(scale = 1): ImpostorInstance & {
+    /** Update lighting uniforms (available when baked with enableLighting: true) */
+    updateLighting?: (lighting: {
+      lightDirection?: THREE.Vector3;
+      lightColor?: THREE.Vector3;
+      lightIntensity?: number;
+      ambientColor?: THREE.Vector3;
+      ambientIntensity?: number;
+    }) => void;
+  } {
+    if (!this.impostor || !this.bakeResult) {
+      throw new Error("Must call bake() before creating instances");
+    }
+
+    // Pass scale directly - createInstance reads dimensions from bounding box
+    const instance = this.impostor.createInstance(this.bakeResult, scale);
+
+    // Position Y so the bottom of the billboard is at ground level
+    // The plane is now maxDimension × maxDimension (square), so use treeSize
+    // Height offset is the Y position of the bounding box's bottom
+    const scaledSize = this.treeSize * scale;
+    instance.mesh.position.y = scaledSize / 2 + this.heightOffset * scale;
+
+    this.lastInstance = instance;
+    return instance;
+  }
+
+  /**
+   * Create multiple impostor instances for efficient rendering.
+   *
+   * @param count - Number of instances
+   * @param scale - Scale factor (default: 1)
+   * @returns Instanced mesh with helper methods
+   */
+  createInstancedMesh(count: number, scale = 1) {
+    if (!this.impostor || !this.bakeResult) {
+      throw new Error("Must call bake() before creating instances");
+    }
+
+    const size = this.treeSize * scale;
+    return this.impostor.createInstancedMesh(this.bakeResult, count, size);
+  }
+
+  /**
+   * Update lighting on the last created impostor instance.
+   * Convenience method that forwards to instance.updateLighting().
+   */
+  updateLighting(lighting: {
+    lightDirection?: THREE.Vector3;
+    lightColor?: THREE.Vector3;
+    lightIntensity?: number;
+    ambientColor?: THREE.Vector3;
+    ambientIntensity?: number;
+  }): void {
+    if (this.lastInstance?.updateLighting) {
+      this.lastInstance.updateLighting(lighting);
+    } else if (this.lastInstance?.material) {
+      // Direct uniform update fallback
+      updateImpostorLighting(this.lastInstance.material, lighting);
+    }
+  }
+
+  /**
+   * Get the tree's calculated size (diameter of bounding sphere).
+   * @deprecated Use getTreeDimensions() for more accurate sizing
+   */
+  getTreeSize(): number {
+    return this.treeSize;
+  }
+
+  /**
+   * Get the tree's actual dimensions (width and height).
+   * Width is the larger of X/Z extent, height is Y extent.
+   */
+  getTreeDimensions(): { width: number; height: number } {
+    return {
+      width: this.treeWidth,
+      height: this.treeHeight,
+    };
+  }
+
+  /**
+   * Get the height offset (distance from ground to tree bottom).
+   * Used for proper Y positioning of impostors.
+   */
+  getHeightOffset(): number {
+    return this.heightOffset;
+  }
+
+  /**
+   * Check if this impostor was baked with lighting support.
+   */
+  hasLighting(): boolean {
+    return this.bakeResult?.normalAtlasTexture != null;
+  }
+
+  /**
+   * Get the atlas texture for preview/debugging.
+   */
+  getAtlasTexture(): THREE.Texture | null {
+    return this.bakeResult?.atlasTexture ?? null;
+  }
+
+  /**
+   * Get the bake result for advanced usage.
+   */
+  getBakeResult(): ImpostorBakeResult | null {
+    return this.bakeResult;
+  }
+
+  /**
+   * Export atlas as data URL for saving.
+   */
+  exportAtlasAsDataURL(format: "png" | "jpeg" = "png"): string | null {
+    if (!this.impostor || !this.bakeResult) return null;
+    return this.impostor.exportAtlasAsDataURL(this.bakeResult, format);
+  }
+
+  /**
+   * Dispose of all resources.
+   */
+  dispose(): void {
+    if (this.bakeResult?.renderTarget) {
+      this.bakeResult.renderTarget.dispose();
+    }
+    this.impostor?.dispose();
+    this.impostor = null;
+    this.bakeResult = null;
+  }
+}
+
+/**
+ * Convenience function to bake a tree impostor.
+ */
+export function bakeTreeImpostor(
+  treeMesh: TreeMeshResult,
+  renderer: THREE.WebGLRenderer,
+  options?: TreeImpostorOptions,
+): TreeImpostor {
+  const impostor = new TreeImpostor(options);
+  impostor.bake(treeMesh, renderer);
+  return impostor;
+}

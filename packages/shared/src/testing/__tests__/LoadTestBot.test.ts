@@ -1,12 +1,16 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { LoadTestBot, type LoadTestBehavior } from "../LoadTestBot";
 
 const TEST_WS_URL = "ws://localhost:5555/ws";
 
+/**
+ * Check if the game server is running.
+ * Uses a short timeout to fail fast when server is unavailable.
+ */
 async function isServerAvailable(): Promise<boolean> {
   try {
     const controller = new globalThis.AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
+    const timeout = setTimeout(() => controller.abort(), 500); // Short timeout
     await fetch("http://localhost:5555/health", { signal: controller.signal });
     clearTimeout(timeout);
     return true;
@@ -14,6 +18,9 @@ async function isServerAvailable(): Promise<boolean> {
     return false;
   }
 }
+
+// Module-level flag set once at test suite initialization
+let serverAvailable = false;
 
 describe("LoadTestBot Unit Tests", () => {
   describe("Configuration", () => {
@@ -232,10 +239,14 @@ describe("LoadTestBot Unit Tests", () => {
 });
 
 describe("LoadTestBot Integration Tests", () => {
-  let serverAvailable = false;
-
-  beforeEach(async () => {
+  // Check server availability ONCE at suite start (not per-test)
+  beforeAll(async () => {
     serverAvailable = await isServerAvailable();
+    if (!serverAvailable) {
+      console.log(
+        "[LoadTestBot Tests] Server not available, integration tests will be skipped",
+      );
+    }
   });
 
   describe("Connection", () => {

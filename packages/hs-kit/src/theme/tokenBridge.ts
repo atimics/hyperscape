@@ -29,7 +29,7 @@ import {
   breakpoints,
   touchTargets,
   parseTokenToNumber,
-} from "@hyperscape/client/src/constants/tokens";
+} from "../tokens";
 import type { Theme } from "../styled/themes";
 
 // Re-export parseTokenToNumber for convenience

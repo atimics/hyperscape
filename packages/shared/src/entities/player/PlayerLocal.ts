@@ -71,7 +71,7 @@
 import type PhysX from "@hyperscape/physx-js-webidl";
 import { createNode } from "../../extras/three/createNode";
 import { Layers } from "../../physics/Layers";
-import { Emotes } from "../../data/playerEmotes";
+import { Emotes, essentialEmotes } from "../../data/playerEmotes";
 import THREE from "../../extras/three/three";
 import { UI, UIText, UIView } from "../../nodes";
 import type {
@@ -139,11 +139,13 @@ interface AvatarInstance {
   move(matrix: THREE.Matrix4): void;
   update(delta: number): void;
   raw: {
-    scene: THREE.Object3D;
+    scene: THREE.Object3D & { visible?: boolean };
   };
   disableRateCheck?: () => void;
   height?: number;
   setEmote?: (emote: string) => void;
+  preloadEmote?: (emote: string) => void;
+  setEmoteAndWait?: (emote: string, timeoutMs?: number) => Promise<void>;
 }
 
 interface AvatarNode {
@@ -153,6 +155,8 @@ interface AvatarNode {
   visible: boolean;
   emote?: string;
   setEmote?: (emote: string) => void;
+  preloadEmote?: (emote: string) => void;
+  setEmoteAndWait?: (emote: string, timeoutMs?: number) => Promise<void>;
   ctx: World;
   parent: { matrixWorld: THREE.Matrix4 };
   activate(world: World): void;
@@ -383,8 +387,8 @@ export class PlayerLocal extends Entity implements HotReloadable {
     defense: { level: 1, xp: 0 },
     constitution: { level: 1, xp: 0 },
     ranged: { level: 1, xp: 0 },
-    magic: { level: 1, xp: 0 },
     prayer: { level: 1, xp: 0 },
+    magic: { level: 1, xp: 0 },
     woodcutting: { level: 1, xp: 0 },
     mining: { level: 1, xp: 0 },
     fishing: { level: 1, xp: 0 },
@@ -1503,12 +1507,46 @@ export class PlayerLocal extends Entity implements HotReloadable {
     const avatarHeight = (this._avatar as AvatarNode).height ?? 1.5;
     this.camHeight = Math.max(1.2, avatarHeight * 0.9);
 
-    // Make avatar visible and ensure proper positioning
-    (this._avatar as { visible: boolean }).visible = true;
+    // CRITICAL: Keep avatar hidden until idle animation is loaded and applied
+    // This prevents the T-pose flash that occurs when the avatar is visible
+    // but no animation is playing yet
+    (this._avatar as { visible: boolean }).visible = false;
     (this._avatar as AvatarNode).position.set(0, 0, 0);
 
-    // Verify avatar instance is actually in the scene graph
+    // Ensure VRM scene is also hidden
     const vrmInstance = (this._avatar as AvatarNode).instance;
+    if (vrmInstance?.raw?.scene) {
+      vrmInstance.raw.scene.visible = false;
+    }
+
+    // CRITICAL: Load and apply idle emote BEFORE making avatar visible
+    // This prevents T-pose flash on spawn
+    if (vrmInstance?.setEmoteAndWait) {
+      // Use setEmoteAndWait to ensure animation is loaded and first frame is applied
+      await vrmInstance.setEmoteAndWait(Emotes.IDLE, 3000);
+    } else if (vrmInstance?.setEmote) {
+      // Fallback to regular setEmote (may show brief T-pose)
+      vrmInstance.setEmote(Emotes.IDLE);
+    }
+
+    // NOW make avatar visible - idle animation is guaranteed to be playing
+    (this._avatar as { visible: boolean }).visible = true;
+    if (vrmInstance?.raw?.scene) {
+      vrmInstance.raw.scene.visible = true;
+    }
+
+    // Pre-warm essential emotes in background to prevent T-pose on first use
+    // This is fire-and-forget - doesn't block avatar display
+    if (vrmInstance?.preloadEmote) {
+      for (const emote of essentialEmotes) {
+        if (emote !== Emotes.IDLE) {
+          // IDLE already loaded
+          vrmInstance.preloadEmote(emote);
+        }
+      }
+    }
+
+    // Verify avatar instance is actually in the scene graph
     let parent = vrmInstance!.raw.scene.parent;
     let depth = 0;
     while (parent && depth < 10) {

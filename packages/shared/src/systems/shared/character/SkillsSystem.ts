@@ -154,11 +154,22 @@ export class SkillsSystem extends SystemBase {
   }
 
   update(_deltaTime: number): void {
-    // Clean up old XP drops (for UI)
+    // OPTIMIZATION: Clean up old XP drops in-place to avoid array allocation every frame
+    // Uses a write index to shift elements, then truncates the array
     const currentTime = Date.now();
-    this.xpDrops = this.xpDrops.filter(
-      (drop) => currentTime - drop.timestamp < 3000, // Keep for 3 seconds
-    );
+    let writeIndex = 0;
+    for (let readIndex = 0; readIndex < this.xpDrops.length; readIndex++) {
+      const drop = this.xpDrops[readIndex];
+      if (currentTime - drop.timestamp < 3000) {
+        // Keep this drop - shift it to writeIndex position
+        if (writeIndex !== readIndex) {
+          this.xpDrops[writeIndex] = drop;
+        }
+        writeIndex++;
+      }
+    }
+    // Truncate array to remove expired drops (no allocation)
+    this.xpDrops.length = writeIndex;
   }
 
   /**

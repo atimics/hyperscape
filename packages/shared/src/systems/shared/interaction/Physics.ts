@@ -118,7 +118,8 @@ import type {
   PhysicsSweepHit,
   TriggerEvent,
 } from "../../../types/systems/physics";
-import type { SystemDependencies } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import type { SystemDependencies } from "../infrastructure/System";
 import { SystemBase } from "../infrastructure/SystemBase";
 
 const _v3_1 = new THREE.Vector3();
@@ -383,6 +384,8 @@ export class Physics extends SystemBase implements IPhysics {
   queryFilterData: PxQueryFilterData | null = null;
   _pv1: PxVec3 | null = null;
   _pv2: PxVec3 | null = null;
+  /** Pre-allocated PxVec3 for velocity operations (dedicated to avoid conflicts) */
+  _pv_velocity: PxVec3 | null = null;
   transform!: PxTransform;
   // Pre-allocated PxHitFlags to avoid per-raycast/sweep allocations
   _raycastHitFlags: PhysX.PxHitFlags | null = null;
@@ -442,11 +445,25 @@ export class Physics extends SystemBase implements IPhysics {
     // Contact callbacks
     this.getContactCallback = createPool<InternalContactCallback>(() => {
       const _loggerRef = this.logger;
+
+      // OPTIMIZATION: Pre-allocate contact pool to avoid per-contact allocations
+      // 64 contacts is plenty for typical physics scenarios
+      const CONTACT_POOL_SIZE = 64;
       const contactPool: Array<{
         position: THREE.Vector3;
         normal: THREE.Vector3;
         impulse: THREE.Vector3;
       }> = [];
+
+      // Pre-allocate all contact pool entries upfront
+      for (let i = 0; i < CONTACT_POOL_SIZE; i++) {
+        contactPool.push({
+          position: new THREE.Vector3(),
+          normal: new THREE.Vector3(),
+          impulse: new THREE.Vector3(),
+        });
+      }
+
       const contacts: Array<{
         position: THREE.Vector3;
         normal: THREE.Vector3;
@@ -811,6 +828,7 @@ export class Physics extends SystemBase implements IPhysics {
 
     this._pv1 = new PHYSX.PxVec3() as PxVec3;
     this._pv2 = new PHYSX.PxVec3() as PxVec3;
+    this._pv_velocity = new PHYSX.PxVec3() as PxVec3;
     this.transform = new PHYSX.PxTransform(
       PHYSX.PxIDENTITYEnum.PxIdentity,
     ) as PxTransform;
@@ -1134,7 +1152,15 @@ export class Physics extends SystemBase implements IPhysics {
     }
   }
 
+  // PERFORMANCE: Track interpolation count for monitoring
+  private _lastInterpolationCount = 0;
+  private _interpolationWarningThreshold = 100;
+
   override preUpdate(alpha: number): void {
+    // PERFORMANCE: Physics interpolation must run for visual smoothness,
+    // but we track count to detect performance issues
+    let interpolated = 0;
+
     for (const handle of this.active) {
       // Type guard: only handles with onInterpolate have interpolation
       if (!handle.onInterpolate) continue;
@@ -1163,7 +1189,20 @@ export class Physics extends SystemBase implements IPhysics {
         lerp.curr.position,
         lerp.curr.quaternion,
       );
+      interpolated++;
     }
+
+    // Warn if interpolation count is unusually high (potential performance issue)
+    if (
+      interpolated > this._interpolationWarningThreshold &&
+      interpolated > this._lastInterpolationCount * 1.5
+    ) {
+      console.warn(
+        `[Physics] High interpolation count: ${interpolated} active handles (may impact frame rate)`,
+      );
+    }
+    this._lastInterpolationCount = interpolated;
+
     // Finalize any physics updates immediately
     // but don't listen to any loopback commits from those actor moves
     this.ignoreSetGlobalPose = true;
@@ -1660,12 +1699,12 @@ export class Physics extends SystemBase implements IPhysics {
   }
 
   setLinearVelocity(actor: PxRigidDynamic, velocity: Vector3): void {
-    if (actor && actor.setLinearVelocity) {
-      const pxVelocity = vector3ToPxVec3(velocity as THREE.Vector3);
-      if (pxVelocity) {
-        actor.setLinearVelocity(pxVelocity);
-        cleanupPxVec3(pxVelocity);
-      }
+    // OPTIMIZATION: Use pre-allocated PxVec3 to avoid allocation per velocity set
+    if (actor && actor.setLinearVelocity && this._pv_velocity) {
+      this._pv_velocity.x = velocity.x;
+      this._pv_velocity.y = velocity.y;
+      this._pv_velocity.z = velocity.z;
+      actor.setLinearVelocity(this._pv_velocity);
     }
   }
 

@@ -15,6 +15,7 @@ import type { ServerSocket } from "../../shared/types";
 import {
   THREE,
   TerrainSystem,
+  TownSystem,
   World,
   EventType,
   DeathState,
@@ -31,8 +32,6 @@ import {
   BFSPathfinder,
   // Collision system
   CollisionMask,
-  // Death state
-  DeathState,
 } from "@hyperscape/shared";
 import type { TileCoord, TileMovementState } from "@hyperscape/shared";
 
@@ -96,6 +95,20 @@ export class TileMovementManager {
   } | null = null;
   private _entityManagerChecked = false;
 
+  // Cached reference to TownSystem for building collision
+  private _townSystem: InstanceType<typeof TownSystem> | null = null;
+  private _townSystemChecked = false;
+
+  // Diagnostic: Log building status once per session
+  private _hasLoggedBuildingStatus = false;
+
+  /**
+   * Current player floor for walkability checks.
+   * Set before pathfinding operations for floor-aware collision.
+   * Defaults to 0 (ground floor) when not set.
+   */
+  private currentPlayerFloor: number = 0;
+
   /**
    * Get EntityManager for spatial registry updates (cached lazy lookup)
    */
@@ -112,6 +125,38 @@ export class TileMovementManager {
       }
     }
     return this._entityManager;
+  }
+
+  /**
+   * Get TownSystem for building collision (cached lazy lookup)
+   * Note: Re-checks if no buildings are registered to handle async initialization
+   */
+  private get townSystem(): InstanceType<typeof TownSystem> | null {
+    // Re-check TownSystem if we haven't found buildings yet
+    // This handles the case where first access happens before collision registration
+    if (
+      !this._townSystemChecked ||
+      (this._townSystem &&
+        this._townSystem.getCollisionService().getBuildingCount() === 0)
+    ) {
+      this._townSystem = this.world.getSystem?.("towns") as InstanceType<
+        typeof TownSystem
+      > | null;
+
+      if (this._townSystem) {
+        const buildingCount = this._townSystem
+          .getCollisionService()
+          .getBuildingCount();
+        if (buildingCount > 0) {
+          // Found buildings - cache the system
+          this._townSystemChecked = true;
+        }
+        // If no buildings, don't cache yet - keep checking
+      } else {
+        this._townSystemChecked = true; // No TownSystem available at all
+      }
+    }
+    return this._townSystem;
   }
 
   // ============================================================================
@@ -152,10 +197,67 @@ export class TileMovementManager {
 
   /**
    * Check if a tile is walkable based on collision and terrain constraints
-   * Checks CollisionMatrix for static objects (trees, rocks, stations)
-   * and TerrainSystem for water level, slope, and biome rules
+   * Checks CollisionMatrix for static objects (trees, rocks, stations),
+   * building collision (walls and floors), and TerrainSystem for water level,
+   * slope, and biome rules.
+   *
+   * @param tile - Target tile to check walkability
+   * @param fromTile - Optional source tile for directional wall checks
+   * @returns true if tile is walkable (and movement from fromTile is not blocked)
    */
-  private isTileWalkable(tile: TileCoord): boolean {
+  private isTileWalkable(tile: TileCoord, fromTile?: TileCoord): boolean {
+    const towns = this.townSystem;
+    const playerFloor = this.currentPlayerFloor;
+
+    // FIRST: Check wall blocking between tiles (this handles building walls)
+    // This MUST be checked regardless of whether tiles are inside/outside buildings
+    // because walls block entry/exit at building boundaries
+    if (fromTile && towns) {
+      // Check building wall blocking (handles entry, exit, and internal movement)
+      if (
+        towns.isBuildingWallBlocked(
+          fromTile.x,
+          fromTile.z,
+          tile.x,
+          tile.z,
+          playerFloor,
+        )
+      ) {
+        return false;
+      }
+
+      // Also check CollisionMatrix directional walls (for non-building obstacles)
+      if (
+        this.world.collision.isBlocked(fromTile.x, fromTile.z, tile.x, tile.z)
+      ) {
+        return false;
+      }
+    }
+
+    // SECOND: Check if target tile is inside a building
+    if (towns) {
+      const collisionService = towns.getCollisionService();
+
+      // Query building collision to check if tile is walkable inside a building
+      const buildingResult = collisionService.queryCollision(
+        tile.x,
+        tile.z,
+        playerFloor,
+      );
+
+      if (buildingResult.isInsideBuilding) {
+        // Check if this tile is walkable at the current floor
+        if (!buildingResult.isWalkable) {
+          return false;
+        }
+
+        // Building floor is walkable - skip terrain checks
+        return true;
+      }
+    }
+
+    // THIRD: Not inside a building - use standard collision checks
+
     // Check CollisionMatrix for static objects (trees, rocks, furnaces, etc.)
     // BLOCKS_WALK includes BLOCKED, WATER, STEEP_SLOPE - excludes OCCUPIED
     // (players should be able to walk through other players for pathfinding)
@@ -364,12 +466,44 @@ export class TileMovementManager {
       return; // Too many pathfind requests
     }
 
+    // Set player floor for floor-aware pathfinding collision checks
+    const towns = this.townSystem;
+    if (towns) {
+      const playerState = towns
+        .getCollisionService()
+        .getPlayerBuildingState(playerId);
+      this.currentPlayerFloor = playerState.currentFloor;
+    }
+
     // Calculate BFS path from current tile to target
+    // IMPORTANT: Pass fromTile to enable wall blocking checks (building walls, etc.)
     const path = this.pathfinder.findPath(
       state.currentTile,
       payload.targetTile,
-      (tile) => this.isTileWalkable(tile),
+      (tile, fromTile) => this.isTileWalkable(tile, fromTile),
     );
+
+    // === DIAGNOSTIC: Log once per session to confirm building collision status ===
+    if (!this._hasLoggedBuildingStatus) {
+      this._hasLoggedBuildingStatus = true;
+      const towns = this.townSystem;
+      const buildingCount =
+        towns?.getCollisionService().getBuildingCount() ?? 0;
+      console.log(`[TileMovement] ====== BUILDING COLLISION STATUS ======`);
+      console.log(`[TileMovement] TownSystem available: ${!!towns}`);
+      console.log(`[TileMovement] Buildings registered: ${buildingCount}`);
+      if (buildingCount > 0) {
+        const buildings = towns!.getCollisionService().getAllBuildings();
+        for (const b of buildings.slice(0, 3)) {
+          // Log first 3 buildings
+          const tiles = b.floors[0]?.walkableTiles.size ?? 0;
+          console.log(
+            `[TileMovement]   - ${b.id}: ${tiles} tiles at (${b.worldPosition.x.toFixed(0)}, ${b.worldPosition.z.toFixed(0)})`,
+          );
+        }
+      }
+      console.log(`[TileMovement] =====================================`);
+    }
 
     // Store path and update state
     state.path = path;
@@ -735,8 +869,75 @@ export class TileMovementManager {
     // Convert tile to world position
     const worldPos = tileToWorld(state.currentTile);
 
-    // Get terrain height
-    if (terrain) {
+    // Get height - prioritize building floor elevation over terrain
+    const towns = this.townSystem;
+    let usedBuildingElevation = false;
+
+    if (towns) {
+      const collisionService = towns.getCollisionService();
+
+      // First, get current player state to know which floor they're on
+      const playerState = collisionService.getPlayerBuildingState(playerId);
+
+      // Check if this tile is inside a building
+      const buildingId = collisionService.getBuildingAtTile(
+        state.currentTile.x,
+        state.currentTile.z,
+      );
+
+      if (buildingId) {
+        // Player is inside or entering a building - use building floor elevation
+        const floorElevation = collisionService.getFloorElevation(
+          state.currentTile.x,
+          state.currentTile.z,
+          playerState.currentFloor,
+        );
+
+        if (floorElevation !== null && Number.isFinite(floorElevation)) {
+          worldPos.y = floorElevation + 0.1; // Small offset above floor
+          usedBuildingElevation = true;
+        }
+      }
+
+      // Update player building/floor state for multi-level collision tracking
+      collisionService.updatePlayerBuildingState(
+        playerId,
+        state.currentTile.x,
+        state.currentTile.z,
+        worldPos.y,
+      );
+
+      // Handle explicit stair transitions for precise floor changes
+      // This is called when player steps onto a stair tile
+      if (state.previousTile) {
+        const newFloor = collisionService.handleStairTransition(
+          playerId,
+          state.previousTile,
+          state.currentTile,
+        );
+
+        if (newFloor !== null) {
+          // Player changed floors via stairs - update elevation
+          const newElevation = collisionService.getFloorElevation(
+            state.currentTile.x,
+            state.currentTile.z,
+            newFloor,
+          );
+
+          if (newElevation !== null && Number.isFinite(newElevation)) {
+            worldPos.y = newElevation + 0.1;
+            usedBuildingElevation = true;
+          }
+        }
+      }
+
+      // Cache current floor for subsequent walkability checks
+      const updatedState = collisionService.getPlayerBuildingState(playerId);
+      this.currentPlayerFloor = updatedState.currentFloor;
+    }
+
+    // Fall back to terrain height if not using building elevation
+    if (!usedBuildingElevation && terrain) {
       const height = terrain.getHeightAt(worldPos.x, worldPos.z);
       if (height !== null && Number.isFinite(height)) {
         worldPos.y = (height as number) + 0.1;
@@ -1076,11 +1277,13 @@ export class TileMovementManager {
       }
 
       // Find best melee tile (cardinal-only for range 1, diagonal allowed for range 2+)
+      // Note: getBestMeleeTile only checks if tiles are walkable, not wall blocking
+      // Wall blocking is handled by the pathfinder below
       const meleeTile = getBestMeleeTile(
         this._targetTile,
         state.currentTile,
         meleeRange,
-        (tile) => this.isTileWalkable(tile),
+        (tile) => this.isTileWalkable(tile), // Tile walkability check (no fromTile needed)
       );
 
       if (!meleeTile) {
@@ -1096,11 +1299,21 @@ export class TileMovementManager {
       destinationTile = this._targetTile;
     }
 
+    // Set player floor for floor-aware pathfinding collision checks
+    const townsForPath = this.townSystem;
+    if (townsForPath) {
+      const playerState = townsForPath
+        .getCollisionService()
+        .getPlayerBuildingState(playerId);
+      this.currentPlayerFloor = playerState.currentFloor;
+    }
+
     // Calculate BFS path to the destination tile (NOT to target, then truncate!)
+    // IMPORTANT: Pass fromTile to enable wall blocking checks (building walls, etc.)
     const path = this.pathfinder.findPath(
       state.currentTile,
       destinationTile,
-      (tile) => this.isTileWalkable(tile),
+      (tile, fromTile) => this.isTileWalkable(tile, fromTile),
     );
 
     if (path.length === 0) {

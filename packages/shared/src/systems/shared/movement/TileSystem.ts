@@ -722,9 +722,41 @@ export function isDiagonal(dx: number, dz: number): boolean {
 
 /**
  * Create a unique key for a tile (for Map/Set storage)
+ *
+ * PERFORMANCE NOTE: For hot paths (BFS, pathfinding), prefer tileKeyNumeric()
+ * which uses a single number instead of string allocation.
  */
 export function tileKey(tile: TileCoord): string {
   return `${tile.x},${tile.z}`;
+}
+
+/**
+ * Create a unique NUMERIC key for a tile - FASTER for hot paths
+ * Uses bit shifting to combine x and z into a single number.
+ * Valid for coordinates in range [-1048576, 1048575] (21 bits signed)
+ *
+ * OPTIMIZATION: No string allocation, O(1) constant time
+ */
+export function tileKeyNumeric(tile: TileCoord): number {
+  // Offset to handle negative coordinates (add 2^20 = 1048576)
+  // This shifts the range from [-1048576, 1048575] to [0, 2097151]
+  const offsetX = (tile.x + 1048576) | 0;
+  const offsetZ = (tile.z + 1048576) | 0;
+  // Combine into single number: x in upper 21 bits, z in lower 21 bits
+  // Using Math.imul to ensure correct integer multiplication
+  return offsetX * 2097152 + offsetZ;
+}
+
+/**
+ * Parse a numeric tile key back into a TileCoord
+ */
+export function parseTileKeyNumeric(key: number): TileCoord {
+  const offsetZ = key % 2097152;
+  const offsetX = ((key - offsetZ) / 2097152) | 0;
+  return {
+    x: offsetX - 1048576,
+    z: offsetZ - 1048576,
+  };
 }
 
 /**

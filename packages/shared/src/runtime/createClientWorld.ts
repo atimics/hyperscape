@@ -45,6 +45,7 @@
  */
 
 import { World } from "../core/World";
+import { FrameBudgetManager } from "../utils/FrameBudgetManager";
 
 // Core client systems
 import { ClientActions } from "../systems/client/ClientActions";
@@ -64,11 +65,12 @@ import { Stage } from "../systems/shared";
 
 import THREE from "../extras/three/three";
 
-// Terrain, vegetation, towns, roads, and physics
+// Terrain, vegetation, towns, roads, buildings, and physics
 import { TerrainSystem } from "../systems/shared";
 import { TownSystem } from "../systems/shared";
 import { RoadNetworkSystem } from "../systems/shared";
 import { VegetationSystem } from "../systems/shared";
+import { BuildingRenderingSystem } from "../systems/shared";
 import { Physics } from "../systems/shared";
 
 // RPG systems are registered via SystemLoader to keep them modular
@@ -108,6 +110,17 @@ interface WindowWithWorld extends Window {
  */
 export function createClientWorld() {
   const world = new World();
+
+  // ============================================================================
+  // FRAME BUDGET MANAGER
+  // ============================================================================
+  // Initialize frame budget manager for reducing main thread jank.
+  // This tracks frame time and allows deferring heavy work when over budget.
+  world.frameBudget = FrameBudgetManager.getInstance({
+    targetFrameTime: 16.67, // 60 FPS default
+    renderReserve: 4, // Reserve 4ms for GPU work
+    useIdleCallbacks: true, // Use requestIdleCallback for deferred work
+  });
 
   // ============================================================================
   // CLEAR MODEL CACHE
@@ -185,6 +198,13 @@ export function createClientWorld() {
 
   world.register("towns", TownSystem);
   world.register("roads", RoadNetworkSystem);
+
+  // ============================================================================
+  // BUILDING RENDERING SYSTEM
+  // ============================================================================
+  // Procedural building mesh rendering for towns
+  // Must be registered after towns system as it depends on town data
+  world.register("building-rendering", BuildingRenderingSystem);
 
   // ============================================================================
   // VEGETATION SYSTEM

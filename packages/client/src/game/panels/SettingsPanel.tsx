@@ -20,6 +20,7 @@ import { MicIcon, MicOffIcon } from "../../components/Icons";
 import { ToggleSwitch } from "../../components/ToggleSwitch";
 import { Slider } from "../../components/Slider";
 import { NAME_SANITIZE_REGEX } from "../../utils/validation";
+import { COLORS } from "../../constants/colors";
 import {
   useComplexityStore,
   useComplexityMode,
@@ -612,6 +613,9 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
     prefs?.postprocessing ?? false,
   );
   const [bloom, setBloom] = useState(prefs?.bloom ?? true);
+  const [waterReflections, setWaterReflections] = useState(
+    prefs?.waterReflections ?? true,
+  );
   const [colorGrading, setColorGrading] = useState(
     prefs?.colorGrading || "none",
   );
@@ -762,6 +766,8 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
       if (changes.postprocessing)
         setPostprocessing(changes.postprocessing.value as boolean);
       if (changes.bloom) setBloom(changes.bloom.value as boolean);
+      if (changes.waterReflections)
+        setWaterReflections(changes.waterReflections.value as boolean);
       if (changes.colorGrading)
         setColorGrading(changes.colorGrading.value as string);
       if (changes.colorGradingIntensity)
@@ -934,6 +940,14 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
                   onChange={(v) => {
                     setBloom(v);
                     prefs?.setBloom?.(v);
+                  }}
+                />
+                <ToggleSwitch
+                  label="Water Reflections"
+                  checked={waterReflections}
+                  onChange={(v) => {
+                    setWaterReflections(v);
+                    prefs?.setWaterReflections?.(v);
                   }}
                 />
               </div>

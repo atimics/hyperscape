@@ -1915,7 +1915,7 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       );
 
       // Check if entity has handleInteraction method
-      const interactableEntity = entity as {
+      const interactableEntity = entity as unknown as {
         handleInteraction?: (data: {
           playerId: string;
           interactionType?: string;

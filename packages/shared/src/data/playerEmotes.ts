@@ -84,3 +84,23 @@ export const emoteUrls = [
   Emotes.DEATH,
   Emotes.SQUAT,
 ];
+
+/**
+ * Essential emotes that MUST be pre-loaded immediately after avatar loads.
+ * These are the most commonly used emotes that would cause visible T-pose flash
+ * if loaded on-demand during gameplay.
+ *
+ * Pre-warming these prevents:
+ * - T-pose on first movement (WALK, RUN)
+ * - T-pose on first attack (COMBAT, SWORD_SWING)
+ * - T-pose on death (DEATH)
+ *
+ * IDLE is intentionally first since it's the default pose shown immediately.
+ */
+export const essentialEmotes = [
+  Emotes.IDLE, // Default pose - MUST be loaded first
+  Emotes.WALK, // Most common movement
+  Emotes.RUN, // Fast movement
+  Emotes.COMBAT, // Unarmed attack
+  Emotes.DEATH, // Death animation
+];

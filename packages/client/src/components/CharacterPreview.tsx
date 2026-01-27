@@ -1,7 +1,10 @@
 import React, { useEffect, useRef } from "react";
 import { THREE, createRenderer } from "@hyperscape/shared";
 import type { UniversalRenderer } from "@hyperscape/shared";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import {
+  GLTFLoader,
+  type GLTFParser,
+} from "three/examples/jsm/loaders/GLTFLoader.js";
 import { VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import { retargetAnimationToVRM } from "../utils/vrmAnimationRetarget";
 import { CDN_URL } from "../lib/api-config";
@@ -118,7 +121,7 @@ export const CharacterPreview: React.FC<CharacterPreviewProps> = ({
 
     // Loaders
     const loader = new GLTFLoader();
-    loader.register((parser) => new VRMLoaderPlugin(parser));
+    loader.register((parser: GLTFParser) => new VRMLoaderPlugin(parser));
 
     // --- Loading Logic ---
     let isMounted = true;

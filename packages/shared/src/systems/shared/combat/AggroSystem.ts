@@ -73,6 +73,12 @@ export class AggroSystem extends SystemBase {
    */
   private currentTick = 0;
 
+  /** Cached combat levels (invalidated on skill change) */
+  private combatLevelCache = new Map<string, number>();
+
+  /** EntityManager for spatial queries */
+  private entityManager?: import("../entities/EntityManager").EntityManager;
+
   constructor(world: World) {
     super(world, {
       name: "aggro",
@@ -85,6 +91,12 @@ export class AggroSystem extends SystemBase {
   }
 
   async init(): Promise<void> {
+    // Cache EntityManager for spatial queries (avoid getSystem() in hot paths)
+    this.entityManager =
+      this.world.getSystem<import("../entities/EntityManager").EntityManager>(
+        "entity-manager",
+      );
+
     // Set up type-safe event subscriptions for aggro mechanics
     this.subscribe(
       EventType.MOB_NPC_SPAWNED,
@@ -176,6 +188,8 @@ export class AggroSystem extends SystemBase {
         >;
       }) => {
         this.playerSkills.set(data.playerId, data.skills);
+        // Invalidate combat level cache when skills change
+        this.combatLevelCache.delete(data.playerId);
       },
     );
 
@@ -276,21 +290,46 @@ export class AggroSystem extends SystemBase {
     };
 
     this.mobStates.set(mobData.id, aiState);
+    this._mobStatesArrayDirty = true; // Mark array for rebuild
   }
 
   private unregisterMob(mobId: string): void {
     this.mobStates.delete(mobId);
+    this._mobStatesArrayDirty = true; // Mark array for rebuild
   }
 
   private updatePlayerPosition(data: {
     entityId: string;
     position: Position3D;
   }): void {
-    // Check all mobs for aggro against this player
-    for (const [_mobId, mobState] of this.mobStates) {
-      if (mobState.behavior === "passive") continue;
+    // OPTIMIZED: Use spatial query to find only nearby mobs instead of checking all
+    // Max aggro range is typically 10-15 tiles, we search a bit wider to be safe
+    const MAX_AGGRO_CHECK_RADIUS = 20; // tiles converted to world units
 
-      this.checkPlayerAggro(mobState, data.entityId, data.position);
+    if (this.entityManager) {
+      // Use spatial registry to find mobs near this player
+      const nearbyEntities = this.entityManager
+        .getSpatialRegistry()
+        .getEntitiesInRange(
+          data.position.x,
+          data.position.z,
+          MAX_AGGRO_CHECK_RADIUS,
+          "mob",
+        );
+
+      for (const result of nearbyEntities) {
+        const mobState = this.mobStates.get(result.entityId);
+        if (!mobState || mobState.behavior === "passive") continue;
+
+        this.checkPlayerAggro(mobState, data.entityId, data.position);
+      }
+    } else {
+      // Fallback: Check all mobs (legacy behavior)
+      for (const [_mobId, mobState] of this.mobStates) {
+        if (mobState.behavior === "passive") continue;
+
+        this.checkPlayerAggro(mobState, data.entityId, data.position);
+      }
     }
   }
 
@@ -441,34 +480,38 @@ export class AggroSystem extends SystemBase {
     return 1;
   }
 
-  /**
-   * Get player combat level using OSRS-accurate formula
-   *
-   * Formula: Base + max(Melee, Ranged, Magic)
-   * Where:
-   *   Base = 0.25 * (Defence + Hitpoints + floor(Prayer / 2))
-   *   Melee = 0.325 * (Attack + Strength)
-   *   Ranged = 0.325 * floor(Ranged * 1.5)
-   *   Magic = 0.325 * floor(Magic * 1.5)
-   *
-   * @see https://oldschool.runescape.wiki/w/Combat_level
-   */
+  /** Get player combat level (cached, invalidated on skill change) */
   private getPlayerCombatLevel(playerId: string): number {
-    const playerSkills = this.getPlayerSkills(playerId);
+    const cached = this.combatLevelCache.get(playerId);
+    if (cached !== undefined) return cached;
 
-    // Use OSRS-accurate combat level formula
-    const combatSkills = normalizeCombatSkills({
-      attack: playerSkills.attack,
-      strength: playerSkills.strength,
-      defense: playerSkills.defense,
-      constitution: playerSkills.constitution, // Maps to hitpoints
-      ranged: playerSkills.ranged,
-      magic: playerSkills.magic,
-      prayer: playerSkills.prayer,
-    });
+    const skills = this.getPlayerSkills(playerId);
+    const combatLevel = calculateCombatLevel(
+      normalizeCombatSkills({
+        attack: skills.attack,
+        strength: skills.strength,
+        defense: skills.defense,
+        constitution: skills.constitution,
+        ranged: skills.ranged,
+        magic: skills.magic,
+        prayer: skills.prayer,
+      }),
+    );
 
-    return calculateCombatLevel(combatSkills);
+    this.combatLevelCache.set(playerId, combatLevel);
+    return combatLevel;
   }
+
+  /** Default skills for fresh character (OSRS level 3) */
+  private static readonly DEFAULT_SKILLS = {
+    attack: 1,
+    strength: 1,
+    defense: 1,
+    constitution: 10, // Hitpoints starts at 10 in OSRS
+    ranged: 1,
+    magic: 1,
+    prayer: 1,
+  } as const;
 
   private getPlayerSkills(playerId: string): {
     attack: number;
@@ -479,48 +522,24 @@ export class AggroSystem extends SystemBase {
     magic: number;
     prayer: number;
   } {
-    // Use cached skills data (reactive pattern)
-    const cachedSkills = this.playerSkills.get(playerId);
+    const skills = this.playerSkills.get(playerId);
+    if (!skills) return { ...AggroSystem.DEFAULT_SKILLS };
 
-    if (cachedSkills) {
-      return {
-        attack: cachedSkills.attack?.level ?? 1,
-        strength: cachedSkills.strength?.level ?? 1,
-        defense: cachedSkills.defense?.level ?? 1,
-        constitution: cachedSkills.constitution?.level ?? 10,
-        ranged: cachedSkills.ranged?.level ?? 1,
-        magic:
-          (cachedSkills as Record<string, { level: number }>).magic?.level ?? 1,
-        prayer:
-          (cachedSkills as Record<string, { level: number }>).prayer?.level ??
-          1,
-      };
-    }
-
-    // Default skills for fresh character (OSRS level 3)
+    // Cast once for extended skill access
+    const extended = skills as Record<string, { level: number } | undefined>;
     return {
-      attack: 1,
-      strength: 1,
-      defense: 1,
-      constitution: 10, // Hitpoints starts at 10 in OSRS
-      ranged: 1,
-      magic: 1,
-      prayer: 1,
+      attack: skills.attack?.level ?? 1,
+      strength: skills.strength?.level ?? 1,
+      defense: skills.defense?.level ?? 1,
+      constitution: skills.constitution?.level ?? 10,
+      ranged: skills.ranged?.level ?? 1,
+      magic: extended.magic?.level ?? 1,
+      prayer: extended.prayer?.level ?? 1,
     };
   }
 
   /**
-   * Update tolerance state for a player based on their current position
-   *
-   * OSRS Tolerance System:
-   * - World is divided into 21x21 tile regions
-   * - When player enters a new region, a 10-minute timer starts
-   * - After 10 minutes in the same region, aggressive mobs stop attacking
-   * - Moving to a new region resets the timer
-   *
-   * @param playerId - Player to update
-   * @param playerPosition - Player's current world position
-   *
+   * Update tolerance state - after 10 min in a 21x21 region, mobs stop aggro
    * @see https://oldschool.runescape.wiki/w/Aggression#Tolerance
    */
   private updatePlayerTolerance(
@@ -566,13 +585,6 @@ export class AggroSystem extends SystemBase {
     const regionX = Math.floor(tile.x / TOLERANCE_REGION_SIZE);
     const regionZ = Math.floor(tile.z / TOLERANCE_REGION_SIZE);
     return `${regionX}:${regionZ}`;
-  }
-
-  /**
-   * Clean up tolerance data for a player (on disconnect)
-   */
-  private removePlayerTolerance(playerId: string): void {
-    this.playerTolerance.delete(playerId);
   }
 
   /**
@@ -636,21 +648,20 @@ export class AggroSystem extends SystemBase {
     mobState.currentTarget = null;
     mobState.isPatrolling = true; // Resume patrolling
 
-    // Emit chase end event
+    // Emit chase end event - MobEntity handles actual return-to-spawn movement
     this.emitTypedEvent(EventType.MOB_NPC_CHASE_ENDED, {
       mobId: mobState.mobId,
       targetPlayerId: previousTarget || "",
     });
-
-    // Start returning to home position
-    this.returnToHome(mobState);
   }
 
-  private returnToHome(_mobState: MobAIStateData): void {
-    // DISABLED: Return-to-home movement now handled by MobEntity.handleFleeState()
-    // MobEntity automatically returns to spawn when target is lost
-    // This system only triggers the state change, not the actual movement
-  }
+  // PERFORMANCE: Track rotation index for progressive mob AI updates
+  private _mobAIRotationIndex = 0;
+  private readonly MAX_MOB_AI_UPDATES_PER_TICK = 50;
+
+  // OPTIMIZATION: Cached array for mob states (avoids Array.from() allocation each tick)
+  private _mobStatesArray: Array<[string, MobAIStateData]> = [];
+  private _mobStatesArrayDirty = true;
 
   private updateMobAI(): void {
     const now = Date.now();
@@ -658,51 +669,79 @@ export class AggroSystem extends SystemBase {
     // Increment tick counter for tolerance system
     this.currentTick++;
 
-    for (const [_mobId, mobState] of this.mobStates) {
-      // Skip if in combat - combat system handles behavior
-      if (mobState.isInCombat) continue;
-
-      // Strong type assumption - positions are always valid Position3D objects
-      if (!mobState.currentPosition || !mobState.homePosition) {
-        console.warn(
-          `[AggroSystem] Missing positions for mob ${mobState.mobId}`,
-        );
-        continue;
+    // OPTIMIZATION: Use cached array, only rebuild when mob states change
+    if (this._mobStatesArrayDirty) {
+      this._mobStatesArray.length = 0;
+      for (const entry of this.mobStates.entries()) {
+        this._mobStatesArray.push(entry);
       }
-
-      // Check leashing - if too far from home, return
-      const homeDistance = calculateDistance(
-        mobState.currentPosition,
-        mobState.homePosition,
-      );
-      if (homeDistance > mobState.leashRange) {
-        if (mobState.isChasing) {
-          this.stopChasing(mobState);
-        } else {
-          this.returnToHome(mobState);
-        }
-        continue;
-      }
-
-      // Clean up old aggro targets
-      this.cleanupAggroTargets(mobState);
-
-      // If chasing, update chase behavior
-      if (mobState.isChasing && mobState.currentTarget) {
-        this.updateChasing(mobState);
-      } else if (
-        mobState.behavior === "aggressive" &&
-        mobState.aggroTargets.size > 0
-      ) {
-        // Check if we should start chasing someone
-        const bestTarget = this.getBestAggroTarget(mobState);
-        this.startChasing(mobState, bestTarget.playerId);
-      } else if (!mobState.isChasing && now - mobState.lastAction > 5000) {
-        // Patrol behavior when not chasing
-        this.updatePatrol(mobState);
-        mobState.lastAction = now;
-      }
+      this._mobStatesArrayDirty = false;
+      this._mobAIRotationIndex = 0; // Reset rotation on change
     }
+    const mobStatesArray = this._mobStatesArray;
+    const totalMobs = mobStatesArray.length;
+    if (totalMobs === 0) return;
+
+    const frameBudget = this.world.frameBudget;
+    let processed = 0;
+    const maxUpdates = Math.min(this.MAX_MOB_AI_UPDATES_PER_TICK, totalMobs);
+
+    // Start from rotation index
+    const startIndex = this._mobAIRotationIndex % totalMobs;
+    let i = startIndex;
+
+    do {
+      // Check frame budget periodically
+      if (processed > 0 && processed % 10 === 0) {
+        if (frameBudget && !frameBudget.hasTimeRemaining(1)) {
+          break; // Over budget
+        }
+      }
+
+      if (processed >= maxUpdates) break;
+
+      const [_mobId, mobState] = mobStatesArray[i];
+
+      if (!mobState.isInCombat) {
+        // Strong type assumption - positions are always valid Position3D objects
+        if (!mobState.currentPosition || !mobState.homePosition) {
+          console.warn(
+            `[AggroSystem] Missing positions for mob ${mobState.mobId}`,
+          );
+        } else {
+          // Check leashing - if too far from home, stop chasing and return
+          const homeDistance = calculateDistance(
+            mobState.currentPosition,
+            mobState.homePosition,
+          );
+          if (homeDistance > mobState.leashRange && mobState.isChasing) {
+            this.stopChasing(mobState);
+          } else {
+            // Clean up old aggro targets
+            this.cleanupAggroTargets(mobState);
+
+            // If chasing, update chase behavior
+            if (mobState.isChasing && mobState.currentTarget) {
+              this.updateChasing(mobState);
+            } else if (
+              mobState.behavior === "aggressive" &&
+              mobState.aggroTargets.size > 0
+            ) {
+              // Check if we should start chasing someone
+              const bestTarget = this.getBestAggroTarget(mobState);
+              this.startChasing(mobState, bestTarget.playerId);
+            }
+            // NOTE: Patrol behavior handled by MobEntity.serverUpdate()
+          }
+        }
+      }
+
+      processed++;
+      i = (i + 1) % totalMobs;
+    } while (i !== startIndex);
+
+    // Save rotation index for next tick
+    this._mobAIRotationIndex = i;
   }
 
   private cleanupAggroTargets(mobState: MobAIStateData): void {
@@ -787,15 +826,7 @@ export class AggroSystem extends SystemBase {
     if (distance <= 2.0 && !mobState.isInCombat) {
       this.startCombatWithPlayer(mobState, mobState.currentTarget);
     }
-    // NOTE: Movement requests removed - MobEntity handles all movement via its own AI
-    // MobEntity.serverUpdate() detects target and moves towards it
-    // Emitting MOB_MOVE_REQUEST events was redundant and no system handled them
-  }
-
-  private updatePatrol(_mobState: MobAIStateData): void {
-    // DISABLED: Patrol movement now handled by MobEntity.serverUpdate()
-    // MobEntity has built-in patrol logic with patrol points
-    // This system only tracks aggro state, not actual movement
+    // NOTE: Movement handled by MobEntity.serverUpdate() which detects target and moves
   }
 
   private onCombatStarted(data: {
@@ -948,6 +979,17 @@ export class AggroSystem extends SystemBase {
   destroy(): void {
     // Clear all mob states and aggro data
     this.mobStates.clear();
+    this._mobStatesArray.length = 0;
+    this._mobStatesArrayDirty = true;
+
+    // Clear combat level cache
+    this.combatLevelCache.clear();
+
+    // Clear player tolerance data
+    this.playerTolerance.clear();
+
+    // Clear cached skills
+    this.playerSkills.clear();
 
     // Call parent cleanup (automatically handles interval cleanup)
     super.destroy();

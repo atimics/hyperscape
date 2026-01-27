@@ -264,8 +264,7 @@ export interface NPCEntityConfig extends EntityConfig<NPCEntityProperties> {
 }
 
 // Resource entity config
-export interface ResourceEntityConfig
-  extends EntityConfig<ResourceEntityProperties> {
+export interface ResourceEntityConfig extends EntityConfig<ResourceEntityProperties> {
   resourceType: ResourceType;
   resourceId: string;
   harvestSkill: string;
@@ -282,6 +281,25 @@ export interface ResourceEntityConfig
   depletedModelPath?: string | null;
   modelScale?: number;
   depletedModelScale?: number;
+  /**
+   * Path to LOD1 (low-poly) model for medium-distance rendering
+   * If not specified, full model is used until imposter distance
+   * Recommended for trees and large resources to improve mid-range performance
+   */
+  lod1Model?: string | null;
+  /**
+   * Scale for LOD1 model (defaults to modelScale if not specified)
+   */
+  lod1ModelScale?: number;
+  /**
+   * LOD configuration for this resource
+   */
+  lodConfig?: {
+    /** Distance to switch from LOD0 to LOD1 (default: 60) */
+    lod1Distance?: number;
+    /** Distance to switch to imposter billboard (default: 120) */
+    imposterDistance?: number;
+  };
   /**
    * Tile footprint - how many tiles this resource occupies
    * Defaults to "standard" (1×1) if not specified
@@ -427,8 +445,7 @@ export interface LocalHeadstoneData extends Omit<HeadstoneData, "deathTime"> {
 }
 
 // Headstone entity config
-export interface HeadstoneEntityConfig
-  extends EntityConfig<BaseEntityProperties> {
+export interface HeadstoneEntityConfig extends EntityConfig<BaseEntityProperties> {
   headstoneData: HeadstoneData;
 }
 

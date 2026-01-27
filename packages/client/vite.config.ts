@@ -368,6 +368,44 @@ export default defineConfig(({ mode }) => {
           __dirname,
           "../shared/build/framework.client.js",
         ),
+        // Workspace package aliases (these are kept external in shared's build)
+        "@hyperscape/decimation": path.resolve(
+          __dirname,
+          "../decimation/dist/index.js",
+        ),
+        "@hyperscape/impostor": path.resolve(
+          __dirname,
+          "../impostors/dist/index.js",
+        ),
+        // Procgen package aliases for terrain, vegetation, etc.
+        "@hyperscape/procgen/terrain": path.resolve(
+          __dirname,
+          "../procgen/dist/terrain/index.js",
+        ),
+        "@hyperscape/procgen/vegetation": path.resolve(
+          __dirname,
+          "../procgen/dist/vegetation/index.js",
+        ),
+        "@hyperscape/procgen/building/town": path.resolve(
+          __dirname,
+          "../procgen/dist/building/town/index.js",
+        ),
+        "@hyperscape/procgen/building": path.resolve(
+          __dirname,
+          "../procgen/dist/building/index.js",
+        ),
+        "@hyperscape/procgen/rock": path.resolve(
+          __dirname,
+          "../procgen/dist/rock/index.js",
+        ),
+        "@hyperscape/procgen/plant": path.resolve(
+          __dirname,
+          "../procgen/dist/plant/index.js",
+        ),
+        "@hyperscape/procgen": path.resolve(
+          __dirname,
+          "../procgen/dist/index.js",
+        ),
       },
       dedupe: ["three"],
     },

@@ -89,7 +89,10 @@ import type {
 import type { DataValidationResult } from "../types/core/validation-types";
 import type { MobSpawnPoint, NPCLocation, WorldArea } from "./world-areas";
 import { WeaponType, EquipmentSlotName, AttackType } from "../types/core/core";
-import type { WorldConfigManifest } from "../types/world/world-types";
+import type {
+  WorldConfigManifest,
+  BuildingsManifest,
+} from "../types/world/world-types";
 
 /**
  * Gathering Tool Data - derived from items.json where item.tool is defined
@@ -201,6 +204,7 @@ export class DataManager {
   private validationResult: DataValidationResult | null = null;
   private worldAssetsDir: string | null = null;
   private static worldConfig: WorldConfigManifest | null = null;
+  private static buildingsManifest: BuildingsManifest | null = null;
 
   private constructor() {
     // Private constructor for singleton pattern
@@ -219,6 +223,21 @@ export class DataManager {
    */
   public static setWorldConfig(config: WorldConfigManifest): void {
     DataManager.worldConfig = config;
+  }
+
+  /**
+   * Get the loaded buildings manifest
+   * Returns null if not yet loaded
+   */
+  public static getBuildingsManifest(): BuildingsManifest | null {
+    return DataManager.buildingsManifest;
+  }
+
+  /**
+   * Set the buildings manifest (for testing or runtime updates)
+   */
+  public static setBuildingsManifest(manifest: BuildingsManifest): void {
+    DataManager.buildingsManifest = manifest;
   }
 
   /**
@@ -402,6 +421,23 @@ export class DataManager {
       } catch {
         console.warn(
           "[DataManager] world-config.json not found, using default world generation parameters",
+        );
+      }
+
+      // Load buildings manifest for pre-defined towns
+      try {
+        const buildingsRes = await fetch(`${baseUrl}/buildings.json`);
+        if (buildingsRes.ok) {
+          const buildingsData =
+            (await buildingsRes.json()) as BuildingsManifest;
+          DataManager.buildingsManifest = buildingsData;
+          console.log(
+            `[DataManager] Loaded buildings manifest: ${buildingsData.towns?.length ?? 0} pre-defined towns`,
+          );
+        }
+      } catch {
+        console.warn(
+          "[DataManager] buildings.json not found, no pre-defined towns",
         );
       }
 
@@ -603,6 +639,23 @@ export class DataManager {
       } catch {
         console.warn(
           "[DataManager] world-config.json not found, using default world generation parameters",
+        );
+      }
+
+      // Load buildings manifest for pre-defined towns
+      const buildingsPath = path.join(manifestsDir, "buildings.json");
+      try {
+        const buildingsData = await fs.readFile(buildingsPath, "utf-8");
+        const buildingsManifest = JSON.parse(
+          buildingsData,
+        ) as BuildingsManifest;
+        DataManager.buildingsManifest = buildingsManifest;
+        console.log(
+          `[DataManager] Loaded buildings manifest: ${buildingsManifest.towns?.length ?? 0} pre-defined towns`,
+        );
+      } catch {
+        console.warn(
+          "[DataManager] buildings.json not found, no pre-defined towns",
         );
       }
 

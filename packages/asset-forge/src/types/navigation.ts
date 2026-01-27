@@ -1,3 +1,4 @@
+// Navigation view type used for route mapping
 export type NavigationView =
   | "assets"
   | "generation"
@@ -5,20 +6,9 @@ export type NavigationView =
   | "handRigging"
   | "armorFitting"
   | "retargetAnimate"
-  | "worldBuilder";
-
-export interface NavigationState {
-  currentView: NavigationView;
-  selectedAssetId: string | null;
-  navigationHistory: NavigationView[];
-}
-
-export interface NavigationContextValue extends NavigationState {
-  // Navigation actions
-  navigateTo: (view: NavigationView) => void;
-  navigateToAsset: (assetId: string) => void;
-  goBack: () => void;
-
-  // Navigation helpers
-  canGoBack: boolean;
-}
+  | "worldBuilder"
+  | "manifests"
+  | "buildingGen"
+  | "treeGen"
+  | "rockGen"
+  | "plantGen";

@@ -18,7 +18,8 @@ import {
 } from "../../../types/entities";
 import type { World } from "../../../types/index";
 import type { Item } from "../../../types/core/core";
-import type { EntityManager } from "..";
+// NOTE: Import directly to avoid circular dependency through barrel file
+import type { EntityManager } from "./EntityManager";
 import { groundToTerrain } from "../../../utils/game/EntityUtils";
 import type { ItemSpawnerStats } from "../../../types/entities";
 

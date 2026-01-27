@@ -1,0 +1,321 @@
+/**
+ * LODWorker - Worker-based mesh decimation with sync fallback.
+ * Sync path uses real @hyperscape/decimation (seam-aware QSlim).
+ * Worker path uses simplified stride decimation (ES modules can't load in workers).
+ */
+
+import { WorkerPool } from "./WorkerPool";
+import {
+  decimate as realDecimate,
+  fromBufferGeometry,
+  toBufferGeometry,
+} from "@hyperscape/decimation";
+
+export interface LODLevelConfig {
+  name: string;
+  targetPercent: number;
+  minVertices?: number;
+  strictness?: 0 | 1 | 2;
+}
+
+export interface LODWorkerInput {
+  meshId: string;
+  positions: Float32Array;
+  indices: Uint16Array | Uint32Array;
+  uvs?: Float32Array;
+  lodConfigs: LODLevelConfig[];
+  category?: string;
+}
+
+export interface LODLevelOutput {
+  name: string;
+  positions: Float32Array;
+  indices: Uint32Array;
+  uvs: Float32Array;
+  originalVertices: number;
+  finalVertices: number;
+  reductionPercent: number;
+  processingTimeMs: number;
+}
+
+export interface LODWorkerOutput {
+  meshId: string;
+  levels: LODLevelOutput[];
+  totalProcessingTimeMs: number;
+  error?: string;
+}
+
+export const LOD_PRESETS: Record<string, LODLevelConfig[]> = {
+  tree: [
+    { name: "lod1", targetPercent: 30, minVertices: 200, strictness: 2 },
+    { name: "lod2", targetPercent: 10, minVertices: 50, strictness: 2 },
+  ],
+  bush: [
+    { name: "lod1", targetPercent: 35, minVertices: 100, strictness: 2 },
+    { name: "lod2", targetPercent: 15, minVertices: 30, strictness: 2 },
+  ],
+  rock: [
+    { name: "lod1", targetPercent: 40, minVertices: 80, strictness: 2 },
+    { name: "lod2", targetPercent: 15, minVertices: 30, strictness: 2 },
+  ],
+  plant: [{ name: "lod1", targetPercent: 40, minVertices: 50, strictness: 2 }],
+  building: [
+    { name: "lod1", targetPercent: 50, minVertices: 500, strictness: 2 },
+    { name: "lod2", targetPercent: 20, minVertices: 100, strictness: 2 },
+  ],
+  character: [
+    { name: "lod1", targetPercent: 50, minVertices: 300, strictness: 2 },
+    { name: "lod2", targetPercent: 25, minVertices: 100, strictness: 2 },
+  ],
+  item: [{ name: "lod1", targetPercent: 50, minVertices: 50, strictness: 2 }],
+  default: [
+    { name: "lod1", targetPercent: 30, minVertices: 100, strictness: 2 },
+    { name: "lod2", targetPercent: 10, minVertices: 30, strictness: 2 },
+  ],
+};
+
+/** Generate LODs synchronously using real QSlim decimation */
+export function generateLODsSync(input: LODWorkerInput): LODWorkerOutput {
+  const startTime = performance.now();
+
+  try {
+    const originalVertices = input.positions.length / 3;
+    const levels: LODLevelOutput[] = [];
+    const configs =
+      input.lodConfigs.length > 0
+        ? input.lodConfigs
+        : (LOD_PRESETS[input.category ?? "default"] ?? LOD_PRESETS.default);
+
+    const meshData = fromBufferGeometry(
+      input.positions,
+      input.indices,
+      input.uvs,
+    );
+
+    for (const config of configs) {
+      const levelStart = performance.now();
+
+      let effectiveTargetPercent = config.targetPercent;
+      if (config.minVertices && originalVertices > 0) {
+        const minPercent = (config.minVertices / originalVertices) * 100;
+        effectiveTargetPercent = Math.max(effectiveTargetPercent, minPercent);
+      }
+
+      const meshCopy = meshData.clone();
+      const decimationResult = realDecimate(meshCopy, {
+        targetPercent: effectiveTargetPercent,
+        strictness: config.strictness ?? 2,
+      });
+
+      const { positions, indices, uvs } = toBufferGeometry(
+        decimationResult.mesh,
+      );
+      const reductionPercent =
+        originalVertices > 0
+          ? ((originalVertices - decimationResult.finalVertices) /
+              originalVertices) *
+            100
+          : 0;
+
+      levels.push({
+        name: config.name,
+        positions,
+        indices,
+        uvs,
+        originalVertices,
+        finalVertices: decimationResult.finalVertices,
+        reductionPercent,
+        processingTimeMs: performance.now() - levelStart,
+      });
+    }
+
+    return {
+      meshId: input.meshId,
+      levels,
+      totalProcessingTimeMs: performance.now() - startTime,
+    };
+  } catch (error) {
+    return {
+      meshId: input.meshId,
+      levels: [],
+      totalProcessingTimeMs: performance.now() - startTime,
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+// Inline worker code - uses deterministic stride sampling (not random)
+const LOD_WORKER_CODE = `
+function strideDecimate(positions, indices, uvs, targetPercent) {
+  const vertexCount = positions.length / 3;
+  const targetVerts = Math.max(4, Math.floor(vertexCount * targetPercent / 100));
+  
+  if (targetVerts >= vertexCount) {
+    return { 
+      positions: new Float32Array(positions), 
+      indices: new Uint32Array(indices),
+      uvs: uvs ? new Float32Array(uvs) : new Float32Array(0),
+    };
+  }
+  
+  const stride = Math.max(1, Math.floor(vertexCount / targetVerts));
+  const keepVertex = new Array(vertexCount).fill(false);
+  const newIndex = new Array(vertexCount).fill(-1);
+  
+  let kept = 0;
+  for (let i = 0; i < vertexCount && kept < targetVerts; i += stride) {
+    keepVertex[i] = true;
+    newIndex[i] = kept++;
+  }
+  
+  const newPositions = new Float32Array(kept * 3);
+  const newUVs = uvs ? new Float32Array(kept * 2) : null;
+  let pi = 0;
+  let ui = 0;
+  
+  for (let i = 0; i < vertexCount; i++) {
+    if (keepVertex[i]) {
+      newPositions[pi++] = positions[i * 3];
+      newPositions[pi++] = positions[i * 3 + 1];
+      newPositions[pi++] = positions[i * 3 + 2];
+      
+      if (newUVs && uvs) {
+        newUVs[ui++] = uvs[i * 2];
+        newUVs[ui++] = uvs[i * 2 + 1];
+      }
+    }
+  }
+  
+  const newIndicesArray = [];
+  for (let i = 0; i < indices.length; i += 3) {
+    const a = newIndex[indices[i]];
+    const b = newIndex[indices[i + 1]];
+    const c = newIndex[indices[i + 2]];
+    if (a >= 0 && b >= 0 && c >= 0 && a !== b && b !== c && c !== a) {
+      newIndicesArray.push(a, b, c);
+    }
+  }
+  
+  return {
+    positions: newPositions,
+    indices: new Uint32Array(newIndicesArray),
+    uvs: newUVs || new Float32Array(0),
+  };
+}
+
+self.onmessage = function(e) {
+  const { meshId, positions, indices, uvs, lodConfigs } = e.data;
+  const startTime = performance.now();
+  
+  try {
+    const levels = [];
+    const originalVertices = positions.length / 3;
+    const configs = lodConfigs && lodConfigs.length > 0 ? lodConfigs : [
+      { name: "lod1", targetPercent: 30, minVertices: 100 },
+      { name: "lod2", targetPercent: 10, minVertices: 30 },
+    ];
+    
+    for (const config of configs) {
+      const levelStart = performance.now();
+      let effectiveTargetPercent = config.targetPercent;
+      if (config.minVertices && originalVertices > 0) {
+        const minPercent = (config.minVertices / originalVertices) * 100;
+        effectiveTargetPercent = Math.max(effectiveTargetPercent, minPercent);
+      }
+      
+      const result = strideDecimate(positions, indices, uvs, effectiveTargetPercent);
+      const finalVertices = result.positions.length / 3;
+      const reductionPercent = originalVertices > 0
+        ? ((originalVertices - finalVertices) / originalVertices) * 100
+        : 0;
+      
+      levels.push({
+        name: config.name,
+        positions: result.positions,
+        indices: result.indices,
+        uvs: result.uvs,
+        originalVertices,
+        finalVertices,
+        reductionPercent,
+        processingTimeMs: levelEnd - levelStart,
+      });
+    }
+    
+    // Transfer ownership of ArrayBuffers for zero-copy
+    const transfers = levels.flatMap(l => [
+      l.positions.buffer,
+      l.indices.buffer,
+      l.uvs.buffer,
+    ]);
+    
+    self.postMessage({
+      result: {
+        meshId,
+        levels,
+        totalProcessingTimeMs: performance.now() - startTime,
+      }
+    }, transfers);
+  } catch (error) {
+    self.postMessage({
+      result: {
+        meshId,
+        levels: [],
+        totalProcessingTimeMs: performance.now() - startTime,
+        error: error.message || 'Worker error',
+      }
+    });
+  }
+};
+`;
+
+let lodWorkerPool: WorkerPool<LODWorkerInput, LODWorkerOutput> | null = null;
+
+export function getLODWorkerPool(
+  poolSize?: number,
+): WorkerPool<LODWorkerInput, LODWorkerOutput> {
+  if (!lodWorkerPool) {
+    lodWorkerPool = new WorkerPool<LODWorkerInput, LODWorkerOutput>(
+      LOD_WORKER_CODE,
+      poolSize,
+      generateLODsSync,
+    );
+  }
+  return lodWorkerPool;
+}
+
+export function isLODWorkerAvailable(): boolean {
+  return getLODWorkerPool().hasWorkers();
+}
+
+export async function generateLODsAsync(
+  input: LODWorkerInput,
+): Promise<LODWorkerOutput> {
+  const pool = getLODWorkerPool();
+  const positions = new Float32Array(input.positions);
+  const indices =
+    input.indices instanceof Uint32Array
+      ? new Uint32Array(input.indices)
+      : new Uint32Array(input.indices);
+  const uvs = input.uvs ? new Float32Array(input.uvs) : undefined;
+  const transfers: Transferable[] = [positions.buffer, indices.buffer];
+  if (uvs) transfers.push(uvs.buffer);
+
+  return pool.execute({ ...input, positions, indices, uvs }, transfers);
+}
+
+export async function generateLODsBatch(
+  inputs: LODWorkerInput[],
+): Promise<LODWorkerOutput[]> {
+  return Promise.all(inputs.map(generateLODsAsync));
+}
+
+export function terminateLODWorkerPool(): void {
+  if (lodWorkerPool) {
+    lodWorkerPool.terminate();
+    lodWorkerPool = null;
+  }
+}
+
+export function getLODWorkerStats() {
+  return getLODWorkerPool().getStats();
+}

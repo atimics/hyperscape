@@ -55,7 +55,7 @@ import type {
   NetworkData,
   LoadedAvatar,
 } from "../../types/index";
-import { Emotes } from "../../data/playerEmotes";
+import { Emotes, essentialEmotes } from "../../data/playerEmotes";
 import type { World } from "../../core/World";
 import { createNode } from "../../extras/three/createNode";
 import { LerpQuaternion } from "../../extras/animation/LerpQuaternion";
@@ -88,9 +88,13 @@ interface AvatarWithInstance {
     move: (matrix: THREE.Matrix4) => void;
     update: (delta: number) => void;
     disableRateCheck?: () => void;
+    preloadEmote?: (emote: string) => void;
+    setEmoteAndWait?: (emote: string, timeoutMs?: number) => Promise<void>;
   } | null;
   getHeadToHeight?: () => number;
   setEmote?: (emote: string) => void;
+  preloadEmote?: (emote: string) => void;
+  setEmoteAndWait?: (emote: string, timeoutMs?: number) => Promise<void>;
   getBoneTransform?: (boneName: string) => THREE.Matrix4 | null;
   deactivate?: () => void;
   emote?: string | null;
@@ -414,16 +418,20 @@ export class PlayerRemote extends Entity implements HotReloadable {
       // Bubble goes at head height for chat
       this.bubble.position.y = headHeight + 0.2;
 
-      // CRITICAL: Make avatar visible and ensure proper positioning (matches PlayerLocal)
-      // Avatar visibility is controlled through the instance's raw scene object
-      if (this.avatar?.instance) {
-        const avatarWithRaw = this.avatar.instance as unknown as {
-          raw?: { scene?: { visible?: boolean } };
-        };
-        if (avatarWithRaw.raw?.scene) {
-          avatarWithRaw.raw.scene.visible = true;
-        }
+      // CRITICAL: Keep avatar hidden until idle animation is loaded and applied
+      // This prevents the T-pose flash that occurs when the avatar is visible
+      // but no animation is playing yet
+      const avatarWithRaw = this.avatar?.instance as unknown as
+        | {
+            raw?: { scene?: { visible?: boolean } };
+          }
+        | undefined;
+
+      // Ensure avatar starts hidden
+      if (avatarWithRaw?.raw?.scene) {
+        avatarWithRaw.raw.scene.visible = false;
       }
+
       nodeObj.position.set(0, 0, 0);
 
       // PERFORMANCE: Disable raycasting on VRM meshes - use raycastProxy instead
@@ -438,9 +446,33 @@ export class PlayerRemote extends Entity implements HotReloadable {
         });
       }
 
-      // Ensure a default idle emote after mount so avatar isn't frozen
-      (this.avatar as Avatar).setEmote(Emotes.IDLE);
+      // CRITICAL: Load and apply idle emote BEFORE making avatar visible
+      // This prevents T-pose flash on spawn
+      const avatarWithEmote = this.avatar as AvatarWithInstance;
+      if (avatarWithEmote.instance?.setEmoteAndWait) {
+        // Use setEmoteAndWait to ensure animation is loaded and first frame is applied
+        await avatarWithEmote.instance.setEmoteAndWait(Emotes.IDLE, 3000);
+      } else if (avatarWithEmote.setEmote) {
+        // Fallback to regular setEmote (may show brief T-pose)
+        avatarWithEmote.setEmote(Emotes.IDLE);
+      }
       this.lastEmote = Emotes.IDLE;
+
+      // NOW make avatar visible - idle animation is guaranteed to be playing
+      if (avatarWithRaw?.raw?.scene) {
+        avatarWithRaw.raw.scene.visible = true;
+      }
+
+      // Pre-warm essential emotes in background to prevent T-pose on first use
+      // This is fire-and-forget - doesn't block avatar display
+      if (avatarWithEmote.instance?.preloadEmote) {
+        for (const emote of essentialEmotes) {
+          if (emote !== Emotes.IDLE) {
+            // IDLE already loaded
+            avatarWithEmote.instance.preloadEmote(emote);
+          }
+        }
+      }
 
       // Calculate camera height for spectator mode (same as PlayerLocal)
       interface AvatarWithHeight {
@@ -448,6 +480,30 @@ export class PlayerRemote extends Entity implements HotReloadable {
       }
       const avatarHeight = (this.avatar as AvatarWithHeight).height ?? 1.5;
       const camHeight = Math.max(1.2, avatarHeight * 0.9);
+
+      // HLOD: Set mesh reference for impostor baking (VRM scene is the mesh)
+      if (instanceWithRaw?.raw?.scene) {
+        this.mesh = instanceWithRaw.raw.scene as THREE.Object3D;
+
+        // Initialize HLOD impostor support for remote players
+        // Bake impostor in idle pose, freeze animations at LOD1
+        await this.initHLOD(`player_remote_${this.id}_${avatarUrl}`, {
+          category: "player",
+          atlasSize: 512,
+          hemisphere: true,
+          freezeAnimationAtLOD1: true, // AAA LOD: Freeze animation at medium distance
+          prepareForBake: async () => {
+            // Ensure VRM is in idle pose before baking impostor
+            if (avatarWithEmote.instance?.setEmoteAndWait) {
+              await avatarWithEmote.instance.setEmoteAndWait(Emotes.IDLE, 2000);
+            } else if (avatarWithEmote.setEmote) {
+              avatarWithEmote.setEmote(Emotes.IDLE);
+            }
+            // Update animation mixer to apply pose
+            avatarWithEmote.instance?.update?.(0);
+          },
+        });
+      }
 
       // Avatar loaded successfully
       loadSuccess = true;
