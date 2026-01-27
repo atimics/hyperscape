@@ -1911,6 +1911,46 @@ export class TerrainSystem extends System {
             `size ${zone.width.toFixed(1)}x${zone.depth.toFixed(1)}m, height=${zone.height.toFixed(1)}m`,
         );
       }
+
+      // Also load explicit flatZones defined in the area config (e.g., duel arenas)
+      const areaConfig = area as {
+        flatZones?: Array<{
+          id: string;
+          centerX: number;
+          centerZ: number;
+          width: number;
+          depth: number;
+          blendRadius: number;
+        }>;
+      };
+
+      if (areaConfig.flatZones) {
+        for (const zoneConfig of areaConfig.flatZones) {
+          // Get procedural height at zone center
+          const flatHeight = this.getProceduralHeightWithBoost(
+            zoneConfig.centerX,
+            zoneConfig.centerZ,
+          );
+
+          const zone: FlatZone = {
+            id: zoneConfig.id,
+            centerX: zoneConfig.centerX,
+            centerZ: zoneConfig.centerZ,
+            width: zoneConfig.width,
+            depth: zoneConfig.depth,
+            height: flatHeight,
+            blendRadius: zoneConfig.blendRadius,
+          };
+
+          this.registerFlatZone(zone);
+          loadedCount++;
+
+          console.log(
+            `[TerrainSystem] Registered area flat zone "${zone.id}" at (${zone.centerX}, ${zone.centerZ}) ` +
+              `size ${zone.width.toFixed(1)}x${zone.depth.toFixed(1)}m, height=${zone.height.toFixed(1)}m`,
+          );
+        }
+      }
     }
 
     console.log(
