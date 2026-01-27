@@ -11,7 +11,8 @@ export const links = {
     process.env.NEXT_PUBLIC_DISCORD_URL || "https://discord.gg/f4ZwhAbKye",
   twitter: process.env.NEXT_PUBLIC_TWITTER_URL || "https://x.com/hyperscapeai",
   github:
-    process.env.NEXT_PUBLIC_GITHUB_URL || "https://github.com/hyperscape-ai",
+    process.env.NEXT_PUBLIC_GITHUB_URL ||
+    "https://github.com/HyperscapeAI/hyperscape",
 };
 
 export const navigation = {

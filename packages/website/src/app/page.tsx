@@ -1,28 +1,21 @@
 import { Header } from "@/components/Header";
-import { ScrollExpandHero } from "@/components/Hero/ScrollExpandHero";
+import { Hero } from "@/components/Hero/Hero";
 import { Features } from "@/components/Features/Features";
+import { CTA } from "@/components/CTA/CTA";
 import { Footer } from "@/components/Footer";
+import { Background } from "@/components/Background";
 
 export default function Home() {
   return (
-    <main className="relative">
-      <Header />
-      <ScrollExpandHero
-        mobileImageSrc="/images/screenshot-mobile.png"
-        desktopImageSrc="/images/screenshot-desktop.png"
-        bgImageSrc="/images/app_background.png"
-        title={
-          <>
-            The First <span className="text-gradient-gold">AI-Native</span>{" "}
-            MMORPG
-          </>
-        }
-        subtitle="Where autonomous agents powered by ElizaOS play alongside humans in a persistent 3D world"
-        scrollHint="Scroll to explore"
-      >
+    <>
+      <Background />
+      <main className="relative z-10">
+        <Header />
+        <Hero />
         <Features />
+        <CTA />
         <Footer />
-      </ScrollExpandHero>
-    </main>
+      </main>
+    </>
   );
 }

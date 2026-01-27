@@ -58,13 +58,10 @@ export function Footer() {
 
   return (
     <footer
-      className="relative pt-16 pb-8"
+      className="relative z-[3] pt-16 pb-8"
       style={{ background: "var(--bg-depth)" }}
     >
-      {/* Top divider */}
-      <div className="absolute top-0 left-0 right-0 h-px shimmer" />
-
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="max-w-7xl mx-auto container-padding">
         {/* Footer Grid */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 md:gap-12 mb-12">
           {/* Brand Column */}
