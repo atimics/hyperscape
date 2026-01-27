@@ -1509,36 +1509,20 @@ export class DuelSystem {
   }
 
   /**
-   * Process active duel (bounds checking, rule enforcement)
+   * Process active duel (rule enforcement)
+   * Note: Arena bounds are enforced by wall collision in CollisionMatrix,
+   * not by teleporting players back. This prevents unexpected teleports.
    */
   private processActiveDuel(session: DuelSession): void {
     if (session.arenaId === null) return;
 
-    const bounds = this.arenaPool.getArenaBounds(session.arenaId);
-    if (!bounds) return;
-
-    const spawnPoints = this.arenaPool.getSpawnPoints(session.arenaId);
-    if (!spawnPoints) return;
-
-    // Check both players for arena bounds violations
-    // Teleport back to spawn point if they leave bounds
-    this.enforceArenaBounds(
-      session.challengerId,
-      bounds,
-      spawnPoints[0],
-      spawnPoints[1],
-    );
-    this.enforceArenaBounds(
-      session.targetId,
-      bounds,
-      spawnPoints[1],
-      spawnPoints[0],
-    );
-
     // If noMovement rule is active, freeze players at spawn points
     if (session.rules.noMovement) {
-      this.enforceNoMovement(session.challengerId, spawnPoints[0]);
-      this.enforceNoMovement(session.targetId, spawnPoints[1]);
+      const spawnPoints = this.arenaPool.getSpawnPoints(session.arenaId);
+      if (spawnPoints) {
+        this.enforceNoMovement(session.challengerId, spawnPoints[0]);
+        this.enforceNoMovement(session.targetId, spawnPoints[1]);
+      }
     }
   }
 
