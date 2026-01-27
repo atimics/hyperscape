@@ -187,13 +187,154 @@ interface MinimapProps {
   dragHandleProps?: DragHandleProps;
   /** Whether edit mode is unlocked (shows drag border) */
   isUnlocked?: boolean;
+  /** If true, hides overlay controls (compass, stamina, teleport) - use MinimapOverlayControls externally */
+  hideOverlayControls?: boolean;
+}
+
+/**
+ * Props for the MinimapOverlayControls component
+ */
+interface MinimapOverlayControlsProps {
+  world: ClientWorld;
+  /** Size of the control buttons (default: 40) */
+  buttonSize?: number;
+  /** Padding from edges (default: 4) */
+  padding?: number;
+  /** Optional callback when compass is clicked to reset camera */
+  onCompassClick?: () => void;
+}
+
+/**
+ * Reusable overlay controls for minimap - compass, stamina, and teleport buttons.
+ * Position this absolutely over the minimap container for proper overlay behavior.
+ */
+export function MinimapOverlayControls({
+  world,
+  buttonSize = 40,
+  padding = 4,
+  onCompassClick,
+}: MinimapOverlayControlsProps) {
+  const [yawDeg, setYawDeg] = useState<number>(0);
+
+  // Track camera rotation for compass
+  useEffect(() => {
+    let rafId: number | null = null;
+    const tempForward = new THREE.Vector3();
+
+    const loop = () => {
+      if (world.camera) {
+        world.camera.getWorldDirection(tempForward);
+        tempForward.y = 0;
+        if (tempForward.lengthSq() > 1e-6) {
+          tempForward.normalize();
+          const yaw = Math.atan2(tempForward.x, -tempForward.z);
+          const newYawDeg = THREE.MathUtils.radToDeg(yaw);
+          setYawDeg((prev) =>
+            Math.abs(prev - newYawDeg) > 0.1 ? newYawDeg : prev,
+          );
+        }
+      }
+      rafId = requestAnimationFrame(loop);
+    };
+    rafId = requestAnimationFrame(loop);
+    return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+    };
+  }, [world]);
+
+  const handleCompassClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (onCompassClick) {
+        onCompassClick();
+      } else {
+        // Default behavior: reset camera to face North
+        const camSys = world.getSystem("client-camera-system") as {
+          resetCamera?: () => void;
+        } | null;
+        camSys?.resetCamera?.();
+      }
+    },
+    [world, onCompassClick],
+  );
+
+  return (
+    <>
+      {/* Compass - top left */}
+      <div
+        onClick={handleCompassClick}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        className="absolute rounded-full border border-white/60 bg-black/60 flex items-center justify-center cursor-pointer z-30 pointer-events-auto touch-manipulation"
+        style={{
+          top: padding,
+          left: padding,
+          width: buttonSize,
+          height: buttonSize,
+        }}
+        title="Click to face North"
+      >
+        <div
+          className="relative pointer-events-none"
+          style={{
+            width: buttonSize * 0.7,
+            height: buttonSize * 0.7,
+            transform: `rotate(${yawDeg}deg)`,
+          }}
+        >
+          <div className="absolute inset-0 rounded-full border border-white/50 pointer-events-none" />
+          <div className="absolute left-1/2 top-0.5 -translate-x-1/2 text-[11px] text-red-500 font-semibold shadow-[0_1px_1px_rgba(0,0,0,0.8)] pointer-events-none">
+            N
+          </div>
+          <div className="absolute left-1/2 bottom-0.5 -translate-x-1/2 text-[9px] text-white/70 pointer-events-none">
+            S
+          </div>
+          <div className="absolute top-1/2 left-0.5 -translate-y-1/2 text-[9px] text-white/70 pointer-events-none">
+            W
+          </div>
+          <div className="absolute top-1/2 right-0.5 -translate-y-1/2 text-[9px] text-white/70 pointer-events-none">
+            E
+          </div>
+        </div>
+      </div>
+
+      {/* Home Teleport Orb - bottom left */}
+      <div
+        className="absolute z-30 pointer-events-auto"
+        style={{
+          bottom: padding,
+          left: padding,
+        }}
+      >
+        <MinimapHomeTeleportOrb world={world} size={buttonSize} />
+      </div>
+
+      {/* Stamina Orb - bottom right */}
+      <div
+        className="absolute z-30 pointer-events-auto"
+        style={{
+          bottom: padding,
+          right: padding,
+        }}
+      >
+        <MinimapStaminaOrb world={world} size={buttonSize} />
+      </div>
+    </>
+  );
 }
 
 export function Minimap({
   world,
   width: initialWidth = 200,
   height: initialHeight = 200,
-  zoom = 50,
+  zoom = 25,
   className = "",
   style = {},
   onCompassClick,
@@ -208,6 +349,7 @@ export function Minimap({
   onCollapseChange,
   dragHandleProps,
   isUnlocked = false,
+  hideOverlayControls = false,
 }: MinimapProps) {
   const theme = useThemeStore((s) => s.theme);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -218,7 +360,6 @@ export function Minimap({
   const sceneRef = useRef<THREE.Scene | null>(null);
   const [entityPips, setEntityPips] = useState<EntityPip[]>([]);
   const entityPipsRefForRender = useRef<EntityPip[]>([]);
-  const [isTouchDevice, setIsTouchDevice] = useState<boolean>(false);
   const entityCacheRef = useRef<Map<string, EntityPip>>(new Map());
   const rendererInitializedRef = useRef<boolean>(false);
 
@@ -249,27 +390,37 @@ export function Minimap({
     h: number;
   } | null>(null);
 
-  // Calculate extent based on size - larger size = more visible area (not scaled)
-  // Use the average of width/height to determine extent
-  const sizeBasedExtent = useMemo(() => {
-    // Base extent at 200px is the initial zoom value
-    // When size increases, we reveal more map (increase extent proportionally)
-    const baseSize = 200;
-    const avgSize = (width + height) / 2;
-    return zoom * (avgSize / baseSize);
-  }, [width, height, zoom]);
+  // User's zoom factor (1.0 = default, <1 = zoomed in, >1 = zoomed out)
+  // This is preserved across panel resizes (RuneScape/WoW behavior)
+  const [userZoomFactor, setUserZoomFactor] = useState<number>(1.0);
+  const userZoomFactorRef = useRef<number>(1.0);
 
-  // Minimap zoom state (orthographic half-extent in world units)
-  const [extent, setExtent] = useState<number>(sizeBasedExtent);
+  // Fixed base extent in world units - zoom prop sets default viewing radius
+  // This NEVER changes with panel size, only with user zoom (RuneScape behavior)
+  // Panel resizing only crops/reveals more map area, doesn't change zoom level
+  const BASE_EXTENT = zoom;
+
+  // Aspect ratio for proper camera frustum (avoids distortion when panel isn't square)
+  const aspectRatio = useMemo(() => width / height, [width, height]);
+
+  // Minimap extent (orthographic half-extent in world units)
+  // Only changes when user zooms, NOT when panel is resized
+  const extent = useMemo(() => {
+    return BASE_EXTENT * userZoomFactor;
+  }, [BASE_EXTENT, userZoomFactor]);
+
   const extentRef = useRef<number>(extent); // Ref for synchronous access in render loop
-  const MIN_EXTENT = 20;
-  const MAX_EXTENT = 1000; // Increased to support larger sizes and full viewport
-  const STEP_EXTENT = 10;
+  const aspectRatioRef = useRef<number>(aspectRatio);
+  const MIN_ZOOM_FACTOR = 0.2; // 5x zoomed in
+  const MAX_ZOOM_FACTOR = 5.0; // 5x zoomed out
+  const STEP_ZOOM_FACTOR = 0.1;
 
-  // Update extent when size changes (reveals more map)
+  // Keep refs in sync
   useEffect(() => {
-    setExtent(sizeBasedExtent);
-  }, [sizeBasedExtent]);
+    extentRef.current = extent;
+    aspectRatioRef.current = aspectRatio;
+    userZoomFactorRef.current = userZoomFactor;
+  }, [extent, aspectRatio, userZoomFactor]);
 
   // Rotation: follow main camera yaw (RS3-like) with North toggle
   const [rotateWithCamera] = useState<boolean>(true);
@@ -299,16 +450,6 @@ export function Minimap({
     opacity: number;
   } | null>(null);
 
-  // Detect touch device
-  useEffect(() => {
-    const checkTouch = () => {
-      setIsTouchDevice(
-        "ontouchstart" in window || navigator.maxTouchPoints > 0,
-      );
-    };
-    checkTouch();
-  }, []);
-
   // Initialize minimap renderer and camera
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -318,11 +459,14 @@ export function Minimap({
     // console.log('[Minimap] Initializing renderer...');
 
     // Create orthographic camera for overhead view - much higher up
+    // Use aspect ratio to prevent distortion
+    const horizontalExtent = extent * (width / height);
+    const verticalExtent = extent;
     const camera = new THREE.OrthographicCamera(
-      -extent,
-      extent,
-      extent,
-      -extent,
+      -horizontalExtent,
+      horizontalExtent,
+      verticalExtent,
+      -verticalExtent,
       0.1,
       2000,
     );
@@ -812,14 +956,20 @@ export function Minimap({
         }
       }
 
-      // --- Camera Frustum Update (for zoom) ---
+      // --- Camera Frustum Update (for zoom with aspect ratio) ---
       if (cam) {
         const currentExtent = extentRef.current;
-        if (cam.right !== currentExtent) {
-          cam.left = -currentExtent;
-          cam.right = currentExtent;
-          cam.top = currentExtent;
-          cam.bottom = -currentExtent;
+        const currentAspect = aspectRatioRef.current;
+        // Use aspect ratio to prevent distortion
+        // Horizontal extent scales with aspect ratio
+        const horizontalExtent = currentExtent * currentAspect;
+        const verticalExtent = currentExtent;
+
+        if (cam.right !== horizontalExtent || cam.top !== verticalExtent) {
+          cam.left = -horizontalExtent;
+          cam.right = horizontalExtent;
+          cam.top = verticalExtent;
+          cam.bottom = -verticalExtent;
           cam.updateProjectionMatrix();
         }
       }
@@ -1160,7 +1310,7 @@ export function Minimap({
   );
 
   // Wheel handler for minimap zoom - uses native WheelEvent for passive: false support
-  // Uses functional update to ensure correct extent value during rapid scrolling
+  // Uses functional update to ensure correct zoom factor value during rapid scrolling
   // No dependencies - handler is stable and listener doesn't need to be re-attached
   const handleWheel = useCallback(
     (e: WheelEvent) => {
@@ -1173,12 +1323,13 @@ export function Minimap({
         1,
         Math.min(5, Math.round(Math.abs(e.deltaY) / 100)),
       );
-      // Use functional update to always have the latest extent value
-      setExtent((prev) =>
+      // Use functional update to always have the latest zoom factor value
+      // Positive deltaY = zoom out (increase factor), negative = zoom in (decrease factor)
+      setUserZoomFactor((prev) =>
         THREE.MathUtils.clamp(
-          prev + sign * steps * STEP_EXTENT,
-          MIN_EXTENT,
-          MAX_EXTENT,
+          prev + sign * steps * STEP_ZOOM_FACTOR,
+          MIN_ZOOM_FACTOR,
+          MAX_ZOOM_FACTOR,
         ),
       );
     },
@@ -1355,8 +1506,8 @@ export function Minimap({
           e.stopPropagation();
         }}
       />
-      {/* Compass control - only shown when not being managed externally */}
-      {!onCompassClick && (
+      {/* Compass control - only shown when not being managed externally and not hidden */}
+      {!onCompassClick && !hideOverlayControls && (
         <div
           title="Click to face North"
           onClick={(e) => {
@@ -1386,10 +1537,10 @@ export function Minimap({
           }}
           className="absolute rounded-full border border-white/60 bg-black/60 flex items-center justify-center cursor-pointer z-10 pointer-events-auto touch-manipulation"
           style={{
-            top: isTouchDevice ? 4 : 6,
-            left: isTouchDevice ? 4 : 6,
-            width: isTouchDevice ? 44 : 40,
-            height: isTouchDevice ? 44 : 40,
+            top: 4,
+            left: 4,
+            width: 40,
+            height: 40,
           }}
         >
           <div
@@ -1486,35 +1637,29 @@ export function Minimap({
         </button>
       )}
 
-      {/* Home Teleport Orb - bottom left corner (hidden when embedded) */}
-      {!embedded && (
+      {/* Home Teleport Orb - bottom left corner (always visible, fixed size overlay) */}
+      {!embedded && !hideOverlayControls && (
         <div
           className="absolute z-20 pointer-events-auto"
           style={{
-            bottom: 6,
-            left: 6,
+            bottom: 4,
+            left: 4,
           }}
         >
-          <MinimapHomeTeleportOrb
-            world={world}
-            size={Math.max(36, Math.min(48, width * 0.2))}
-          />
+          <MinimapHomeTeleportOrb world={world} size={40} />
         </div>
       )}
 
-      {/* Stamina Orb - bottom right corner (hidden when embedded) */}
-      {!embedded && (
+      {/* Stamina Orb - bottom right corner (always visible, fixed size overlay) */}
+      {!embedded && !hideOverlayControls && (
         <div
           className="absolute z-20 pointer-events-auto"
           style={{
-            bottom: 6,
-            right: 6,
+            bottom: 4,
+            right: 4,
           }}
         >
-          <MinimapStaminaOrb
-            world={world}
-            size={Math.max(36, Math.min(48, width * 0.2))}
-          />
+          <MinimapStaminaOrb world={world} size={40} />
         </div>
       )}
     </div>
