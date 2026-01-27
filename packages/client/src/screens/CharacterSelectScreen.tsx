@@ -35,6 +35,7 @@ import { usePrivy, useCreateWallet } from "@privy-io/react-auth";
 import { useThemeStore } from "@/ui";
 import { ELIZAOS_API, GAME_WS_URL, CDN_URL } from "@/lib/api-config";
 import { apiClient } from "@/lib/api-client";
+import { privyAuthManager } from "@/auth/PrivyAuthManager";
 
 type Character = {
   id: string;
@@ -388,24 +389,44 @@ export function CharacterSelectScreen({
     "disconnected" | "connecting" | "connected" | "reconnecting" | "failed"
   >("disconnected");
   // Use primitive states instead of object to prevent unnecessary re-renders
+  // Initialize from PrivyAuthManager with localStorage fallback
   const [authToken, setAuthToken] = React.useState(
-    localStorage.getItem("privy_auth_token") || "",
+    privyAuthManager.getToken() ||
+      localStorage.getItem("privy_auth_token") ||
+      "",
   );
   const [privyUserId, setPrivyUserId] = React.useState(
-    localStorage.getItem("privy_user_id") || "",
+    privyAuthManager.getUserId() || localStorage.getItem("privy_user_id") || "",
   );
 
-  // Watch for Privy auth being written to localStorage before opening WS
+  // Subscribe to PrivyAuthManager state changes
+  React.useEffect(() => {
+    const unsubscribe = privyAuthManager.subscribe((state) => {
+      const newToken = state.privyToken || "";
+      const newUserId = state.privyUserId || "";
+      if (newToken && newToken !== authToken) setAuthToken(newToken);
+      if (newUserId && newUserId !== privyUserId) setPrivyUserId(newUserId);
+    });
+    return unsubscribe;
+  }, [authToken, privyUserId]);
+
+  // Watch for Privy auth being written to localStorage as fallback
   React.useEffect(() => {
     const onStorage = (e: Event) => {
       const storageEvent = e as { key?: string | null };
       if (!storageEvent.key) return;
       if (storageEvent.key === "privy_auth_token") {
-        const token = localStorage.getItem("privy_auth_token") || "";
+        const token =
+          privyAuthManager.getToken() ||
+          localStorage.getItem("privy_auth_token") ||
+          "";
         if (token !== authToken) setAuthToken(token);
       }
       if (storageEvent.key === "privy_user_id") {
-        const userId = localStorage.getItem("privy_user_id") || "";
+        const userId =
+          privyAuthManager.getUserId() ||
+          localStorage.getItem("privy_user_id") ||
+          "";
         if (userId !== privyUserId) setPrivyUserId(userId);
       }
     };
@@ -417,8 +438,15 @@ export function CharacterSelectScreen({
     if (authToken && privyUserId) return;
     let attempts = 0;
     const id = window.setInterval(() => {
-      const token = localStorage.getItem("privy_auth_token") || "";
-      const userId = localStorage.getItem("privy_user_id") || "";
+      // Check PrivyAuthManager first, then localStorage as fallback
+      const token =
+        privyAuthManager.getToken() ||
+        localStorage.getItem("privy_auth_token") ||
+        "";
+      const userId =
+        privyAuthManager.getUserId() ||
+        localStorage.getItem("privy_user_id") ||
+        "";
       if (token && userId) {
         // Only update if different (prevents unnecessary re-renders)
         if (token !== authToken) setAuthToken(token);
