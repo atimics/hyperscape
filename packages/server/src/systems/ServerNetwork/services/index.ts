@@ -11,3 +11,4 @@ export * from "./InputValidation";
 export * from "./SlidingWindowRateLimiter";
 export * from "./IdempotencyService";
 export { AuditLogger } from "./AuditLogger";
+export { Logger, LogLevel } from "./Logger";

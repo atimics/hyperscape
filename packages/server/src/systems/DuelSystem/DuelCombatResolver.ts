@@ -17,7 +17,7 @@
 import type { World, StakedItem } from "@hyperscape/shared";
 import { EventType, DeathState } from "@hyperscape/shared";
 import type { DuelSession } from "./DuelSessionManager";
-import { AuditLogger } from "../ServerNetwork/services";
+import { AuditLogger, Logger } from "../ServerNetwork/services";
 import {
   LOBBY_SPAWN_WINNER,
   LOBBY_SPAWN_LOSER,
@@ -188,17 +188,12 @@ export class DuelCombatResolver {
     winnerStakes: StakedItem[],
     loserStakes: StakedItem[],
   ): void {
-    console.log(
-      `[DuelCombatResolver] transferStakes - winnerId: ${winnerId}, loserId: ${loserId}`,
-    );
-    console.log(
-      `[DuelCombatResolver] Winner stakes (${winnerStakes.length}):`,
-      JSON.stringify(winnerStakes),
-    );
-    console.log(
-      `[DuelCombatResolver] Loser stakes (${loserStakes.length}):`,
-      JSON.stringify(loserStakes),
-    );
+    Logger.debug("DuelCombatResolver", "Transferring stakes", {
+      winnerId,
+      loserId,
+      winnerStakesCount: winnerStakes.length,
+      loserStakesCount: loserStakes.length,
+    });
 
     // Calculate total values
     const winnerOwnValue = winnerStakes.reduce((sum, s) => sum + s.value, 0);
@@ -224,9 +219,11 @@ export class DuelCombatResolver {
     const allWinnerItems = [...winnerStakes, ...loserStakes];
 
     if (allWinnerItems.length > 0) {
-      console.log(
-        `[DuelCombatResolver] Emitting duel:stakes:settle for winner ${winnerId} (${winnerStakes.length} own + ${loserStakes.length} won)`,
-      );
+      Logger.debug("DuelCombatResolver", "Settling stakes", {
+        winnerId,
+        ownStakesCount: winnerStakes.length,
+        wonStakesCount: loserStakes.length,
+      });
       this.world.emit("duel:stakes:settle", {
         playerId: winnerId,
         ownStakes: winnerStakes,

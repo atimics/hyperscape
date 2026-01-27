@@ -40,7 +40,7 @@ import {
   type EquipmentRestrictions,
 } from "./DuelSessionManager";
 import { DuelCombatResolver } from "./DuelCombatResolver";
-import { AuditLogger } from "../ServerNetwork/services";
+import { AuditLogger, Logger } from "../ServerNetwork/services";
 import {
   DISCONNECT_TIMEOUT_TICKS,
   CLEANUP_INTERVAL_TICKS,
@@ -50,6 +50,20 @@ import {
   ticksToMs,
   TICK_DURATION_MS,
 } from "./config";
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Exhaustiveness check helper for switch statements.
+ * TypeScript will error if any enum value is not handled.
+ */
+function assertNever(value: never): never {
+  throw new Error(
+    `Unexpected value in exhaustive check: ${JSON.stringify(value)}`,
+  );
+}
 
 // ============================================================================
 // Types
@@ -137,7 +151,7 @@ export class DuelSystem {
       }
     });
 
-    console.log("[DuelSystem] Initialized");
+    Logger.info("DuelSystem", "Initialized");
   }
 
   /**
@@ -163,7 +177,7 @@ export class DuelSystem {
     this.sessionManager.clearAllSessions();
     this.pendingDuels.destroy();
 
-    console.log("[DuelSystem] Destroyed");
+    Logger.info("DuelSystem", "Destroyed");
   }
 
   /**
@@ -175,10 +189,25 @@ export class DuelSystem {
 
     // Process active duels
     for (const [_duelId, session] of this.sessionManager.getAllSessions()) {
-      if (session.state === "COUNTDOWN") {
-        this.processCountdown(session);
-      } else if (session.state === "FIGHTING") {
-        this.processActiveDuel(session);
+      // Exhaustive switch ensures all states are handled
+      switch (session.state) {
+        case "RULES":
+        case "STAKES":
+        case "CONFIRMING":
+          // Setup states - no tick processing needed
+          break;
+        case "COUNTDOWN":
+          this.processCountdown(session);
+          break;
+        case "FIGHTING":
+          this.processActiveDuel(session);
+          break;
+        case "FINISHED":
+          // Resolution in progress - no tick processing needed
+          break;
+        default:
+          // TypeScript exhaustiveness check - ensures all DuelState values are handled
+          assertNever(session.state);
       }
     }
   }
@@ -1386,9 +1415,10 @@ export class DuelSystem {
     if (session.state !== "FIGHTING") {
       // Don't call cancelDuel here - if state is FINISHED, resolveDuel will handle cleanup
       // If state is something else (shouldn't happen), just ignore
-      console.log(
-        `[DuelSystem] Ignoring death for ${playerId} - duel state is ${session.state}`,
-      );
+      Logger.debug("DuelSystem", "Ignoring death - invalid state", {
+        playerId,
+        state: session.state,
+      });
       return;
     }
 
@@ -1407,31 +1437,39 @@ export class DuelSystem {
 
     // Delay the duel resolution to allow death animation to play
     // and give players time to see the outcome (OSRS-accurate behavior)
-    console.log(
-      `[DuelSystem] Starting ${DEATH_RESOLUTION_DELAY_TICKS}-tick death animation delay @ ${Date.now()}`,
-    );
+    Logger.debug("DuelSystem", "Starting death animation delay", {
+      duelId: capturedDuelId,
+      delayTicks: DEATH_RESOLUTION_DELAY_TICKS,
+    });
     setTimeout(() => {
-      console.log(
-        `[DuelSystem] Death animation delay complete, resolving duel @ ${Date.now()}`,
-      );
       // SECURITY: Verify session still exists and hasn't been cleaned up
       // This prevents double-resolution if cancelDuel was called
       const currentSession = this.sessionManager.getSession(capturedDuelId);
       if (!currentSession) {
-        console.log(
-          `[DuelSystem] Skipping resolveDuel - session ${capturedDuelId} no longer exists`,
+        Logger.debug(
+          "DuelSystem",
+          "Skipping resolveDuel - session no longer exists",
+          {
+            duelId: capturedDuelId,
+          },
         );
         return;
       }
 
       // Verify it's the same session and in correct state
       if (currentSession.state !== "FINISHED") {
-        console.log(
-          `[DuelSystem] Skipping resolveDuel - session state changed to ${currentSession.state}`,
-        );
+        Logger.debug("DuelSystem", "Skipping resolveDuel - state changed", {
+          duelId: capturedDuelId,
+          state: currentSession.state,
+        });
         return;
       }
 
+      Logger.debug("DuelSystem", "Resolving duel after death", {
+        duelId: capturedDuelId,
+        winnerId,
+        loserId,
+      });
       this.resolveDuel(currentSession, winnerId, loserId, "death");
     }, ticksToMs(DEATH_RESOLUTION_DELAY_TICKS));
   }

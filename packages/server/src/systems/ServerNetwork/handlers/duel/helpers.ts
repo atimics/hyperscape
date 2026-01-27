@@ -18,6 +18,59 @@ import {
 } from "../common";
 
 // ============================================================================
+// Entity Interfaces
+// ============================================================================
+
+/**
+ * Player entity interface for duel handlers.
+ * Defines the shape of player entities as accessed by this module.
+ */
+interface DuelPlayerEntity {
+  id: string;
+  position?: { x: number; y: number; z: number };
+  name?: string;
+  characterName?: string;
+  combatLevel?: number;
+  data?: {
+    name?: string;
+    combatLevel?: number;
+  };
+  combat?: {
+    combatLevel?: number;
+  };
+}
+
+/**
+ * Type guard to check if an entity has player-like properties
+ */
+function isDuelPlayerEntity(entity: unknown): entity is DuelPlayerEntity {
+  return (
+    typeof entity === "object" &&
+    entity !== null &&
+    "id" in entity &&
+    typeof (entity as DuelPlayerEntity).id === "string"
+  );
+}
+
+/**
+ * Server network interface for socket lookups.
+ * Encapsulates the network system shape to reduce Law of Demeter violations.
+ */
+interface ServerNetworkInterface {
+  broadcastManager?: {
+    getPlayerSocket: (id: string) => ServerSocket | undefined;
+  };
+  sockets?: Map<string, ServerSocket>;
+}
+
+/**
+ * Type guard for server network
+ */
+function isServerNetwork(system: unknown): system is ServerNetworkInterface {
+  return typeof system === "object" && system !== null;
+}
+
+// ============================================================================
 // Rate Limiter
 // ============================================================================
 
@@ -45,16 +98,9 @@ export function getDuelSystem(world: World): DuelSystem | undefined {
  */
 export function getPlayerName(world: World, playerId: string): string {
   const player = world.entities.players?.get(playerId);
-  if (!player) return "Unknown";
+  if (!player || !isDuelPlayerEntity(player)) return "Unknown";
 
-  // Try various name properties
-  const entity = player as unknown as {
-    name?: string;
-    data?: { name?: string };
-    characterName?: string;
-  };
-
-  return entity.name || entity.data?.name || entity.characterName || "Unknown";
+  return player.name || player.data?.name || player.characterName || "Unknown";
 }
 
 /**
@@ -62,18 +108,12 @@ export function getPlayerName(world: World, playerId: string): string {
  */
 export function getPlayerCombatLevel(world: World, playerId: string): number {
   const player = world.entities.players?.get(playerId);
-  if (!player) return 3;
-
-  const entity = player as unknown as {
-    combatLevel?: number;
-    data?: { combatLevel?: number };
-    combat?: { combatLevel?: number };
-  };
+  if (!player || !isDuelPlayerEntity(player)) return 3;
 
   return (
-    entity.combatLevel ||
-    entity.data?.combatLevel ||
-    entity.combat?.combatLevel ||
+    player.combatLevel ||
+    player.data?.combatLevel ||
+    player.combat?.combatLevel ||
     3
   );
 }
@@ -92,22 +132,15 @@ export function getSocketByPlayerId(
   world: World,
   playerId: string,
 ): ServerSocket | undefined {
-  // Try getting from network system (same pattern as trade helpers)
-  const serverNetwork = world.getSystem("network") as
-    | {
-        broadcastManager?: {
-          getPlayerSocket: (id: string) => ServerSocket | undefined;
-        };
-        sockets?: Map<string, ServerSocket>;
-      }
-    | undefined;
+  const serverNetwork = world.getSystem("network");
+  if (!serverNetwork || !isServerNetwork(serverNetwork)) return undefined;
 
-  if (!serverNetwork) return undefined;
-
+  // Prefer broadcastManager.getPlayerSocket for direct lookup
   if (serverNetwork.broadcastManager?.getPlayerSocket) {
     return serverNetwork.broadcastManager.getPlayerSocket(playerId);
   }
 
+  // Fallback to iterating sockets map
   if (serverNetwork.sockets) {
     for (const [, socket] of serverNetwork.sockets) {
       if (getPlayerId(socket) === playerId) {
