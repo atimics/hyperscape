@@ -6,7 +6,12 @@
  * consistent socket handling patterns across all handlers.
  */
 
-import { type World, ALL_WORLD_AREAS } from "@hyperscape/shared";
+import {
+  type World,
+  ALL_WORLD_AREAS,
+  isPositionInsideCombatArena,
+  getDuelArenaConfig,
+} from "@hyperscape/shared";
 import type { ServerSocket } from "../../../../shared/types";
 import type { DuelSystem } from "../../../DuelSystem";
 import type { PendingDuelChallengeManager } from "../../PendingDuelChallengeManager";
@@ -142,6 +147,27 @@ export function isInDuelArenaZone(world: World, playerId: string): boolean {
   });
 
   return inBounds;
+}
+
+/**
+ * Check if player is inside a combat arena (not the lobby)
+ * Uses manifest-driven config via isPositionInsideCombatArena()
+ */
+export function isInsideCombatArena(world: World, playerId: string): boolean {
+  const player = world.entities.players?.get(playerId);
+  if (!player?.position) return false;
+
+  return isPositionInsideCombatArena(player.position.x, player.position.z);
+}
+
+/**
+ * Check if player is in the Duel Arena lobby (can challenge)
+ * Must be in duel arena zone but NOT inside a combat arena
+ */
+export function isInDuelArenaLobby(world: World, playerId: string): boolean {
+  return (
+    isInDuelArenaZone(world, playerId) && !isInsideCombatArena(world, playerId)
+  );
 }
 
 /**

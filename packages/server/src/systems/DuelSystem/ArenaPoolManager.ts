@@ -21,6 +21,7 @@ import {
   type ArenaBounds,
   type ICollisionMatrix,
   CollisionFlag,
+  getDuelArenaConfig,
 } from "@hyperscape/shared";
 
 // ============================================================================
@@ -32,62 +33,45 @@ interface ArenaState {
   currentDuelId: string | null;
 }
 
-// ============================================================================
-// Arena Configuration
-// ============================================================================
-
-/**
- * Base coordinates for the arena area.
- * These should match the duel_arena zone configuration.
- */
-const ARENA_BASE_X = 60; // Duel Arena x coordinate (near spawn)
-const ARENA_BASE_Z = 80; // Duel Arena z coordinate (near spawn)
-const ARENA_Y = 0; // Ground level
-
-/**
- * Arena dimensions
- */
-const ARENA_WIDTH = 20; // Width of each arena (x-axis)
-const ARENA_LENGTH = 24; // Length of each arena (z-axis)
-const ARENA_GAP = 4; // Gap between arenas
-
-/**
- * Spawn offset from arena center
- */
-const SPAWN_OFFSET = 8; // Distance from center to spawn point
-
 /**
  * Generate arena configuration for a given arena ID (1-6)
+ * Uses manifest-driven config from getDuelArenaConfig()
  */
 function generateArenaConfig(arenaId: number): Arena {
-  // Calculate row and column (2x3 grid, IDs 1-6)
-  const row = Math.floor((arenaId - 1) / 2); // 0, 0, 1, 1, 2, 2
-  const col = (arenaId - 1) % 2; // 0, 1, 0, 1, 0, 1
+  const config = getDuelArenaConfig();
+
+  // Calculate row and column based on grid layout
+  const row = Math.floor((arenaId - 1) / config.columns);
+  const col = (arenaId - 1) % config.columns;
 
   // Calculate center position
   const centerX =
-    ARENA_BASE_X + col * (ARENA_WIDTH + ARENA_GAP) + ARENA_WIDTH / 2;
+    config.baseX +
+    col * (config.arenaWidth + config.arenaGap) +
+    config.arenaWidth / 2;
   const centerZ =
-    ARENA_BASE_Z + row * (ARENA_LENGTH + ARENA_GAP) + ARENA_LENGTH / 2;
+    config.baseZ +
+    row * (config.arenaLength + config.arenaGap) +
+    config.arenaLength / 2;
 
   // Calculate bounds
   const bounds: ArenaBounds = {
     min: {
-      x: centerX - ARENA_WIDTH / 2,
-      y: ARENA_Y - 1,
-      z: centerZ - ARENA_LENGTH / 2,
+      x: centerX - config.arenaWidth / 2,
+      y: config.baseY - 1,
+      z: centerZ - config.arenaLength / 2,
     },
     max: {
-      x: centerX + ARENA_WIDTH / 2,
-      y: ARENA_Y + 10,
-      z: centerZ + ARENA_LENGTH / 2,
+      x: centerX + config.arenaWidth / 2,
+      y: config.baseY + 10,
+      z: centerZ + config.arenaLength / 2,
     },
   };
 
   // Calculate spawn points (north and south)
   const spawnPoints: [ArenaSpawnPoint, ArenaSpawnPoint] = [
-    { x: centerX, y: ARENA_Y, z: centerZ - SPAWN_OFFSET }, // North spawn
-    { x: centerX, y: ARENA_Y, z: centerZ + SPAWN_OFFSET }, // South spawn
+    { x: centerX, y: config.baseY, z: centerZ - config.spawnOffset }, // North spawn
+    { x: centerX, y: config.baseY, z: centerZ + config.spawnOffset }, // South spawn
   ];
 
   return {
@@ -105,9 +89,6 @@ function generateArenaConfig(arenaId: number): Arena {
 // ============================================================================
 
 export class ArenaPoolManager {
-  /** Number of arenas in the pool */
-  private static readonly ARENA_COUNT = 6;
-
   /** Arena states by ID */
   private arenas: Map<number, ArenaState> = new Map();
 
@@ -117,9 +98,11 @@ export class ArenaPoolManager {
 
   /**
    * Initialize all arenas in the pool
+   * Uses arena count from manifest config
    */
   private initializeArenas(): void {
-    for (let i = 1; i <= ArenaPoolManager.ARENA_COUNT; i++) {
+    const config = getDuelArenaConfig();
+    for (let i = 1; i <= config.arenaCount; i++) {
       const arena = generateArenaConfig(i);
       this.arenas.set(i, {
         arena,

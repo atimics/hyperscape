@@ -21,7 +21,7 @@ import {
   sendToSocket,
   getPlayerId,
   isPlayerOnline,
-  isInDuelArenaZone,
+  isInDuelArenaLobby,
   arePlayersInChallengeRange,
   arePlayersAdjacent,
 } from "./helpers";
@@ -62,13 +62,18 @@ export function handleDuelChallenge(
 
   // FIRST CHECK: Zone validation before any other processing
   // This prevents consuming rate limit tokens for invalid requests
-  if (!isInDuelArenaZone(world, playerId)) {
-    Logger.debug("DuelChallenge", "Failed: Challenger not in duel arena", {
-      playerId,
-    });
+  // Must be in lobby area (not inside a combat arena)
+  if (!isInDuelArenaLobby(world, playerId)) {
+    Logger.debug(
+      "DuelChallenge",
+      "Failed: Challenger not in duel arena lobby",
+      {
+        playerId,
+      },
+    );
     sendDuelError(
       socket,
-      "You must be in the Duel Arena to challenge players.",
+      "You must be in the Duel Arena lobby to challenge players.",
       "NOT_IN_DUEL_ARENA",
     );
     return;
@@ -109,14 +114,14 @@ export function handleDuelChallenge(
     return;
   }
 
-  // Check target player is also in Duel Arena zone
-  if (!isInDuelArenaZone(world, targetPlayerId)) {
-    Logger.debug("DuelChallenge", "Failed: Target not in duel arena", {
+  // Check target player is also in Duel Arena lobby (not in combat arena)
+  if (!isInDuelArenaLobby(world, targetPlayerId)) {
+    Logger.debug("DuelChallenge", "Failed: Target not in duel arena lobby", {
       targetPlayerId,
     });
     sendDuelError(
       socket,
-      "That player is not in the Duel Arena.",
+      "That player is not in the Duel Arena lobby.",
       "TARGET_NOT_IN_DUEL_ARENA",
     );
     return;

@@ -218,3 +218,129 @@ export function areRulesCompatible(
   const incompatible2 = DUEL_RULE_DEFINITIONS[rule2].incompatibleWith;
   return !incompatible1.includes(rule2) && !incompatible2.includes(rule1);
 }
+
+// ============================================================================
+// Arena Configuration (Manifest-Driven)
+// ============================================================================
+
+import { ALL_WORLD_AREAS } from "./world-areas";
+
+/**
+ * Arena layout configuration derived from world-areas.json manifest.
+ * Single source of truth for arena positioning and dimensions.
+ */
+export interface DuelArenaConfig {
+  /** Base X coordinate for arena grid */
+  baseX: number;
+  /** Base Z coordinate for arena grid */
+  baseZ: number;
+  /** Ground level Y coordinate */
+  baseY: number;
+  /** Width of each arena (x-axis) */
+  arenaWidth: number;
+  /** Length of each arena (z-axis) */
+  arenaLength: number;
+  /** Gap between arenas */
+  arenaGap: number;
+  /** Number of columns in arena grid */
+  columns: number;
+  /** Number of rows in arena grid */
+  rows: number;
+  /** Total number of arenas */
+  arenaCount: number;
+  /** Distance from center to spawn point */
+  spawnOffset: number;
+  /** Lobby spawn point */
+  lobbySpawnPoint: { x: number; y: number; z: number };
+}
+
+/**
+ * Default arena config (fallback if manifest not loaded)
+ */
+const DEFAULT_ARENA_CONFIG: DuelArenaConfig = {
+  baseX: 60,
+  baseZ: 80,
+  baseY: 0,
+  arenaWidth: 20,
+  arenaLength: 24,
+  arenaGap: 4,
+  columns: 2,
+  rows: 3,
+  arenaCount: 6,
+  spawnOffset: 8,
+  lobbySpawnPoint: { x: 105, y: 0, z: 60 },
+};
+
+/**
+ * Get duel arena configuration from manifest.
+ * Reads from ALL_WORLD_AREAS["duel_arena"].subZones.arenas
+ * Falls back to default values if manifest not loaded.
+ */
+export function getDuelArenaConfig(): DuelArenaConfig {
+  const duelArena = ALL_WORLD_AREAS["duel_arena"];
+  if (!duelArena?.subZones?.arenas) {
+    return DEFAULT_ARENA_CONFIG;
+  }
+
+  const arenas = duelArena.subZones.arenas;
+  const lobby = duelArena.subZones.lobby;
+
+  // Parse layout (e.g., "2x3" -> columns=2, rows=3)
+  let columns = 2;
+  let rows = 3;
+  if (arenas.arenaLayout) {
+    const match = arenas.arenaLayout.match(/(\d+)x(\d+)/);
+    if (match) {
+      columns = parseInt(match[1], 10);
+      rows = parseInt(match[2], 10);
+    }
+  }
+
+  return {
+    baseX: arenas.bounds.minX,
+    baseZ: arenas.bounds.minZ,
+    baseY: 0,
+    arenaWidth: arenas.arenaSize?.width ?? DEFAULT_ARENA_CONFIG.arenaWidth,
+    arenaLength: arenas.arenaSize?.length ?? DEFAULT_ARENA_CONFIG.arenaLength,
+    arenaGap: arenas.arenaGap ?? DEFAULT_ARENA_CONFIG.arenaGap,
+    columns,
+    rows,
+    arenaCount: arenas.arenaCount ?? columns * rows,
+    spawnOffset: DEFAULT_ARENA_CONFIG.spawnOffset,
+    lobbySpawnPoint: lobby?.spawnPoint ?? DEFAULT_ARENA_CONFIG.lobbySpawnPoint,
+  };
+}
+
+/**
+ * Check if a position is inside any combat arena.
+ * Used for zone validation (e.g., preventing challenges inside arenas).
+ *
+ * @param x - World X coordinate
+ * @param z - World Z coordinate
+ * @returns true if position is inside a combat arena
+ */
+export function isPositionInsideCombatArena(x: number, z: number): boolean {
+  const config = getDuelArenaConfig();
+
+  for (let row = 0; row < config.rows; row++) {
+    for (let col = 0; col < config.columns; col++) {
+      const arenaMinX =
+        config.baseX + col * (config.arenaWidth + config.arenaGap);
+      const arenaMaxX = arenaMinX + config.arenaWidth;
+      const arenaMinZ =
+        config.baseZ + row * (config.arenaLength + config.arenaGap);
+      const arenaMaxZ = arenaMinZ + config.arenaLength;
+
+      if (
+        x >= arenaMinX &&
+        x <= arenaMaxX &&
+        z >= arenaMinZ &&
+        z <= arenaMaxZ
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
