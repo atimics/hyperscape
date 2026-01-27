@@ -447,8 +447,32 @@ export class PlayerDeathSystem extends SystemBase {
 
     if (duelSystem?.isPlayerInActiveDuel?.(playerId)) {
       console.log(
-        `[PlayerDeathSystem] Skipping death processing for ${playerId} - in active duel`,
+        `[PlayerDeathSystem] Player ${playerId} died in duel - playing death animation only (no item drops)`,
       );
+
+      // Still emit death state and play animation for duel deaths
+      // DuelSystem handles stakes/respawn, but we need the visual feedback
+      this.emitTypedEvent(EventType.PLAYER_SET_DEAD, {
+        playerId,
+        isDead: true,
+      });
+
+      // Set death animation on entity
+      const playerEntity = this.world.entities?.get?.(playerId);
+      if (playerEntity && "data" in playerEntity) {
+        const typedPlayerEntity = playerEntity as PlayerEntityLike;
+        if (typedPlayerEntity.emote !== undefined) {
+          typedPlayerEntity.emote = "death";
+        }
+        if (typedPlayerEntity.data) {
+          typedPlayerEntity.data.e = "death";
+          typedPlayerEntity.data.deathState = DeathState.DYING;
+        }
+        if ("markNetworkDirty" in playerEntity) {
+          (playerEntity as { markNetworkDirty: () => void }).markNetworkDirty();
+        }
+      }
+
       return;
     }
 

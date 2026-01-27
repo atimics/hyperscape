@@ -123,6 +123,7 @@ import { DialogueSystem } from "..";
 
 // Client-only visual systems
 import { DamageSplatSystem } from "../../client";
+import { DuelCountdownSplatSystem } from "../../client";
 import { SocialSystem } from "../../client";
 import { DuelArenaVisualsSystem } from "../../client";
 
@@ -360,6 +361,16 @@ export async function registerSystems(world: World): Promise<void> {
     } catch (err) {
       console.error(
         "[SystemLoader] Failed to register DamageSplatSystem:",
+        err,
+      );
+    }
+
+    // Duel countdown splat system - 3D countdown numbers over players' heads
+    try {
+      world.register("duel-countdown-splat", DuelCountdownSplatSystem);
+    } catch (err) {
+      console.error(
+        "[SystemLoader] Failed to register DuelCountdownSplatSystem:",
         err,
       );
     }

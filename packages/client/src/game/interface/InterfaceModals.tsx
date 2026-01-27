@@ -685,7 +685,7 @@ export function InterfaceModalsRenderer({
           visible={true}
           onClose={() => {
             setBankData(null);
-            world?.network?.send?.("bank_close", {});
+            world?.network?.send?.("bankClose", {});
           }}
           title="Bank"
           width={900}
@@ -702,7 +702,7 @@ export function InterfaceModalsRenderer({
             coins={coins}
             onClose={() => {
               setBankData(null);
-              world?.network?.send?.("bank_close", {});
+              world?.network?.send?.("bankClose", {});
             }}
           />
         </ModalWindow>

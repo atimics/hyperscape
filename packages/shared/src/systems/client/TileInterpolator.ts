@@ -1124,7 +1124,11 @@ export class TileInterpolator {
       }
       state.catchUpMultiplier = 1.0;
       state.targetCatchUpMultiplier = 1.0;
-      state.moveSeq++;
+      // CRITICAL: Reset moveSeq to 0 instead of incrementing
+      // Server cleanup() deletes state and creates new with moveSeq=0
+      // If we increment, client's moveSeq can become higher than server's
+      // causing movement packets to be ignored as "stale"
+      state.moveSeq = 0;
     } else {
       // No existing state - create fresh state at new position
       state = {

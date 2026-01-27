@@ -31,6 +31,7 @@ import {
   DEFAULT_DUEL_RULES,
   validateRuleCombination,
   DuelErrorCode,
+  DeathState,
 } from "@hyperscape/shared";
 import { PendingDuelManager } from "./PendingDuelManager";
 import { ArenaPoolManager } from "./ArenaPoolManager";
@@ -654,22 +655,25 @@ export class DuelSystem {
       : session.targetStakes;
 
     // Check if this inventory slot is already staked
+    // SECURITY: Reject duplicate slots to prevent item duplication via rapid clicking
     const existingIndex = stakes.findIndex(
       (s) => s.inventorySlot === inventorySlot,
     );
     if (existingIndex >= 0) {
-      // Update existing stake quantity
-      stakes[existingIndex].quantity += quantity;
-      stakes[existingIndex].value += value;
-    } else {
-      // Add new stake
-      stakes.push({
-        inventorySlot,
-        itemId,
-        quantity,
-        value,
-      });
+      return {
+        success: false,
+        error: "Item from this slot is already staked.",
+        errorCode: DuelErrorCode.ALREADY_STAKED,
+      };
     }
+
+    // Add new stake
+    stakes.push({
+      inventorySlot,
+      itemId,
+      quantity,
+      value,
+    });
 
     // Reset both players' acceptance when stakes change
     session.challengerAccepted = false;
@@ -881,6 +885,15 @@ export class DuelSystem {
       this.world.emit("duel:countdown:start", {
         duelId,
         arenaId,
+        challengerId: session.challengerId,
+        targetId: session.targetId,
+      });
+
+      // Emit initial countdown tick (3) immediately after teleport
+      // This ensures players see "3" right away instead of waiting for first processTick
+      this.world.emit("duel:countdown:tick", {
+        duelId: session.duelId,
+        count: 3,
         challengerId: session.challengerId,
         targetId: session.targetId,
       });
@@ -1442,8 +1455,14 @@ export class DuelSystem {
     if (!session) return;
 
     // Only process deaths during active combat
+    // SECURITY: If state is already FINISHED, resolution is in progress - ignore
+    // This prevents race conditions when both players die simultaneously
     if (session.state !== "FIGHTING") {
-      this.cancelDuel(duelId, "player_died_before_fight");
+      // Don't call cancelDuel here - if state is FINISHED, resolveDuel will handle cleanup
+      // If state is something else (shouldn't happen), just ignore
+      console.log(
+        `[DuelSystem] Ignoring death for ${playerId} - duel state is ${session.state}`,
+      );
       return;
     }
 
@@ -1454,7 +1473,35 @@ export class DuelSystem {
         : session.challengerId;
     const loserId = playerId;
 
-    this.resolveDuel(session, winnerId, loserId, "death");
+    // Set state to FINISHED immediately to prevent further deaths from being processed
+    session.state = "FINISHED";
+
+    // Store the duelId for the setTimeout callback to verify session still exists
+    const capturedDuelId = session.duelId;
+
+    // Delay the duel resolution to allow death animation to play
+    // and give players time to see the outcome (OSRS-accurate behavior)
+    setTimeout(() => {
+      // SECURITY: Verify session still exists and hasn't been cleaned up
+      // This prevents double-resolution if cancelDuel was called
+      const currentSession = this.duelSessions.get(capturedDuelId);
+      if (!currentSession) {
+        console.log(
+          `[DuelSystem] Skipping resolveDuel - session ${capturedDuelId} no longer exists`,
+        );
+        return;
+      }
+
+      // Verify it's the same session and in correct state
+      if (currentSession.state !== "FINISHED") {
+        console.log(
+          `[DuelSystem] Skipping resolveDuel - session state changed to ${currentSession.state}`,
+        );
+        return;
+      }
+
+      this.resolveDuel(currentSession, winnerId, loserId, "death");
+    }, 5000);
   }
 
   /**
@@ -1500,8 +1547,9 @@ export class DuelSystem {
     this.restorePlayerHealth(loserId);
 
     // Teleport both players to duel arena lobby (OSRS-accurate)
-    this.teleportToLobby(winnerId);
-    this.teleportToLobby(loserId);
+    // Use different spawn positions so players don't overlap
+    this.teleportToLobby(winnerId, true);
+    this.teleportToLobby(loserId, false);
 
     // Emit duel completed event with full details
     this.world.emit("duel:completed", {
@@ -1736,10 +1784,14 @@ export class DuelSystem {
 
   /**
    * Teleport player to duel arena lobby (both winner and loser)
+   * Uses different spawn positions to prevent players overlapping
    */
-  private teleportToLobby(playerId: string): void {
-    // Lobby spawn point - center of duel arena lobby area
-    const lobbySpawn = { x: 105, y: 0, z: 60 };
+  private teleportToLobby(playerId: string, isWinner: boolean): void {
+    // Use offset spawn positions so winner and loser don't overlap
+    // Winner spawns slightly west, loser spawns slightly east
+    const lobbySpawn = isWinner
+      ? { x: 102, y: 0, z: 60 }
+      : { x: 108, y: 0, z: 60 };
 
     this.world.emit("player:teleport", {
       playerId,
@@ -1754,6 +1806,26 @@ export class DuelSystem {
   private restorePlayerHealth(playerId: string): void {
     const lobbySpawn = { x: 105, y: 0, z: 60 };
 
+    // CRITICAL: Clear death state on the entity directly
+    // PlayerDeathSystem sets deathState = DYING for duel deaths, but returns early
+    // without calling the normal respawn flow. We must clear it here to re-enable movement.
+    const playerEntity = this.world.entities?.get?.(playerId);
+    if (playerEntity && "data" in playerEntity) {
+      const data = playerEntity.data as {
+        deathState?: DeathState;
+        deathPosition?: [number, number, number];
+        respawnTick?: number;
+        e?: string;
+      };
+      data.deathState = DeathState.ALIVE;
+      data.deathPosition = undefined;
+      data.respawnTick = undefined;
+      data.e = "idle";
+      if ("markNetworkDirty" in playerEntity) {
+        (playerEntity as { markNetworkDirty: () => void }).markNetworkDirty();
+      }
+    }
+
     // Emit PLAYER_RESPAWNED to trigger health restoration in PlayerSystem
     // This resets health to max and marks player as alive
     this.world.emit(EventType.PLAYER_RESPAWNED, {
@@ -1762,7 +1834,7 @@ export class DuelSystem {
       townName: "Duel Arena",
     });
 
-    // Also emit PLAYER_SET_DEAD to ensure death state is cleared
+    // Also emit PLAYER_SET_DEAD to ensure death state is cleared on client
     this.world.emit(EventType.PLAYER_SET_DEAD, {
       playerId,
       isDead: false,

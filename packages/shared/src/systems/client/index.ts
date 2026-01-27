@@ -17,6 +17,7 @@ export { NodeClient } from "./NodeClient";
 export { ControlPriorities } from "./ControlPriorities";
 export { EquipmentVisualSystem } from "./EquipmentVisualSystem";
 export { DamageSplatSystem } from "./DamageSplatSystem";
+export { DuelCountdownSplatSystem } from "./DuelCountdownSplatSystem";
 export { XPDropSystem } from "./XPDropSystem";
 export { ZoneVisualsSystem } from "./ZoneVisualsSystem";
 export { ResourceTileDebugSystem } from "./ResourceTileDebugSystem";

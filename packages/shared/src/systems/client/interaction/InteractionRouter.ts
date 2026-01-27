@@ -220,6 +220,15 @@ export class InteractionRouter extends System {
     this.visualFeedback.update();
   }
 
+  /**
+   * Cancel any pending client-side action (walk-to, interaction).
+   * Used when player teleports to prevent stale actions from executing.
+   */
+  cancelCurrentAction(): void {
+    this.actionQueue.cancelCurrentAction();
+    this.visualFeedback.hideTargetMarker();
+  }
+
   override destroy(): void {
     if (this.canvas) {
       this.canvas.removeEventListener("click", this.onCanvasClick);

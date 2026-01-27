@@ -410,6 +410,16 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.world.currentTick = tickNumber;
     }, TickPriority.INPUT);
 
+    // SECOND: Process duel state transitions BEFORE action queue
+    // CRITICAL: Must run before ActionQueue so COUNTDOWN→FIGHTING transition
+    // happens before movement validation (which calls canMove())
+    // Without this ordering, there's a race condition where movement requests
+    // are rejected because they see COUNTDOWN state, but state changes to
+    // FIGHTING later in the same tick
+    this.tickSystem.onTick(() => {
+      this.duelSystem.processTick();
+    }, TickPriority.INPUT);
+
     // Register action queue to process inputs at INPUT priority
     this.tickSystem.onTick((tickNumber) => {
       this.actionQueue.processTick(tickNumber);
@@ -554,11 +564,6 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       this.duelSystem,
     );
 
-    // Register duel system tick processing
-    this.tickSystem.onTick(() => {
-      this.duelSystem.processTick();
-    }, TickPriority.MOVEMENT);
-
     // Listen for duel countdown ticks and forward to clients
     this.world.on("duel:countdown:tick", (event) => {
       const { duelId, count, challengerId, targetId } = event as {
@@ -568,7 +573,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         targetId: string;
       };
 
-      const payload = { duelId, count };
+      // Include player IDs so client can display countdown over both players' heads
+      const payload = { duelId, count, challengerId, targetId };
 
       const challengerSocket = this.getSocketByPlayerId(challengerId);
       if (challengerSocket) {
@@ -850,6 +856,14 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       // Clear any in-progress movement by cleaning up the player's movement state
       this.tileMovementManager.cleanup(playerId);
 
+      // CRITICAL: Sync position to TileMovementManager after teleport
+      // Without this, movement system uses stale position and player appears stuck
+      this.tileMovementManager.syncPlayerPosition(playerId, position);
+
+      // Clear any pending actions from before teleport (e.g., queued movements, combat actions)
+      // This prevents stale actions from executing after teleport
+      this.actionQueue.cleanup(playerId);
+
       // Send teleport to the teleporting player
       const socket = this.getSocketByPlayerId(playerId);
       if (socket) {
@@ -873,6 +887,15 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         },
         socket?.id,
       );
+
+      // CRITICAL: Sync animation state after teleport to prevent T-pose
+      // Without this, remote players may show default pose until next animation change
+      this.broadcastManager.sendToAll("entityModified", {
+        id: playerId,
+        changes: {
+          e: "idle",
+        },
+      });
     });
 
     // Listen for movement cancel events (used by duel system to prevent escaping arena)

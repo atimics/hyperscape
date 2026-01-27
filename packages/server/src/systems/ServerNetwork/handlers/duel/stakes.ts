@@ -56,104 +56,127 @@ export async function handleDuelAddStake(
     return;
   }
 
-  // Get item from database inventory (same pattern as trade system)
-  const inventoryRepo = new InventoryRepository(db.drizzle, db.pool);
-  const inventoryItems = await inventoryRepo.getPlayerInventoryAsync(playerId);
-  const inventoryItem = inventoryItems.find(
-    (item) => item.slotIndex === inventorySlot,
-  );
+  // SECURITY: Lock inventory to prevent race conditions during stake operations
+  const inventorySystem = world.getSystem("inventory") as
+    | {
+        lockForTransaction?: (id: string) => boolean;
+        unlockTransaction?: (id: string) => void;
+        reloadFromDatabase?: (id: string) => Promise<void>;
+      }
+    | undefined;
 
-  if (!inventoryItem) {
-    sendDuelError(socket, "No item in that slot", "ITEM_NOT_FOUND");
+  const locked = inventorySystem?.lockForTransaction?.(playerId) ?? true;
+  if (!locked) {
+    sendDuelError(socket, "Inventory busy, try again", "SERVER_ERROR");
     return;
   }
 
-  // Validate item exists in item database
-  const itemData = getItem(inventoryItem.itemId);
-  if (!itemData) {
-    sendDuelError(socket, "Invalid item", "INVALID_ITEM");
-    return;
-  }
-
-  // Check if item is tradeable (stakeable items must be tradeable)
-  if (itemData.tradeable === false) {
-    sendDuelError(socket, "This item cannot be staked", "ITEM_NOT_TRADEABLE");
-    return;
-  }
-
-  // Determine quantity (for stackable items, use provided quantity or all)
-  let qty = quantity;
-  if (qty <= 0 || qty > inventoryItem.quantity) {
-    qty = inventoryItem.quantity;
-  }
-
-  // Calculate value
-  const value = (itemData.value || 0) * qty;
-
-  // Add to stakes
-  const result = duelSystem.addStake(
-    duelId,
-    playerId,
-    inventorySlot,
-    inventoryItem.itemId,
-    qty,
-    value,
-  );
-
-  if (!result.success) {
-    sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
-    return;
-  }
-
-  // Remove item from inventory (OSRS-accurate: staked items leave inventory)
   try {
-    if (qty >= inventoryItem.quantity) {
-      // Remove entire item
-      await db.pool.query(
-        `DELETE FROM inventory WHERE "playerId" = $1 AND "slotIndex" = $2`,
-        [playerId, inventorySlot],
-      );
-    } else {
-      // Reduce quantity
-      await db.pool.query(
-        `UPDATE inventory SET quantity = quantity - $1 WHERE "playerId" = $2 AND "slotIndex" = $3`,
-        [qty, playerId, inventorySlot],
-      );
+    // Get item from database inventory (same pattern as trade system)
+    const inventoryRepo = new InventoryRepository(db.drizzle, db.pool);
+    const inventoryItems =
+      await inventoryRepo.getPlayerInventoryAsync(playerId);
+    const inventoryItem = inventoryItems.find(
+      (item) => item.slotIndex === inventorySlot,
+    );
+
+    if (!inventoryItem) {
+      sendDuelError(socket, "No item in that slot", "ITEM_NOT_FOUND");
+      return;
     }
 
-    // Reload inventory and sync to client
-    const inventorySystem = world.getSystem("inventory") as
-      | { reloadFromDatabase?: (id: string) => Promise<void> }
-      | undefined;
-    if (inventorySystem?.reloadFromDatabase) {
-      await inventorySystem.reloadFromDatabase(playerId);
+    // Validate item exists in item database
+    const itemData = getItem(inventoryItem.itemId);
+    if (!itemData) {
+      sendDuelError(socket, "Invalid item", "INVALID_ITEM");
+      return;
     }
-  } catch (error) {
-    console.error(`[Duel] Failed to remove staked item from inventory:`, error);
-    // Don't fail the stake operation - item is already in stakes
-  }
 
-  // Get session to send updates to both players
-  const session = duelSystem.getDuelSession(duelId);
-  if (!session) return;
+    // Check if item is tradeable (stakeable items must be tradeable)
+    if (itemData.tradeable === false) {
+      sendDuelError(socket, "This item cannot be staked", "ITEM_NOT_TRADEABLE");
+      return;
+    }
 
-  // Notify both players of the stake change
-  const updatePayload = {
-    duelId,
-    challengerStakes: session.challengerStakes,
-    targetStakes: session.targetStakes,
-    challengerAccepted: session.challengerAccepted,
-    targetAccepted: session.targetAccepted,
-    modifiedBy: playerId,
-  };
+    // Determine quantity (for stackable items, use provided quantity or all)
+    let qty = quantity;
+    if (qty <= 0 || qty > inventoryItem.quantity) {
+      qty = inventoryItem.quantity;
+    }
 
-  sendToSocket(socket, "duelStakesUpdated", updatePayload);
+    // Calculate value
+    const value = (itemData.value || 0) * qty;
 
-  const opponentId =
-    playerId === session.challengerId ? session.targetId : session.challengerId;
-  const opponentSocket = getSocketByPlayerId(world, opponentId);
-  if (opponentSocket) {
-    sendToSocket(opponentSocket, "duelStakesUpdated", updatePayload);
+    // Add to stakes
+    const result = duelSystem.addStake(
+      duelId,
+      playerId,
+      inventorySlot,
+      inventoryItem.itemId,
+      qty,
+      value,
+    );
+
+    if (!result.success) {
+      sendDuelError(socket, result.error!, result.errorCode || "UNKNOWN");
+      return;
+    }
+
+    // Remove item from inventory (OSRS-accurate: staked items leave inventory)
+    try {
+      if (qty >= inventoryItem.quantity) {
+        // Remove entire item
+        await db.pool.query(
+          `DELETE FROM inventory WHERE "playerId" = $1 AND "slotIndex" = $2`,
+          [playerId, inventorySlot],
+        );
+      } else {
+        // Reduce quantity
+        await db.pool.query(
+          `UPDATE inventory SET quantity = quantity - $1 WHERE "playerId" = $2 AND "slotIndex" = $3`,
+          [qty, playerId, inventorySlot],
+        );
+      }
+
+      // Reload inventory and sync to client
+      if (inventorySystem?.reloadFromDatabase) {
+        await inventorySystem.reloadFromDatabase(playerId);
+      }
+    } catch (error) {
+      console.error(
+        `[Duel] Failed to remove staked item from inventory:`,
+        error,
+      );
+      // Don't fail the stake operation - item is already in stakes
+    }
+
+    // Get session to send updates to both players
+    const session = duelSystem.getDuelSession(duelId);
+    if (!session) return;
+
+    // Notify both players of the stake change
+    const updatePayload = {
+      duelId,
+      challengerStakes: session.challengerStakes,
+      targetStakes: session.targetStakes,
+      challengerAccepted: session.challengerAccepted,
+      targetAccepted: session.targetAccepted,
+      modifiedBy: playerId,
+    };
+
+    sendToSocket(socket, "duelStakesUpdated", updatePayload);
+
+    const opponentId =
+      playerId === session.challengerId
+        ? session.targetId
+        : session.challengerId;
+    const opponentSocket = getSocketByPlayerId(world, opponentId);
+    if (opponentSocket) {
+      sendToSocket(opponentSocket, "duelStakesUpdated", updatePayload);
+    }
+  } finally {
+    // SECURITY: Always unlock inventory
+    inventorySystem?.unlockTransaction?.(playerId);
   }
 }
 
@@ -209,8 +232,25 @@ export async function handleDuelRemoveStake(
     return;
   }
 
-  // Return item to inventory
+  // SECURITY: Lock inventory to prevent race conditions during unstake operations
+  const inventorySystem = world.getSystem("inventory") as
+    | {
+        lockForTransaction?: (id: string) => boolean;
+        unlockTransaction?: (id: string) => void;
+        reloadFromDatabase?: (id: string) => Promise<void>;
+      }
+    | undefined;
+
+  const locked = inventorySystem?.lockForTransaction?.(playerId) ?? true;
+  if (!locked) {
+    // Stake was already removed from array, but we can't return item - log error
+    console.error(
+      `[Duel] Could not lock inventory to return unstaked item for ${playerId}`,
+    );
+  }
+
   try {
+    // Return item to inventory
     // Find a free slot
     const inventoryRepo = new InventoryRepository(db.drizzle, db.pool);
     const currentInventory =
@@ -256,14 +296,14 @@ export async function handleDuelRemoveStake(
     }
 
     // Reload inventory and sync to client
-    const inventorySystem = world.getSystem("inventory") as
-      | { reloadFromDatabase?: (id: string) => Promise<void> }
-      | undefined;
     if (inventorySystem?.reloadFromDatabase) {
       await inventorySystem.reloadFromDatabase(playerId);
     }
   } catch (error) {
     console.error(`[Duel] Failed to return unstaked item to inventory:`, error);
+  } finally {
+    // SECURITY: Always unlock inventory
+    inventorySystem?.unlockTransaction?.(playerId);
   }
 
   // Notify both players of the stake change

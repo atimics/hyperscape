@@ -2543,12 +2543,20 @@ export class ClientNetwork extends SystemBase {
   /**
    * Duel countdown tick (3, 2, 1, 0)
    */
-  onDuelCountdownTick = (data: { duelId: string; count: number }) => {
+  onDuelCountdownTick = (data: {
+    duelId: string;
+    count: number;
+    challengerId: string;
+    targetId: string;
+  }) => {
     console.log("[ClientNetwork] Duel countdown tick:", data);
+    // Update UI overlay (fullscreen countdown)
     this.world.emit(EventType.UI_UPDATE, {
       component: "duelCountdownTick",
       data,
     });
+    // Emit for 3D countdown splat system (numbers over players' heads)
+    this.world.emit(EventType.DUEL_COUNTDOWN_TICK, data);
   };
 
   /**
@@ -3524,6 +3532,15 @@ export class ClientNetwork extends SystemBase {
       // Clear the tile movement flags on player data
       localPlayer.data.tileInterpolatorControlled = false;
       localPlayer.data.tileMovementActive = false;
+
+      // Cancel any pending client-side actions (walk-to actions, interactions)
+      // This prevents stale actions from executing after teleport
+      const interactionRouter = this.world.getSystem("interaction-router") as {
+        cancelCurrentAction?: () => void;
+      } | null;
+      if (interactionRouter?.cancelCurrentAction) {
+        interactionRouter.cancelCurrentAction();
+      }
 
       // Now teleport the player
       localPlayer.teleport(pos);
