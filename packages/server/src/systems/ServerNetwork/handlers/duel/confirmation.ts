@@ -15,6 +15,7 @@ import {
   sendToSocket,
   getPlayerId,
   getSocketByPlayerId,
+  rateLimiter,
 } from "./helpers";
 
 // ============================================================================
@@ -37,6 +38,12 @@ export function handleDuelAcceptFinal(
   const playerId = getPlayerId(socket);
   if (!playerId) {
     sendDuelError(socket, "Not authenticated", "NOT_AUTHENTICATED");
+    return;
+  }
+
+  // Rate limit accept operations to prevent spam
+  if (!rateLimiter.tryOperation(playerId)) {
+    sendDuelError(socket, "Please wait before accepting", "RATE_LIMITED");
     return;
   }
 

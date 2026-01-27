@@ -40,6 +40,11 @@ import {
   type EquipmentRestrictions,
 } from "./DuelSessionManager";
 import { DuelCombatResolver } from "./DuelCombatResolver";
+import {
+  isPlayerDisconnectPayload,
+  isEntityDeathPayload,
+  isPlayerDeath,
+} from "./validation";
 import { AuditLogger, Logger } from "../ServerNetwork/services";
 import {
   DISCONNECT_TIMEOUT_TICKS,
@@ -127,27 +132,32 @@ export class DuelSystem {
       this.cleanupExpiredSessions();
     }, ticksToMs(CLEANUP_INTERVAL_TICKS));
 
-    // Subscribe to player disconnect events
+    // Subscribe to player disconnect events with runtime validation
     this.world.on(EventType.PLAYER_LEFT, (payload: unknown) => {
-      const data = payload as { playerId: string };
-      this.onPlayerDisconnect(data.playerId);
+      if (!isPlayerDisconnectPayload(payload)) {
+        Logger.warn("DuelSystem", "Invalid PLAYER_LEFT payload", { payload });
+        return;
+      }
+      this.onPlayerDisconnect(payload.playerId);
     });
 
     this.world.on(EventType.PLAYER_LOGOUT, (payload: unknown) => {
-      const data = payload as { playerId: string };
-      this.onPlayerDisconnect(data.playerId);
+      if (!isPlayerDisconnectPayload(payload)) {
+        Logger.warn("DuelSystem", "Invalid PLAYER_LOGOUT payload", { payload });
+        return;
+      }
+      this.onPlayerDisconnect(payload.playerId);
     });
 
     // Subscribe to player death to end duel (ENTITY_DEATH is emitted when health reaches 0)
     this.world.on(EventType.ENTITY_DEATH, (payload: unknown) => {
-      const data = payload as {
-        entityId: string;
-        entityType?: "player" | "mob";
-        killedBy?: string;
-      };
+      if (!isEntityDeathPayload(payload)) {
+        Logger.warn("DuelSystem", "Invalid ENTITY_DEATH payload", { payload });
+        return;
+      }
       // Only handle player deaths
-      if (data.entityType === "player" || data.entityId?.includes("player")) {
-        this.handlePlayerDeath(data.entityId);
+      if (isPlayerDeath(payload)) {
+        this.handlePlayerDeath(payload.entityId);
       }
     });
 

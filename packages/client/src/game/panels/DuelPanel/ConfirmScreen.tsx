@@ -12,7 +12,12 @@
 
 import { useMemo, type CSSProperties } from "react";
 import { useThemeStore, type Theme } from "@/ui";
-import { getItem, type DuelRules } from "@hyperscape/shared";
+import {
+  getItem,
+  type DuelRules,
+  DUEL_RULE_LABELS,
+  EQUIPMENT_SLOT_LABELS,
+} from "@hyperscape/shared";
 
 // ============================================================================
 // Types
@@ -79,32 +84,7 @@ function calculateTotalValue(stakes: StakedItem[]): number {
   return stakes.reduce((sum, item) => sum + item.value, 0);
 }
 
-const RULE_LABELS: Record<keyof DuelRules, string> = {
-  noRanged: "No Ranged",
-  noMelee: "No Melee",
-  noMagic: "No Magic",
-  noSpecialAttack: "No Special Attack",
-  noPrayer: "No Prayer",
-  noPotions: "No Potions",
-  noFood: "No Food",
-  noForfeit: "No Forfeit",
-  noMovement: "No Movement",
-  funWeapons: "Fun Weapons Only",
-};
-
-const EQUIPMENT_LABELS: Record<keyof EquipmentRestrictions, string> = {
-  head: "Head",
-  cape: "Cape",
-  amulet: "Amulet",
-  weapon: "Weapon",
-  body: "Body",
-  shield: "Shield",
-  legs: "Legs",
-  gloves: "Gloves",
-  boots: "Boots",
-  ring: "Ring",
-  ammo: "Ammo",
-};
+// Rule and equipment labels now imported from @hyperscape/shared/data/duel-manifest
 
 // ============================================================================
 // Memoized Styles Hook
@@ -327,7 +307,7 @@ export function ConfirmScreen({
             ) : (
               <div style={styles.listStyle}>
                 {activeRules.map((rule) => (
-                  <div key={rule}>• {RULE_LABELS[rule]}</div>
+                  <div key={rule}>• {DUEL_RULE_LABELS[rule]}</div>
                 ))}
               </div>
             )}
@@ -341,7 +321,7 @@ export function ConfirmScreen({
             ) : (
               <div style={styles.listStyle}>
                 {disabledEquipment.map((slot) => (
-                  <div key={slot}>• {EQUIPMENT_LABELS[slot]}</div>
+                  <div key={slot}>• {EQUIPMENT_SLOT_LABELS[slot]}</div>
                 ))}
               </div>
             )}

@@ -1522,16 +1522,15 @@ export class World extends EventEmitter {
     if (!player) return 3;
 
     // Try multiple property paths for combat level
-    const playerWithLevel = player as {
+    // Cast through unknown to avoid protected property conflict
+    const playerWithLevel = player as unknown as {
       combatLevel?: number;
-      level?: number;
       data?: { combatLevel?: number };
       combat?: { combatLevel?: number };
     };
 
     return (
       playerWithLevel.combatLevel ||
-      playerWithLevel.level ||
       playerWithLevel.data?.combatLevel ||
       playerWithLevel.combat?.combatLevel ||
       3

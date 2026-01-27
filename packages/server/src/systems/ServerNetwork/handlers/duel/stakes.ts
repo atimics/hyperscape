@@ -431,6 +431,12 @@ export function handleDuelAcceptStakes(
     return;
   }
 
+  // Rate limit accept operations to prevent spam
+  if (!rateLimiter.tryOperation(playerId)) {
+    sendDuelError(socket, "Please wait before accepting", "RATE_LIMITED");
+    return;
+  }
+
   const duelSystem = getDuelSystem(world);
   if (!duelSystem) {
     sendDuelError(socket, "Duel system unavailable", "SYSTEM_ERROR");

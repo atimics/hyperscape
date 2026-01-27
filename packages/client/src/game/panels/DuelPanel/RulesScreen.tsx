@@ -13,7 +13,12 @@
 
 import { useCallback, useMemo, type CSSProperties } from "react";
 import { useThemeStore, type Theme } from "@/ui";
-import type { DuelRules, EquipmentSlot } from "@hyperscape/shared";
+import {
+  type DuelRules,
+  type EquipmentSlot,
+  DUEL_RULE_DEFINITIONS,
+  EQUIPMENT_SLOT_LABELS,
+} from "@hyperscape/shared";
 
 // ============================================================================
 // Types
@@ -46,41 +51,8 @@ interface RulesScreenProps {
 }
 
 // ============================================================================
-// Rule Definitions
+// Rule Definitions - Now imported from @hyperscape/shared/data/duel-manifest
 // ============================================================================
-
-const RULE_LABELS: Record<
-  keyof DuelRules,
-  { label: string; description: string }
-> = {
-  noRanged: { label: "No Ranged", description: "Cannot use ranged attacks" },
-  noMelee: { label: "No Melee", description: "Cannot use melee attacks" },
-  noMagic: { label: "No Magic", description: "Cannot use magic attacks" },
-  noSpecialAttack: {
-    label: "No Special Attack",
-    description: "Cannot use special attacks",
-  },
-  noPrayer: { label: "No Prayer", description: "Prayer points drained" },
-  noPotions: { label: "No Potions", description: "Cannot drink potions" },
-  noFood: { label: "No Food", description: "Cannot eat food" },
-  noForfeit: { label: "No Forfeit", description: "Fight to the death" },
-  noMovement: { label: "No Movement", description: "Frozen in place" },
-  funWeapons: { label: "Fun Weapons", description: "Boxing gloves only" },
-};
-
-const EQUIPMENT_LABELS: Record<EquipmentSlot, string> = {
-  head: "Head",
-  cape: "Cape",
-  amulet: "Amulet",
-  weapon: "Weapon",
-  body: "Body",
-  shield: "Shield",
-  legs: "Legs",
-  gloves: "Gloves",
-  boots: "Boots",
-  ring: "Ring",
-  ammo: "Ammo",
-};
 
 // ============================================================================
 // Memoized Styles Hook
@@ -251,22 +223,24 @@ export function RulesScreen({
       <div style={styles.sectionStyle}>
         <div style={styles.sectionTitleStyle}>Combat Rules</div>
         <div style={styles.gridStyle}>
-          {(Object.keys(RULE_LABELS) as Array<keyof DuelRules>).map((rule) => (
-            <div
-              key={rule}
-              style={getCheckboxStyle(theme, rules[rule])}
-              onClick={() => handleRuleToggle(rule)}
-              title={RULE_LABELS[rule].description}
-            >
-              <input
-                type="checkbox"
-                checked={rules[rule]}
-                onChange={() => {}}
-                style={{ cursor: "pointer" }}
-              />
-              <span>{RULE_LABELS[rule].label}</span>
-            </div>
-          ))}
+          {(Object.keys(DUEL_RULE_DEFINITIONS) as Array<keyof DuelRules>).map(
+            (rule) => (
+              <div
+                key={rule}
+                style={getCheckboxStyle(theme, rules[rule])}
+                onClick={() => handleRuleToggle(rule)}
+                title={DUEL_RULE_DEFINITIONS[rule].description}
+              >
+                <input
+                  type="checkbox"
+                  checked={rules[rule]}
+                  onChange={() => {}}
+                  style={{ cursor: "pointer" }}
+                />
+                <span>{DUEL_RULE_DEFINITIONS[rule].label}</span>
+              </div>
+            ),
+          )}
         </div>
       </div>
 
@@ -274,21 +248,23 @@ export function RulesScreen({
       <div style={styles.sectionStyle}>
         <div style={styles.sectionTitleStyle}>Disabled Equipment</div>
         <div style={styles.gridStyle}>
-          {(Object.keys(EQUIPMENT_LABELS) as EquipmentSlot[]).map((slot) => (
-            <div
-              key={slot}
-              style={getCheckboxStyle(theme, equipmentRestrictions[slot])}
-              onClick={() => handleEquipmentToggle(slot)}
-            >
-              <input
-                type="checkbox"
-                checked={equipmentRestrictions[slot]}
-                onChange={() => {}}
-                style={{ cursor: "pointer" }}
-              />
-              <span>No {EQUIPMENT_LABELS[slot]}</span>
-            </div>
-          ))}
+          {(Object.keys(EQUIPMENT_SLOT_LABELS) as EquipmentSlot[]).map(
+            (slot) => (
+              <div
+                key={slot}
+                style={getCheckboxStyle(theme, equipmentRestrictions[slot])}
+                onClick={() => handleEquipmentToggle(slot)}
+              >
+                <input
+                  type="checkbox"
+                  checked={equipmentRestrictions[slot]}
+                  onChange={() => {}}
+                  style={{ cursor: "pointer" }}
+                />
+                <span>No {EQUIPMENT_SLOT_LABELS[slot]}</span>
+              </div>
+            ),
+          )}
         </div>
       </div>
 
