@@ -35,6 +35,7 @@ import {
 } from "@hyperscape/shared";
 import { PendingDuelManager } from "./PendingDuelManager";
 import { ArenaPoolManager } from "./ArenaPoolManager";
+import { AuditLogger } from "../ServerNetwork/services";
 
 // ============================================================================
 // Types
@@ -423,6 +424,22 @@ export class DuelSystem {
       reason,
       cancelledBy,
     });
+
+    // AUDIT: Log duel cancellation if stakes were involved
+    if (
+      session.challengerStakes.length > 0 ||
+      session.targetStakes.length > 0
+    ) {
+      AuditLogger.getInstance().logDuelCancelled(
+        duelId,
+        cancelledBy,
+        reason,
+        session.challengerId,
+        session.targetId,
+        session.challengerStakes,
+        session.targetStakes,
+      );
+    }
 
     return { success: true };
   }
@@ -1576,6 +1593,17 @@ export class DuelSystem {
       challengerStakes: session.challengerStakes,
       targetStakes: session.targetStakes,
     });
+
+    // AUDIT: Log duel completion for economic tracking
+    AuditLogger.getInstance().logDuelComplete(
+      session.duelId,
+      winnerId,
+      loserId,
+      loserStakes,
+      winnerStakes,
+      winnerReceivesValue,
+      reason,
+    );
 
     // Release arena
     if (session.arenaId !== null) {
