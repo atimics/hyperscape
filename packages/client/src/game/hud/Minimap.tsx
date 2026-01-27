@@ -381,6 +381,10 @@ export function Minimap({
   const width = currentWidth;
   const height = currentHeight;
 
+  // Refs for width/height so render loop can access current values
+  const widthRef = useRef<number>(width);
+  const heightRef = useRef<number>(height);
+
   // Resize state
   const [isResizing, setIsResizing] = useState(false);
   const resizeStartRef = useRef<{
@@ -390,37 +394,39 @@ export function Minimap({
     h: number;
   } | null>(null);
 
-  // User's zoom factor (1.0 = default, <1 = zoomed in, >1 = zoomed out)
-  // This is preserved across panel resizes (RuneScape/WoW behavior)
-  const [userZoomFactor, setUserZoomFactor] = useState<number>(1.0);
-  const userZoomFactorRef = useRef<number>(1.0);
+  // Calculate extent based on size - larger size = more visible area (not scaled)
+  // Use the average of width/height to determine extent
+  // This creates "frame over canvas" behavior - resizing reveals more/less map
+  const sizeBasedExtent = useMemo(() => {
+    // Base extent at 200px is the initial zoom value
+    // When size increases, we reveal more map (increase extent proportionally)
+    const baseSize = 200;
+    const avgSize = (width + height) / 2;
+    return zoom * (avgSize / baseSize);
+  }, [width, height, zoom]);
 
-  // Fixed base extent in world units - zoom prop sets default viewing radius
-  // This NEVER changes with panel size, only with user zoom (RuneScape behavior)
-  // Panel resizing only crops/reveals more map area, doesn't change zoom level
-  const BASE_EXTENT = zoom;
-
-  // Aspect ratio for proper camera frustum (avoids distortion when panel isn't square)
-  const aspectRatio = useMemo(() => width / height, [width, height]);
-
-  // Minimap extent (orthographic half-extent in world units)
-  // Only changes when user zooms, NOT when panel is resized
-  const extent = useMemo(() => {
-    return BASE_EXTENT * userZoomFactor;
-  }, [BASE_EXTENT, userZoomFactor]);
-
+  // Minimap zoom state (orthographic half-extent in world units)
+  const [extent, setExtent] = useState<number>(sizeBasedExtent);
   const extentRef = useRef<number>(extent); // Ref for synchronous access in render loop
-  const aspectRatioRef = useRef<number>(aspectRatio);
-  const MIN_ZOOM_FACTOR = 0.2; // 5x zoomed in
-  const MAX_ZOOM_FACTOR = 5.0; // 5x zoomed out
-  const STEP_ZOOM_FACTOR = 0.1;
+  const MIN_EXTENT = 20;
+  const MAX_EXTENT = 1000; // Increased to support larger sizes and full viewport
+  const STEP_EXTENT = 10;
 
-  // Keep refs in sync
+  // Update extent when size changes (reveals more map)
+  useEffect(() => {
+    setExtent(sizeBasedExtent);
+  }, [sizeBasedExtent]);
+
+  // Keep refs in sync with state for render loop access
   useEffect(() => {
     extentRef.current = extent;
-    aspectRatioRef.current = aspectRatio;
-    userZoomFactorRef.current = userZoomFactor;
-  }, [extent, aspectRatio, userZoomFactor]);
+  }, [extent]);
+
+  // Keep width/height refs in sync
+  useEffect(() => {
+    widthRef.current = width;
+    heightRef.current = height;
+  }, [width, height]);
 
   // Rotation: follow main camera yaw (RS3-like) with North toggle
   const [rotateWithCamera] = useState<boolean>(true);
@@ -459,14 +465,12 @@ export function Minimap({
     // console.log('[Minimap] Initializing renderer...');
 
     // Create orthographic camera for overhead view - much higher up
-    // Use aspect ratio to prevent distortion
-    const horizontalExtent = extent * (width / height);
-    const verticalExtent = extent;
+    // Square frustum ensures consistent map scale regardless of panel shape
     const camera = new THREE.OrthographicCamera(
-      -horizontalExtent,
-      horizontalExtent,
-      verticalExtent,
-      -verticalExtent,
+      -extent,
+      extent,
+      extent,
+      -extent,
       0.1,
       2000,
     );
@@ -956,20 +960,17 @@ export function Minimap({
         }
       }
 
-      // --- Camera Frustum Update (for zoom with aspect ratio) ---
+      // --- Camera Frustum Update (square frustum for consistent map scale) ---
+      // Using same extent on all sides ensures map scale stays constant
+      // Resizing reveals more/less map (frame over canvas behavior)
       if (cam) {
         const currentExtent = extentRef.current;
-        const currentAspect = aspectRatioRef.current;
-        // Use aspect ratio to prevent distortion
-        // Horizontal extent scales with aspect ratio
-        const horizontalExtent = currentExtent * currentAspect;
-        const verticalExtent = currentExtent;
 
-        if (cam.right !== horizontalExtent || cam.top !== verticalExtent) {
-          cam.left = -horizontalExtent;
-          cam.right = horizontalExtent;
-          cam.top = verticalExtent;
-          cam.bottom = -verticalExtent;
+        if (cam.right !== currentExtent) {
+          cam.left = -currentExtent;
+          cam.right = currentExtent;
+          cam.top = currentExtent;
+          cam.bottom = -currentExtent;
           cam.updateProjectionMatrix();
         }
       }
@@ -1040,11 +1041,14 @@ export function Minimap({
             _tempProjectVec.copy(pip.position);
             _tempProjectVec.project(cameraRef.current);
 
-            const x = (_tempProjectVec.x * 0.5 + 0.5) * width;
-            const y = (_tempProjectVec.y * -0.5 + 0.5) * height;
+            // Use refs to get current width/height (not stale closure values)
+            const currentWidth = widthRef.current;
+            const currentHeight = heightRef.current;
+            const x = (_tempProjectVec.x * 0.5 + 0.5) * currentWidth;
+            const y = (_tempProjectVec.y * -0.5 + 0.5) * currentHeight;
 
             // Only draw if within bounds
-            if (x >= 0 && x <= width && y >= 0 && y <= height) {
+            if (x >= 0 && x <= currentWidth && y >= 0 && y <= currentHeight) {
               // Set pip properties based on type
               let radius = 3;
               let borderColor = "#ffffff";
@@ -1187,8 +1191,11 @@ export function Minimap({
           // Reuse pre-allocated vector instead of creating new one
           _tempDestVec.set(target.x, 0, target.z);
           _tempDestVec.project(cameraRef.current);
-          const sx = (_tempDestVec.x * 0.5 + 0.5) * width;
-          const sy = (_tempDestVec.y * -0.5 + 0.5) * height;
+          // Use refs to get current width/height (not stale closure values)
+          const destWidth = widthRef.current;
+          const destHeight = heightRef.current;
+          const sx = (_tempDestVec.x * 0.5 + 0.5) * destWidth;
+          const sy = (_tempDestVec.y * -0.5 + 0.5) * destHeight;
           ctx.save();
           ctx.globalAlpha = 1;
           ctx.fillStyle = "#ff3333";
@@ -1310,7 +1317,7 @@ export function Minimap({
   );
 
   // Wheel handler for minimap zoom - uses native WheelEvent for passive: false support
-  // Uses functional update to ensure correct zoom factor value during rapid scrolling
+  // Uses functional update to ensure correct extent value during rapid scrolling
   // No dependencies - handler is stable and listener doesn't need to be re-attached
   const handleWheel = useCallback(
     (e: WheelEvent) => {
@@ -1323,13 +1330,13 @@ export function Minimap({
         1,
         Math.min(5, Math.round(Math.abs(e.deltaY) / 100)),
       );
-      // Use functional update to always have the latest zoom factor value
-      // Positive deltaY = zoom out (increase factor), negative = zoom in (decrease factor)
-      setUserZoomFactor((prev) =>
+      // Use functional update to always have the latest extent value
+      // Positive deltaY = zoom out (increase extent), negative = zoom in (decrease extent)
+      setExtent((prev) =>
         THREE.MathUtils.clamp(
-          prev + sign * steps * STEP_ZOOM_FACTOR,
-          MIN_ZOOM_FACTOR,
-          MAX_ZOOM_FACTOR,
+          prev + sign * steps * STEP_EXTENT,
+          MIN_EXTENT,
+          MAX_EXTENT,
         ),
       );
     },

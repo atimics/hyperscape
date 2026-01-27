@@ -886,9 +886,8 @@ function MinimapPanel({ world }: { world: ClientWorld }): React.ReactElement {
       }}
     >
       {/* Minimap canvas - renders the map, controls hidden */}
-      {/* Note: No dimension-based key - component handles size changes internally */}
-      {/* Using dimension keys would cause remount and reset zoom state */}
       <Minimap
+        key={`minimap-${dimensions.width}-${dimensions.height}`}
         world={world}
         width={dimensions.width}
         height={dimensions.height}

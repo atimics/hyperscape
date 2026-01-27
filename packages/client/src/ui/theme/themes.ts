@@ -201,7 +201,7 @@ export const baseTheme: Theme = {
   colors: {
     background: {
       primary: "#1c1c20", // Slightly lighter base
-      secondary: "rgba(50, 50, 58, 0.88)", // Semi-transparent for coherent glass look
+      secondary: "#32323a", // Much lighter for contrast
       tertiary: "#4e4e58", // Significantly lighter for clear separation
       overlay: "rgba(0, 0, 0, 0.7)",
       glass: "rgba(28, 28, 32, 0.78)",
@@ -367,7 +367,7 @@ export const hyperscapeTheme: Theme = {
   colors: {
     background: {
       primary: "#0f0f12", // Slightly lighter base
-      secondary: "rgba(34, 34, 42, 0.88)", // Semi-transparent for coherent glass look
+      secondary: "#22222a", // Much lighter for contrast
       tertiary: "#363640", // Significantly lighter for clear separation
       overlay: "rgba(0, 0, 0, 0.75)",
       glass: "rgba(18, 18, 22, 0.82)", // Lighter glass
