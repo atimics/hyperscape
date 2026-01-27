@@ -422,6 +422,7 @@ export class PlayerDeathSystem extends SystemBase {
     entityId: string;
     killedBy: string;
     entityType: "player" | "mob";
+    deathPosition?: { x: number; y: number; z: number };
   }): void {
     // Only handle player deaths - mob deaths are handled by MobDeathSystem
     if (data.entityType !== "player") {
@@ -438,6 +439,22 @@ export class PlayerDeathSystem extends SystemBase {
     }
 
     const playerId = data.entityId;
+
+    // CRITICAL: Use position from event first (captured at exact moment of death)
+    // Fall back to cache only if event doesn't include position
+    let deathPosition = data.deathPosition;
+    if (!deathPosition) {
+      deathPosition = this.playerPositions.get(playerId);
+    }
+    if (!deathPosition) {
+      const playerEntity = this.world.entities?.get?.(playerId);
+      if (playerEntity) {
+        const entityPos = getEntityPosition(playerEntity);
+        if (entityPos) {
+          deathPosition = { x: entityPos.x, y: entityPos.y, z: entityPos.z };
+        }
+      }
+    }
 
     // Check if player is in an active duel - DuelSystem handles duel deaths
     // No gravestone or item drops should occur during duels (OSRS-accurate)
@@ -460,19 +477,6 @@ export class PlayerDeathSystem extends SystemBase {
         console.log(
           `[PlayerDeathSystem] Cancelled scheduled emote reset for duel death: ${playerId}`,
         );
-      }
-
-      // Get death position for the death animation (same as regular death)
-      // Without this, clients don't know where to show the death animation
-      let deathPosition = this.playerPositions.get(playerId);
-      if (!deathPosition) {
-        const playerEntity = this.world.entities?.get?.(playerId);
-        if (playerEntity) {
-          const entityPos = getEntityPosition(playerEntity);
-          if (entityPos) {
-            deathPosition = { x: entityPos.x, y: entityPos.y, z: entityPos.z };
-          }
-        }
       }
 
       // Still emit death state and play animation for duel deaths
@@ -512,19 +516,9 @@ export class PlayerDeathSystem extends SystemBase {
       return;
     }
 
-    // Get player's current position - try multiple sources for robustness
-    let position = this.playerPositions.get(playerId);
-
-    if (!position) {
-      // Fallback 1: Try to get position from player entity
-      const playerEntity = this.world.entities?.get?.(playerId);
-      if (playerEntity) {
-        const entityPos = getEntityPosition(playerEntity);
-        if (entityPos) {
-          position = { x: entityPos.x, y: entityPos.y, z: entityPos.z };
-        }
-      }
-    }
+    // Use the deathPosition already captured at the top of this function
+    // (from event data first, then fallbacks)
+    let position = deathPosition;
 
     if (!position) {
       // Fallback 2: Try to get from player system

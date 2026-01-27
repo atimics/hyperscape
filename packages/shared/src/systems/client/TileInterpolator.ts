@@ -1039,6 +1039,34 @@ export class TileInterpolator {
   }
 
   /**
+   * Stop all movement for an entity (e.g., on death)
+   *
+   * Clears the movement path and resets to idle emote.
+   * Used when an entity dies to prevent continued movement after death.
+   *
+   * @param entityId - Entity to stop
+   * @param position - Optional position to snap to (e.g., death position)
+   */
+  stopMovement(
+    entityId: string,
+    position?: { x: number; y: number; z: number },
+  ): void {
+    const state = this.entityStates.get(entityId);
+    if (!state) return;
+
+    // Clear movement path
+    state.fullPath = [];
+    state.targetTileIndex = 0;
+    state.isMoving = false;
+
+    // Snap to position if provided
+    if (position) {
+      state.visualPosition.set(position.x, position.y, position.z);
+      state.targetWorldPos.set(position.x, position.y, position.z);
+    }
+  }
+
+  /**
    * Set combat rotation for an entity (AAA Single Source of Truth)
    *
    * When combat rotation arrives via entityModified, it should be routed here

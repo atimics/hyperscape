@@ -509,13 +509,24 @@ export class EventBridge {
       // Forward player death state changes to ALL clients
       // CRITICAL: Broadcast to all so other players see death animation and position updates
       this.world.on(EventType.PLAYER_SET_DEAD, (payload: unknown) => {
-        const data = payload as { playerId: string; isDead: boolean };
+        const data = payload as {
+          playerId: string;
+          isDead: boolean;
+          deathPosition?:
+            | { x: number; y: number; z: number }
+            | [number, number, number];
+        };
 
         if (data.playerId) {
           // Broadcast to ALL players so they can:
           // 1. See death animation on the dying player
           // 2. Clear tile interpolator state (allows respawn position to apply)
-          this.broadcast.sendToAll("playerSetDead", data);
+          // CRITICAL: Include deathPosition so clients can position death animation correctly
+          this.broadcast.sendToAll("playerSetDead", {
+            playerId: data.playerId,
+            isDead: data.isDead,
+            deathPosition: data.deathPosition,
+          });
 
           // CRITICAL: Also broadcast entityModified with death animation
           // Without this, remote players won't see the death animation play

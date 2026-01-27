@@ -3244,6 +3244,12 @@ export class ClientNetwork extends SystemBase {
             posArray = [x, y, z];
           }
 
+          // CRITICAL: Stop TileInterpolator movement to prevent position fighting
+          // This ensures the death animation plays at the correct position
+          if (this.tileInterpolator) {
+            this.tileInterpolator.stopMovement(data.playerId, { x, y, z });
+          }
+
           // Apply death position and emote together
           entity.modify({
             p: posArray,
