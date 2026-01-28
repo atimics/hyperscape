@@ -27,6 +27,7 @@ import type {
   MinimapWrapperProps,
 } from "./types";
 import { Minimap } from "../hud/Minimap";
+import { MinimapOverlayControls } from "../hud/MinimapOverlayControls";
 
 /**
  * WindowContent - Renders the active tab content
@@ -386,18 +387,21 @@ export function MinimapWrapper({
         overflow: "hidden",
       }}
     >
-      <Minimap
-        key={`minimap-${size}`}
-        world={world}
-        width={size}
-        height={size}
-        zoom={50}
-        isVisible={true}
-        resizable={false}
-        embedded={false}
-        dragHandleProps={dragHandleProps}
-        isUnlocked={isUnlocked}
-      />
+      <div style={{ position: "relative", width: size, height: size }}>
+        <Minimap
+          key={`minimap-${size}`}
+          world={world}
+          width={size}
+          height={size}
+          zoom={10}
+          isVisible={true}
+          resizable={false}
+          embedded={true}
+          dragHandleProps={dragHandleProps}
+          isUnlocked={isUnlocked}
+        />
+        <MinimapOverlayControls world={world} width={size} height={size} />
+      </div>
     </div>
   );
 }

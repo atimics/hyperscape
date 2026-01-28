@@ -15,8 +15,6 @@ import { useThemeStore } from "@/ui";
 import { Entity, THREE, createRenderer } from "@hyperscape/shared";
 import type { UniversalRenderer } from "@hyperscape/shared";
 import type { ClientWorld } from "../../types";
-import { MinimapStaminaOrb } from "./MinimapStaminaBar";
-import { MinimapHomeTeleportOrb } from "./MinimapHomeTeleportOrb";
 import { ThreeResourceManager } from "../../lib/ThreeResourceManager";
 
 // === PRE-ALLOCATED VECTORS FOR HOT PATHS ===
@@ -37,40 +35,9 @@ const _tempUnprojectVec = new THREE.Vector3();
 /** Pre-allocated position object for RAF loop target position - avoids GC pressure */
 const _tempTargetPos: { x: number; z: number } = { x: 0, z: 0 };
 
-// === VECTOR3 POOL FOR ENTITY PIPS ===
-// Reduces GC pressure when entities spawn/despawn frequently
-
-/** Pool of reusable Vector3 objects for entity pips */
-const _vector3Pool: THREE.Vector3[] = [];
-
-/** Maximum pool size to prevent unbounded memory growth */
-const MAX_POOL_SIZE = 200;
-
-/**
- * Acquire a Vector3 from the pool or create a new one
- * @param x Optional initial x coordinate
- * @param y Optional initial y coordinate
- * @param z Optional initial z coordinate
- */
-function acquireVector3(x = 0, y = 0, z = 0): THREE.Vector3 {
-  const vec = _vector3Pool.pop();
-  if (vec) {
-    return vec.set(x, y, z);
-  }
-  return new THREE.Vector3(x, y, z);
-}
-
-/**
- * Release a Vector3 back to the pool for reuse
- * @param vec The Vector3 to release
- */
-function releaseVector3(vec: THREE.Vector3): void {
-  if (_vector3Pool.length < MAX_POOL_SIZE) {
-    vec.set(0, 0, 0); // Reset to prevent stale data
-    _vector3Pool.push(vec);
-  }
-  // If pool is full, let GC collect it (rare case)
-}
+/** Cached projection-view matrix from last 3D render - keeps pips synced with throttled 3D */
+const _cachedProjectionViewMatrix = new THREE.Matrix4();
+let _hasCachedMatrix = false;
 
 interface EntityPip {
   id: string;
@@ -187,169 +154,27 @@ interface MinimapProps {
   dragHandleProps?: DragHandleProps;
   /** Whether edit mode is unlocked (shows drag border) */
   isUnlocked?: boolean;
-  /** If true, hides overlay controls (compass, stamina, teleport) - use MinimapOverlayControls externally */
-  hideOverlayControls?: boolean;
-}
-
-/**
- * Props for the MinimapOverlayControls component
- */
-interface MinimapOverlayControlsProps {
-  world: ClientWorld;
-  /** Size of the control buttons (default: 40) */
-  buttonSize?: number;
-  /** Padding from edges (default: 4) */
-  padding?: number;
-  /** Optional callback when compass is clicked to reset camera */
-  onCompassClick?: () => void;
-}
-
-/**
- * Reusable overlay controls for minimap - compass, stamina, and teleport buttons.
- * Position this absolutely over the minimap container for proper overlay behavior.
- */
-export function MinimapOverlayControls({
-  world,
-  buttonSize = 40,
-  padding = 4,
-  onCompassClick,
-}: MinimapOverlayControlsProps) {
-  const [yawDeg, setYawDeg] = useState<number>(0);
-
-  // Track camera rotation for compass
-  useEffect(() => {
-    let rafId: number | null = null;
-    const tempForward = new THREE.Vector3();
-
-    const loop = () => {
-      if (world.camera) {
-        world.camera.getWorldDirection(tempForward);
-        tempForward.y = 0;
-        if (tempForward.lengthSq() > 1e-6) {
-          tempForward.normalize();
-          const yaw = Math.atan2(tempForward.x, -tempForward.z);
-          const newYawDeg = THREE.MathUtils.radToDeg(yaw);
-          setYawDeg((prev) =>
-            Math.abs(prev - newYawDeg) > 0.1 ? newYawDeg : prev,
-          );
-        }
-      }
-      rafId = requestAnimationFrame(loop);
-    };
-    rafId = requestAnimationFrame(loop);
-    return () => {
-      if (rafId !== null) window.cancelAnimationFrame(rafId);
-    };
-  }, [world]);
-
-  const handleCompassClick = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (onCompassClick) {
-        onCompassClick();
-      } else {
-        // Default behavior: reset camera to face North
-        const camSys = world.getSystem("client-camera-system") as {
-          resetCamera?: () => void;
-        } | null;
-        camSys?.resetCamera?.();
-      }
-    },
-    [world, onCompassClick],
-  );
-
-  return (
-    <>
-      {/* Compass - top left */}
-      <div
-        onClick={handleCompassClick}
-        onMouseDown={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-        }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-        }}
-        className="absolute rounded-full border border-white/60 bg-black/60 flex items-center justify-center cursor-pointer z-30 pointer-events-auto touch-manipulation"
-        style={{
-          top: padding,
-          left: padding,
-          width: buttonSize,
-          height: buttonSize,
-        }}
-        title="Click to face North"
-      >
-        <div
-          className="relative pointer-events-none"
-          style={{
-            width: buttonSize * 0.7,
-            height: buttonSize * 0.7,
-            transform: `rotate(${yawDeg}deg)`,
-          }}
-        >
-          <div className="absolute inset-0 rounded-full border border-white/50 pointer-events-none" />
-          <div className="absolute left-1/2 top-0.5 -translate-x-1/2 text-[11px] text-red-500 font-semibold shadow-[0_1px_1px_rgba(0,0,0,0.8)] pointer-events-none">
-            N
-          </div>
-          <div className="absolute left-1/2 bottom-0.5 -translate-x-1/2 text-[9px] text-white/70 pointer-events-none">
-            S
-          </div>
-          <div className="absolute top-1/2 left-0.5 -translate-y-1/2 text-[9px] text-white/70 pointer-events-none">
-            W
-          </div>
-          <div className="absolute top-1/2 right-0.5 -translate-y-1/2 text-[9px] text-white/70 pointer-events-none">
-            E
-          </div>
-        </div>
-      </div>
-
-      {/* Home Teleport Orb - bottom left */}
-      <div
-        className="absolute z-30 pointer-events-auto"
-        style={{
-          bottom: padding,
-          left: padding,
-        }}
-      >
-        <MinimapHomeTeleportOrb world={world} size={buttonSize} />
-      </div>
-
-      {/* Stamina Orb - bottom right */}
-      <div
-        className="absolute z-30 pointer-events-auto"
-        style={{
-          bottom: padding,
-          right: padding,
-        }}
-      >
-        <MinimapStaminaOrb world={world} size={buttonSize} />
-      </div>
-    </>
-  );
 }
 
 export function Minimap({
   world,
   width: initialWidth = 200,
   height: initialHeight = 200,
-  zoom = 25,
+  zoom = 10,
   className = "",
   style = {},
-  onCompassClick,
+  onCompassClick: _onCompassClick,
   isVisible = true,
   resizable = true,
   onSizeChange,
-  minSize = 120,
+  minSize = 80,
   maxSize,
-  embedded = false,
+  embedded: _embedded = false,
   collapsible = false,
   defaultCollapsed = false,
   onCollapseChange,
   dragHandleProps,
   isUnlocked = false,
-  hideOverlayControls = false,
 }: MinimapProps) {
   const theme = useThemeStore((s) => s.theme);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -381,9 +206,15 @@ export function Minimap({
   const width = currentWidth;
   const height = currentHeight;
 
-  // Refs for width/height so render loop can access current values
-  const widthRef = useRef<number>(width);
-  const heightRef = useRef<number>(height);
+  // Refs for width/height to allow RAF loop to access current values without stale closures
+  const widthRef = useRef(width);
+  const heightRef = useRef(height);
+
+  // Keep dimension refs updated for RAF loop access
+  useEffect(() => {
+    widthRef.current = width;
+    heightRef.current = height;
+  }, [width, height]);
 
   // Resize state
   const [isResizing, setIsResizing] = useState(false);
@@ -396,7 +227,6 @@ export function Minimap({
 
   // Calculate extent based on size - larger size = more visible area (not scaled)
   // Use the average of width/height to determine extent
-  // This creates "frame over canvas" behavior - resizing reveals more/less map
   const sizeBasedExtent = useMemo(() => {
     // Base extent at 200px is the initial zoom value
     // When size increases, we reveal more map (increase extent proportionally)
@@ -416,17 +246,6 @@ export function Minimap({
   useEffect(() => {
     setExtent(sizeBasedExtent);
   }, [sizeBasedExtent]);
-
-  // Keep refs in sync with state for render loop access
-  useEffect(() => {
-    extentRef.current = extent;
-  }, [extent]);
-
-  // Keep width/height refs in sync
-  useEffect(() => {
-    widthRef.current = width;
-    heightRef.current = height;
-  }, [width, height]);
 
   // Rotation: follow main camera yaw (RS3-like) with North toggle
   const [rotateWithCamera] = useState<boolean>(true);
@@ -465,7 +284,6 @@ export function Minimap({
     // console.log('[Minimap] Initializing renderer...');
 
     // Create orthographic camera for overhead view - much higher up
-    // Square frustum ensures consistent map scale regardless of panel shape
     const camera = new THREE.OrthographicCamera(
       -extent,
       extent,
@@ -807,11 +625,11 @@ export function Minimap({
             entityPip.type = type;
             entityPip.color = color;
           } else {
-            // New entity - acquire Vector3 from pool instead of allocating new
+            // New entity, create a new Vector3
             entityPip = {
               id: entity.id,
               type,
-              position: acquireVector3(pos.x, 0, pos.z),
+              position: new THREE.Vector3(pos.x, 0, pos.z),
               color,
             };
             entityCacheRef.current.set(entity.id, entityPip);
@@ -822,15 +640,10 @@ export function Minimap({
       }
 
       // Clean up cache: remove entities that are no longer present
-      // Release Vector3 objects back to pool when entities despawn
+      // This prevents stale pips from entities that despawned
       const cacheKeys = entityCacheRef.current.keys();
       for (const id of cacheKeys) {
         if (!seenIds.has(id)) {
-          const removedPip = entityCacheRef.current.get(id);
-          if (removedPip) {
-            // Return Vector3 to pool for reuse
-            releaseVector3(removedPip.position);
-          }
           entityCacheRef.current.delete(id);
         }
       }
@@ -960,12 +773,9 @@ export function Minimap({
         }
       }
 
-      // --- Camera Frustum Update (square frustum for consistent map scale) ---
-      // Using same extent on all sides ensures map scale stays constant
-      // Resizing reveals more/less map (frame over canvas behavior)
+      // --- Camera Frustum Update (for zoom) ---
       if (cam) {
         const currentExtent = extentRef.current;
-
         if (cam.right !== currentExtent) {
           cam.left = -currentExtent;
           cam.right = currentExtent;
@@ -1012,6 +822,14 @@ export function Minimap({
 
         rendererRef.current.render(sceneRef.current, cam);
 
+        // Cache the projection-view matrix used for this render
+        // This keeps pip positions synced with the throttled 3D background
+        _cachedProjectionViewMatrix.multiplyMatrices(
+          cam.projectionMatrix,
+          cam.matrixWorldInverse,
+        );
+        _hasCachedMatrix = true;
+
         // Restore fog for main camera
         sceneRef.current.fog = savedFog;
         if (terrainMat?.terrainUniforms) {
@@ -1035,20 +853,25 @@ export function Minimap({
         const pipsArray = entityPipsRefForRender.current;
         for (let pipIdx = 0; pipIdx < pipsArray.length; pipIdx++) {
           const pip = pipsArray[pipIdx];
-          // Convert world position to screen position
-          if (cameraRef.current) {
+          // Convert world position to screen position using cached matrix
+          // This keeps pips synced with the throttled 3D render (not the live camera)
+          if (_hasCachedMatrix) {
             // Reuse pre-allocated vector instead of cloning to avoid GC pressure
             _tempProjectVec.copy(pip.position);
-            _tempProjectVec.project(cameraRef.current);
+            // Apply cached projection-view matrix manually instead of using project()
+            _tempProjectVec.applyMatrix4(_cachedProjectionViewMatrix);
 
-            // Use refs to get current width/height (not stale closure values)
-            const currentWidth = widthRef.current;
-            const currentHeight = heightRef.current;
-            const x = (_tempProjectVec.x * 0.5 + 0.5) * currentWidth;
-            const y = (_tempProjectVec.y * -0.5 + 0.5) * currentHeight;
+            // Use refs for width/height to avoid stale closure values during resize
+            const x = (_tempProjectVec.x * 0.5 + 0.5) * widthRef.current;
+            const y = (_tempProjectVec.y * -0.5 + 0.5) * heightRef.current;
 
-            // Only draw if within bounds
-            if (x >= 0 && x <= currentWidth && y >= 0 && y <= currentHeight) {
+            // Only draw if within bounds (use refs for current dimensions)
+            if (
+              x >= 0 &&
+              x <= widthRef.current &&
+              y >= 0 &&
+              y <= heightRef.current
+            ) {
               // Set pip properties based on type
               let radius = 3;
               let borderColor = "#ffffff";
@@ -1187,15 +1010,14 @@ export function Minimap({
             : destWorldRef
               ? { x: destWorldRef.x, z: destWorldRef.z }
               : null;
-        if (target && cameraRef.current) {
+        if (target && _hasCachedMatrix) {
           // Reuse pre-allocated vector instead of creating new one
           _tempDestVec.set(target.x, 0, target.z);
-          _tempDestVec.project(cameraRef.current);
-          // Use refs to get current width/height (not stale closure values)
-          const destWidth = widthRef.current;
-          const destHeight = heightRef.current;
-          const sx = (_tempDestVec.x * 0.5 + 0.5) * destWidth;
-          const sy = (_tempDestVec.y * -0.5 + 0.5) * destHeight;
+          // Apply cached projection-view matrix to stay synced with throttled 3D render
+          _tempDestVec.applyMatrix4(_cachedProjectionViewMatrix);
+          // Use refs for width/height to avoid stale closure values during resize
+          const sx = (_tempDestVec.x * 0.5 + 0.5) * widthRef.current;
+          const sy = (_tempDestVec.y * -0.5 + 0.5) * heightRef.current;
           ctx.save();
           ctx.globalAlpha = 1;
           ctx.fillStyle = "#ff3333";
@@ -1331,7 +1153,6 @@ export function Minimap({
         Math.min(5, Math.round(Math.abs(e.deltaY) / 100)),
       );
       // Use functional update to always have the latest extent value
-      // Positive deltaY = zoom out (increase extent), negative = zoom in (decrease extent)
       setExtent((prev) =>
         THREE.MathUtils.clamp(
           prev + sign * steps * STEP_EXTENT,
@@ -1356,7 +1177,7 @@ export function Minimap({
     };
   }, [handleWheel]);
 
-  // Resize handlers for corner drag
+  // Resize handlers for corner drag - allows independent width and height
   const handleResizeStart = useCallback(
     (e: React.PointerEvent, corner: "se" | "sw" | "ne" | "nw") => {
       if (!resizable) return;
@@ -1378,32 +1199,37 @@ export function Minimap({
         const dy = moveEvent.clientY - resizeStartRef.current.y;
 
         let newW = resizeStartRef.current.w;
+        let newH = resizeStartRef.current.h;
 
         // Calculate new size based on corner being dragged
-        // For square minimap, use the larger dimension change
+        // Width and height are independent - no longer forcing square
         if (corner === "se") {
-          const delta = Math.max(dx, dy);
-          newW = resizeStartRef.current.w + delta;
+          newW = resizeStartRef.current.w + dx;
+          newH = resizeStartRef.current.h + dy;
         } else if (corner === "sw") {
-          const delta = Math.max(-dx, dy);
-          newW = resizeStartRef.current.w + delta;
+          newW = resizeStartRef.current.w - dx;
+          newH = resizeStartRef.current.h + dy;
         } else if (corner === "ne") {
-          const delta = Math.max(dx, -dy);
-          newW = resizeStartRef.current.w + delta;
+          newW = resizeStartRef.current.w + dx;
+          newH = resizeStartRef.current.h - dy;
         } else if (corner === "nw") {
-          const delta = Math.max(-dx, -dy);
-          newW = resizeStartRef.current.w + delta;
+          newW = resizeStartRef.current.w - dx;
+          newH = resizeStartRef.current.h - dy;
         }
 
-        // Keep it square and clamp to bounds (use newW since minimap is always square)
+        // Clamp to bounds independently for width and height
         // If maxSize is not specified, allow unlimited resizing (use very large number)
         const effectiveMaxSize = maxSize ?? 9999;
-        const size = Math.max(
+        const clampedW = Math.max(
           minSize,
           Math.min(effectiveMaxSize, Math.round(newW / 8) * 8),
         );
-        setCurrentWidth(size);
-        setCurrentHeight(size);
+        const clampedH = Math.max(
+          minSize,
+          Math.min(effectiveMaxSize, Math.round(newH / 8) * 8),
+        );
+        setCurrentWidth(clampedW);
+        setCurrentHeight(clampedH);
       };
 
       const handleUp = () => {
@@ -1513,67 +1339,6 @@ export function Minimap({
           e.stopPropagation();
         }}
       />
-      {/* Compass control - only shown when not being managed externally and not hidden */}
-      {!onCompassClick && !hideOverlayControls && (
-        <div
-          title="Click to face North"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const cam = cameraRef.current;
-            if (cam) {
-              cam.up.set(0, 0, -1);
-            }
-            // Reorient main camera to face North (RS3-like) using camera system directly
-            const camSys = world.getSystem("client-camera-system") as {
-              resetCamera?: () => void;
-            } | null;
-            camSys?.resetCamera?.();
-          }}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          onTouchStart={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          onWheel={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          className="absolute rounded-full border border-white/60 bg-black/60 flex items-center justify-center cursor-pointer z-10 pointer-events-auto touch-manipulation"
-          style={{
-            top: 4,
-            left: 4,
-            width: 40,
-            height: 40,
-          }}
-        >
-          <div
-            className="relative w-7 h-7 pointer-events-none"
-            style={{ transform: `rotate(${yawDeg}deg)` }}
-          >
-            {/* Rotating ring */}
-            <div className="absolute inset-0 rounded-full border border-white/50 pointer-events-none" />
-            {/* N marker at top of compass (rotates with ring) */}
-            <div className="absolute left-1/2 top-0.5 -translate-x-1/2 text-[11px] text-red-500 font-semibold shadow-[0_1px_1px_rgba(0,0,0,0.8)] pointer-events-none">
-              N
-            </div>
-            {/* S/E/W faint labels */}
-            <div className="absolute left-1/2 bottom-0.5 -translate-x-1/2 text-[9px] text-white/70 pointer-events-none">
-              S
-            </div>
-            <div className="absolute top-1/2 left-0.5 -translate-y-1/2 text-[9px] text-white/70 pointer-events-none">
-              W
-            </div>
-            <div className="absolute top-1/2 right-0.5 -translate-y-1/2 text-[9px] text-white/70 pointer-events-none">
-              E
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Resize handles (SE corner only for simplicity) */}
       {resizable && (
         <div
@@ -1642,32 +1407,6 @@ export function Minimap({
         >
           −
         </button>
-      )}
-
-      {/* Home Teleport Orb - bottom left corner (always visible, fixed size overlay) */}
-      {!embedded && !hideOverlayControls && (
-        <div
-          className="absolute z-20 pointer-events-auto"
-          style={{
-            bottom: 4,
-            left: 4,
-          }}
-        >
-          <MinimapHomeTeleportOrb world={world} size={40} />
-        </div>
-      )}
-
-      {/* Stamina Orb - bottom right corner (always visible, fixed size overlay) */}
-      {!embedded && !hideOverlayControls && (
-        <div
-          className="absolute z-20 pointer-events-auto"
-          style={{
-            bottom: 4,
-            right: 4,
-          }}
-        >
-          <MinimapStaminaOrb world={world} size={40} />
-        </div>
       )}
     </div>
   );

@@ -26,7 +26,8 @@ import type {
   PlayerEquipmentItems,
 } from "../../types";
 import type { PlayerStats } from "@hyperscape/shared";
-import { Minimap, MinimapOverlayControls } from "../../game/hud/Minimap";
+import { Minimap } from "../../game/hud/Minimap";
+import { MinimapOverlayControls } from "../../game/hud/MinimapOverlayControls";
 import { MenuButton, type MenuIconName } from "@/ui";
 import { ChatPanel } from "../../game/panels/ChatPanel";
 import {
@@ -484,19 +485,20 @@ export const PANEL_CONFIG: Record<string, PanelConfig> = {
       landscapePosition: "modal",
     },
   },
-  // Minimap - no max size for flexible resizing, no aspect ratio for independent width/height
+  // Minimap - three-layer architecture with minimal constraints
+  // Layer 1: Fixed canvas (512x512), Layer 2: Resizable viewport, Layer 3: Overlay
   minimap: {
-    minSize: { width: 235, height: 235 },
-    preferredSize: { width: 550, height: 550 },
-    // No maxSize - allow unlimited resizing in edit mode
-    // No aspectRatio - allow independent width/height resizing
+    minSize: { width: 80, height: 80 }, // Very minimal - can go nearly as small as needed
+    preferredSize: { width: 300, height: 300 },
+    // No maxSize - allow near-fullscreen resizing
+    // No aspectRatio - width and height resize independently
     scrollable: false,
     resizable: true,
-    scaleFactor: { min: 0.6, max: 1.2 },
+    scaleFactor: { min: 0.4, max: 1.5 }, // Wide range for flexibility
     responsive: {
-      mobile: { width: 260, height: 260 },
-      tablet: { width: 420, height: 420 },
-      desktop: { width: 550, height: 550 },
+      mobile: { width: 150, height: 150 },
+      tablet: { width: 250, height: 250 },
+      desktop: { width: 300, height: 300 },
     },
     mobileLayout: {
       drawerType: "overlay",
@@ -882,23 +884,25 @@ function MinimapPanel({ world }: { world: ClientWorld }): React.ReactElement {
         position: "absolute",
         // Leave small margin for Window resize handles
         inset: 2,
-        overflow: "hidden",
       }}
     >
-      {/* Minimap canvas - renders the map, controls hidden */}
+      {/* Minimap with 3D canvas and 2D overlay for pips */}
+      {/* Note: No dimension-based key - component handles size changes internally */}
       <Minimap
-        key={`minimap-${dimensions.width}-${dimensions.height}`}
         world={world}
         width={dimensions.width}
         height={dimensions.height}
-        zoom={50}
+        zoom={10}
         isVisible={true}
         resizable={false}
-        embedded={false}
-        hideOverlayControls={true}
+        embedded={true}
       />
-      {/* Overlay controls - positioned on top, fixed size regardless of minimap size */}
-      <MinimapOverlayControls world={world} buttonSize={40} padding={6} />
+      {/* Overlay controls (compass, teleport, stamina) as sibling - scales with minimap */}
+      <MinimapOverlayControls
+        world={world}
+        width={dimensions.width}
+        height={dimensions.height}
+      />
     </div>
   );
 }

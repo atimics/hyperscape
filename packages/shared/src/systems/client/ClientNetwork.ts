@@ -698,6 +698,18 @@ export class ClientNetwork extends SystemBase {
     }
   };
 
+  /**
+   * Handler for authResult packets.
+   * This is a no-op because auth is handled by the temporary handleAuthResult listener
+   * during the connection phase. This method exists to prevent "No handler" warnings
+   * when the packet is also received by the general onPacket handler.
+   */
+  onAuthResult(_data: { success: boolean; error?: string }): void {
+    // Auth is already handled in connect() by the temporary handleAuthResult listener.
+    // This handler exists to satisfy the flush() method's handler lookup.
+    this.logger.debug("onAuthResult received (already handled during connect)");
+  }
+
   async onSnapshot(data: SnapshotData) {
     this.id = data.id; // Store our network ID
     this.connected = true; // Mark as connected when we get the snapshot

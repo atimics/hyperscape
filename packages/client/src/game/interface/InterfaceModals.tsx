@@ -37,6 +37,7 @@ import { QuestStartPanel } from "../panels/QuestStartPanel";
 import { QuestCompletePanel } from "../panels/QuestCompletePanel";
 import { XpLampPanel } from "../panels/XpLampPanel";
 import { Minimap } from "../hud/Minimap";
+import { MinimapOverlayControls } from "../hud/MinimapOverlayControls";
 
 /**
  * FullscreenWorldMap - RuneScape-style fullscreen world map overlay
@@ -253,15 +254,28 @@ export function FullscreenWorldMap({
             background: theme.colors.background.primary,
           }}
         >
-          <Minimap
-            world={world}
-            width={mapDimensions.width}
-            height={mapDimensions.height}
-            zoom={60}
-            embedded={true}
-            resizable={false}
-            isVisible={true}
-          />
+          <div
+            style={{
+              position: "relative",
+              width: mapDimensions.width,
+              height: mapDimensions.height,
+            }}
+          >
+            <Minimap
+              world={world}
+              width={mapDimensions.width}
+              height={mapDimensions.height}
+              zoom={20}
+              embedded={true}
+              resizable={false}
+              isVisible={true}
+            />
+            <MinimapOverlayControls
+              world={world}
+              width={mapDimensions.width}
+              height={mapDimensions.height}
+            />
+          </div>
         </div>
 
         {/* Footer with legend and controls hint */}
