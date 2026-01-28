@@ -643,6 +643,10 @@ export async function handleEnterWorld(
               xp: savedData.constitutionXp,
             },
             ranged: { level: savedData.rangedLevel, xp: savedData.rangedXp },
+            magic: {
+              level: (savedData as { magicLevel?: number }).magicLevel || 1,
+              xp: (savedData as { magicXp?: number }).magicXp || 0,
+            },
             woodcutting: {
               level: savedData.woodcuttingLevel || 1,
               xp: savedData.woodcuttingXp || 0,
