@@ -1,0 +1,277 @@
+@import 'tailwindcss';
+
+/* Custom theme configuration */
+@theme {
+  /* Typography */
+  --font-display: 'Cinzel', serif;
+  --font-body: 'Rubik', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  
+  /* Gold palette */
+  --gold-essence: #d4a84b;
+  --gold-flame: #ffd866;
+  --gold-dim: #c49530;
+  --gold-ember: #b8860b;
+  
+  /* Background depths */
+  --bg-depth: #0a0a0c;
+  --bg-surface: #141416;
+  --bg-elevated: #1e1e22;
+  
+  /* Glass effects */
+  --glass-surface: rgba(10, 10, 12, 0.85);
+  --glass-border: rgba(45, 40, 32, 0.5);
+  --glass-highlight: rgba(212, 168, 75, 0.1);
+  
+  /* Blur values */
+  --blur-glass: 16px;
+  --blur-deep: 24px;
+  
+  /* Text colors */
+  --text-primary: #f5f0e8;
+  --text-secondary: #c4b896;
+  --text-muted: #7d7460;
+  
+  /* Border colors */
+  --border-subtle: #2d2820;
+  --border-bronze: #8b6914;
+  --border-focus: #e8c55a;
+}
+
+/* Base styles */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: #0a0a0c;
+  color: #f5f0e8;
+  overflow-x: hidden;
+}
+
+/* Selection */
+::selection {
+  background-color: rgba(212, 168, 75, 0.3);
+  color: var(--text-primary);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(212, 168, 75, 0.5);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 168, 75, 0.7);
+}
+
+/* Custom utility classes */
+
+/* Global container padding - reduced for more content space */
+.container-padding {
+  padding-left: 0.75rem;  /* 12px */
+  padding-right: 0.75rem;
+}
+
+@media (min-width: 640px) {
+  .container-padding {
+    padding-left: 1rem;   /* 16px */
+    padding-right: 1rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .container-padding {
+    padding-left: 1.5rem; /* 24px */
+    padding-right: 1.5rem;
+  }
+}
+
+.glass {
+  background: var(--glass-surface);
+  backdrop-filter: blur(var(--blur-glass));
+  -webkit-backdrop-filter: blur(var(--blur-glass));
+  border: 1px solid var(--glass-border);
+}
+
+.glow-gold {
+  filter: drop-shadow(0 0 20px rgba(212, 168, 75, 0.6));
+}
+
+.glow-gold-lg {
+  filter: drop-shadow(0 0 40px rgba(212, 168, 75, 0.8));
+}
+
+.text-gradient-gold {
+  background: linear-gradient(135deg, #d4a84b 0%, #ffd866 50%, #d4a84b 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.border-gradient-gold {
+  border: 1px solid transparent;
+  background: linear-gradient(var(--bg-surface), var(--bg-surface)) padding-box,
+              linear-gradient(135deg, var(--border-bronze) 0%, transparent 50%, var(--border-bronze) 100%) border-box;
+}
+
+/* Button styles */
+.btn-primary {
+  background: linear-gradient(135deg, var(--gold-essence) 0%, var(--gold-dim) 100%);
+  color: var(--bg-depth);
+  font-weight: 600;
+  border-radius: 0.5rem;
+  transition: all 0.2s ease;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 0 20px rgba(212, 168, 75, 0.3);
+}
+
+.btn-primary:hover {
+  background: linear-gradient(135deg, var(--gold-flame) 0%, var(--gold-essence) 100%);
+  box-shadow: 0 0 30px rgba(212, 168, 75, 0.5);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--text-primary);
+  font-weight: 500;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(212, 168, 75, 0.5);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.btn-secondary:hover {
+  border-color: var(--gold-essence);
+  background: var(--glass-highlight);
+}
+
+/* Social link styles */
+.social-link {
+  color: var(--text-muted);
+  transition: color 0.2s ease;
+}
+
+.social-link:hover {
+  color: var(--gold-essence);
+}
+
+/* Footer link styles */
+.footer-link {
+  color: var(--text-secondary);
+  transition: color 0.2s ease;
+}
+
+.footer-link:hover {
+  color: var(--gold-essence);
+}
+
+/* Shimmer animation for dividers */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(212, 168, 75, 0.3) 20%,
+    rgba(255, 216, 102, 0.5) 50%,
+    rgba(212, 168, 75, 0.3) 80%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 3s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* Slow zoom for hero background */
+.animate-slow-zoom {
+  animation: slowZoom 60s ease-in-out infinite alternate;
+}
+
+@keyframes slowZoom {
+  0% {
+    transform: scale(1);
+  }
+  100% {
+    transform: scale(1.08);
+  }
+}
+
+/* Float animation */
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+/* Glow pulse */
+.animate-glow-pulse {
+  animation: glowPulse 2s ease-in-out infinite;
+}
+
+@keyframes glowPulse {
+  0%, 100% {
+    filter: drop-shadow(0 0 20px rgba(212, 168, 75, 0.6));
+  }
+  50% {
+    filter: drop-shadow(0 0 30px rgba(212, 168, 75, 0.9));
+  }
+}
+
+/* Particle CSS fallback for low-end devices */
+.particle-fallback {
+  background: 
+    radial-gradient(circle at 20% 30%, rgba(212, 168, 75, 0.1) 0%, transparent 50%),
+    radial-gradient(circle at 80% 70%, rgba(255, 216, 102, 0.08) 0%, transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(212, 168, 75, 0.05) 0%, transparent 70%);
+}
+
+/* Hide scrollbar utility */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  
+  .animate-slow-zoom,
+  .animate-float,
+  .animate-glow-pulse {
+    animation: none !important;
+  }
+}
