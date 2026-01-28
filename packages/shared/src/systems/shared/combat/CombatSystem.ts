@@ -968,6 +968,7 @@ export class CombatSystem extends SystemBase {
       sourcePosition: attackerPos,
       targetPosition: targetPos,
       delayMs: 400, // Delay to match bow draw animation
+      arrowId: arrowSlot?.itemId ? String(arrowSlot.itemId) : undefined,
     });
 
     // Set cooldown and enter combat
