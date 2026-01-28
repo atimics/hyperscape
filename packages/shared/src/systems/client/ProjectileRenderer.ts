@@ -50,10 +50,21 @@ interface TrailSprite {
 interface ActiveProjectile {
   /** Main visual - sprite for spells, Group for arrows */
   sprite: THREE.Sprite | THREE.Group;
+  /** Current position of projectile */
+  currentPos: THREE.Vector3;
+  /** Starting position (for arc calculation) */
   startPos: THREE.Vector3;
-  endPos: THREE.Vector3;
+  /** Target position (updated each frame for tracking) */
+  targetPos: THREE.Vector3;
+  /** Total distance from start to original target (for arc calculation) */
+  totalDistance: number;
+  /** Distance traveled so far */
+  distanceTraveled: number;
+  /** Movement speed in units per second */
+  speed: number;
+  /** Max lifetime in ms (safety timeout) */
+  maxLifetime: number;
   startTime: number;
-  duration: number;
   type: "arrow" | "spell";
   spellId?: string;
   arrowId?: string;
@@ -67,8 +78,6 @@ interface ActiveProjectile {
   trailPositions: THREE.Vector3[];
   /** Current trail position index */
   trailIndex: number;
-  /** Base rotation for arrows (unused for 3D arrows) */
-  baseRotation: number;
 }
 
 /**
@@ -79,10 +88,11 @@ export class ProjectileRenderer extends System {
 
   private activeProjectiles: ActiveProjectile[] = [];
 
-  // Projectile timing constants
-  private readonly BASE_DURATION = 600; // Base flight time in ms
-  private readonly DISTANCE_FACTOR = 100; // Additional ms per tile
-  private readonly MAX_DURATION = 2000; // Max flight time
+  // Projectile movement constants
+  private readonly PROJECTILE_SPEED = 12; // Units per second (tiles ~= 1 unit)
+  private readonly ARROW_SPEED = 15; // Arrows are slightly faster
+  private readonly HIT_THRESHOLD = 0.5; // Distance to consider projectile "hit"
+  private readonly MAX_LIFETIME = 5000; // Safety timeout in ms
   private readonly TRAIL_UPDATE_INTERVAL = 16; // ~60fps trail updates
 
   // Pre-allocated for performance
@@ -431,8 +441,8 @@ export class ProjectileRenderer extends System {
         proj.attackerId === payload.attackerId &&
         proj.targetId === payload.targetId
       ) {
-        // Set duration to 0 to remove on next update
-        proj.duration = 0;
+        // Set maxLifetime to 0 to remove on next update
+        proj.maxLifetime = 0;
       }
     }
   };
@@ -453,18 +463,14 @@ export class ProjectileRenderer extends System {
       return;
     }
 
-    // Calculate duration based on distance
-    const dx = targetPos.x - sourcePos.x;
-    const dz = targetPos.z - sourcePos.z;
-    const distance = Math.sqrt(dx * dx + dz * dz);
-    const duration = Math.min(
-      this.BASE_DURATION + distance * this.DISTANCE_FACTOR,
-      this.MAX_DURATION,
-    );
-
     // Set initial position (slightly above ground)
     const startY = sourcePos.y + 1.2;
     const endY = targetPos.y + 1.0;
+
+    // Calculate initial distance for arc calculation
+    const dx = targetPos.x - sourcePos.x;
+    const dz = targetPos.z - sourcePos.z;
+    const totalDistance = Math.sqrt(dx * dx + dz * dz);
 
     // Get visual config
     let visualConfig: SpellVisualConfig | ArrowVisualConfig;
@@ -552,13 +558,19 @@ export class ProjectileRenderer extends System {
       }
     }
 
-    // Track projectile
+    // Track projectile with speed-based movement
+    const speed = type === "arrow" ? this.ARROW_SPEED : this.PROJECTILE_SPEED;
+
     this.activeProjectiles.push({
       sprite: projectileObject,
+      currentPos: new THREE.Vector3(sourcePos.x, startY, sourcePos.z),
       startPos: new THREE.Vector3(sourcePos.x, startY, sourcePos.z),
-      endPos: new THREE.Vector3(targetPos.x, endY, targetPos.z),
+      targetPos: new THREE.Vector3(targetPos.x, endY, targetPos.z),
+      totalDistance,
+      distanceTraveled: 0,
+      speed,
+      maxLifetime: this.MAX_LIFETIME,
       startTime: performance.now(),
-      duration,
       type,
       spellId,
       arrowId,
@@ -568,14 +580,31 @@ export class ProjectileRenderer extends System {
       trailSprites,
       trailPositions,
       trailIndex: 0,
-      baseRotation: 0,
     });
   }
 
   /**
-   * Update projectile positions each frame
+   * Get current position of a target entity (mob or player)
+   * Uses same pattern as DamageSplatSystem for reliable entity lookup
    */
-  update(_dt: number): void {
+  private getTargetPosition(targetId: string, outVec: THREE.Vector3): boolean {
+    // Use world.entities.get() - works for both mobs and players on client
+    const target = this.world.entities?.get(targetId) as {
+      position?: { x: number; y: number; z: number };
+    } | null;
+
+    if (target?.position) {
+      outVec.set(target.position.x, target.position.y + 1.0, target.position.z);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Update projectile positions each frame using speed-based homing
+   */
+  update(dt: number): void {
     if (!this.world.isClient) return;
 
     const now = performance.now();
@@ -590,30 +619,65 @@ export class ProjectileRenderer extends System {
     for (let i = 0; i < this.activeProjectiles.length; i++) {
       const proj = this.activeProjectiles[i];
       const elapsed = now - proj.startTime;
-      const progress = Math.min(elapsed / proj.duration, 1);
 
-      // Interpolate position
-      this._tempVec3.lerpVectors(proj.startPos, proj.endPos, progress);
+      // Safety timeout
+      if (elapsed > proj.maxLifetime) {
+        this.removeProjectile(proj);
+        this._toRemove.push(i);
+        continue;
+      }
 
-      // Add arc for arrows (parabolic trajectory)
-      if (proj.type === "arrow") {
+      // Track moving target - update targetPos with current target position
+      this.getTargetPosition(proj.targetId, proj.targetPos);
+
+      // Calculate direction to target
+      this._tempVec3.copy(proj.targetPos).sub(proj.currentPos);
+      const distanceToTarget = this._tempVec3.length();
+
+      // Check if we've hit the target
+      if (distanceToTarget < this.HIT_THRESHOLD) {
+        this.removeProjectile(proj);
+        this._toRemove.push(i);
+        continue;
+      }
+
+      // Normalize direction and move at constant speed
+      this._tempVec3.normalize();
+      const moveDistance = proj.speed * dt;
+      proj.distanceTraveled += moveDistance;
+
+      // Move toward target
+      proj.currentPos.addScaledVector(this._tempVec3, moveDistance);
+
+      // For arrows, add arc based on progress through total flight
+      if (proj.type === "arrow" && proj.totalDistance > 0) {
         const arrowConfig = proj.visualConfig as ArrowVisualConfig;
         const arcHeight = arrowConfig.arcHeight ?? 1.5;
 
-        // Parabola: height = 4 * h * t * (1 - t) where h is max height
-        const arcProgress = 4 * arcHeight * progress * (1 - progress);
-        this._tempVec3.y += arcProgress;
+        // Progress based on distance traveled vs total distance
+        const progress = Math.min(
+          proj.distanceTraveled / proj.totalDistance,
+          1,
+        );
 
-        // For 3D arrows, use lookAt to point toward next position
-        if (progress < 0.95 && proj.sprite instanceof THREE.Group) {
-          // Calculate look-ahead position for smooth orientation
-          const lookAhead = Math.min(progress + 0.1, 1);
-          this._tempVec3b.lerpVectors(proj.startPos, proj.endPos, lookAhead);
-          const lookAheadArc = 4 * arcHeight * lookAhead * (1 - lookAhead);
-          this._tempVec3b.y += lookAheadArc;
-          proj.sprite.lookAt(this._tempVec3b);
+        // Parabolic arc: height = 4 * h * t * (1 - t)
+        const arcOffset = 4 * arcHeight * progress * (1 - progress);
+
+        // Set position with arc
+        proj.sprite.position.set(
+          proj.currentPos.x,
+          proj.currentPos.y + arcOffset,
+          proj.currentPos.z,
+        );
+
+        // Point arrow toward target
+        if (proj.sprite instanceof THREE.Group) {
+          proj.sprite.lookAt(proj.targetPos);
         }
       } else {
+        // Spell - direct movement, no arc
+        proj.sprite.position.copy(proj.currentPos);
+
         // Spell effects: pulsing
         const spellConfig = proj.visualConfig as SpellVisualConfig;
         if (spellConfig.pulseSpeed && spellConfig.pulseAmount) {
@@ -626,28 +690,29 @@ export class ProjectileRenderer extends System {
         }
       }
 
-      proj.sprite.position.copy(this._tempVec3);
-
       // Update trail for spells
       if (
         proj.type === "spell" &&
         proj.trailSprites.length > 0 &&
         shouldUpdateTrail
       ) {
+        // Progress approximation for trail opacity
+        const progress =
+          proj.totalDistance > 0
+            ? Math.min(proj.distanceTraveled / proj.totalDistance, 1)
+            : 0.5;
         this.updateTrail(proj, progress);
       }
 
-      // Fade out near end
-      if (progress > 0.8) {
-        const fadeProgress = (progress - 0.8) / 0.2;
+      // Fade out when very close to target
+      if (distanceToTarget < this.HIT_THRESHOLD * 3) {
+        const fadeProgress = 1 - distanceToTarget / (this.HIT_THRESHOLD * 3);
 
         if (proj.sprite instanceof THREE.Sprite) {
-          // Fade sprite (spell)
           if (proj.sprite.material instanceof THREE.SpriteMaterial) {
             proj.sprite.material.opacity = 1 - fadeProgress;
           }
 
-          // Fade trail too
           for (const trail of proj.trailSprites) {
             if (trail.sprite.material instanceof THREE.SpriteMaterial) {
               const baseOpacity = this.getTrailOpacity(
@@ -659,7 +724,6 @@ export class ProjectileRenderer extends System {
             }
           }
         } else if (proj.sprite instanceof THREE.Group) {
-          // Fade 3D arrow by adjusting child mesh materials
           proj.sprite.traverse((child) => {
             if (child instanceof THREE.Mesh && child.material) {
               const mat = child.material as THREE.MeshBasicMaterial;
@@ -668,12 +732,6 @@ export class ProjectileRenderer extends System {
             }
           });
         }
-      }
-
-      // Mark for removal when done
-      if (progress >= 1) {
-        this.removeProjectile(proj);
-        this._toRemove.push(i);
       }
     }
 

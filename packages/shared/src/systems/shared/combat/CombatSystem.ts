@@ -967,6 +967,7 @@ export class CombatSystem extends SystemBase {
       projectileType: "arrow",
       sourcePosition: attackerPos,
       targetPosition: targetPos,
+      delayMs: 400, // Delay to match bow draw animation
     });
 
     // Set cooldown and enter combat

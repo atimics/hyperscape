@@ -164,7 +164,7 @@ export const ARROW_VISUALS: Readonly<Record<string, ArrowVisualConfig>> =
       length: 0.6,
       width: 0.15,
       rotateToDirection: true,
-      arcHeight: 1.5,
+      arcHeight: 0, // Straight line trajectory
     },
 
     bronze_arrow: {
@@ -174,7 +174,7 @@ export const ARROW_VISUALS: Readonly<Record<string, ArrowVisualConfig>> =
       length: 0.6,
       width: 0.15,
       rotateToDirection: true,
-      arcHeight: 1.5,
+      arcHeight: 0,
     },
 
     iron_arrow: {
@@ -184,7 +184,7 @@ export const ARROW_VISUALS: Readonly<Record<string, ArrowVisualConfig>> =
       length: 0.6,
       width: 0.15,
       rotateToDirection: true,
-      arcHeight: 1.4,
+      arcHeight: 0,
     },
 
     steel_arrow: {
@@ -194,7 +194,7 @@ export const ARROW_VISUALS: Readonly<Record<string, ArrowVisualConfig>> =
       length: 0.6,
       width: 0.15,
       rotateToDirection: true,
-      arcHeight: 1.3,
+      arcHeight: 0,
     },
 
     mithril_arrow: {
@@ -204,7 +204,7 @@ export const ARROW_VISUALS: Readonly<Record<string, ArrowVisualConfig>> =
       length: 0.6,
       width: 0.15,
       rotateToDirection: true,
-      arcHeight: 1.2,
+      arcHeight: 0,
     },
 
     adamant_arrow: {
@@ -214,7 +214,7 @@ export const ARROW_VISUALS: Readonly<Record<string, ArrowVisualConfig>> =
       length: 0.6,
       width: 0.15,
       rotateToDirection: true,
-      arcHeight: 1.1,
+      arcHeight: 0,
     },
   });
 
