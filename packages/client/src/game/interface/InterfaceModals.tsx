@@ -738,7 +738,7 @@ export function InterfaceModalsRenderer({
           visible={true}
           onClose={() => {
             setStoreData(null);
-            world?.network?.send?.("store_close", {
+            world?.network?.send?.("storeClose", {
               storeId: storeData.storeId,
             });
           }}
@@ -756,7 +756,7 @@ export function InterfaceModalsRenderer({
             npcEntityId={storeData.npcEntityId}
             onClose={() => {
               setStoreData(null);
-              world?.network?.send?.("store_close", {
+              world?.network?.send?.("storeClose", {
                 storeId: storeData.storeId,
               });
             }}

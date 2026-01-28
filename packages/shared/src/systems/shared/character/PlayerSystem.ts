@@ -52,6 +52,7 @@ import {
   getAvailableStyles,
 } from "../../../constants/WeaponStyleConfig";
 import type { CombatStyle } from "../../../utils/game/CombatCalculations";
+import type { CombatStyleExtended } from "../../../types/game/combat-types";
 import type {
   HealthUpdateEvent,
   PlayerDeathEvent,
@@ -177,6 +178,47 @@ export class PlayerSystem extends SystemBase {
       },
       icon: "⚖️",
     },
+
+    // Ranged combat styles (OSRS-accurate)
+    rapid: {
+      id: "rapid",
+      name: "Rapid",
+      description: "Faster attacks. Train Ranged.",
+      xpDistribution: {
+        attack: 0,
+        strength: 0,
+        defense: 0,
+        constitution: 0,
+      },
+      icon: "⚡",
+    },
+
+    longrange: {
+      id: "longrange",
+      name: "Longrange",
+      description: "Increased range. Train Ranged and Defense.",
+      xpDistribution: {
+        attack: 0,
+        strength: 0,
+        defense: 50,
+        constitution: 0,
+      },
+      icon: "🔭",
+    },
+
+    // Magic combat styles (OSRS-accurate)
+    autocast: {
+      id: "autocast",
+      name: "Autocast",
+      description: "Automatically cast selected spell. Train Magic.",
+      xpDistribution: {
+        attack: 0,
+        strength: 0,
+        defense: 0,
+        constitution: 0,
+      },
+      icon: "✨",
+    },
   };
 
   constructor(world: World) {
@@ -296,6 +338,13 @@ export class PlayerSystem extends SystemBase {
     this.subscribe(EventType.UI_AUTO_RETALIATE_UPDATE, (data) =>
       this.handleAutoRetaliateToggle(
         data as { playerId: string; enabled: boolean },
+      ),
+    );
+
+    // Autocast spell selection (F2P magic combat)
+    this.subscribe(EventType.PLAYER_SET_AUTOCAST, (data) =>
+      this.handleSetAutocast(
+        data as { playerId: string; spellId: string | null },
       ),
     );
 
@@ -1745,7 +1794,7 @@ export class PlayerSystem extends SystemBase {
       }
     }
 
-    if (!isStyleValidForWeapon(weaponType, newStyle as CombatStyle)) {
+    if (!isStyleValidForWeapon(weaponType, newStyle as CombatStyleExtended)) {
       const availableStyles = getAvailableStyles(weaponType);
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId,
@@ -2085,6 +2134,66 @@ export class PlayerSystem extends SystemBase {
       message: `Auto retaliate: ${enabled ? "ON" : "OFF"}`,
       type: "info",
     });
+  }
+
+  /**
+   * Handle autocast spell selection
+   * Sets the player's selected spell for magic combat
+   */
+  private handleSetAutocast(data: {
+    playerId: string;
+    spellId: string | null;
+  }): void {
+    const { playerId, spellId } = data;
+
+    // Validate player exists in PlayerSystem's internal map
+    const player = this.players.get(playerId);
+    if (!player) {
+      this.logger.warn(`Set autocast rejected: unknown player ${playerId}`);
+      return;
+    }
+
+    // Update player entity data on PlayerSystem's internal player
+    if (player.data) {
+      (player.data as { selectedSpell?: string | null }).selectedSpell =
+        spellId;
+    }
+
+    // ALSO update on Entities.players (used by CombatSystem via world.getPlayer())
+    const entitiesPlayer = this.world.getPlayer?.(playerId);
+    if (entitiesPlayer?.data) {
+      (entitiesPlayer.data as { selectedSpell?: string | null }).selectedSpell =
+        spellId;
+    }
+
+    // Persist to database (server-side only)
+    if (this.world.isServer && this.databaseSystem) {
+      const databaseId = PlayerIdMapper.getDatabaseId(playerId);
+      this.databaseSystem.savePlayer(databaseId, {
+        selectedSpell: spellId ?? undefined,
+      });
+    }
+
+    // Notify client of autocast change
+    this.emitTypedEvent(EventType.COMBAT_AUTOCAST_SET, {
+      playerId,
+      spellId,
+    });
+
+    // Chat message feedback
+    if (spellId) {
+      this.emitTypedEvent(EventType.UI_MESSAGE, {
+        playerId,
+        message: `Autocast set to ${spellId.replace(/_/g, " ")}`,
+        type: "info",
+      });
+    } else {
+      this.emitTypedEvent(EventType.UI_MESSAGE, {
+        playerId,
+        message: "Autocast disabled",
+        type: "info",
+      });
+    }
   }
 
   /**

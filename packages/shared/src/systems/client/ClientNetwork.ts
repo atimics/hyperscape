@@ -3026,6 +3026,11 @@ export class ClientNetwork extends SystemBase {
     this.send("altarPray", { altarId, timestamp: Date.now() });
   }
 
+  // Magic autocast actions
+  setAutocast(spellId: string | null) {
+    this.send("setAutocast", { spellId, timestamp: Date.now() });
+  }
+
   onEntityRemoved = (id: string) => {
     // Remove from interpolation tracking
     this.interpolationStates.delete(id);
@@ -3570,6 +3575,19 @@ export class ClientNetwork extends SystemBase {
   }) => {
     // Forward to local event system so DamageSplatSystem can show visual feedback
     this.world.emit(EventType.COMBAT_DAMAGE_DEALT, data);
+  };
+
+  onProjectileLaunched = (data: {
+    attackerId: string;
+    targetId: string;
+    projectileType: string;
+    sourcePosition: { x: number; y: number; z: number };
+    targetPosition: { x: number; y: number; z: number };
+    spellId?: string;
+    delayMs?: number;
+  }) => {
+    // Forward to local event system so ProjectileRenderer can show visual effects
+    this.world.emit(EventType.COMBAT_PROJECTILE_LAUNCHED, data);
   };
 
   onXpDrop = (data: {
