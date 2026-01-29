@@ -966,8 +966,10 @@ describe("DuelSystem", () => {
 
       duelSystem.onPlayerDisconnect("player1");
 
-      // Advance past disconnect timeout (30 seconds)
-      vi.advanceTimersByTime(31000);
+      // Process enough ticks to pass DISCONNECT_TIMEOUT_TICKS (50)
+      for (let i = 0; i < 51; i++) {
+        duelSystem.processTick();
+      }
 
       // Session should be resolved
       expect(world._emit).toHaveBeenCalledWith(
@@ -1010,8 +1012,10 @@ describe("DuelSystem", () => {
       duelSystem.onPlayerDisconnect("player1");
       duelSystem.onPlayerReconnect("player1");
 
-      // Advance past what would be the timeout
-      vi.advanceTimersByTime(35000);
+      // Process enough ticks to pass what would be the timeout
+      for (let i = 0; i < 55; i++) {
+        duelSystem.processTick();
+      }
 
       // Session should still be active (not auto-forfeited)
       expect(duelSystem.getDuelSession(duelId)).toBeDefined();

@@ -108,9 +108,8 @@ export class DuelSystem {
   /** Cleanup interval handle */
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
-  /** Disconnected players during combat - maps playerId to timeout handle */
-  private disconnectTimers: Map<string, ReturnType<typeof setTimeout>> =
-    new Map();
+  /** Monotonic tick counter, incremented each processTick() call */
+  private currentTick = 0;
 
   constructor(world: World) {
     this.world = world;
@@ -196,13 +195,7 @@ export class DuelSystem {
       this.cleanupInterval = null;
     }
 
-    // Clear all disconnect timers
-    for (const timer of this.disconnectTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.disconnectTimers.clear();
-
-    // Cancel all active duels
+    // Cancel all active duels (pendingDisconnect/pendingResolution cleared with sessions)
     for (const [duelId] of this.sessionManager.getAllSessions()) {
       this.cancelDuel(duelId, "server_shutdown");
     }
@@ -217,6 +210,8 @@ export class DuelSystem {
    * Process tick - called every server tick
    */
   processTick(): void {
+    this.currentTick++;
+
     // Process pending challenges (distance checks, timeouts)
     this.pendingDuels.processTick();
 
@@ -234,9 +229,44 @@ export class DuelSystem {
           break;
         case "FIGHTING":
           this.processActiveDuel(session);
+          // Check for pending disconnect auto-forfeit (tick-based)
+          if (
+            session.pendingDisconnect &&
+            this.currentTick >= session.pendingDisconnect.forfeitAtTick
+          ) {
+            const { playerId } = session.pendingDisconnect;
+            session.pendingDisconnect = undefined;
+
+            // Verify session is still in FIGHTING state
+            if (session.state === "FIGHTING") {
+              const winnerId =
+                playerId === session.challengerId
+                  ? session.targetId
+                  : session.challengerId;
+              this.resolveDuel(session, winnerId, playerId, "forfeit");
+            }
+          }
           break;
         case "FINISHED":
-          // Resolution in progress - no tick processing needed
+          // Check for pending death resolution (tick-based)
+          if (
+            session.pendingResolution &&
+            this.currentTick >= session.pendingResolution.resolveAtTick
+          ) {
+            const { winnerId, loserId, reason } = session.pendingResolution;
+            session.pendingResolution = undefined;
+
+            // Verify session still exists and is in correct state
+            if (session.state === "FINISHED") {
+              Logger.debug("DuelSystem", "Resolving duel after death (tick)", {
+                duelId: session.duelId,
+                winnerId,
+                loserId,
+                tick: this.currentTick,
+              });
+              this.resolveDuel(session, winnerId, loserId, reason);
+            }
+          }
           break;
         default:
           // TypeScript exhaustiveness check - ensures all DuelState values are handled
@@ -1389,7 +1419,7 @@ export class DuelSystem {
       return;
     }
 
-    // If in FINISHED state, resolution is already pending via setTimeout.
+    // If in FINISHED state, resolution is already pending via tick-based scheduling.
     // Do NOT cancel — that would delete the session and prevent teleportation.
     if (session.state === "FINISHED") {
       Logger.debug("DuelSystem", "Ignoring disconnect - resolution pending", {
@@ -1408,25 +1438,26 @@ export class DuelSystem {
    * Handle player reconnect during duel
    */
   onPlayerReconnect(playerId: string): void {
-    // Clear any pending disconnect timer
-    const timer = this.disconnectTimers.get(playerId);
-    if (timer) {
-      clearTimeout(timer);
-      this.disconnectTimers.delete(playerId);
+    // Clear any pending disconnect auto-forfeit
+    const duelId = this.sessionManager.getPlayerDuelId(playerId);
+    if (!duelId) return;
+
+    const session = this.sessionManager.getSession(duelId);
+    if (!session) return;
+
+    if (
+      session.pendingDisconnect &&
+      session.pendingDisconnect.playerId === playerId
+    ) {
+      session.pendingDisconnect = undefined;
 
       // Notify both players that the disconnected player returned
-      const duelId = this.sessionManager.getPlayerDuelId(playerId);
-      if (duelId) {
-        const session = this.sessionManager.getSession(duelId);
-        if (session) {
-          this.world.emit("duel:player:reconnected", {
-            duelId,
-            playerId,
-            challengerId: session.challengerId,
-            targetId: session.targetId,
-          });
-        }
-      }
+      this.world.emit("duel:player:reconnected", {
+        duelId,
+        playerId,
+        challengerId: session.challengerId,
+        targetId: session.targetId,
+      });
     }
   }
 
@@ -1435,7 +1466,7 @@ export class DuelSystem {
    */
   private startDisconnectTimer(playerId: string, session: DuelSession): void {
     // Don't start another timer if one already exists
-    if (this.disconnectTimers.has(playerId)) return;
+    if (session.pendingDisconnect) return;
 
     // Notify opponent that player disconnected
     this.world.emit("duel:player:disconnected", {
@@ -1456,27 +1487,12 @@ export class DuelSystem {
       return;
     }
 
-    // Start 30-second timer for reconnection
-    const timer = setTimeout(() => {
-      this.disconnectTimers.delete(playerId);
-
-      // Check if duel still exists and player is still disconnected
-      const duelId = this.sessionManager.getPlayerDuelId(playerId);
-      if (!duelId) return;
-
-      const currentSession = this.sessionManager.getSession(duelId);
-      if (!currentSession || currentSession.state !== "FIGHTING") return;
-
-      // Auto-forfeit: disconnected player loses
-      const winnerId =
-        playerId === currentSession.challengerId
-          ? currentSession.targetId
-          : currentSession.challengerId;
-
-      this.resolveDuel(currentSession, winnerId, playerId, "forfeit");
-    }, ticksToMs(DISCONNECT_TIMEOUT_TICKS));
-
-    this.disconnectTimers.set(playerId, timer);
+    // Schedule disconnect auto-forfeit via tick-based processing (replaces setTimeout).
+    // processTick() will check this and auto-forfeit if the player hasn't reconnected.
+    session.pendingDisconnect = {
+      playerId,
+      forfeitAtTick: this.currentTick + DISCONNECT_TIMEOUT_TICKS,
+    };
   }
 
   /**
@@ -1512,46 +1528,22 @@ export class DuelSystem {
     // Set state to FINISHED immediately to prevent further deaths from being processed
     session.state = "FINISHED";
 
-    // Store the duelId for the setTimeout callback to verify session still exists
-    const capturedDuelId = session.duelId;
+    // Schedule resolution via tick-based processing (replaces setTimeout).
+    // processTick() will pick this up and call resolveDuel() after the delay.
+    // This aligns death resolution with game time and avoids timer memory leaks.
+    session.pendingResolution = {
+      winnerId,
+      loserId,
+      reason: "death",
+      resolveAtTick: this.currentTick + DEATH_RESOLUTION_DELAY_TICKS,
+    };
 
-    // Delay the duel resolution to allow death animation to play
-    // and give players time to see the outcome (OSRS-accurate behavior)
-    Logger.debug("DuelSystem", "Starting death animation delay", {
-      duelId: capturedDuelId,
+    Logger.debug("DuelSystem", "Scheduled death resolution", {
+      duelId: session.duelId,
       delayTicks: DEATH_RESOLUTION_DELAY_TICKS,
+      resolveAtTick: session.pendingResolution.resolveAtTick,
+      currentTick: this.currentTick,
     });
-    setTimeout(() => {
-      // SECURITY: Verify session still exists and hasn't been cleaned up
-      // This prevents double-resolution if cancelDuel was called
-      const currentSession = this.sessionManager.getSession(capturedDuelId);
-      if (!currentSession) {
-        Logger.debug(
-          "DuelSystem",
-          "Skipping resolveDuel - session no longer exists",
-          {
-            duelId: capturedDuelId,
-          },
-        );
-        return;
-      }
-
-      // Verify it's the same session and in correct state
-      if (currentSession.state !== "FINISHED") {
-        Logger.debug("DuelSystem", "Skipping resolveDuel - state changed", {
-          duelId: capturedDuelId,
-          state: currentSession.state,
-        });
-        return;
-      }
-
-      Logger.debug("DuelSystem", "Resolving duel after death", {
-        duelId: capturedDuelId,
-        winnerId,
-        loserId,
-      });
-      this.resolveDuel(currentSession, winnerId, loserId, "death");
-    }, ticksToMs(DEATH_RESOLUTION_DELAY_TICKS));
   }
 
   /**

@@ -79,6 +79,18 @@ export interface DuelSession {
   // Result
   winnerId?: string;
   forfeitedBy?: string;
+
+  // Tick-based scheduling (replaces setTimeout)
+  pendingResolution?: {
+    winnerId: string;
+    loserId: string;
+    reason: "death" | "forfeit";
+    resolveAtTick: number;
+  };
+  pendingDisconnect?: {
+    playerId: string;
+    forfeitAtTick: number;
+  };
 }
 
 // ============================================================================
