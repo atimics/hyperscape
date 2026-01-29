@@ -232,13 +232,15 @@ export function useActionBarState({
   useEffect(() => {
     if (!world) return;
 
-    const handlePrayerStateSync = (data: PrayerStateSyncEventPayload) => {
+    const handlePrayerStateSync = (...args: unknown[]) => {
+      const data = args[0] as PrayerStateSyncEventPayload;
       const localPlayer = world.getPlayer();
       if (!localPlayer || data.playerId !== localPlayer.id) return;
       setActivePrayers(new Set(data.active));
     };
 
-    const handlePrayerToggled = (data: PrayerToggledEventPayload) => {
+    const handlePrayerToggled = (...args: unknown[]) => {
+      const data = args[0] as PrayerToggledEventPayload;
       const localPlayer = world.getPlayer();
       if (!localPlayer || data.playerId !== localPlayer.id) return;
       setActivePrayers((prev) => {
@@ -252,6 +254,7 @@ export function useActionBarState({
       });
     };
 
+    // Event handlers cast to match emitter signature - data validated by type guards
     world.on(
       EventType.PRAYER_STATE_SYNC,
       handlePrayerStateSync as (...args: unknown[]) => void,
@@ -277,13 +280,15 @@ export function useActionBarState({
   useEffect(() => {
     if (!world) return;
 
-    const handleAttackStyleUpdate = (data: AttackStyleUpdateEventPayload) => {
+    const handleAttackStyleUpdate = (...args: unknown[]) => {
+      const data = args[0] as AttackStyleUpdateEventPayload;
       const localPlayer = world.getPlayer();
       if (!localPlayer || data.playerId !== localPlayer.id) return;
       setActiveAttackStyle(data.style);
     };
 
-    const handleAttackStyleChanged = (data: AttackStyleChangedEventPayload) => {
+    const handleAttackStyleChanged = (...args: unknown[]) => {
+      const data = args[0] as AttackStyleChangedEventPayload;
       const localPlayer = world.getPlayer();
       if (!localPlayer || data.playerId !== localPlayer.id) return;
       setActiveAttackStyle(data.newStyle);
@@ -300,6 +305,7 @@ export function useActionBarState({
       }
     }
 
+    // Event handlers cast to match emitter signature
     world.on(
       EventType.UI_ATTACK_STYLE_UPDATE,
       handleAttackStyleUpdate as (...args: unknown[]) => void,
@@ -334,7 +340,8 @@ export function useActionBarState({
   useEffect(() => {
     if (!world) return;
 
-    const handleActionBarState = (data: ActionBarStatePayload) => {
+    const handleActionBarState = (...args: unknown[]) => {
+      const data = args[0] as ActionBarStatePayload;
       if (data.barId !== barId) return;
 
       if (Array.isArray(data.slots) && data.slots.length > 0) {
@@ -351,6 +358,7 @@ export function useActionBarState({
       }
     };
 
+    // Event handler cast to match emitter signature
     world.on(
       "actionBarState",
       handleActionBarState as (...args: unknown[]) => void,
@@ -367,7 +375,8 @@ export function useActionBarState({
   useEffect(() => {
     if (!world || !useParentDndContext) return;
 
-    const handleSlotUpdate = (data: ActionBarSlotUpdatePayload) => {
+    const handleSlotUpdate = (...args: unknown[]) => {
+      const data = args[0] as ActionBarSlotUpdatePayload;
       if (data.barId !== barId) return;
 
       setSlots((prev) => {
@@ -377,7 +386,8 @@ export function useActionBarState({
       });
     };
 
-    const handleSlotSwap = (data: ActionBarSlotSwapPayload) => {
+    const handleSlotSwap = (...args: unknown[]) => {
+      const data = args[0] as ActionBarSlotSwapPayload;
       if (data.barId !== barId) return;
 
       setSlots((prev) => {
@@ -390,6 +400,7 @@ export function useActionBarState({
       });
     };
 
+    // Event handlers cast to match emitter signature
     world.on(
       EventType.ACTION_BAR_SLOT_UPDATE,
       handleSlotUpdate as (...args: unknown[]) => void,

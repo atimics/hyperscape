@@ -129,6 +129,7 @@ import { DialogueSystem } from "..";
 // NOTE: Import directly from specific files to avoid circular dependency
 import { DamageSplatSystem } from "../../client/DamageSplatSystem";
 import { DuelCountdownSplatSystem } from "../../client/DuelCountdownSplatSystem";
+import { ProjectileRenderer } from "../../client/ProjectileRenderer";
 import { SocialSystem } from "../../client/SocialSystem";
 import { DuelArenaVisualsSystem } from "../../client/DuelArenaVisualsSystem";
 
@@ -364,6 +365,16 @@ export async function registerSystems(world: World): Promise<void> {
     } catch (err) {
       console.error(
         "[SystemLoader] Failed to register DamageSplatSystem:",
+        err,
+      );
+    }
+
+    // Projectile renderer - visual arrows and spell projectiles
+    try {
+      world.register("projectile-renderer", ProjectileRenderer);
+    } catch (err) {
+      console.error(
+        "[SystemLoader] Failed to register ProjectileRenderer:",
         err,
       );
     }

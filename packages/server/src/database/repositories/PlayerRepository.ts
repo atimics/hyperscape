@@ -109,6 +109,9 @@ export class PlayerRepository extends BaseRepository {
     if (data.rangedLevel !== undefined) {
       updateData.rangedLevel = data.rangedLevel;
     }
+    if (data.magicLevel !== undefined) {
+      updateData.magicLevel = data.magicLevel;
+    }
     if (data.woodcuttingLevel !== undefined) {
       updateData.woodcuttingLevel = data.woodcuttingLevel;
     }
@@ -145,6 +148,9 @@ export class PlayerRepository extends BaseRepository {
     }
     if (data.rangedXp !== undefined) {
       updateData.rangedXp = data.rangedXp;
+    }
+    if (data.magicXp !== undefined) {
+      updateData.magicXp = data.magicXp;
     }
     if (data.woodcuttingXp !== undefined) {
       updateData.woodcuttingXp = data.woodcuttingXp;
@@ -191,6 +197,9 @@ export class PlayerRepository extends BaseRepository {
     }
     if (data.attackStyle !== undefined) {
       updateData.attackStyle = data.attackStyle;
+    }
+    if (data.selectedSpell !== undefined) {
+      updateData.selectedSpell = data.selectedSpell;
     }
     // Prayer system fields
     if (data.prayerLevel !== undefined) {

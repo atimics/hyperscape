@@ -180,6 +180,7 @@ const names = [
   'attackStyleUpdate',
   // Combat visual feedback packets
   'combatDamageDealt',
+  'projectileLaunched',  // Server -> Client: ranged/magic projectile for visual rendering
   // Player state packets
   'playerUpdated',
   'playerNameChanged',     // Server -> Client: player name change confirmed
@@ -335,6 +336,7 @@ const names = [
   // Skill/Spell ability packets
   'useSkill',            // Client -> Server: activate a skill ability
   'castSpell',           // Client -> Server: cast a spell (optionally on target)
+  'setAutocast',         // Client -> Server: set autocast spell (or null to disable)
   'skillActivated',      // Server -> Client: skill activation acknowledged
   'spellCast',           // Server -> Client: spell cast acknowledged
   'abilityCooldown',     // Server -> Client: ability cooldown update (skill or spell)
@@ -366,6 +368,9 @@ const names = [
   'debugDoorTilesResult',         // Server -> Client: door tiles response
   'debugWallBlocking',            // Client -> Server: check wall blocking between tiles
   'debugWallBlockingResult',      // Server -> Client: wall blocking check result
+  // Authentication packets (first-message auth pattern for security)
+  'authenticate',          // Client -> Server: send auth credentials after connection (security: avoids token in URL)
+  'authResult',            // Server -> Client: authentication result (success/failure)
 ]
 
 const byName: Record<string, PacketInfo> = {};

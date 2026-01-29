@@ -359,15 +359,22 @@ export class ClientNetwork extends SystemBase {
       this.id = null;
     }
 
-    // Check if wsUrl already contains an authToken (e.g., from embedded viewport)
-    // If so, use it as-is instead of overwriting with localStorage
+    // SECURITY: First-message authentication pattern
+    // Auth token is NOT included in URL to prevent leaking via:
+    // - Server logs (WebSocket URLs are often logged)
+    // - Browser history
+    // - Referrer headers
+    // Instead, we send credentials in an 'authenticate' packet after connection opens
+
+    // Check if wsUrl already contains an authToken (e.g., legacy embedded viewport)
+    // If so, use legacy URL-based auth for backward compatibility
     const urlHasAuthToken = wsUrl.includes("authToken=");
 
     let authToken = "";
     let privyUserId = "";
 
     if (!urlHasAuthToken && typeof localStorage !== "undefined") {
-      // Only get from localStorage if URL doesn't already have authToken
+      // Get auth credentials from localStorage for first-message auth
       const privyToken = localStorage.getItem("privy_auth_token");
       const privyId = localStorage.getItem("privy_user_id");
 
@@ -382,24 +389,23 @@ export class ClientNetwork extends SystemBase {
       }
     }
 
-    // Build WebSocket URL - preserve existing params and append safely
-    const ws = new URL(wsUrl);
-    const params = ws.searchParams;
-    if (!params.has("authToken")) {
-      params.set("authToken", authToken);
-    }
-    if (privyUserId && !params.has("privyUserId")) {
-      params.set("privyUserId", privyUserId);
-    }
-    if (name && !params.has("name")) {
-      params.set("name", name);
-    }
-    if (avatar && !params.has("avatar")) {
-      params.set("avatar", avatar);
-    }
-    const url = ws.toString();
+    // Build WebSocket URL - only include non-auth params
+    let url: string;
     if (urlHasAuthToken) {
-      this.logger.debug("Using authToken from URL (embedded mode)");
+      // URL already has authToken (legacy embedded mode) - use as-is
+      url = wsUrl;
+      this.logger.debug("Using authToken from URL (legacy embedded mode)");
+    } else {
+      // First-message auth mode - don't put authToken in URL
+      url = wsUrl;
+      this.logger.debug("Using first-message auth pattern (secure)");
+    }
+    // Add non-sensitive params to URL
+    const hasParams = url.includes("?");
+    if (name) url += `${hasParams ? "&" : "?"}name=${encodeURIComponent(name)}`;
+    if (avatar) {
+      const separator = url.includes("?") ? "&" : "?";
+      url += `${separator}avatar=${encodeURIComponent(avatar)}`;
     }
 
     // Read embedded configuration once at initialization
@@ -423,7 +429,8 @@ export class ClientNetwork extends SystemBase {
       }
     }
 
-    // console.debug('[ClientNetwork] Connecting to WebSocket:', url)
+    // Capture whether we're using first-message auth for the open handler
+    const useFirstMessageAuth = !urlHasAuthToken && authToken;
 
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(url);
@@ -432,48 +439,57 @@ export class ClientNetwork extends SystemBase {
       const timeout = setTimeout(() => {
         this.logger.warn("WebSocket connection timeout");
         reject(new Error("WebSocket connection timeout"));
-      }, 10000);
+      }, 30000); // Increased timeout for first-message auth flow
+
+      // Handler for first-message auth response
+      const handleAuthResult = (event: MessageEvent) => {
+        const packet = readPacket(event.data as ArrayBuffer);
+        if (!packet || packet.length === 0) return;
+
+        const [method, data] = packet;
+        if (method === "onAuthResult") {
+          const result = data as { success: boolean; error?: string };
+
+          // Remove auth handler - we're done with auth phase
+          this.ws?.removeEventListener("message", handleAuthResult);
+
+          if (result.success) {
+            this.logger.debug("First-message authentication successful");
+            // Auth successful - complete connection setup
+            this.completeConnectionSetup(timeout, resolve);
+          } else {
+            const errorMessage = `Authentication failed: ${result.error || "Unknown error"}`;
+            this.logger.error(errorMessage);
+            clearTimeout(timeout);
+            reject(new Error(errorMessage));
+          }
+        }
+      };
 
       this.ws.addEventListener("open", () => {
         this.logger.debug("WebSocket connected successfully");
-        this.connected = true;
-        this.initialized = true;
-        clearTimeout(timeout);
 
-        // Handle reconnection success
-        if (this.isReconnecting) {
-          this.logger.debug(
-            `Reconnected after ${this.reconnectAttempts} attempts`,
-          );
-          this.emitTypedEvent("NETWORK_RECONNECTED", {
-            attempts: this.reconnectAttempts,
+        if (useFirstMessageAuth) {
+          // First-message auth: send authenticate packet and wait for response
+          this.logger.debug("Sending first-message authentication...");
+
+          // Add auth result handler BEFORE sending authenticate packet
+          this.ws?.addEventListener("message", handleAuthResult);
+
+          // Send authentication credentials
+          const authPacket = writePacket("authenticate", {
+            authToken,
+            privyUserId,
+            name,
+            avatar,
           });
-          this.world.chat.add(
-            {
-              id: uuid(),
-              from: "System",
-              fromId: undefined,
-              body: "Connection restored.",
-              text: "Connection restored.",
-              timestamp: Date.now(),
-              createdAt: new Date().toISOString(),
-            },
-            false,
-          );
-          // Flush outgoing queue after reconnection
-          this.flushOutgoingQueue();
-        }
+          this.ws?.send(authPacket);
 
-        // Reset reconnection state
-        this.isReconnecting = false;
-        this.reconnectAttempts = 0;
-        this.intentionalDisconnect = false;
-        if (this.reconnectTimeoutId) {
-          clearTimeout(this.reconnectTimeoutId);
-          this.reconnectTimeoutId = null;
+          // Don't resolve yet - wait for authResult
+        } else {
+          // Legacy URL-based auth: complete immediately
+          this.completeConnectionSetup(timeout, resolve);
         }
-
-        resolve();
       });
 
       this.ws.addEventListener("message", this.onPacket);
@@ -497,6 +513,52 @@ export class ClientNetwork extends SystemBase {
         }
       });
     });
+  }
+
+  /**
+   * Complete the connection setup after authentication (or immediately for legacy URL auth)
+   * Extracted to avoid code duplication between first-message auth and legacy auth paths
+   */
+  private completeConnectionSetup(
+    timeout: ReturnType<typeof setTimeout>,
+    resolve: () => void,
+  ): void {
+    this.connected = true;
+    this.initialized = true;
+    clearTimeout(timeout);
+
+    // Handle reconnection success
+    if (this.isReconnecting) {
+      this.logger.debug(`Reconnected after ${this.reconnectAttempts} attempts`);
+      this.emitTypedEvent("NETWORK_RECONNECTED", {
+        attempts: this.reconnectAttempts,
+      });
+      this.world.chat.add(
+        {
+          id: uuid(),
+          from: "System",
+          fromId: undefined,
+          body: "Connection restored.",
+          text: "Connection restored.",
+          timestamp: Date.now(),
+          createdAt: new Date().toISOString(),
+        },
+        false,
+      );
+      // Flush outgoing queue after reconnection
+      this.flushOutgoingQueue();
+    }
+
+    // Reset reconnection state
+    this.isReconnecting = false;
+    this.reconnectAttempts = 0;
+    this.intentionalDisconnect = false;
+    if (this.reconnectTimeoutId) {
+      clearTimeout(this.reconnectTimeoutId);
+      this.reconnectTimeoutId = null;
+    }
+
+    resolve();
   }
 
   preFixedUpdate() {
@@ -701,6 +763,18 @@ export class ClientNetwork extends SystemBase {
       this.enqueue(method, data);
     }
   };
+
+  /**
+   * Handler for authResult packets.
+   * This is a no-op because auth is handled by the temporary handleAuthResult listener
+   * during the connection phase. This method exists to prevent "No handler" warnings
+   * when the packet is also received by the general onPacket handler.
+   */
+  onAuthResult(_data: { success: boolean; error?: string }): void {
+    // Auth is already handled in connect() by the temporary handleAuthResult listener.
+    // This handler exists to satisfy the flush() method's handler lookup.
+    this.logger.debug("onAuthResult received (already handled during connect)");
+  }
 
   async onSnapshot(data: SnapshotData) {
     this.id = data.id; // Store our network ID
@@ -3089,6 +3163,11 @@ export class ClientNetwork extends SystemBase {
     this.send("altarPray", { altarId, timestamp: Date.now() });
   }
 
+  // Magic autocast actions
+  setAutocast(spellId: string | null) {
+    this.send("setAutocast", { spellId, timestamp: Date.now() });
+  }
+
   onEntityRemoved = (id: string) => {
     // Remove from interpolation tracking
     this.deleteInterpolationState(id);
@@ -3647,6 +3726,19 @@ export class ClientNetwork extends SystemBase {
   }) => {
     // Forward to local event system so DamageSplatSystem can show visual feedback
     this.world.emit(EventType.COMBAT_DAMAGE_DEALT, data);
+  };
+
+  onProjectileLaunched = (data: {
+    attackerId: string;
+    targetId: string;
+    projectileType: string;
+    sourcePosition: { x: number; y: number; z: number };
+    targetPosition: { x: number; y: number; z: number };
+    spellId?: string;
+    delayMs?: number;
+  }) => {
+    // Forward to local event system so ProjectileRenderer can show visual effects
+    this.world.emit(EventType.COMBAT_PROJECTILE_LAUNCHED, data);
   };
 
   onXpDrop = (data: {

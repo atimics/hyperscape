@@ -56,10 +56,13 @@ import {
   TownSystem,
   worldToTile,
   tilesWithinMeleeRange,
+  tileChebyshevDistance,
   getItem,
   DeathState,
   type DuelRules,
   type DuelEquipmentSlot,
+  AttackType,
+  WeaponType,
 } from "@hyperscape/shared";
 
 // PlayerDeathSystem type for tick processing (not exported from main index)
@@ -107,6 +110,7 @@ import {
   handlePrayerDeactivateAll,
   handleAltarPray,
 } from "./handlers/prayer";
+import { handleSetAutocast } from "./handlers/magic";
 import { handleResourceGather } from "./handlers/resources";
 import {
   handleActionBarSave,
@@ -1181,14 +1185,17 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         playerId: string;
         targetId: string;
         targetPosition: { x: number; y: number; z: number };
-        meleeRange?: number;
+        attackRange?: number;
+        attackType?: AttackType;
       };
-      // Use OSRS-style melee pathfinding (cardinal-only for range 1)
+      // Use OSRS-style pathfinding with appropriate range and type
+      // MELEE: Cardinal-only for range 1, RANGED/MAGIC: Chebyshev distance
       this.tileMovementManager.movePlayerToward(
         followEvent.playerId,
         followEvent.targetPosition,
         true, // Run toward target
-        followEvent.meleeRange ?? 1, // Default to standard melee range
+        followEvent.attackRange ?? 1, // Default to standard melee range
+        followEvent.attackType ?? AttackType.MELEE, // Default to melee if not specified
       );
     });
 
@@ -1721,8 +1728,8 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     };
 
     // Combat - server-authoritative "walk to and attack" system
-    // OSRS-style: If in melee range, start combat immediately; otherwise queue pending attack
-    // Melee range is CARDINAL ONLY for range 1 (standard melee)
+    // OSRS-style: If in attack range, start combat immediately; otherwise queue pending attack
+    // Melee range is CARDINAL ONLY for range 1, ranged/magic use Chebyshev distance
     this.handlers["onAttackMob"] = (socket, data) => {
       const playerEntity = socket.player;
       if (!playerEntity) return;
@@ -1748,10 +1755,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       if (mobEntity.type !== "mob") return;
       if ((mobEntity.config?.currentHealth ?? 0) <= 0) return;
 
-      // Get player's weapon melee range from equipment system
-      const meleeRange = this.getPlayerWeaponRange(playerEntity.id);
+      // Get player's weapon range and attack type from equipment system
+      const attackRange = this.getPlayerWeaponRange(playerEntity.id);
+      const attackType = this.getPlayerAttackType(playerEntity.id);
 
-      // OSRS-accurate melee range check (cardinal-only for range 1)
+      // Get tiles for range check
       const playerPos = playerEntity.position;
       const playerTile = worldToTile(playerPos.x, playerPos.z);
       const targetTile = worldToTile(
@@ -1759,8 +1767,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         mobEntity.position.z,
       );
 
-      if (tilesWithinMeleeRange(playerTile, targetTile, meleeRange)) {
-        // In melee range - start combat immediately via action queue
+      // Check if in attack range (melee uses cardinal-only, ranged/magic use Chebyshev)
+      if (
+        this.isInAttackRange(playerTile, targetTile, attackType, attackRange)
+      ) {
+        // In range - start combat immediately via action queue
         this.actionQueue.queueCombat(socket, data);
       } else {
         // Not in range - queue pending attack (server handles OSRS-style pathfinding)
@@ -1768,7 +1779,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           playerEntity.id,
           targetId,
           this.world.currentTick,
-          meleeRange,
+          attackRange,
+          "mob",
+          attackType,
         );
       }
     };
@@ -1797,10 +1810,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
       if (!targetPlayer || !targetPlayer.position) return;
 
-      // Get player's weapon melee range from equipment system
-      const meleeRange = this.getPlayerWeaponRange(playerEntity.id);
+      // Get player's weapon range and attack type from equipment system
+      const attackRange = this.getPlayerWeaponRange(playerEntity.id);
+      const attackType = this.getPlayerAttackType(playerEntity.id);
 
-      // OSRS-accurate melee range check (cardinal-only for range 1)
+      // Get tiles for range check
       const playerPos = playerEntity.position;
       const playerTile = worldToTile(playerPos.x, playerPos.z);
       const targetTile = worldToTile(
@@ -1808,8 +1822,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         targetPlayer.position.z,
       );
 
-      if (tilesWithinMeleeRange(playerTile, targetTile, meleeRange)) {
-        // In melee range - validate zones and start combat immediately
+      // Check if in attack range (melee uses cardinal-only, ranged/magic use Chebyshev)
+      if (
+        this.isInAttackRange(playerTile, targetTile, attackType, attackRange)
+      ) {
+        // In range - validate zones and start combat immediately
         handleAttackPlayer(socket, data, this.world);
       } else {
         // Not in range - validate zones first, then queue pending attack
@@ -1843,8 +1860,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
           playerEntity.id,
           targetPlayerId,
           this.world.currentTick,
-          meleeRange,
+          attackRange,
           "player", // PvP target type
+          attackType,
         );
       }
     };
@@ -1866,6 +1884,28 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     this.handlers["onSetAutoRetaliate"] = (socket, data) =>
       handleSetAutoRetaliate(socket, data, this.world);
+
+    // Autocast spell selection (F2P magic combat)
+    this.handlers["onSetAutocast"] = (socket, data) => {
+      const playerEntity = socket.player;
+      if (!playerEntity) return;
+
+      const payload = data as { spellId?: string | null };
+      const spellId = payload.spellId;
+
+      // Validate spell ID if provided
+      if (spellId !== null && spellId !== undefined) {
+        if (typeof spellId !== "string" || spellId.length > 50) {
+          return;
+        }
+      }
+
+      // Emit event to update player's selected spell
+      this.world.emit(EventType.PLAYER_SET_AUTOCAST, {
+        playerId: playerEntity.id,
+        spellId: spellId ?? null,
+      });
+    };
 
     this.handlers["onPickupItem"] = (socket, data) =>
       handlePickupItem(socket, data, this.world);
@@ -1904,6 +1944,11 @@ export class ServerNetwork extends System implements NetworkWithSocket {
     this.handlers["onAltarPray"] = (socket, data) =>
       handleAltarPray(socket, data, this.world);
     this.handlers["altarPray"] = this.handlers["onAltarPray"];
+
+    // Magic handlers
+    this.handlers["onSetAutocast"] = (socket, data) =>
+      handleSetAutocast(socket, data, this.world);
+    this.handlers["setAutocast"] = this.handlers["onSetAutocast"];
 
     // Action bar handlers
     this.handlers["onActionBarSave"] = (socket, data) =>
@@ -3242,11 +3287,21 @@ export class ServerNetwork extends System implements NetworkWithSocket {
   }
 
   /**
-   * Get player's weapon attack range in tiles
-   * Uses equipment system to get equipped weapon's attackRange from manifest
+   * Get player's attack range in tiles
+   * Spell selection takes priority (magic range = 10)
+   * Otherwise uses equipped weapon's attackRange from manifest
    * Returns 1 for unarmed (punching)
    */
   getPlayerWeaponRange(playerId: string): number {
+    // Check if player has a spell selected - if so, use magic range regardless of weapon
+    const playerEntity = this.world.getPlayer?.(playerId);
+    const selectedSpell = (playerEntity?.data as { selectedSpell?: string })
+      ?.selectedSpell;
+
+    if (selectedSpell) {
+      return 10; // Standard magic attack range
+    }
+
     const equipmentSystem = this.world.getSystem("equipment") as
       | {
           getPlayerEquipment?: (id: string) => {
@@ -3278,6 +3333,82 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
     // Default to 1 tile (unarmed/punching)
     return 1;
+  }
+
+  /**
+   * Get the attack type from the player's equipped weapon or selected spell
+   * Returns AttackType.MELEE if no weapon or melee weapon equipped and no spell selected
+   *
+   * OSRS-accurate: You can cast spells without a staff - the staff just provides
+   * magic attack bonus and elemental staves give infinite runes
+   */
+  getPlayerAttackType(playerId: string): AttackType {
+    // Check if player has a spell selected - if so, use magic regardless of weapon
+    const playerEntity = this.world.getPlayer?.(playerId);
+    const selectedSpell = (playerEntity?.data as { selectedSpell?: string })
+      ?.selectedSpell;
+
+    if (selectedSpell) {
+      return AttackType.MAGIC;
+    }
+
+    const equipmentSystem = this.world.getSystem("equipment") as
+      | {
+          getPlayerEquipment?: (id: string) => {
+            weapon?: {
+              item?: {
+                attackType?: AttackType;
+                weaponType?: WeaponType;
+              };
+            };
+          } | null;
+        }
+      | undefined;
+
+    if (equipmentSystem?.getPlayerEquipment) {
+      const equipment = equipmentSystem.getPlayerEquipment(playerId);
+
+      if (equipment?.weapon?.item) {
+        const weaponItem = equipment.weapon.item;
+
+        // Check explicit attackType first
+        if (weaponItem.attackType) {
+          return weaponItem.attackType;
+        }
+
+        // Fall back to weaponType for legacy compatibility
+        if (weaponItem.weaponType === WeaponType.BOW) {
+          return AttackType.RANGED;
+        }
+        if (
+          weaponItem.weaponType === WeaponType.STAFF ||
+          weaponItem.weaponType === WeaponType.WAND
+        ) {
+          return AttackType.MAGIC;
+        }
+      }
+    }
+
+    return AttackType.MELEE;
+  }
+
+  /**
+   * Check if player is within attack range based on attack type
+   * Melee uses cardinal-only for range 1, ranged/magic uses Chebyshev distance
+   */
+  isInAttackRange(
+    attackerTile: { x: number; z: number },
+    targetTile: { x: number; z: number },
+    attackType: AttackType,
+    range: number,
+  ): boolean {
+    if (attackType === AttackType.MELEE) {
+      return tilesWithinMeleeRange(attackerTile, targetTile, range);
+    }
+
+    // Ranged/Magic use Chebyshev distance (8-directional)
+    const distance = tileChebyshevDistance(attackerTile, targetTile);
+    return distance <= range && distance > 0;
   }
 
   /**
