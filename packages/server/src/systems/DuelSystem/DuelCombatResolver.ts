@@ -18,11 +18,7 @@ import type { World, StakedItem } from "@hyperscape/shared";
 import { EventType, PlayerEntity } from "@hyperscape/shared";
 import type { DuelSession } from "./DuelSessionManager";
 import { AuditLogger, Logger } from "../ServerNetwork/services";
-import {
-  LOBBY_SPAWN_WINNER,
-  LOBBY_SPAWN_LOSER,
-  LOBBY_SPAWN_CENTER,
-} from "./config";
+import { LOBBY_SPAWN_WINNER, LOBBY_SPAWN_LOSER } from "./config";
 
 // ============================================================================
 // Types
@@ -103,42 +99,98 @@ export class DuelCombatResolver {
       0,
     );
 
-    // Transfer stakes to winner
-    this.transferStakes(session, winnerId, loserId, winnerStakes, loserStakes);
+    // Transfer stakes — wrapped so a failure doesn't prevent teleportation
+    try {
+      this.transferStakes(
+        session,
+        winnerId,
+        loserId,
+        winnerStakes,
+        loserStakes,
+      );
+    } catch (err) {
+      Logger.error("DuelCombatResolver", "Stake transfer failed", {
+        duelId: session.duelId,
+        winnerId,
+        loserId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
-    // Restore both players to full health
-    this.restorePlayerHealth(winnerId);
-    this.restorePlayerHealth(loserId);
+    // Restore health — wrapped so a failure doesn't prevent teleportation
+    try {
+      this.restorePlayerHealth(winnerId, LOBBY_SPAWN_WINNER);
+      this.restorePlayerHealth(loserId, LOBBY_SPAWN_LOSER);
+    } catch (err) {
+      Logger.error("DuelCombatResolver", "Health restoration failed", {
+        duelId: session.duelId,
+        winnerId,
+        loserId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
-    // Teleport both players to duel arena lobby
-    this.teleportToLobby(winnerId, true);
-    this.teleportToLobby(loserId, false);
+    // CRITICAL: Teleports must ALWAYS execute — this is the most visible
+    // part of duel resolution. Wrapped individually so one player failing
+    // doesn't prevent the other from being teleported.
+    try {
+      this.teleportToLobby(winnerId, true);
+    } catch (err) {
+      Logger.error("DuelCombatResolver", "Winner teleport failed", {
+        duelId: session.duelId,
+        winnerId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    try {
+      this.teleportToLobby(loserId, false);
+    } catch (err) {
+      Logger.error("DuelCombatResolver", "Loser teleport failed", {
+        duelId: session.duelId,
+        loserId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     // Emit duel completed event
-    this.world.emit("duel:completed", {
-      duelId: session.duelId,
-      winnerId,
-      winnerName,
-      loserId,
-      loserName,
-      reason,
-      forfeit: reason === "forfeit",
-      winnerReceives: loserStakes,
-      winnerReceivesValue,
-      challengerStakes: session.challengerStakes,
-      targetStakes: session.targetStakes,
-    });
+    try {
+      this.world.emit("duel:completed", {
+        duelId: session.duelId,
+        winnerId,
+        winnerName,
+        loserId,
+        loserName,
+        reason,
+        forfeit: reason === "forfeit",
+        winnerReceives: loserStakes,
+        winnerReceivesValue,
+        challengerStakes: session.challengerStakes,
+        targetStakes: session.targetStakes,
+      });
+    } catch (err) {
+      Logger.error("DuelCombatResolver", "Completion event failed", {
+        duelId: session.duelId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     // Audit log for economic tracking
-    AuditLogger.getInstance().logDuelComplete(
-      session.duelId,
-      winnerId,
-      loserId,
-      loserStakes,
-      winnerStakes,
-      winnerReceivesValue,
-      reason,
-    );
+    try {
+      AuditLogger.getInstance().logDuelComplete(
+        session.duelId,
+        winnerId,
+        loserId,
+        loserStakes,
+        winnerStakes,
+        winnerReceivesValue,
+        reason,
+      );
+    } catch (err) {
+      Logger.error("DuelCombatResolver", "Audit logging failed", {
+        duelId: session.duelId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     return {
       winnerId,
@@ -243,8 +295,12 @@ export class DuelCombatResolver {
 
   /**
    * Restore player to full health after duel (OSRS-accurate: no death in duels)
+   * @param spawnPosition - Must match the teleport destination to avoid lerpPosition conflicts
    */
-  private restorePlayerHealth(playerId: string): void {
+  private restorePlayerHealth(
+    playerId: string,
+    spawnPosition: { x: number; y: number; z: number },
+  ): void {
     // Clear death state using PlayerEntity helper method (Law of Demeter)
     const playerEntity = this.world.entities?.get?.(playerId);
     if (playerEntity instanceof PlayerEntity) {
@@ -254,7 +310,7 @@ export class DuelCombatResolver {
     // Emit PLAYER_RESPAWNED to trigger health restoration in PlayerSystem
     this.world.emit(EventType.PLAYER_RESPAWNED, {
       playerId,
-      spawnPosition: LOBBY_SPAWN_CENTER,
+      spawnPosition,
       townName: "Duel Arena",
     });
 

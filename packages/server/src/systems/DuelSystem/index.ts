@@ -405,6 +405,26 @@ export class DuelSystem {
       };
     }
 
+    // SAFETY: Never cancel a session that is already being resolved.
+    // FINISHED means resolveDuel is pending (e.g., death animation delay).
+    // Cancelling here would delete the session and prevent teleportation.
+    if (session.state === "FINISHED") {
+      Logger.warn(
+        "DuelSystem",
+        "Cannot cancel FINISHED duel - resolution pending",
+        {
+          duelId,
+          reason,
+          cancelledBy,
+        },
+      );
+      return {
+        success: false,
+        error: "Duel is already being resolved.",
+        errorCode: DuelErrorCode.INVALID_STATE,
+      };
+    }
+
     // Return staked items to both players
     this.combatResolver.returnStakedItems(session);
 
@@ -1349,6 +1369,17 @@ export class DuelSystem {
       return;
     }
 
+    // If in FINISHED state, resolution is already pending via setTimeout.
+    // Do NOT cancel — that would delete the session and prevent teleportation.
+    if (session.state === "FINISHED") {
+      Logger.debug("DuelSystem", "Ignoring disconnect - resolution pending", {
+        playerId,
+        duelId,
+        state: session.state,
+      });
+      return;
+    }
+
     // For setup states (RULES, STAKES, CONFIRMING, COUNTDOWN), cancel immediately
     this.cancelDuel(duelId, "player_disconnected", playerId);
   }
@@ -1512,8 +1543,24 @@ export class DuelSystem {
     loserId: string,
     reason: "death" | "forfeit",
   ): void {
-    // Delegate to combat resolver for stake transfer, health restoration, and teleportation
-    this.combatResolver.resolveDuel(session, winnerId, loserId, reason);
+    // Delegate to combat resolver for stake transfer, health restoration, and teleportation.
+    // Wrapped in try/catch so arena release and session cleanup ALWAYS happen,
+    // even if the resolver throws (prevents zombie sessions and stuck arenas).
+    try {
+      this.combatResolver.resolveDuel(session, winnerId, loserId, reason);
+    } catch (err) {
+      Logger.error(
+        "DuelSystem",
+        "Combat resolver failed during duel resolution",
+        {
+          duelId: session.duelId,
+          winnerId,
+          loserId,
+          reason,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      );
+    }
 
     // Release arena
     if (session.arenaId !== null) {
