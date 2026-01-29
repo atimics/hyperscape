@@ -98,6 +98,8 @@ clear-users.sql
 logs/
 
 eliza/
+# Exception: server eliza integration should be tracked
+!packages/server/src/eliza/
 
 # Eliza database directories
 .eliza/
