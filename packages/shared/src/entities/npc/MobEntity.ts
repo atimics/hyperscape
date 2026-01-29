@@ -125,6 +125,7 @@ import {
   getCameraPosition,
 } from "../../utils/rendering/AnimationLOD";
 import { RAYCAST_PROXY } from "../../systems/client/interaction/constants";
+import type { AggroSystem } from "../../systems/shared/combat/AggroSystem";
 
 // Polyfill ProgressEvent for Node.js server environment
 
@@ -2617,7 +2618,16 @@ export class MobEntity extends CombatantEntity {
     }
 
     const currentPos = this.getPosition();
-    const players = this.world.getPlayers();
+
+    // Use spatial player index for O(k) lookup instead of O(P) iteration
+    // AggroSystem maintains a playersByRegion index using 21x21 tile regions
+    // This queries a 3x3 grid of regions (63x63 tiles) which covers any aggro range
+    const aggroSystem = this.world.getSystem("aggro") as
+      | AggroSystem
+      | undefined;
+    const players = aggroSystem
+      ? aggroSystem.getPlayersInNearbyRegions(currentPos)
+      : this.world.getPlayers(); // Fallback if AggroSystem not available
 
     // OSRS-Accurate Aggression Range:
     // The aggression range origin is the static spawn point of the NPC.

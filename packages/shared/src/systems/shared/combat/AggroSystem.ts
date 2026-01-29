@@ -69,6 +69,13 @@ export class AggroSystem extends SystemBase {
   private playerTolerance = new Map<string, ToleranceState>();
 
   /**
+   * Reverse index: regionId -> Set of playerIds in that region
+   * Used for O(1) spatial lookups instead of O(P) iteration over all players
+   * Updated alongside playerTolerance for consistency
+   */
+  private playersByRegion = new Map<string, Set<string>>();
+
+  /**
    * Current server tick (updated on each AI tick)
    */
   private currentTick = 0;
@@ -532,7 +539,27 @@ export class AggroSystem extends SystemBase {
     const existing = this.playerTolerance.get(playerId);
 
     if (!existing || existing.regionId !== regionId) {
-      // Entered new region - reset timer
+      // Remove from old region's player set (if any)
+      if (existing) {
+        const oldRegionPlayers = this.playersByRegion.get(existing.regionId);
+        if (oldRegionPlayers) {
+          oldRegionPlayers.delete(playerId);
+          // Clean up empty sets to prevent memory leaks
+          if (oldRegionPlayers.size === 0) {
+            this.playersByRegion.delete(existing.regionId);
+          }
+        }
+      }
+
+      // Add to new region's player set
+      let regionPlayers = this.playersByRegion.get(regionId);
+      if (!regionPlayers) {
+        regionPlayers = new Set<string>();
+        this.playersByRegion.set(regionId, regionPlayers);
+      }
+      regionPlayers.add(playerId);
+
+      // Update tolerance state
       this.playerTolerance.set(playerId, {
         regionId,
         enteredTick: this.currentTick,
@@ -572,6 +599,17 @@ export class AggroSystem extends SystemBase {
    * Clean up tolerance data for a player (on disconnect)
    */
   private removePlayerTolerance(playerId: string): void {
+    // Remove from region index first
+    const existing = this.playerTolerance.get(playerId);
+    if (existing) {
+      const regionPlayers = this.playersByRegion.get(existing.regionId);
+      if (regionPlayers) {
+        regionPlayers.delete(playerId);
+        if (regionPlayers.size === 0) {
+          this.playersByRegion.delete(existing.regionId);
+        }
+      }
+    }
     this.playerTolerance.delete(playerId);
   }
 
@@ -588,6 +626,101 @@ export class AggroSystem extends SystemBase {
 
     const remaining = state.toleranceExpiredTick - this.currentTick;
     return Math.max(0, remaining);
+  }
+
+  /**
+   * Get the tolerance region ID for a world position
+   * Regions are 21x21 tiles (OSRS-accurate)
+   *
+   * @param position - World position (x, z coordinates)
+   * @returns Region identifier string "x:z"
+   */
+  getRegionIdForPosition(position: Position3D): string {
+    const tile = worldToTile(position.x, position.z);
+    return this.getToleranceRegionId(tile);
+  }
+
+  /**
+   * Get all players in a 2x2 grid of regions around the given position
+   * Used for O(k) spatial player lookups instead of O(P) iteration
+   *
+   * Queries 4 regions (2x2 grid = 42x42 tiles) for good coverage.
+   * The quadrant is selected based on position within the center region.
+   *
+   * @param position - Center position to search around
+   * @returns Array of player entities in nearby regions
+   */
+  getPlayersInNearbyRegions(position: Position3D): Entity[] {
+    const tile = worldToTile(position.x, position.z);
+    const centerRegionX = Math.floor(tile.x / TOLERANCE_REGION_SIZE);
+    const centerRegionZ = Math.floor(tile.z / TOLERANCE_REGION_SIZE);
+
+    // Determine which quadrant of the region we're in to pick the best 2x2
+    const tileInRegionX = tile.x % TOLERANCE_REGION_SIZE;
+    const tileInRegionZ = tile.z % TOLERANCE_REGION_SIZE;
+    const halfRegion = TOLERANCE_REGION_SIZE / 2;
+
+    // Pick direction to extend: if in upper half, extend +1; if in lower half, extend -1
+    const extendX = tileInRegionX >= halfRegion ? 1 : -1;
+    const extendZ = tileInRegionZ >= halfRegion ? 1 : -1;
+
+    const nearbyPlayerIds: string[] = [];
+
+    // Query 2x2 grid of regions
+    for (let dx = 0; dx !== extendX + extendX; dx += extendX) {
+      for (let dz = 0; dz !== extendZ + extendZ; dz += extendZ) {
+        const regionId = `${centerRegionX + dx}:${centerRegionZ + dz}`;
+        const playersInRegion = this.playersByRegion.get(regionId);
+        if (playersInRegion) {
+          for (const playerId of playersInRegion) {
+            nearbyPlayerIds.push(playerId);
+          }
+        }
+      }
+    }
+
+    // Convert player IDs to entities
+    const players: Entity[] = [];
+    for (const playerId of nearbyPlayerIds) {
+      const player = this.world.entities.items.get(playerId);
+      if (player) {
+        players.push(player);
+      }
+    }
+
+    return players;
+  }
+
+  /**
+   * Get count of players in nearby 2x2 region grid (for debugging/metrics)
+   *
+   * @param position - Center position
+   * @returns Number of players in the 2x2 region grid (42x42 tiles)
+   */
+  getNearbyPlayerCount(position: Position3D): number {
+    const tile = worldToTile(position.x, position.z);
+    const centerRegionX = Math.floor(tile.x / TOLERANCE_REGION_SIZE);
+    const centerRegionZ = Math.floor(tile.z / TOLERANCE_REGION_SIZE);
+
+    const tileInRegionX = tile.x % TOLERANCE_REGION_SIZE;
+    const tileInRegionZ = tile.z % TOLERANCE_REGION_SIZE;
+    const halfRegion = TOLERANCE_REGION_SIZE / 2;
+
+    const extendX = tileInRegionX >= halfRegion ? 1 : -1;
+    const extendZ = tileInRegionZ >= halfRegion ? 1 : -1;
+
+    let count = 0;
+    for (let dx = 0; dx !== extendX + extendX; dx += extendX) {
+      for (let dz = 0; dz !== extendZ + extendZ; dz += extendZ) {
+        const regionId = `${centerRegionX + dx}:${centerRegionZ + dz}`;
+        const playersInRegion = this.playersByRegion.get(regionId);
+        if (playersInRegion) {
+          count += playersInRegion.size;
+        }
+      }
+    }
+
+    return count;
   }
 
   private startChasing(mobState: MobAIStateData, playerId: string): void {
