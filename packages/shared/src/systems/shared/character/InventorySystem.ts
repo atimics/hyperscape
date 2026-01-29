@@ -36,7 +36,7 @@ export class InventorySystem extends SystemBase {
   private readonly MAX_INVENTORY_SLOTS = 28;
   private persistTimers = new Map<string, NodeJS.Timeout>();
   private saveInterval?: NodeJS.Timeout;
-  private readonly AUTO_SAVE_INTERVAL = 30000; // 30 seconds
+  private readonly AUTO_SAVE_INTERVAL = 5000; // 5 seconds - reduced for minimal data loss
 
   // Pickup locks to prevent race conditions when multiple players try to pickup same item
   private pickupLocks = new Set<string>();
@@ -819,6 +819,9 @@ export class InventorySystem extends SystemBase {
           },
         });
       }
+
+      // CRITICAL: Persist immediately for item drops to prevent duplication on crash
+      await this.persistInventoryImmediate(data.playerId);
     }
   }
 
@@ -924,11 +927,11 @@ export class InventorySystem extends SystemBase {
     });
   }
 
-  private pickupItem(data: {
+  private async pickupItem(data: {
     playerId: string;
     entityId: string;
     itemId?: string;
-  }): void {
+  }): Promise<void> {
     // SERVER-SIDE ONLY: Prevent duplication by ensuring only server processes pickups
     if (!this.world.isServer) {
       // Client just sent the request, don't process locally
@@ -1086,6 +1089,9 @@ export class InventorySystem extends SystemBase {
             message: "Failed to pick up item. Please try again.",
             type: "warning",
           });
+        } else {
+          // CRITICAL: Persist immediately for item pickups to prevent loss on crash
+          await this.persistInventoryImmediate(data.playerId);
         }
       } else {
         // Could not add (should not happen after canAddItem check, but handle defensively)
