@@ -51,6 +51,7 @@ import {
   CLEANUP_INTERVAL_TICKS,
   SESSION_MAX_AGE_TICKS,
   DEATH_RESOLUTION_DELAY_TICKS,
+  POSITION_TOLERANCE,
   ticksToMs,
   TICK_DURATION_MS,
 } from "./config";
@@ -1604,12 +1605,11 @@ export class DuelSystem {
     if (!player?.position) return;
 
     const { x, z } = player.position;
-    const tolerance = 0.5;
 
     const dx = Math.abs(x - spawnPoint.x);
     const dz = Math.abs(z - spawnPoint.z);
 
-    if (dx > tolerance || dz > tolerance) {
+    if (dx > POSITION_TOLERANCE || dz > POSITION_TOLERANCE) {
       this.world.emit("player:teleport", {
         playerId,
         position: { x: spawnPoint.x, y: spawnPoint.y, z: spawnPoint.z },

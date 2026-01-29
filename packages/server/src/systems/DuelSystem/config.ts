@@ -150,6 +150,13 @@ export const MAX_STAKES_PER_PLAYER = 28;
  */
 export const POSITION_TOLERANCE = 0.5;
 
+/**
+ * Cooldown (in ms) before a challenger can re-challenge the same target
+ * after a decline or expiry. Prevents harassment spam.
+ * 10 seconds.
+ */
+export const CHALLENGE_COOLDOWN_MS = 10_000;
+
 // ============================================================================
 // DEFAULT VALUES
 // ============================================================================

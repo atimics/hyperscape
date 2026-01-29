@@ -17,6 +17,7 @@ import {
   CHALLENGE_TIMEOUT_TICKS,
   CHALLENGE_CLEANUP_INTERVAL_TICKS,
   CHALLENGE_DISTANCE_TILES,
+  CHALLENGE_COOLDOWN_MS,
   ticksToMs,
   generateDuelId,
 } from "./config";
@@ -28,6 +29,9 @@ export class PendingDuelManager {
   /** Map of playerId -> challengeId for quick lookup */
   private playerToChallengeAsChallenger = new Map<string, string>();
   private playerToChallengeAsTarget = new Map<string, string>();
+
+  /** Anti-harassment cooldown: "challengerId->targetId" -> expiresAt timestamp */
+  private challengeCooldowns = new Map<string, number>();
 
   /** Cleanup interval handle */
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
@@ -85,6 +89,20 @@ export class PendingDuelManager {
         success: false,
         error: "That player is already being challenged.",
       };
+    }
+
+    // Anti-harassment cooldown: prevent re-challenging same target too quickly
+    const cooldownKey = `${challengerId}->${targetId}`;
+    const cooldownExpiry = this.challengeCooldowns.get(cooldownKey);
+    if (cooldownExpiry && Date.now() < cooldownExpiry) {
+      return {
+        success: false,
+        error: "Please wait before challenging this player again.",
+      };
+    }
+    // Clear expired cooldown entry
+    if (cooldownExpiry) {
+      this.challengeCooldowns.delete(cooldownKey);
     }
 
     // Generate unique challenge ID
@@ -220,6 +238,9 @@ export class PendingDuelManager {
     // Only the target can decline
     if (challenge.targetId !== decliningPlayerId) return undefined;
 
+    // Set anti-harassment cooldown so challenger can't immediately re-challenge
+    this.setCooldown(challenge.challengerId, challenge.targetId);
+
     return this.cancelChallenge(challengeId);
   }
 
@@ -239,6 +260,9 @@ export class PendingDuelManager {
     for (const challengeId of expired) {
       const challenge = this.cancelChallenge(challengeId);
       if (challenge) {
+        // Set anti-harassment cooldown on expiry
+        this.setCooldown(challenge.challengerId, challenge.targetId);
+
         // Emit event for handlers to notify players
         this.world.emit("duel:challenge:expired", {
           challengeId,
@@ -300,6 +324,14 @@ export class PendingDuelManager {
   }
 
   /**
+   * Set anti-harassment cooldown for a challenger->target pair
+   */
+  private setCooldown(challengerId: string, targetId: string): void {
+    const key = `${challengerId}->${targetId}`;
+    this.challengeCooldowns.set(key, Date.now() + CHALLENGE_COOLDOWN_MS);
+  }
+
+  /**
    * Clean up on shutdown
    */
   destroy(): void {
@@ -310,5 +342,6 @@ export class PendingDuelManager {
     this.pendingChallenges.clear();
     this.playerToChallengeAsChallenger.clear();
     this.playerToChallengeAsTarget.clear();
+    this.challengeCooldowns.clear();
   }
 }
