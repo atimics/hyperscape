@@ -46,6 +46,11 @@ interface PlayerEquipment {
   helmet: EquipmentSlot;
   body: EquipmentSlot;
   legs: EquipmentSlot;
+  boots: EquipmentSlot;
+  gloves: EquipmentSlot;
+  cape: EquipmentSlot;
+  amulet: EquipmentSlot;
+  ring: EquipmentSlot;
   arrows: EquipmentSlot;
   totalStats: Record<string, number>;
 }
@@ -99,6 +104,41 @@ class MockArmorEquipmentManager {
         id: `${playerId}_legs`,
         name: "Legs Slot",
         slot: "legs",
+        itemId: null,
+        item: null,
+      },
+      boots: {
+        id: `${playerId}_boots`,
+        name: "Boots Slot",
+        slot: "boots",
+        itemId: null,
+        item: null,
+      },
+      gloves: {
+        id: `${playerId}_gloves`,
+        name: "Gloves Slot",
+        slot: "gloves",
+        itemId: null,
+        item: null,
+      },
+      cape: {
+        id: `${playerId}_cape`,
+        name: "Cape Slot",
+        slot: "cape",
+        itemId: null,
+        item: null,
+      },
+      amulet: {
+        id: `${playerId}_amulet`,
+        name: "Amulet Slot",
+        slot: "amulet",
+        itemId: null,
+        item: null,
+      },
+      ring: {
+        id: `${playerId}_ring`,
+        name: "Ring Slot",
+        slot: "ring",
         itemId: null,
         item: null,
       },
@@ -234,6 +274,11 @@ class MockArmorEquipmentManager {
       equipment.helmet,
       equipment.body,
       equipment.legs,
+      equipment.boots,
+      equipment.gloves,
+      equipment.cape,
+      equipment.amulet,
+      equipment.ring,
       equipment.arrows,
     ];
 
@@ -680,8 +725,8 @@ describe("ArmorSystem", () => {
         requirements?: { skills?: Record<string, number> };
       }>;
 
-    it("contains exactly 32 armor items", () => {
-      expect(armorManifest).toHaveLength(32);
+    it("contains exactly 69 armor items", () => {
+      expect(armorManifest).toHaveLength(69);
     });
 
     it("has no duplicate IDs", () => {
@@ -697,7 +742,17 @@ describe("ArmorSystem", () => {
     });
 
     it("all items have valid equipSlot", () => {
-      const validSlots = ["helmet", "body", "legs"];
+      const validSlots = [
+        "helmet",
+        "body",
+        "legs",
+        "shield",
+        "boots",
+        "gloves",
+        "cape",
+        "amulet",
+        "ring",
+      ];
       for (const item of armorManifest) {
         expect(validSlots).toContain(item.equipSlot);
       }
@@ -713,15 +768,16 @@ describe("ArmorSystem", () => {
     it("melee armor has per-style defence bonuses", () => {
       const meleeArmor = armorManifest.filter(
         (item) =>
-          item.id.startsWith("bronze_") ||
-          item.id.startsWith("iron_") ||
-          item.id.startsWith("steel_") ||
-          item.id.startsWith("mithril_") ||
-          item.id.startsWith("adamant_") ||
-          item.id.startsWith("rune_"),
+          (item.id.startsWith("bronze_") ||
+            item.id.startsWith("iron_") ||
+            item.id.startsWith("steel_") ||
+            item.id.startsWith("mithril_") ||
+            item.id.startsWith("adamant_") ||
+            item.id.startsWith("rune_")) &&
+          ["helmet", "body", "legs", "shield"].includes(item.equipSlot!),
       );
 
-      expect(meleeArmor.length).toBe(18); // 6 tiers × 3 slots
+      expect(meleeArmor.length).toBe(24); // 6 tiers × 4 slots (helmet/body/legs/shield)
 
       for (const item of meleeArmor) {
         const b = item.bonuses!;
@@ -734,13 +790,17 @@ describe("ArmorSystem", () => {
 
     it("melee armor has negative magic bonuses", () => {
       const meleeArmor = armorManifest.filter(
-        (item) => item.id.startsWith("rune_") || item.id.startsWith("adamant_"),
+        (item) =>
+          (item.id.startsWith("rune_") || item.id.startsWith("adamant_")) &&
+          ["helmet", "body", "legs", "shield"].includes(item.equipSlot!),
       );
+
+      expect(meleeArmor.length).toBe(8); // 2 tiers × 4 slots
 
       for (const item of meleeArmor) {
         const b = item.bonuses!;
         expect(b.attackMagic).toBeLessThan(0);
-        // defenseMagic is negative for body/legs, -1 for helmets (raw JSON key)
+        // defenseMagic is negative for body/legs, -1 for helmets/shields
         expect(b.defenseMagic).toBeLessThanOrEqual(0);
       }
     });
@@ -748,9 +808,10 @@ describe("ArmorSystem", () => {
     it("ranged armor has positive defenseRanged and defenseMagic", () => {
       const rangedArmor = armorManifest.filter(
         (item) =>
-          item.id.startsWith("leather_") ||
-          item.id.startsWith("studded_") ||
-          item.id.startsWith("green_dhide_") ||
+          ((item.id.startsWith("leather_") ||
+            item.id.startsWith("studded_") ||
+            item.id.startsWith("green_dhide_")) &&
+            ["helmet", "body", "legs"].includes(item.equipSlot!)) ||
           item.id === "coif", // coif is studded tier head piece
       );
 
@@ -770,7 +831,7 @@ describe("ArmorSystem", () => {
           item.id.startsWith("wizard_") || item.id.startsWith("mystic_"),
       );
 
-      expect(magicArmor.length).toBe(6); // wizard(3) + mystic(3)
+      expect(magicArmor.length).toBe(8); // wizard(3+boots) + mystic(3+gloves)
 
       for (const item of magicArmor) {
         const b = item.bonuses!;
