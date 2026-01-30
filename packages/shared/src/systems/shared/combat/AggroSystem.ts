@@ -80,6 +80,13 @@ export class AggroSystem extends SystemBase {
    */
   private currentTick = 0;
 
+  /**
+   * Pre-allocated arrays for spatial queries (avoid GC pressure)
+   * Max expected players in a 2x2 region grid is bounded by server capacity
+   */
+  private readonly _nearbyPlayerIdsBuffer: string[] = [];
+  private readonly _nearbyPlayersBuffer: Entity[] = [];
+
   constructor(world: World) {
     super(world, {
       name: "aggro",
@@ -656,15 +663,23 @@ export class AggroSystem extends SystemBase {
     const centerRegionZ = Math.floor(tile.z / TOLERANCE_REGION_SIZE);
 
     // Determine which quadrant of the region we're in to pick the best 2x2
-    const tileInRegionX = tile.x % TOLERANCE_REGION_SIZE;
-    const tileInRegionZ = tile.z % TOLERANCE_REGION_SIZE;
+    // Use positive modulo to handle negative tile coordinates correctly
+    // In JS, -5 % 21 = -5, but we need 16 for correct quadrant selection
+    const tileInRegionX =
+      ((tile.x % TOLERANCE_REGION_SIZE) + TOLERANCE_REGION_SIZE) %
+      TOLERANCE_REGION_SIZE;
+    const tileInRegionZ =
+      ((tile.z % TOLERANCE_REGION_SIZE) + TOLERANCE_REGION_SIZE) %
+      TOLERANCE_REGION_SIZE;
     const halfRegion = TOLERANCE_REGION_SIZE / 2;
 
     // Pick direction to extend: if in upper half, extend +1; if in lower half, extend -1
     const extendX = tileInRegionX >= halfRegion ? 1 : -1;
     const extendZ = tileInRegionZ >= halfRegion ? 1 : -1;
 
-    const nearbyPlayerIds: string[] = [];
+    // Reuse pre-allocated buffers (clear by setting length)
+    const nearbyPlayerIds = this._nearbyPlayerIdsBuffer;
+    nearbyPlayerIds.length = 0;
 
     // Query 2x2 grid of regions
     for (let dx = 0; dx !== extendX + extendX; dx += extendX) {
@@ -679,8 +694,9 @@ export class AggroSystem extends SystemBase {
       }
     }
 
-    // Convert player IDs to entities
-    const players: Entity[] = [];
+    // Convert player IDs to entities (reuse buffer)
+    const players = this._nearbyPlayersBuffer;
+    players.length = 0;
     for (const playerId of nearbyPlayerIds) {
       const player = this.world.entities.items.get(playerId);
       if (player) {
@@ -702,8 +718,13 @@ export class AggroSystem extends SystemBase {
     const centerRegionX = Math.floor(tile.x / TOLERANCE_REGION_SIZE);
     const centerRegionZ = Math.floor(tile.z / TOLERANCE_REGION_SIZE);
 
-    const tileInRegionX = tile.x % TOLERANCE_REGION_SIZE;
-    const tileInRegionZ = tile.z % TOLERANCE_REGION_SIZE;
+    // Use positive modulo for negative coordinate support
+    const tileInRegionX =
+      ((tile.x % TOLERANCE_REGION_SIZE) + TOLERANCE_REGION_SIZE) %
+      TOLERANCE_REGION_SIZE;
+    const tileInRegionZ =
+      ((tile.z % TOLERANCE_REGION_SIZE) + TOLERANCE_REGION_SIZE) %
+      TOLERANCE_REGION_SIZE;
     const halfRegion = TOLERANCE_REGION_SIZE / 2;
 
     const extendX = tileInRegionX >= halfRegion ? 1 : -1;

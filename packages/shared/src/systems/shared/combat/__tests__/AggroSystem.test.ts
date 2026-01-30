@@ -630,5 +630,31 @@ describe("AggroSystem", () => {
       const count = system.getNearbyPlayerCount({ x: 5, y: 0, z: 5 });
       expect(count).toBe(1);
     });
+
+    it("handles negative tile coordinates correctly (positive modulo)", () => {
+      const privateSystem = system as unknown as {
+        updatePlayerTolerance: (
+          playerId: string,
+          position: { x: number; y: number; z: number },
+        ) => void;
+      };
+
+      // Add player in negative region -1:-1 (position -10, -10)
+      privateSystem.updatePlayerTolerance("player1", { x: -10, y: 0, z: -10 });
+
+      // Query from negative position should find the player
+      // Position -5,-5 is in region -1:-1, and -10,-10 is also in region -1:-1
+      // The positive modulo fix ensures quadrant selection works for negative coords
+      const count = system.getNearbyPlayerCount({ x: -5, y: 0, z: -5 });
+      expect(count).toBe(1);
+
+      // Also verify getRegionIdForPosition handles negatives correctly
+      expect(system.getRegionIdForPosition({ x: -10, y: 0, z: -10 })).toBe(
+        "-1:-1",
+      );
+      expect(system.getRegionIdForPosition({ x: -22, y: 0, z: -22 })).toBe(
+        "-2:-2",
+      );
+    });
   });
 });
