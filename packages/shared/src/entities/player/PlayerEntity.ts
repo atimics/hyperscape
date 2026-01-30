@@ -350,6 +350,7 @@ export class PlayerEntity extends CombatantEntity {
         cooking: defaultSkill,
         smithing: defaultSkill,
         agility: defaultSkill,
+        crafting: defaultSkill,
       },
 
       // Equipment - initially empty

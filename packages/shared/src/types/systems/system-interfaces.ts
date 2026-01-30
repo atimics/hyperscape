@@ -706,7 +706,8 @@ export interface XPDrop {
     | "firemaking"
     | "cooking"
     | "smithing"
-    | "agility";
+    | "agility"
+    | "crafting";
   amount: number;
   timestamp: number;
   playerId: string;
