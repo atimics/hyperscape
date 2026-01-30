@@ -229,12 +229,10 @@ export class EquipmentSystem extends SystemBase {
       const typedData = data as {
         playerId: string;
         itemId: string;
-        slot: string;
       };
-      await this.equipItem({
+      await this.tryEquipItem({
         playerId: typedData.playerId,
         itemId: typedData.itemId,
-        slot: typedData.slot,
         inventorySlot: undefined,
       });
     });
@@ -259,9 +257,17 @@ export class EquipmentSystem extends SystemBase {
         itemId: string;
         slot: string;
       };
+      const itemData = this.getItemData(typedData.itemId);
+      if (!itemData) {
+        Logger.systemError(
+          "EquipmentSystem",
+          `FORCE_EQUIP: unknown item "${typedData.itemId}" for player ${typedData.playerId}`,
+        );
+        return;
+      }
       this.handleForceEquip({
         playerId: typedData.playerId,
-        item: this.getItemData(typedData.itemId)!,
+        item: itemData,
         slot: typedData.slot,
       });
     });
@@ -826,6 +832,7 @@ export class EquipmentSystem extends SystemBase {
 
   private cleanupPlayerEquipment(playerId: string): void {
     this.playerEquipment.delete(playerId);
+    this.playerSkills.delete(playerId);
   }
 
   private async handleItemRightClick(data: {
@@ -1107,7 +1114,14 @@ export class EquipmentSystem extends SystemBase {
     this.sendMessage(data.playerId, `Equipped ${itemData.name}.`, "info");
 
     // Save to database after equipping - MUST await to prevent data loss on logout
-    await this.saveEquipmentToDatabase(data.playerId);
+    try {
+      await this.saveEquipmentToDatabase(data.playerId);
+    } catch (err) {
+      Logger.systemError(
+        "EquipmentSystem",
+        `Failed to save equipment after equip for ${data.playerId}: ${err}`,
+      );
+    }
   }
 
   private async unequipItem(data: {
@@ -1224,7 +1238,14 @@ export class EquipmentSystem extends SystemBase {
     this.sendMessage(data.playerId, `Unequipped ${itemName}.`, "info");
 
     // Save to database after unequipping - MUST await to prevent data loss on logout
-    await this.saveEquipmentToDatabase(data.playerId);
+    try {
+      await this.saveEquipmentToDatabase(data.playerId);
+    } catch (err) {
+      Logger.systemError(
+        "EquipmentSystem",
+        `Failed to save equipment after unequip for ${data.playerId}: ${err}`,
+      );
+    }
   }
 
   private handleForceEquip(data: {
@@ -1485,10 +1506,7 @@ export class EquipmentSystem extends SystemBase {
         equipment.arrows,
       ].filter((slot): slot is EquipmentSlot => slot !== null);
 
-      const isEquipped = slots.some(
-        (slot) =>
-          slot.itemId === parseInt(itemIdStr, 10) || slot.itemId === itemId,
-      );
+      const isEquipped = slots.some((slot) => slot.itemId === itemIdStr);
       if (isEquipped) {
         return true;
       }

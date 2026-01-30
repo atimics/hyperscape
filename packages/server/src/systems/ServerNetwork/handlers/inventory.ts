@@ -24,7 +24,9 @@ import {
   World,
   COMBAT_CONSTANTS,
   INPUT_LIMITS,
+  DeathState,
 } from "@hyperscape/shared";
+import { getTradingSystem } from "./trade/helpers";
 import {
   isValidItemId,
   isValidInventorySlot,
@@ -428,6 +430,33 @@ export function handleEquipItem(
     }
   }
 
+  // Block equip during active trades (OSRS: can't change gear mid-trade)
+  const tradingSystemEquip = getTradingSystem(world);
+  if (tradingSystemEquip?.isPlayerInTrade(playerEntity.id)) {
+    sendInventoryError(
+      socket,
+      "equip",
+      "You can't change equipment during a trade.",
+    );
+    return;
+  }
+
+  // Block equip while dead (OSRS: can't change gear while dead)
+  const entityDataEquip = playerEntity.data as
+    | { deathState?: DeathState }
+    | undefined;
+  if (
+    entityDataEquip?.deathState === DeathState.DYING ||
+    entityDataEquip?.deathState === DeathState.DEAD
+  ) {
+    sendInventoryError(
+      socket,
+      "equip",
+      "You can't change equipment while dead.",
+    );
+    return;
+  }
+
   // Emit event for EquipmentSystem to handle
   world.emit(EventType.INVENTORY_ITEM_RIGHT_CLICK, {
     playerId: playerEntity.id,
@@ -593,6 +622,33 @@ export function handleUnequipItem(
       socket,
       "unequip",
       "You can't change equipment during a duel.",
+    );
+    return;
+  }
+
+  // Block unequip during active trades (OSRS: can't change gear mid-trade)
+  const tradingSystemUnequip = getTradingSystem(world);
+  if (tradingSystemUnequip?.isPlayerInTrade(playerEntity.id)) {
+    sendInventoryError(
+      socket,
+      "unequip",
+      "You can't change equipment during a trade.",
+    );
+    return;
+  }
+
+  // Block unequip while dead (OSRS: can't change gear while dead)
+  const entityDataUnequip = playerEntity.data as
+    | { deathState?: DeathState }
+    | undefined;
+  if (
+    entityDataUnequip?.deathState === DeathState.DYING ||
+    entityDataUnequip?.deathState === DeathState.DEAD
+  ) {
+    sendInventoryError(
+      socket,
+      "unequip",
+      "You can't change equipment while dead.",
     );
     return;
   }
