@@ -633,6 +633,68 @@ export interface SmithingCompletePayload {
 }
 
 // =========================================================================
+// CRAFTING EVENT PAYLOADS
+// =========================================================================
+
+/**
+ * Player initiated crafting (used needle, chisel, or gold bar on furnace)
+ */
+export interface CraftingInteractPayload {
+  playerId: string;
+  /** How the crafting was initiated */
+  triggerType: "needle" | "chisel" | "furnace";
+  /** Optional station entity ID for furnace crafting */
+  stationId?: string;
+}
+
+/**
+ * Crafting interface opened - show available recipes to player
+ */
+export interface CraftingInterfaceOpenPayload {
+  playerId: string;
+  availableRecipes: Array<{
+    output: string;
+    name: string;
+    category: string;
+    inputs: Array<{ item: string; amount: number }>;
+    tools: string[];
+    level: number;
+    xp: number;
+    meetsLevel: boolean;
+    hasInputs: boolean;
+  }>;
+  station: string;
+}
+
+/**
+ * Request to craft a specific item
+ */
+export interface ProcessingCraftingRequestPayload {
+  playerId: string;
+  recipeId: string;
+  quantity: number;
+}
+
+/**
+ * Crafting process started
+ */
+export interface CraftingStartPayload {
+  playerId: string;
+  recipeId: string;
+}
+
+/**
+ * Crafting batch completed
+ */
+export interface CraftingCompletePayload {
+  playerId: string;
+  recipeId: string;
+  outputItemId: string;
+  totalCrafted: number;
+  totalXp: number;
+}
+
+// =========================================================================
 // TYPE-SAFE EVENT MAPPING
 // =========================================================================
 
@@ -974,6 +1036,13 @@ export interface EventMap {
   [EventType.SMITHING_START]: SmithingStartPayload;
   [EventType.SMITHING_COMPLETE]: SmithingCompletePayload;
   [EventType.PROCESSING_SMITHING_REQUEST]: ProcessingSmithingRequestPayload;
+
+  // Crafting Events (leather, jewelry, gem cutting)
+  [EventType.CRAFTING_INTERACT]: CraftingInteractPayload;
+  [EventType.CRAFTING_INTERFACE_OPEN]: CraftingInterfaceOpenPayload;
+  [EventType.CRAFTING_START]: CraftingStartPayload;
+  [EventType.CRAFTING_COMPLETE]: CraftingCompletePayload;
+  [EventType.PROCESSING_CRAFTING_REQUEST]: ProcessingCraftingRequestPayload;
 
   // Quest Events
   [EventType.QUEST_START_CONFIRM]: QuestStartConfirmPayload;

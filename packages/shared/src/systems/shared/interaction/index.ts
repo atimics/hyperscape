@@ -23,3 +23,6 @@ export * from "./CookingSystem";
 // Smithing skill systems (furnace smelting, anvil smithing)
 export * from "./SmeltingSystem";
 export * from "./SmithingSystem";
+
+// Crafting skill system (leather, jewelry, gem cutting)
+export * from "./CraftingSystem";

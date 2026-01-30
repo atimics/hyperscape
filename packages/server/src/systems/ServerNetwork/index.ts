@@ -1659,6 +1659,70 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       });
     };
 
+    // Crafting - player initiated crafting (needle, chisel, or furnace jewelry)
+    this.handlers["onCraftingSourceInteract"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      const payload = data as {
+        triggerType?: string;
+        stationId?: string;
+      };
+      if (!payload.triggerType) return;
+
+      // Validate triggerType
+      if (!["needle", "chisel", "furnace"].includes(payload.triggerType)) {
+        return;
+      }
+
+      // Emit event for CraftingSystem to handle
+      this.world.emit(EventType.CRAFTING_INTERACT, {
+        playerId: player.id,
+        triggerType: payload.triggerType,
+        stationId: payload.stationId,
+      });
+    };
+
+    // Processing crafting - player selected item to craft from UI
+    this.handlers["onProcessingCrafting"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      // Rate limiting - prevent request spam
+      if (!this.canProcessRequest(player.id)) {
+        return;
+      }
+
+      const payload = data as {
+        recipeId?: unknown;
+        quantity?: unknown;
+      };
+
+      // Type validation
+      if (typeof payload.recipeId !== "string") {
+        return;
+      }
+
+      // Length validation (prevent memory abuse)
+      if (payload.recipeId.length > 64) {
+        return;
+      }
+
+      // Quantity validation with bounds
+      const quantity =
+        typeof payload.quantity === "number" &&
+        Number.isFinite(payload.quantity)
+          ? Math.floor(Math.max(1, Math.min(payload.quantity, 10000)))
+          : 1;
+
+      // Emit event for CraftingSystem to handle
+      this.world.emit(EventType.PROCESSING_CRAFTING_REQUEST, {
+        playerId: player.id,
+        recipeId: payload.recipeId,
+        quantity,
+      });
+    };
+
     // Route movement and combat through action queue for OSRS-style tick processing
     // Actions are queued and processed on tick boundaries, not immediately
     this.handlers["onMoveRequest"] = (socket, data) => {

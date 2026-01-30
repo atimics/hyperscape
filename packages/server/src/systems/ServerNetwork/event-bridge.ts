@@ -97,6 +97,7 @@ export class EventBridge {
     this.setupStoreEvents();
     this.setupFireEvents();
     this.setupSmeltingEvents();
+    this.setupCraftingEvents();
     this.setupQuestEvents();
     this.setupTradeEvents();
   }
@@ -1136,6 +1137,46 @@ export class EventBridge {
       });
     } catch (_err) {
       console.error("[EventBridge] Error setting up smelting events:", _err);
+    }
+  }
+
+  /**
+   * Setup crafting system event listeners
+   *
+   * Forwards crafting interface open events to specific players
+   * so they can see the crafting UI with available recipes.
+   *
+   * @private
+   */
+  private setupCraftingEvents(): void {
+    try {
+      // Forward crafting interface open events to specific player
+      this.world.on(EventType.CRAFTING_INTERFACE_OPEN, (payload: unknown) => {
+        const data = payload as {
+          playerId: string;
+          availableRecipes: Array<{
+            output: string;
+            name: string;
+            category: string;
+            inputs: Array<{ item: string; amount: number }>;
+            tools: string[];
+            level: number;
+            xp: number;
+            meetsLevel: boolean;
+            hasInputs: boolean;
+          }>;
+          station: string;
+        };
+
+        if (data.playerId) {
+          this.broadcast.sendToPlayer(data.playerId, "craftingInterfaceOpen", {
+            availableRecipes: data.availableRecipes,
+            station: data.station,
+          });
+        }
+      });
+    } catch (_err) {
+      console.error("[EventBridge] Error setting up crafting events:", _err);
     }
   }
 
