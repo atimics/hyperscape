@@ -1372,6 +1372,21 @@ export class DataManager {
       warnings.push("No treasure locations found in TREASURE_LOCATIONS");
     }
 
+    // Validate equipSlot values match valid EquipmentSlotName or "2h"
+    if (itemCount > 0) {
+      const validSlots = new Set<string>([
+        ...Object.values(EquipmentSlotName),
+        "2h",
+      ]);
+      for (const [itemId, item] of ITEMS) {
+        if (item.equipSlot && !validSlots.has(item.equipSlot)) {
+          errors.push(
+            `Item "${itemId}" has invalid equipSlot "${item.equipSlot}" (valid: ${[...validSlots].join(", ")})`,
+          );
+        }
+      }
+    }
+
     // Validate cross-references (only if we have data)
     if (itemCount > 0 && npcCount > 0) {
       this.validateCrossReferences(errors, warnings);

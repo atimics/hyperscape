@@ -760,6 +760,21 @@ export class EquipmentSystem extends SystemBase {
 
     // If equipping a 2h weapon, unequip shield first
     if (is2hWeapon && slot === "weapon" && equipment.shield?.itemId) {
+      // Pre-check inventory space before attempting shield auto-unequip
+      const invSystemForShield =
+        this.world.getSystem<InventorySystem>("inventory");
+      if (
+        invSystemForShield &&
+        !invSystemForShield.hasSpace(data.playerId, 1)
+      ) {
+        this.sendMessage(
+          data.playerId,
+          "Your inventory is too full to unequip the shield for a 2-handed weapon.",
+          "warning",
+        );
+        return;
+      }
+
       await this.unequipItem({
         playerId: data.playerId,
         slot: "shield",
@@ -1780,17 +1795,17 @@ export class EquipmentSystem extends SystemBase {
   private async performAutoSave(): Promise<void> {
     if (!this.databaseSystem) return;
 
-    for (const playerId of this.playerEquipment.keys()) {
-      try {
-        await this.saveEquipmentToDatabase(playerId);
-      } catch (error) {
-        Logger.systemError(
-          "EquipmentSystem",
-          `Error during auto-save for player ${playerId}`,
-          error instanceof Error ? error : new Error(String(error)),
-        );
-      }
-    }
+    const savePromises = Array.from(this.playerEquipment.keys()).map(
+      (playerId) =>
+        this.saveEquipmentToDatabase(playerId).catch((error) => {
+          Logger.systemError(
+            "EquipmentSystem",
+            `Error during auto-save for player ${playerId}`,
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }),
+    );
+    await Promise.allSettled(savePromises);
   }
 
   /**
