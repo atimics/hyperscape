@@ -101,6 +101,37 @@ export interface CraftingManifest {
 }
 
 /**
+ * Tanning recipe from recipes/tanning.json
+ */
+export interface TanningRecipeManifest {
+  input: string;
+  output: string;
+  cost: number;
+  name: string;
+}
+
+/**
+ * Full manifest structure for recipes/tanning.json
+ */
+export interface TanningManifest {
+  recipes: TanningRecipeManifest[];
+}
+
+/**
+ * Tanning recipe data for runtime use
+ */
+export interface TanningRecipeData {
+  /** Input hide item ID (e.g., "cowhide") */
+  input: string;
+  /** Output leather item ID (e.g., "leather") */
+  output: string;
+  /** Coin cost per hide tanned */
+  cost: number;
+  /** Display name */
+  name: string;
+}
+
+/**
  * Crafting recipe data for runtime use
  */
 export interface CraftingRecipeData {
@@ -276,6 +307,10 @@ export class ProcessingDataProvider {
   private smeltingManifest: SmeltingManifest | null = null;
   private smithingManifest: SmithingManifest | null = null;
   private craftingManifest: CraftingManifest | null = null;
+  private tanningManifest: TanningManifest | null = null;
+
+  // Tanning lookup tables
+  private tanningRecipeMap = new Map<string, TanningRecipeData>();
 
   // ============================================================================
   // PRE-ALLOCATED BUFFERS (Memory optimization - avoid allocation in hot paths)
@@ -339,6 +374,13 @@ export class ProcessingDataProvider {
   }
 
   /**
+   * Load tanning recipes from manifest
+   */
+  public loadTanningRecipes(manifest: TanningManifest): void {
+    this.tanningManifest = manifest;
+  }
+
+  /**
    * Check if recipe manifests are loaded
    */
   public hasRecipeManifests(): boolean {
@@ -347,7 +389,8 @@ export class ProcessingDataProvider {
       this.firemakingManifest ||
       this.smeltingManifest ||
       this.smithingManifest ||
-      this.craftingManifest
+      this.craftingManifest ||
+      this.tanningManifest
     );
   }
 
@@ -390,10 +433,14 @@ export class ProcessingDataProvider {
       this.buildCraftingDataFromManifest();
     }
 
+    if (this.tanningManifest) {
+      this.buildTanningDataFromManifest();
+    }
+
     this.isInitialized = true;
 
     console.log(
-      `[ProcessingDataProvider] Initialized: ${this.cookableItemIds.size} cookable items, ${this.burneableLogIds.size} burnable logs, ${this.smeltableBarIds.size} smeltable bars, ${this.smithableItemIds.size} smithable items, ${this.craftableItemIds.size} craftable items`,
+      `[ProcessingDataProvider] Initialized: ${this.cookableItemIds.size} cookable items, ${this.burneableLogIds.size} burnable logs, ${this.smeltableBarIds.size} smeltable bars, ${this.smithableItemIds.size} smithable items, ${this.craftableItemIds.size} craftable items, ${this.tanningRecipeMap.size} tanning recipes`,
     );
   }
 
@@ -413,6 +460,7 @@ export class ProcessingDataProvider {
     this.craftingRecipeMap.clear();
     this.craftableItemIds.clear();
     this.craftingRecipesByCategory.clear();
+    this.tanningRecipeMap.clear();
     this.isInitialized = false;
     this.initialize();
   }
@@ -1240,6 +1288,51 @@ export class ProcessingDataProvider {
   }
 
   // ==========================================================================
+  // TANNING DATA
+  // ==========================================================================
+
+  /**
+   * Build tanning data from manifest
+   */
+  private buildTanningDataFromManifest(): void {
+    if (!this.tanningManifest) return;
+
+    for (const recipe of this.tanningManifest.recipes) {
+      const data: TanningRecipeData = {
+        input: recipe.input,
+        output: recipe.output,
+        cost: recipe.cost,
+        name: recipe.name,
+      };
+      this.tanningRecipeMap.set(recipe.input, data);
+    }
+  }
+
+  /**
+   * Get tanning recipe by input hide item ID
+   */
+  public getTanningRecipe(inputItemId: string): TanningRecipeData | null {
+    this.ensureInitialized();
+    return this.tanningRecipeMap.get(inputItemId) || null;
+  }
+
+  /**
+   * Get all tanning recipes
+   */
+  public getAllTanningRecipes(): TanningRecipeData[] {
+    this.ensureInitialized();
+    return Array.from(this.tanningRecipeMap.values());
+  }
+
+  /**
+   * Check if an item can be tanned
+   */
+  public isTannableItem(itemId: string): boolean {
+    this.ensureInitialized();
+    return this.tanningRecipeMap.has(itemId);
+  }
+
+  // ==========================================================================
   // UTILITY
   // ==========================================================================
 
@@ -1269,6 +1362,7 @@ export class ProcessingDataProvider {
     smeltableBars: number;
     smithingRecipes: number;
     craftingRecipes: number;
+    tanningRecipes: number;
     isInitialized: boolean;
   } {
     this.ensureInitialized();
@@ -1278,6 +1372,7 @@ export class ProcessingDataProvider {
       smeltableBars: this.smeltableBarIds.size,
       smithingRecipes: this.smithingRecipeMap.size,
       craftingRecipes: this.craftingRecipeMap.size,
+      tanningRecipes: this.tanningRecipeMap.size,
       isInitialized: this.isInitialized,
     };
   }

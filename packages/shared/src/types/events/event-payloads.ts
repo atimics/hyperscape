@@ -695,6 +695,53 @@ export interface CraftingCompletePayload {
 }
 
 // =========================================================================
+// TANNING EVENT PAYLOADS
+// =========================================================================
+
+/**
+ * Player interacted with tanner NPC
+ */
+export interface TanningInteractPayload {
+  playerId: string;
+  npcId: string;
+}
+
+/**
+ * Tanning interface opened - show available hides to tan
+ */
+export interface TanningInterfaceOpenPayload {
+  playerId: string;
+  availableRecipes: Array<{
+    input: string;
+    output: string;
+    cost: number;
+    name: string;
+    hasHide: boolean;
+    hideCount: number;
+  }>;
+}
+
+/**
+ * Request to tan hides
+ */
+export interface TanningRequestPayload {
+  playerId: string;
+  inputItemId: string;
+  quantity: number;
+}
+
+/**
+ * Tanning completed
+ */
+export interface TanningCompletePayload {
+  playerId: string;
+  inputItemId: string;
+  outputItemId: string;
+  totalTanned: number;
+  totalCost: number;
+}
+
+// =========================================================================
 // TYPE-SAFE EVENT MAPPING
 // =========================================================================
 
@@ -1043,6 +1090,12 @@ export interface EventMap {
   [EventType.CRAFTING_START]: CraftingStartPayload;
   [EventType.CRAFTING_COMPLETE]: CraftingCompletePayload;
   [EventType.PROCESSING_CRAFTING_REQUEST]: ProcessingCraftingRequestPayload;
+
+  // Tanning Events (NPC tanner: hides → leather)
+  [EventType.TANNING_INTERACT]: TanningInteractPayload;
+  [EventType.TANNING_INTERFACE_OPEN]: TanningInterfaceOpenPayload;
+  [EventType.TANNING_REQUEST]: TanningRequestPayload;
+  [EventType.TANNING_COMPLETE]: TanningCompletePayload;
 
   // Quest Events
   [EventType.QUEST_START_CONFIRM]: QuestStartConfirmPayload;

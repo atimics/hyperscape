@@ -1723,6 +1723,46 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       });
     };
 
+    // Tanning - player selected hide to tan from UI
+    this.handlers["onProcessingTanning"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      // Rate limiting - prevent request spam
+      if (!this.canProcessRequest(player.id)) {
+        return;
+      }
+
+      const payload = data as {
+        inputItemId?: unknown;
+        quantity?: unknown;
+      };
+
+      // Type validation
+      if (typeof payload.inputItemId !== "string") {
+        return;
+      }
+
+      // Length validation (prevent memory abuse)
+      if (payload.inputItemId.length > 64) {
+        return;
+      }
+
+      // Quantity validation with bounds
+      const quantity =
+        typeof payload.quantity === "number" &&
+        Number.isFinite(payload.quantity)
+          ? Math.floor(Math.max(1, Math.min(payload.quantity, 10000)))
+          : 1;
+
+      // Emit event for TanningSystem to handle
+      this.world.emit(EventType.TANNING_REQUEST, {
+        playerId: player.id,
+        inputItemId: payload.inputItemId,
+        quantity,
+      });
+    };
+
     // Route movement and combat through action queue for OSRS-style tick processing
     // Actions are queued and processed on tick boundaries, not immediately
     this.handlers["onMoveRequest"] = (socket, data) => {

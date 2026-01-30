@@ -26,3 +26,6 @@ export * from "./SmithingSystem";
 
 // Crafting skill system (leather, jewelry, gem cutting)
 export * from "./CraftingSystem";
+
+// Tanning system (NPC tanner: hides → leather)
+export * from "./TanningSystem";

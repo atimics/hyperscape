@@ -44,6 +44,7 @@ import {
   type SmeltingManifest,
   type SmithingManifest,
   type CraftingManifest,
+  type TanningManifest,
 } from "./ProcessingDataProvider";
 import {
   stationDataProvider,
@@ -908,6 +909,17 @@ export class DataManager {
       );
     }
 
+    // Load tanning recipes
+    try {
+      const tanningRes = await fetch(`${baseUrl}/recipes/tanning.json`);
+      const tanningManifest = (await tanningRes.json()) as TanningManifest;
+      processingDataProvider.loadTanningRecipes(tanningManifest);
+    } catch {
+      console.warn(
+        "[DataManager] recipes/tanning.json not found, tanning will be unavailable",
+      );
+    }
+
     // Rebuild ProcessingDataProvider to use the loaded manifests
     // This is necessary in case it was already lazy-initialized before manifests loaded
     processingDataProvider.rebuild();
@@ -1017,6 +1029,18 @@ export class DataManager {
     } catch {
       console.warn(
         "[DataManager] recipes/crafting.json not found, crafting will be unavailable",
+      );
+    }
+
+    // Load tanning recipes
+    try {
+      const tanningPath = path.join(recipesDir, "tanning.json");
+      const tanningData = await fs.readFile(tanningPath, "utf-8");
+      const tanningManifest = JSON.parse(tanningData) as TanningManifest;
+      processingDataProvider.loadTanningRecipes(tanningManifest);
+    } catch {
+      console.warn(
+        "[DataManager] recipes/tanning.json not found, tanning will be unavailable",
       );
     }
 

@@ -473,6 +473,12 @@ export enum EventType {
   CRAFTING_COMPLETE = "crafting:complete",
   PROCESSING_CRAFTING_REQUEST = "processing:crafting:request",
 
+  // Tanning Events (NPC tanner: hides → leather)
+  TANNING_INTERACT = "tanning:interact",
+  TANNING_INTERFACE_OPEN = "tanning:interface:open",
+  TANNING_REQUEST = "tanning:request",
+  TANNING_COMPLETE = "tanning:complete",
+
   // Death System
   DEATH_LOOT_COLLECT = "death:loot:collect",
   DEATH_HEADSTONE_EXPIRED = "death:headstone:expired",

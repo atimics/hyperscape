@@ -98,6 +98,7 @@ export class EventBridge {
     this.setupFireEvents();
     this.setupSmeltingEvents();
     this.setupCraftingEvents();
+    this.setupTanningEvents();
     this.setupQuestEvents();
     this.setupTradeEvents();
   }
@@ -1177,6 +1178,41 @@ export class EventBridge {
       });
     } catch (_err) {
       console.error("[EventBridge] Error setting up crafting events:", _err);
+    }
+  }
+
+  /**
+   * Setup tanning system event listeners
+   *
+   * Forwards tanning interface open events to specific players
+   * so they can see the tanning UI with available hides.
+   *
+   * @private
+   */
+  private setupTanningEvents(): void {
+    try {
+      // Forward tanning interface open events to specific player
+      this.world.on(EventType.TANNING_INTERFACE_OPEN, (payload: unknown) => {
+        const data = payload as {
+          playerId: string;
+          availableRecipes: Array<{
+            input: string;
+            output: string;
+            cost: number;
+            name: string;
+            hasHide: boolean;
+            hideCount: number;
+          }>;
+        };
+
+        if (data.playerId) {
+          this.broadcast.sendToPlayer(data.playerId, "tanningInterfaceOpen", {
+            availableRecipes: data.availableRecipes,
+          });
+        }
+      });
+    } catch (_err) {
+      console.error("[EventBridge] Error setting up tanning events:", _err);
     }
   }
 
