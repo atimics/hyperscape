@@ -1153,6 +1153,40 @@ export class InventoryInteractionSystem extends SystemBase {
       },
     });
 
+    // Needle: Use on leather/hides to craft
+    this.registerAction("processing", {
+      id: "use",
+      label: "Use",
+      priority: 1,
+      condition: (item: Item) => item.id === "needle",
+      callback: (playerId: string, itemId: string, slot: number | null) => {
+        this.startTargetingMode(playerId, itemId, slot ?? 0);
+      },
+    });
+
+    // Chisel: Use on uncut gems to cut
+    this.registerAction("processing", {
+      id: "use",
+      label: "Use",
+      priority: 1,
+      condition: (item: Item) => item.id === "chisel",
+      callback: (playerId: string, itemId: string, slot: number | null) => {
+        this.startTargetingMode(playerId, itemId, slot ?? 0);
+      },
+    });
+
+    // Crafting inputs (leather, uncut gems): Use on tool (reverse direction)
+    this.registerAction("processing", {
+      id: "use",
+      label: "Use",
+      priority: 1,
+      condition: (item: Item) =>
+        processingDataProvider.isCraftingInput(item.id),
+      callback: (playerId: string, itemId: string, slot: number | null) => {
+        this.startTargetingMode(playerId, itemId, slot ?? 0);
+      },
+    });
+
     // Universal actions
     this.registerAction("universal", {
       id: "examine",
@@ -1594,6 +1628,42 @@ export class InventoryInteractionSystem extends SystemBase {
         playerId,
         fishSlot: sourceSlot,
         fireId: targetId,
+      });
+    } else if (actionType === "crafting") {
+      // Crafting: needle + leather, chisel + uncut gem, or reverse
+      // Determine trigger type from source item
+      let triggerType: "needle" | "chisel" = "needle";
+      if (
+        sourceItemId === "chisel" ||
+        processingDataProvider
+          .getCraftingInputsForTool("chisel")
+          .has(sourceItemId)
+      ) {
+        triggerType = "chisel";
+      }
+
+      // Send to server for authoritative processing
+      if (this.world.network?.send) {
+        console.log(
+          "[InventoryInteractionSystem] 🔨 Sending craftingSourceInteract to server:",
+          { triggerType },
+        );
+        this.world.network.send("craftingSourceInteract", {
+          triggerType,
+        });
+      } else {
+        // Fallback: emit local event
+        this.emitTypedEvent(EventType.CRAFTING_INTERACT, {
+          playerId,
+          triggerType,
+        });
+      }
+
+      Logger.system("InventoryInteractionSystem", "Crafting request", {
+        playerId,
+        triggerType,
+        sourceItemId,
+        targetId,
       });
     }
 

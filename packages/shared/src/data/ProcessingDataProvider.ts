@@ -300,6 +300,8 @@ export class ProcessingDataProvider {
   private craftingRecipeMap = new Map<string, CraftingRecipeData>();
   private craftableItemIds = new Set<string>();
   private craftingRecipesByCategory = new Map<string, CraftingRecipeData[]>();
+  private craftingInputsByTool = new Map<string, Set<string>>();
+  private allCraftingInputIds = new Set<string>();
 
   // Loaded recipe manifests (set by DataManager)
   private cookingManifest: CookingManifest | null = null;
@@ -460,6 +462,8 @@ export class ProcessingDataProvider {
     this.craftingRecipeMap.clear();
     this.craftableItemIds.clear();
     this.craftingRecipesByCategory.clear();
+    this.craftingInputsByTool.clear();
+    this.allCraftingInputIds.clear();
     this.tanningRecipeMap.clear();
     this.isInitialized = false;
     this.initialize();
@@ -1186,12 +1190,56 @@ export class ProcessingDataProvider {
         this.craftingRecipesByCategory.get(recipe.category) || [];
       categoryRecipes.push(recipeData);
       this.craftingRecipesByCategory.set(recipe.category, categoryRecipes);
+
+      // Build tool → input item lookups for TargetValidator
+      for (const tool of recipe.tools) {
+        if (!this.craftingInputsByTool.has(tool)) {
+          this.craftingInputsByTool.set(tool, new Set<string>());
+        }
+        const toolInputs = this.craftingInputsByTool.get(tool)!;
+        for (const input of recipe.inputs) {
+          toolInputs.add(input.item);
+          this.allCraftingInputIds.add(input.item);
+        }
+      }
     }
   }
 
   // ==========================================================================
   // CRAFTING ACCESSORS
   // ==========================================================================
+
+  /**
+   * Get valid crafting input item IDs for a tool.
+   * e.g., "needle" → leather, green_dragon_leather, etc.
+   * e.g., "chisel" → uncut_sapphire, uncut_emerald, etc.
+   */
+  public getCraftingInputsForTool(toolId: string): Set<string> {
+    this.ensureInitialized();
+    return this.craftingInputsByTool.get(toolId) || new Set<string>();
+  }
+
+  /**
+   * Check if an item is a crafting input in any recipe.
+   */
+  public isCraftingInput(itemId: string): boolean {
+    this.ensureInitialized();
+    return this.allCraftingInputIds.has(itemId);
+  }
+
+  /**
+   * Get the tool ID required for a crafting input item.
+   * Returns the first matching tool or null if not found.
+   */
+  public getCraftingToolForInput(inputItemId: string): string | null {
+    this.ensureInitialized();
+    for (const [toolId, inputs] of this.craftingInputsByTool) {
+      if (inputs.has(inputItemId)) {
+        return toolId;
+      }
+    }
+    return null;
+  }
 
   /**
    * Check if an item is craftable
