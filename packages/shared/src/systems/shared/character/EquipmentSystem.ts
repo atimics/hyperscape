@@ -363,6 +363,13 @@ export class EquipmentSystem extends SystemBase {
         rangedStrength: 0,
         magicAttack: 0,
         magicDefense: 0,
+        defenseStab: 0,
+        defenseSlash: 0,
+        defenseCrush: 0,
+        defenseRanged: 0,
+        attackStab: 0,
+        attackSlash: 0,
+        attackCrush: 0,
       },
     };
 
@@ -661,6 +668,13 @@ export class EquipmentSystem extends SystemBase {
       rangedStrength: 0,
       magicAttack: 0,
       magicDefense: 0,
+      defenseStab: 0,
+      defenseSlash: 0,
+      defenseCrush: 0,
+      defenseRanged: 0,
+      attackStab: 0,
+      attackSlash: 0,
+      attackCrush: 0,
     };
 
     // Emit UI update event
@@ -757,6 +771,13 @@ export class EquipmentSystem extends SystemBase {
       rangedStrength: 0,
       magicAttack: 0,
       magicDefense: 0,
+      defenseStab: 0,
+      defenseSlash: 0,
+      defenseCrush: 0,
+      defenseRanged: 0,
+      attackStab: 0,
+      attackSlash: 0,
+      attackCrush: 0,
     };
 
     // Emit UI update event
@@ -1243,6 +1264,15 @@ export class EquipmentSystem extends SystemBase {
       // Magic bonuses (F2P)
       magicAttack: 0,
       magicDefense: 0,
+      // Per-style melee defence bonuses (OSRS combat triangle)
+      defenseStab: 0,
+      defenseSlash: 0,
+      defenseCrush: 0,
+      defenseRanged: 0,
+      // Per-style melee attack bonuses
+      attackStab: 0,
+      attackSlash: 0,
+      attackCrush: 0,
     };
 
     // Add bonuses from each equipped item
@@ -1277,6 +1307,24 @@ export class EquipmentSystem extends SystemBase {
           equipment.totalStats.magicAttack += bonuses.attackMagic;
         if (bonuses.defenseMagic)
           equipment.totalStats.magicDefense += bonuses.defenseMagic;
+
+        // Map per-style defence bonuses (OSRS combat triangle)
+        if (bonuses.defenseStab)
+          equipment.totalStats.defenseStab += bonuses.defenseStab;
+        if (bonuses.defenseSlash)
+          equipment.totalStats.defenseSlash += bonuses.defenseSlash;
+        if (bonuses.defenseCrush)
+          equipment.totalStats.defenseCrush += bonuses.defenseCrush;
+        if (bonuses.defenseRanged)
+          equipment.totalStats.defenseRanged += bonuses.defenseRanged;
+
+        // Map per-style attack bonuses
+        if (bonuses.attackStab)
+          equipment.totalStats.attackStab += bonuses.attackStab;
+        if (bonuses.attackSlash)
+          equipment.totalStats.attackSlash += bonuses.attackSlash;
+        if (bonuses.attackCrush)
+          equipment.totalStats.attackCrush += bonuses.attackCrush;
       }
     });
 

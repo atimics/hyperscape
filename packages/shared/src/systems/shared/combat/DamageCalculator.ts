@@ -24,6 +24,20 @@ export interface EquipmentStats {
   strength: number;
   defense: number;
   ranged: number;
+  // Per-style melee defence bonuses (OSRS combat triangle)
+  defenseStab?: number;
+  defenseSlash?: number;
+  defenseCrush?: number;
+  defenseRanged?: number;
+  // Per-style melee attack bonuses
+  attackStab?: number;
+  attackSlash?: number;
+  attackCrush?: number;
+  // Ranged/Magic bonuses
+  rangedAttack?: number;
+  rangedStrength?: number;
+  magicAttack?: number;
+  magicDefense?: number;
 }
 
 /**

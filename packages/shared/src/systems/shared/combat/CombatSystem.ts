@@ -158,6 +158,15 @@ export class CombatSystem extends SystemBase {
       rangedStrength: number;
       magicAttack: number;
       magicDefense: number;
+      // Per-style melee defence bonuses (OSRS combat triangle)
+      defenseStab: number;
+      defenseSlash: number;
+      defenseCrush: number;
+      defenseRanged: number;
+      // Per-style melee attack bonuses
+      attackStab: number;
+      attackSlash: number;
+      attackCrush: number;
     }
   >();
 
@@ -382,6 +391,14 @@ export class CombatSystem extends SystemBase {
           rangedStrength?: number;
           magicAttack?: number;
           magicDefense?: number;
+          // Optional per-style bonuses (OSRS combat triangle)
+          defenseStab?: number;
+          defenseSlash?: number;
+          defenseCrush?: number;
+          defenseRanged?: number;
+          attackStab?: number;
+          attackSlash?: number;
+          attackCrush?: number;
         };
       }) => {
         this.playerEquipmentStats.set(data.playerId, {
@@ -393,6 +410,13 @@ export class CombatSystem extends SystemBase {
           rangedStrength: data.equipmentStats.rangedStrength ?? 0,
           magicAttack: data.equipmentStats.magicAttack ?? 0,
           magicDefense: data.equipmentStats.magicDefense ?? 0,
+          defenseStab: data.equipmentStats.defenseStab ?? 0,
+          defenseSlash: data.equipmentStats.defenseSlash ?? 0,
+          defenseCrush: data.equipmentStats.defenseCrush ?? 0,
+          defenseRanged: data.equipmentStats.defenseRanged ?? 0,
+          attackStab: data.equipmentStats.attackStab ?? 0,
+          attackSlash: data.equipmentStats.attackSlash ?? 0,
+          attackCrush: data.equipmentStats.attackCrush ?? 0,
         });
       },
     );
