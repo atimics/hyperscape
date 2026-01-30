@@ -136,14 +136,7 @@ export class SmeltingSourceInteractionHandler extends BaseInteractionHandler {
       `[SmeltingSourceInteraction] Player clicked furnace for crafting at ${target.position.x}, ${target.position.z}`,
     );
 
-    // Emit CRAFTING_INTERACT event to open crafting interface
-    this.world.emit(EventType.CRAFTING_INTERACT, {
-      playerId: player.id,
-      triggerType: "furnace" as "needle" | "chisel" | "furnace",
-      stationId: target.entityId,
-    });
-
-    // Send to server
+    // Send to server — server CraftingSystem will process and send back craftingInterfaceOpen
     this.send("craftingSourceInteract", {
       triggerType: "furnace",
       stationId: target.entityId,

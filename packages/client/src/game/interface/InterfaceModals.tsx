@@ -840,7 +840,7 @@ export function InterfaceModalsRenderer({
           visible={true}
           onClose={() => setCraftingData(null)}
           title="Crafting"
-          width={700}
+          width={480}
         >
           <CraftingPanel
             availableRecipes={craftingData.availableRecipes}
