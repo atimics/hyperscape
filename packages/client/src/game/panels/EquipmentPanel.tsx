@@ -292,6 +292,28 @@ function renderEquipmentHoverTooltip(
       (item.bonuses.defense !== undefined && item.bonuses.defense !== 0) ||
       (item.bonuses.strength !== undefined && item.bonuses.strength !== 0));
 
+  // Check for per-style bonuses (armor system)
+  const b = item.bonuses ?? {};
+  const hasPerStyleDefence =
+    b.defenseStab !== undefined ||
+    b.defenseSlash !== undefined ||
+    b.defenseCrush !== undefined;
+  const hasPerStyleAttack =
+    b.attackStab !== undefined ||
+    b.attackSlash !== undefined ||
+    b.attackCrush !== undefined;
+  const hasMagicBonuses =
+    (b.attackMagic !== undefined && b.attackMagic !== 0) ||
+    (b.magicDefense !== undefined && b.magicDefense !== 0);
+  const hasRangedBonuses =
+    (b.attackRanged !== undefined && b.attackRanged !== 0) ||
+    (b.defenseRanged !== undefined && b.defenseRanged !== 0);
+  const hasDetailedBonuses =
+    hasPerStyleDefence ||
+    hasPerStyleAttack ||
+    hasMagicBonuses ||
+    hasRangedBonuses;
+
   return createPortal(
     <div
       className="pointer-events-none"
@@ -333,8 +355,130 @@ function renderEquipmentHoverTooltip(
         {equipSlot} • {rarity}
       </div>
 
-      {/* Stat bonuses */}
-      {hasBonuses && (
+      {/* Stat bonuses — detailed per-style for armor, simple for weapons */}
+      {hasDetailedBonuses ? (
+        <div
+          style={{
+            fontSize: "11px",
+            borderTop: `1px solid ${theme.colors.border.default}40`,
+            paddingTop: "6px",
+            marginBottom: "6px",
+          }}
+        >
+          {hasPerStyleDefence && (
+            <div
+              style={{
+                color: theme.colors.text.secondary,
+                marginBottom: "3px",
+              }}
+            >
+              <div style={{ marginBottom: "1px" }}>
+                <span style={{ color: theme.colors.text.muted }}>
+                  Defence:{" "}
+                </span>
+                {[
+                  b.defenseStab !== undefined &&
+                    `${b.defenseStab >= 0 ? "+" : ""}${b.defenseStab} stab`,
+                  b.defenseSlash !== undefined &&
+                    `${b.defenseSlash >= 0 ? "+" : ""}${b.defenseSlash} slash`,
+                  b.defenseCrush !== undefined &&
+                    `${b.defenseCrush >= 0 ? "+" : ""}${b.defenseCrush} crush`,
+                ]
+                  .filter(Boolean)
+                  .join(" / ")}
+              </div>
+              <div>
+                <span style={{ color: theme.colors.text.muted }}>
+                  {"         "}
+                </span>
+                {[
+                  b.magicDefense !== undefined && b.magicDefense !== 0 && (
+                    <span
+                      key="mdef"
+                      style={{
+                        color:
+                          b.magicDefense < 0
+                            ? theme.colors.state.danger
+                            : theme.colors.state.success,
+                      }}
+                    >
+                      {b.magicDefense >= 0 ? "+" : ""}
+                      {b.magicDefense} magic
+                    </span>
+                  ),
+                  b.defenseRanged !== undefined && (
+                    <span key="rdef">
+                      {b.defenseRanged >= 0 ? "+" : ""}
+                      {b.defenseRanged} ranged
+                    </span>
+                  ),
+                ]
+                  .filter(Boolean)
+                  .map((el, i) => (
+                    <React.Fragment key={i}>
+                      {i > 0 && " / "}
+                      {el}
+                    </React.Fragment>
+                  ))}
+              </div>
+            </div>
+          )}
+          {(hasMagicBonuses || hasRangedBonuses || hasPerStyleAttack) && (
+            <div style={{ color: theme.colors.text.secondary }}>
+              <span style={{ color: theme.colors.text.muted }}>Attack: </span>
+              {[
+                hasPerStyleAttack &&
+                  b.attackStab !== undefined &&
+                  b.attackStab !== 0 &&
+                  `${b.attackStab >= 0 ? "+" : ""}${b.attackStab} stab`,
+                hasPerStyleAttack &&
+                  b.attackSlash !== undefined &&
+                  b.attackSlash !== 0 &&
+                  `${b.attackSlash >= 0 ? "+" : ""}${b.attackSlash} slash`,
+                hasPerStyleAttack &&
+                  b.attackCrush !== undefined &&
+                  b.attackCrush !== 0 &&
+                  `${b.attackCrush >= 0 ? "+" : ""}${b.attackCrush} crush`,
+                b.attackMagic !== undefined && b.attackMagic !== 0 && (
+                  <span
+                    key="matk"
+                    style={{
+                      color:
+                        b.attackMagic < 0
+                          ? theme.colors.state.danger
+                          : theme.colors.state.success,
+                    }}
+                  >
+                    {b.attackMagic >= 0 ? "+" : ""}
+                    {b.attackMagic} magic
+                  </span>
+                ),
+                b.attackRanged !== undefined && b.attackRanged !== 0 && (
+                  <span
+                    key="ratk"
+                    style={{
+                      color:
+                        b.attackRanged < 0
+                          ? theme.colors.state.danger
+                          : theme.colors.state.success,
+                    }}
+                  >
+                    {b.attackRanged >= 0 ? "+" : ""}
+                    {b.attackRanged} ranged
+                  </span>
+                ),
+              ]
+                .filter(Boolean)
+                .map((el, i) => (
+                  <React.Fragment key={i}>
+                    {i > 0 && " / "}
+                    {el}
+                  </React.Fragment>
+                ))}
+            </div>
+          )}
+        </div>
+      ) : hasBonuses ? (
         <div
           style={{
             fontSize: "11px",
@@ -390,9 +534,9 @@ function renderEquipmentHoverTooltip(
               </div>
             )}
         </div>
-      )}
+      ) : null}
 
-      {/* Level requirement if any */}
+      {/* Level requirements */}
       {itemData?.requirements?.level && (
         <div
           style={{
@@ -402,6 +546,26 @@ function renderEquipmentHoverTooltip(
           }}
         >
           Requires Level {itemData.requirements.level}
+        </div>
+      )}
+      {itemData?.requirements?.skills && !itemData?.requirements?.level && (
+        <div
+          style={{
+            fontSize: "10px",
+            color: theme.colors.text.muted,
+            marginBottom: "4px",
+          }}
+        >
+          Requires{" "}
+          {Object.entries(
+            itemData.requirements.skills as Record<string, number>,
+          )
+            .filter(([, lvl]) => lvl > 1)
+            .map(
+              ([skill, lvl]) =>
+                `${lvl} ${skill.charAt(0).toUpperCase() + skill.slice(1)}`,
+            )
+            .join(", ")}
         </div>
       )}
 
