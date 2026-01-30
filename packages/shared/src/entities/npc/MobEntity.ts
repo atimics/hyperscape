@@ -125,6 +125,7 @@ import {
   getCameraPosition,
 } from "../../utils/rendering/AnimationLOD";
 import { RAYCAST_PROXY } from "../../systems/client/interaction/constants";
+import type { AggroSystem } from "../../systems/shared/combat/AggroSystem";
 
 // Polyfill ProgressEvent for Node.js server environment
 
@@ -1380,6 +1381,9 @@ export class MobEntity extends CombatantEntity {
       performAttack: (targetId, currentTick) => {
         this.combatManager.performAttack(targetId, currentTick);
       },
+      onEnterCombatRange: (currentTick) => {
+        this.combatManager.onEnterCombatRange(currentTick);
+      },
       isInCombat: () => this.combatManager.isInCombat(),
       exitCombat: () => this.combatManager.exitCombat(),
 
@@ -1389,7 +1393,8 @@ export class MobEntity extends CombatantEntity {
       getSpawnPoint: () => this._currentSpawnPoint,
       getDistanceFromSpawn: () => this.getSpawnDistanceTiles(), // OSRS Chebyshev tiles
       getWanderRadius: () => this.respawnManager.getSpawnAreaRadius(),
-      getLeashRange: () => this.config.leashRange ?? 7, // OSRS-accurate: 7 tiles max range from spawn
+      getLeashRange: () =>
+        this.config.leashRange ?? COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE,
       getCombatRange: () => this.config.combatRange,
 
       // Wander
@@ -2281,7 +2286,7 @@ export class MobEntity extends CombatantEntity {
    * @see https://oldschool.runescape.wiki/w/Aggressiveness
    */
   getLeashRange(): number {
-    return this.config.leashRange ?? 7;
+    return this.config.leashRange ?? COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE;
   }
 
   takeDamage(damage: number, attackerId?: string): boolean {
@@ -2614,14 +2619,24 @@ export class MobEntity extends CombatantEntity {
     }
 
     const currentPos = this.getPosition();
-    const players = this.world.getPlayers();
+
+    // Use spatial player index for O(k) lookup instead of O(P) iteration
+    // AggroSystem maintains a playersByRegion index using 21x21 tile regions
+    // This queries a 3x3 grid of regions (63x63 tiles) which covers any aggro range
+    const aggroSystem = this.world.getSystem("aggro") as
+      | AggroSystem
+      | undefined;
+    const players = aggroSystem
+      ? aggroSystem.getPlayersInNearbyRegions(currentPos)
+      : this.world.getPlayers(); // Fallback if AggroSystem not available
 
     // OSRS-Accurate Aggression Range:
     // The aggression range origin is the static spawn point of the NPC.
     // Aggression range = max range (leash) + attack range (combat range)
     // Players must be within this distance of SPAWN to be attacked.
     // @see https://oldschool.runescape.wiki/w/Aggressiveness
-    const leashRange = this.config.leashRange ?? 7;
+    const leashRange =
+      this.config.leashRange ?? COMBAT_CONSTANTS.DEFAULTS.NPC.LEASH_RANGE;
     const attackRange = Math.max(1, this.config.combatRange);
     const aggressionRange = leashRange + attackRange;
 
