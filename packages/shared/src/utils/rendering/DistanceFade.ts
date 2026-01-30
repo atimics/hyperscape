@@ -1,10 +1,40 @@
 /**
  * Distance-based entity fade using dithered dissolve shader.
  * Includes camera-to-player occlusion dissolve (RuneScape-style).
- * Falls back to opacity for VRM/incompatible materials.
+ *
+ * ## WebGPU/WebGL Support
+ * - WebGPU: Uses TSL (Three Shading Language) nodes for native WebGPU support
+ * - WebGL: Falls back to onBeforeCompile GLSL injection
+ * - VRM/incompatible: Falls back to opacity-based fade
+ *
+ * The TSL path is preferred for WebGPU as it provides better performance
+ * and doesn't require shader recompilation.
  */
 
-import THREE from "../../extras/three/three";
+import THREE, {
+  uniform,
+  sub,
+  add,
+  mul,
+  div,
+  Fn,
+  MeshStandardNodeMaterial,
+  float,
+  fract,
+  smoothstep,
+  positionWorld,
+  step,
+  max,
+  clamp,
+  sqrt,
+  length,
+  mod,
+  floor,
+  abs,
+  viewportCoordinate,
+  dot,
+  vec3,
+} from "../../extras/three/three";
 import { DISTANCE_CONSTANTS } from "../../constants/GameConstants";
 import { GPU_VEG_CONFIG } from "../../systems/shared/world/GPUVegetation";
 
@@ -44,6 +74,155 @@ export const enum FadeState {
   FADING = 1,
   CULLED = 2,
 }
+
+// ============================================================================
+// TSL-BASED DISSOLVE (WebGPU Native)
+// ============================================================================
+
+/** TSL Dissolve uniforms structure */
+export type TSLDissolveUniforms = {
+  fadeAmount: { value: number };
+  cameraPos: { value: THREE.Vector3 };
+  playerPos: { value: THREE.Vector3 };
+  occlusionEnabled: { value: number };
+};
+
+/**
+ * Apply TSL-based dissolve to a MeshStandardNodeMaterial.
+ * This is the preferred path for WebGPU as it uses native TSL nodes.
+ */
+function applyDissolveTSL(
+  material: THREE.MeshStandardNodeMaterial,
+  enableOcclusion: boolean = true,
+): TSLDissolveUniforms | null {
+  // Check if already patched
+  const matWithUniforms = material as THREE.MeshStandardNodeMaterial & {
+    _dissolveUniforms?: TSLDissolveUniforms;
+  };
+  if (matWithUniforms._dissolveUniforms) {
+    return matWithUniforms._dissolveUniforms;
+  }
+
+  // Create uniforms
+  const uFadeAmount = uniform(0.0);
+  const uCameraPos = uniform(new THREE.Vector3(0, 0, 0));
+  const uPlayerPos = uniform(new THREE.Vector3(0, 0, 0));
+  const uOcclusionEnabled = uniform(enableOcclusion ? 1.0 : 0.0);
+
+  // Pre-compute constants
+  const nearCameraFadeStart = float(GPU_VEG_CONFIG.NEAR_CAMERA_FADE_START);
+  const nearCameraFadeEnd = float(GPU_VEG_CONFIG.NEAR_CAMERA_FADE_END);
+  const occlusionCameraRadius = float(GPU_VEG_CONFIG.OCCLUSION_CAMERA_RADIUS);
+  const occlusionPlayerRadius = float(GPU_VEG_CONFIG.OCCLUSION_PLAYER_RADIUS);
+  const occlusionDistanceScale = float(GPU_VEG_CONFIG.OCCLUSION_DISTANCE_SCALE);
+  const occlusionNearMargin = float(GPU_VEG_CONFIG.OCCLUSION_NEAR_MARGIN);
+  const occlusionFarMargin = float(GPU_VEG_CONFIG.OCCLUSION_FAR_MARGIN);
+  const occlusionEdgeSharpness = float(GPU_VEG_CONFIG.OCCLUSION_EDGE_SHARPNESS);
+  const occlusionStrength = float(GPU_VEG_CONFIG.OCCLUSION_STRENGTH);
+
+  // Create alpha test node using TSL
+  material.alphaTestNode = Fn(() => {
+    const worldPos = positionWorld;
+
+    // Near-camera dissolve (prevents hard clipping at near plane)
+    const camToFrag = sub(worldPos, uCameraPos);
+    const camDist = length(camToFrag);
+    const nearCameraFade = sub(
+      float(1.0),
+      smoothstep(nearCameraFadeEnd, nearCameraFadeStart, camDist),
+    );
+
+    // Camera-to-player occlusion dissolve (RuneScape-style cone)
+    const camToPlayer = sub(uPlayerPos, uCameraPos);
+    const ctLengthSq = dot(camToPlayer, camToPlayer);
+    const ctLength = sqrt(ctLengthSq);
+    const ctDir = div(camToPlayer, max(ctLength, float(0.001)));
+
+    const projDist = dot(camToFrag, ctDir);
+    const inRangeNear = step(occlusionNearMargin, projDist);
+    const inRangeFar = step(projDist, sub(ctLength, occlusionFarMargin));
+    const inRange = mul(inRangeNear, inRangeFar);
+
+    const projPoint = add(uCameraPos, mul(projDist, ctDir));
+    const perpDist = length(sub(worldPos, projPoint));
+
+    const t = clamp(
+      div(projDist, max(ctLength, float(0.001))),
+      float(0.0),
+      float(1.0),
+    );
+    const coneRadius = add(
+      add(
+        occlusionCameraRadius,
+        mul(t, sub(occlusionPlayerRadius, occlusionCameraRadius)),
+      ),
+      mul(ctLength, occlusionDistanceScale),
+    );
+
+    const edgeStart = mul(coneRadius, sub(float(1.0), occlusionEdgeSharpness));
+    const occlusionFade = mul(
+      mul(
+        sub(float(1.0), smoothstep(edgeStart, coneRadius, perpDist)),
+        occlusionStrength,
+      ),
+      mul(inRange, uOcclusionEnabled),
+    );
+
+    // Combine all fade sources (base fade from uniform + near camera + occlusion)
+    const fadeWithNear = max(uFadeAmount, nearCameraFade);
+    const fadeValue = max(fadeWithNear, occlusionFade);
+
+    // Screen-space 4x4 Bayer dithering
+    const fragCoord = viewportCoordinate;
+    const ix = mod(floor(fragCoord.x), float(4.0));
+    const iy = mod(floor(fragCoord.y), float(4.0));
+
+    const bit0_x = mod(ix, float(2.0));
+    const bit1_x = floor(mul(ix, float(0.5)));
+    const bit0_y = mod(iy, float(2.0));
+    const bit1_y = floor(mul(iy, float(0.5)));
+    const xor0 = abs(sub(bit0_x, bit0_y));
+    const xor1 = abs(sub(bit1_x, bit1_y));
+
+    const bayerInt = add(
+      add(mul(xor0, float(8.0)), mul(bit0_y, float(4.0))),
+      add(mul(xor1, float(2.0)), bit1_y),
+    );
+    const ditherValue = mul(bayerInt, float(0.0625));
+
+    // RS3-style threshold: discard when fade >= dither
+    // Only apply dithering when fadeValue > 0, otherwise step(0,0)=1 causes holes
+    const hasAnyFade = step(float(0.001), fadeValue);
+    const ditherThreshold = mul(
+      step(ditherValue, fadeValue),
+      mul(hasAnyFade, float(2.0)),
+    );
+
+    return ditherThreshold;
+  })();
+
+  // Configure material for cutout rendering
+  material.transparent = false;
+  material.opacity = 1.0;
+  material.alphaTest = 0.5;
+  material.forceSinglePass = true;
+  material.needsUpdate = true;
+
+  // Store uniforms reference
+  const uniforms: TSLDissolveUniforms = {
+    fadeAmount: uFadeAmount,
+    cameraPos: uCameraPos,
+    playerPos: uPlayerPos,
+    occlusionEnabled: uOcclusionEnabled,
+  };
+  matWithUniforms._dissolveUniforms = uniforms;
+
+  return uniforms;
+}
+
+// ============================================================================
+// GLSL-BASED DISSOLVE (WebGL Fallback)
+// ============================================================================
 
 // Shader uniforms for dithered dissolve with occlusion support
 const DISSOLVE_SHADER_UNIFORMS = `
@@ -117,7 +296,7 @@ if (uOcclusionEnabled > 0.5) {
 if (fadeValue > 0.001 && fadeValue >= ditherValue) discard;
 `;
 
-/** Dissolve uniforms structure with occlusion support */
+/** GLSL Dissolve uniforms structure with occlusion support (WebGL fallback) */
 export type DissolveUniforms = {
   fadeAmount: { value: number };
   cameraPos: { value: THREE.Vector3 };
@@ -125,8 +304,12 @@ export type DissolveUniforms = {
   occlusionEnabled: { value: number };
 };
 
-/** Apply dissolve shader to material, returns uniform refs for updating fade */
-function applyDissolveShader(
+/**
+ * Apply GLSL-based dissolve shader to material (WebGL fallback).
+ * Returns uniform refs for updating fade.
+ * @deprecated Prefer TSL path via applyDissolveTSL for WebGPU
+ */
+function applyDissolveShaderGLSL(
   material: THREE.Material,
   enableOcclusion: boolean = true,
 ): DissolveUniforms | null {
@@ -180,6 +363,13 @@ function applyDissolveShader(
   return uniforms;
 }
 
+// ============================================================================
+// UNIFIED DISSOLVE UNIFORMS TYPE
+// ============================================================================
+
+/** Combined dissolve uniforms type (works for both TSL and GLSL paths) */
+export type UnifiedDissolveUniforms = DissolveUniforms | TSLDissolveUniforms;
+
 export interface FadeUpdateResult {
   state: FadeState;
   fadeAmount: number;
@@ -195,14 +385,28 @@ const _fadeResult: FadeUpdateResult = {
   visible: true,
 };
 
+/**
+ * Check if a material is a node material (TSL-compatible).
+ */
+function isNodeMaterial(
+  material: THREE.Material,
+): material is THREE.MeshStandardNodeMaterial {
+  return (
+    material != null &&
+    (material as THREE.Material & { isNodeMaterial?: boolean })
+      .isNodeMaterial === true
+  );
+}
+
 /** Manages distance-based fade for an entity (shader dissolve or opacity fallback) */
 export class DistanceFadeController {
   private config: Required<DistanceFadeConfig> & {
     enableOcclusionDissolve: boolean;
   };
   private rootObject: THREE.Object3D;
-  private materialUniforms: DissolveUniforms[] = [];
+  private materialUniforms: UnifiedDissolveUniforms[] = [];
   private useShaderFade: boolean = false;
+  private useTSL: boolean = false;
   private lastState: FadeState = FadeState.VISIBLE;
   private lastFadeAmount: number = 0;
 
@@ -233,7 +437,8 @@ export class DistanceFadeController {
   }
 
   /**
-   * Initialize shader-based fade for all meshes in the hierarchy
+   * Initialize shader-based fade for all meshes in the hierarchy.
+   * Prefers TSL path for MeshStandardNodeMaterial, falls back to GLSL for standard materials.
    */
   private initializeShaderFade(): void {
     this.rootObject.traverse((child) => {
@@ -248,7 +453,22 @@ export class DistanceFadeController {
             continue;
           }
 
-          const uniforms = applyDissolveShader(
+          // Try TSL path first for node materials
+          if (isNodeMaterial(material)) {
+            const uniforms = applyDissolveTSL(
+              material as THREE.MeshStandardNodeMaterial,
+              this.config.enableOcclusionDissolve,
+            );
+            if (uniforms) {
+              this.materialUniforms.push(uniforms);
+              this.useShaderFade = true;
+              this.useTSL = true;
+              continue;
+            }
+          }
+
+          // Fall back to GLSL path for standard materials
+          const uniforms = applyDissolveShaderGLSL(
             material,
             this.config.enableOcclusionDissolve,
           );
@@ -269,10 +489,7 @@ export class DistanceFadeController {
       material instanceof THREE.RawShaderMaterial
     )
       return true;
-    if (
-      (material as THREE.Material & { isNodeMaterial?: boolean }).isNodeMaterial
-    )
-      return true;
+    // Note: We now handle node materials with TSL, so don't skip them
     return false;
   }
 
@@ -446,9 +663,71 @@ export class DistanceFadeController {
   hasOcclusionDissolve(): boolean {
     return this.config.enableOcclusionDissolve && this.useShaderFade;
   }
+  /** Returns true if using TSL-based dissolve (WebGPU native) */
+  hasTSLDissolve(): boolean {
+    return this.useTSL;
+  }
 
   dispose(): void {
     this.materialUniforms.length = 0;
     this.useShaderFade = false;
+    this.useTSL = false;
   }
+}
+
+// ============================================================================
+// UTILITY EXPORTS
+// ============================================================================
+
+/**
+ * Creates a TSL-based dissolve material from an existing MeshStandardMaterial.
+ * This is the recommended approach for WebGPU as it uses native TSL nodes.
+ *
+ * @param source - Source material to clone properties from
+ * @param options - Dissolve configuration options
+ * @returns Material with TSL dissolve shader attached
+ */
+export function createTSLDissolveMaterial(
+  source: THREE.MeshStandardMaterial,
+  options: {
+    fadeStart?: number;
+    fadeEnd?: number;
+    enableOcclusion?: boolean;
+  } = {},
+): THREE.MeshStandardNodeMaterial & { dissolveUniforms: TSLDissolveUniforms } {
+  // Create node material with same properties as source
+  const material = new MeshStandardNodeMaterial();
+
+  // Copy properties from source
+  material.color.copy(source.color);
+  material.roughness = source.roughness;
+  material.metalness = source.metalness;
+  material.map = source.map;
+  material.normalMap = source.normalMap;
+  material.roughnessMap = source.roughnessMap;
+  material.metalnessMap = source.metalnessMap;
+  material.aoMap = source.aoMap;
+  material.emissiveMap = source.emissiveMap;
+  material.emissive.copy(source.emissive);
+  material.emissiveIntensity = source.emissiveIntensity;
+  material.side = source.side;
+  material.shadowSide = source.shadowSide;
+
+  // Apply dissolve
+  const uniforms = applyDissolveTSL(
+    material,
+    options.enableOcclusion !== false,
+  );
+
+  if (!uniforms) {
+    throw new Error("Failed to apply TSL dissolve to material");
+  }
+
+  // Return with attached uniforms
+  const result = material as THREE.MeshStandardNodeMaterial & {
+    dissolveUniforms: TSLDissolveUniforms;
+  };
+  result.dissolveUniforms = uniforms;
+
+  return result;
 }

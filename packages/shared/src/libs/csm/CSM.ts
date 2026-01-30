@@ -1,3 +1,27 @@
+/**
+ * Cascaded Shadow Maps (CSM) - WebGL Only
+ *
+ * @deprecated This module is for WebGL fallback only. For WebGPU, use CSMShadowNode instead.
+ *
+ * ## Migration Guide
+ * When using WebGPURenderer, replace CSM with CSMShadowNode:
+ *
+ * ```typescript
+ * // OLD (WebGL with CSM)
+ * const csm = new CSM({ camera, parent: scene, cascades: 3 });
+ * csm.setupMaterial(material);
+ *
+ * // NEW (WebGPU with CSMShadowNode)
+ * import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
+ * const csmNode = new CSMShadowNode(directionalLight, { cascades: 3 });
+ * directionalLight.shadow.shadowNode = csmNode;
+ * ```
+ *
+ * See Environment.ts for the actual WebGPU implementation using CSMShadowNode.
+ *
+ * @module CSM
+ */
+
 import {
   Vector2,
   Vector3,
@@ -69,6 +93,10 @@ interface CSMShaderInfo {
 
 /**
  * An implementation of Cascade Shadow Maps (CSM).
+ *
+ * @deprecated This class is for WebGL fallback only.
+ * When using WebGPURenderer, use CSMShadowNode from Three.js addons instead.
+ * See the module documentation above for migration guidance.
  *
  * This module can only be used with WebGLRenderer. When using WebGPURenderer,
  * use CSMShadowNode instead.
