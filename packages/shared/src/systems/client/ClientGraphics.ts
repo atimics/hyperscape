@@ -89,6 +89,14 @@ import {
   type PostProcessingComposer,
   DEPTH_BLUR_DEFAULTS,
 } from "../../utils/rendering/PostProcessingFactory";
+import {
+  setupGPUCompute,
+  updateGPUCompute,
+  cleanupGPUCompute,
+  isGPUComputeAvailable,
+  getGPUComputeManager,
+  type GPUComputeManager,
+} from "../../utils/compute";
 
 let renderer: UniversalRenderer | undefined;
 
@@ -130,6 +138,7 @@ export class ClientGraphics extends System {
   worldToScreenFactor: number = 0;
   isWebGPU: boolean = true;
   hasRendered: boolean = false;
+  gpuCompute: GPUComputeManager | null = null;
 
   constructor(world: World) {
     super(world);
@@ -191,6 +200,18 @@ export class ClientGraphics extends System {
     // Get max anisotropy
     this.maxAnisotropy = getMaxAnisotropy(this.renderer);
     THREE.Texture.DEFAULT_ANISOTROPY = this.maxAnisotropy;
+
+    // Initialize GPU compute infrastructure (WebGPU only)
+    if (this.isWebGPU) {
+      this.gpuCompute = setupGPUCompute(this.renderer, this.world);
+      if (this.gpuCompute) {
+        console.log("[ClientGraphics] GPU compute initialized:", {
+          grass: !!this.gpuCompute.grass?.isReady(),
+          particles: !!this.gpuCompute.particles?.isReady(),
+          terrain: !!this.gpuCompute.terrain?.isReady(),
+        });
+      }
+    }
 
     // Setup post-processing with TSL
     this.usePostprocessing =
@@ -351,6 +372,11 @@ export class ClientGraphics extends System {
     const fov = this.world.camera.fov;
     const fovRadians = THREE.MathUtils.degToRad(fov);
     this.worldToScreenFactor = (Math.tan(fovRadians / 2) * 2) / this.height;
+
+    // Update GPU compute state for this frame (frustum updates, etc.)
+    if (this.gpuCompute && isGPUComputeAvailable()) {
+      updateGPUCompute(this.world.camera, 0);
+    }
   }
 
   onPrefsChange = (changes: {
@@ -420,6 +446,11 @@ export class ClientGraphics extends System {
     if (this.composer) {
       this.composer.dispose();
       this.composer = null;
+    }
+    // Clean up GPU compute resources
+    if (this.gpuCompute) {
+      cleanupGPUCompute();
+      this.gpuCompute = null;
     }
     // Remove renderer from DOM if it was added
     if (this.renderer?.domElement && this.viewport) {
