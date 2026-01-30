@@ -72,15 +72,15 @@ function isValidEntityId(value: unknown): value is string {
 const VALID_EQUIPMENT_SLOTS = new Set([
   "weapon",
   "shield",
-  "head",
+  "helmet",
   "body",
   "legs",
-  "feet",
-  "hands",
+  "boots",
+  "gloves",
   "cape",
-  "neck",
+  "amulet",
   "ring",
-  "ammo",
+  "arrows",
 ]);
 
 /**
