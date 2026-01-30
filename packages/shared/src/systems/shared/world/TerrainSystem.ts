@@ -818,7 +818,8 @@ export class TerrainSystem extends System {
       "roadInfluence",
       new THREE.BufferAttribute(roadInfluences, 1),
     );
-    geometry.computeVertexNormals();
+    // Use height-field normals for seamless tile edges (not computeVertexNormals)
+    this.computeHeightFieldNormals(geometry, tileX, tileZ);
 
     // Store height data for persistence
     this.storeHeightData(tileX, tileZ, Array.from(heightData));
@@ -2036,13 +2037,23 @@ export class TerrainSystem extends System {
       const tileMinZ = tileZ * this.CONFIG.TILE_SIZE;
       const tileMaxZ = (tileZ + 1) * this.CONFIG.TILE_SIZE;
 
+      // Track if this is an edge vertex (for consistent height computation)
+      const isEdgeX =
+        Math.abs(x - tileMinX) < epsilon || Math.abs(x - tileMaxX) < epsilon;
+      const isEdgeZ =
+        Math.abs(z - tileMinZ) < epsilon || Math.abs(z - tileMaxZ) < epsilon;
+      const isEdgeVertex = isEdgeX || isEdgeZ;
+
       if (Math.abs(x - tileMinX) < epsilon) x = tileMinX;
       if (Math.abs(x - tileMaxX) < epsilon) x = tileMaxX;
       if (Math.abs(z - tileMinZ) < epsilon) z = tileMinZ;
       if (Math.abs(z - tileMaxZ) < epsilon) z = tileMaxZ;
 
-      // Generate height using our improved noise function
-      const height = this.getHeightAt(x, z);
+      // Generate height - use computed (deterministic) values for edge vertices
+      // to ensure consistency across tile boundaries, avoiding cache inconsistencies
+      const height = isEdgeVertex
+        ? this.getHeightAtComputed(x, z)
+        : this.getHeightAt(x, z);
 
       positions.setY(i, height);
       heightData.push(height);
@@ -2131,7 +2142,8 @@ export class TerrainSystem extends System {
       "roadInfluence",
       new THREE.BufferAttribute(roadInfluences, 1),
     );
-    geometry.computeVertexNormals();
+    // Use height-field normals for seamless tile edges (not computeVertexNormals)
+    this.computeHeightFieldNormals(geometry, tileX, tileZ);
 
     // Store height data for persistence
     this.storeHeightData(tileX, tileZ, heightData);
@@ -3565,6 +3577,54 @@ export class TerrainSystem extends System {
     const normal = this._tempVec3.set(-dhdx, 1, -dhdz);
     normal.normalize();
     return normal;
+  }
+
+  /**
+   * Compute vertex normals using height field gradients for seamless tile edges.
+   * Unlike computeVertexNormals() which only uses faces within a tile, this method
+   * samples the global height field to ensure normals are consistent across tile boundaries.
+   * This eliminates visible seams at lake/water edges and all tile borders.
+   */
+  private computeHeightFieldNormals(
+    geometry: THREE.PlaneGeometry,
+    tileX: number,
+    tileZ: number,
+  ): void {
+    const positions = geometry.attributes.position;
+    const normals = new Float32Array(positions.count * 3);
+    const sampleDistance = 0.5; // Small distance for gradient sampling
+
+    for (let i = 0; i < positions.count; i++) {
+      const localX = positions.getX(i);
+      const localZ = positions.getZ(i);
+
+      // Convert to world coordinates
+      const worldX = localX + tileX * this.CONFIG.TILE_SIZE;
+      const worldZ = localZ + tileZ * this.CONFIG.TILE_SIZE;
+
+      // Sample heights using getHeightAtComputed to avoid caching inconsistencies at edges
+      // This ensures deterministic normals regardless of tile generation order
+      const hL = this.getHeightAtComputed(worldX - sampleDistance, worldZ);
+      const hR = this.getHeightAtComputed(worldX + sampleDistance, worldZ);
+      const hD = this.getHeightAtComputed(worldX, worldZ - sampleDistance);
+      const hU = this.getHeightAtComputed(worldX, worldZ + sampleDistance);
+
+      // Partial derivatives: dh/dx and dh/dz
+      const dhdx = (hR - hL) / (2 * sampleDistance);
+      const dhdz = (hU - hD) / (2 * sampleDistance);
+
+      // Normal from height field: (-dhdx, 1, -dhdz), normalized
+      const nx = -dhdx;
+      const ny = 1;
+      const nz = -dhdz;
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+
+      normals[i * 3] = nx / len;
+      normals[i * 3 + 1] = ny / len;
+      normals[i * 3 + 2] = nz / len;
+    }
+
+    geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
   }
 
   private generateNoise(x: number, z: number): number {

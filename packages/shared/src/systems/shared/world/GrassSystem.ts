@@ -97,13 +97,13 @@ export const GRASS_CONFIG = {
   TILE_SIZE: 100,
 
   /** Base density: tufts per square meter (each tuft has BLADES_PER_TUFT blades) */
-  BASE_DENSITY: 12,
+  BASE_DENSITY: 32,
 
   /** Distance where grass starts fading (meters from player) */
-  FADE_START: 80,
+  FADE_START: 60,
 
   /** Distance where grass is fully invisible */
-  FADE_END: 120,
+  FADE_END: 100,
 
   /**
    * Shoreline grass cutoff - matches terrain shader's visual zones:
@@ -139,12 +139,12 @@ export const GRASS_CONFIG = {
   /** Dark grass color for variation (matches terrain grassDark) */
   DARK_COLOR: new THREE.Color(0.28, 0.48, 0.15),
 
-  // LOD - Dense close, sparse far
+  // LOD - Very dense close, rapidly thinning with clumping at distance
   /** Near distance for full density */
-  LOD_NEAR: 20,
+  LOD_NEAR: 10,
 
   /** Far distance for reduced density */
-  LOD_FAR: 40,
+  LOD_FAR: 20,
 
   /** Density reduction at far distance (0.5 = 50%) */
   LOD_FAR_DENSITY: 0.3,
@@ -442,9 +442,14 @@ function createGrassMaterial(): GrassMaterial {
   const flutterIntensity = float(GRASS_CONFIG.FLUTTER_INTENSITY);
 
   // LOD density thresholds (squared distances for performance)
-  const lodHalfDensitySq = float(50 * 50); // 50m: 1/2 density
-  const lodQuarterDensitySq = float(100 * 100); // 100m: 1/4 density
-  const lodEighthDensitySq = float(150 * 150); // 150m: 1/8 density
+  // Very dense close, rapidly thinning - creates natural look
+  const lodHalfDensitySq = float(10 * 10); // 10m: 1/2 density
+  const lodQuarterDensitySq = float(20 * 20); // 20m: 1/4 density
+  const lodEighthDensitySq = float(35 * 35); // 35m: 1/8 density
+
+  // Clumping threshold - beyond this distance, grass appears in clumps
+  const clumpStartSq = float(15 * 15); // 15m: start clumping
+  const clumpFullSq = float(30 * 30); // 30m: full clumping effect
 
   // Terrain colors (OSRS palette - same as TerrainShader)
   const terrainGrassGreen = vec3(0.3, 0.55, 0.15);
@@ -617,12 +622,12 @@ function createGrassMaterial(): GrassMaterial {
     return finalColor;
   })();
 
-  // ========== OPACITY NODE (BASE FADE + DISTANCE FADE + LOD DENSITY) ==========
-  // Performance optimization: reduce density at distance
-  // - Near: full density
-  // - 50m: 1/2 density (every other instance culled)
-  // - 100m: 1/4 density
-  // - 150m: 1/8 density
+  // ========== OPACITY NODE (BASE FADE + DISTANCE FADE + LOD DENSITY + CLUMPING) ==========
+  // Performance optimization: reduce density at distance with clumping
+  // - Near (0-10m): very dense, uniform
+  // - Mid (10-20m): medium density
+  // - Far (20-35m): sparse, clumped
+  // - Beyond 35m: very sparse, strongly clumped
   material.opacityNode = Fn(() => {
     const worldPos = positionWorld;
 
@@ -636,26 +641,40 @@ function createGrassMaterial(): GrassMaterial {
       mul(toPlayer.z, toPlayer.z),
     );
 
+    // ========== CLUMPING NOISE ==========
+    // Sample noise texture at world position to create clumps
+    // Larger scale = bigger clumps
+    const clumpScale = float(0.15); // ~6-7m clumps
+    const clumpUV = vec2(
+      mul(worldPos.x, clumpScale),
+      mul(worldPos.z, clumpScale),
+    );
+    const clumpNoise = texture(noiseTex, clumpUV).r;
+
+    // How much clumping to apply based on distance
+    // 0 at close range, 1 at far range
+    const clumpStrength = smoothstep(clumpStartSq, clumpFullSq, distSq);
+
+    // Clump threshold: at distance, grass only appears where noise > threshold
+    // Close: threshold = 0 (all grass visible)
+    // Far: threshold = 0.5 (only high-noise areas have grass)
+    const clumpThreshold = mul(clumpStrength, float(0.55));
+    const clumpVisible = smoothstep(
+      clumpThreshold,
+      add(clumpThreshold, float(0.1)),
+      clumpNoise,
+    );
+
     // ========== DISTANCE-BASED LOD DENSITY CULLING ==========
     // Use instance index hash to deterministically cull instances at distance
     // Golden ratio hash gives good distribution
     const instanceHash = fract(mul(float(instanceIndex), float(0.61803398875)));
 
-    // Determine LOD level based on distance
-    // Level 0 (< 50m): show all instances (hash < 1.0)
-    // Level 1 (50-100m): show 1/2 instances (hash < 0.5)
-    // Level 2 (100-150m): show 1/4 instances (hash < 0.25)
-    // Level 3 (150m+): show 1/8 instances (hash < 0.125)
-
-    // Calculate threshold based on distance
+    // Calculate threshold based on distance with more aggressive falloff
     // At distance 0: threshold = 1.0 (all visible)
-    // At distance 50m: threshold = 0.5
-    // At distance 100m: threshold = 0.25
-    // At distance 150m+: threshold = 0.125
-    const distanceLevel = smoothstep(float(0), lodEighthDensitySq, distSq);
-    // Exponential decay: 1.0 -> 0.5 -> 0.25 -> 0.125
-    // threshold = 1.0 * 0.5^(distanceLevel * 3)
-    // Since we can't do pow easily, use mix between thresholds
+    // At distance 10m: threshold = 0.5
+    // At distance 20m: threshold = 0.25
+    // At distance 35m+: threshold = 0.125
     const threshold1 = mix(
       float(1.0),
       float(0.5),
@@ -696,10 +715,10 @@ function createGrassMaterial(): GrassMaterial {
       worldPos.y,
     );
 
-    // Combine all factors: base fade, distance fade, shoreline fade, and LOD culling
+    // Combine all factors: base fade, distance fade, shoreline fade, LOD culling, and clumping
     const opacity = mul(
-      mul(mul(baseOpacity, distanceFade), shorelineFade),
-      lodVisible,
+      mul(mul(mul(baseOpacity, distanceFade), shorelineFade), lodVisible),
+      clumpVisible,
     );
 
     return opacity;
