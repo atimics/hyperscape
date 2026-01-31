@@ -39,6 +39,12 @@ interface CraftingSession {
   consumableUses: Map<string, number>;
 }
 
+/** Pre-built inventory state to avoid redundant scans */
+interface InventoryState {
+  counts: Map<string, number>;
+  itemIds: Set<string>;
+}
+
 export class CraftingSystem extends SystemBase {
   private readonly activeSessions = new Map<string, CraftingSession>();
   private readonly playerSkills = new Map<
@@ -48,6 +54,9 @@ export class CraftingSystem extends SystemBase {
 
   /** Track last processed tick to ensure once-per-tick processing */
   private lastProcessedTick = -1;
+
+  /** Reusable array for update loop to avoid allocating per tick */
+  private readonly completedPlayerIds: string[] = [];
 
   constructor(world: World) {
     super(world, {
@@ -279,8 +288,19 @@ export class CraftingSystem extends SystemBase {
       return;
     }
 
+    // Build inventory state once for all checks
+    const invState = this.getInventoryState(playerId);
+    if (!invState) {
+      this.emitTypedEvent(EventType.UI_MESSAGE, {
+        playerId,
+        message: "You have no items.",
+        type: "error",
+      });
+      return;
+    }
+
     // Check tools
-    if (!this.hasRequiredTools(playerId, recipe)) {
+    if (!this.hasRequiredTools(invState, recipe)) {
       const toolNames = recipe.tools.join(", ").replace(/_/g, " ");
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId,
@@ -291,7 +311,7 @@ export class CraftingSystem extends SystemBase {
     }
 
     // Check materials
-    if (!this.hasRequiredInputs(playerId, recipe)) {
+    if (!this.hasRequiredInputs(invState, recipe)) {
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId,
         message: "You don't have the required materials.",
@@ -301,7 +321,7 @@ export class CraftingSystem extends SystemBase {
     }
 
     // Check consumables (e.g., thread)
-    if (!this.hasRequiredConsumables(playerId, recipe)) {
+    if (!this.hasRequiredConsumables(invState, recipe)) {
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId,
         message: "You need thread to craft that.",
@@ -367,8 +387,15 @@ export class CraftingSystem extends SystemBase {
       return;
     }
 
+    // Build inventory state once for all checks
+    const invState = this.getInventoryState(playerId);
+    if (!invState) {
+      this.completeCrafting(playerId);
+      return;
+    }
+
     // Check materials for next craft
-    if (!this.hasRequiredInputs(playerId, recipe)) {
+    if (!this.hasRequiredInputs(invState, recipe)) {
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId,
         message: "You have run out of materials.",
@@ -379,7 +406,7 @@ export class CraftingSystem extends SystemBase {
     }
 
     // Check tools still present
-    if (!this.hasRequiredTools(playerId, recipe)) {
+    if (!this.hasRequiredTools(invState, recipe)) {
       this.emitTypedEvent(EventType.UI_MESSAGE, {
         playerId,
         message: "You no longer have the required tools.",
@@ -394,7 +421,7 @@ export class CraftingSystem extends SystemBase {
       const remaining = session.consumableUses.get(consumable.item) || 0;
       if (remaining <= 0) {
         // Need to consume a new thread/consumable from inventory
-        if (!this.hasRequiredConsumables(playerId, recipe)) {
+        if (!this.hasRequiredConsumables(invState, recipe)) {
           this.emitTypedEvent(EventType.UI_MESSAGE, {
             playerId,
             message: "You have run out of thread.",
@@ -529,46 +556,43 @@ export class CraftingSystem extends SystemBase {
   }
 
   /**
+   * Build inventory state once for use across multiple checks.
+   */
+  private getInventoryState(playerId: string): InventoryState | null {
+    const inventory = this.world.getInventory?.(playerId);
+    if (!inventory || !Array.isArray(inventory)) return null;
+
+    const counts = new Map<string, number>();
+    const itemIds = new Set<string>();
+    for (const item of inventory) {
+      if (!isLooseInventoryItem(item)) continue;
+      itemIds.add(item.itemId);
+      const count = counts.get(item.itemId) || 0;
+      counts.set(item.itemId, count + getItemQuantity(item));
+    }
+    return { counts, itemIds };
+  }
+
+  /**
    * Check if player has required tools in inventory
    */
   private hasRequiredTools(
-    playerId: string,
+    state: InventoryState,
     recipe: CraftingRecipeData,
   ): boolean {
     if (recipe.tools.length === 0) return true;
-
-    const inventory = this.world.getInventory?.(playerId);
-    if (!inventory || !Array.isArray(inventory)) return false;
-
-    const inventoryItemIds = new Set<string>();
-    for (const item of inventory) {
-      if (isLooseInventoryItem(item)) {
-        inventoryItemIds.add(item.itemId);
-      }
-    }
-
-    return recipe.tools.every((tool) => inventoryItemIds.has(tool));
+    return recipe.tools.every((tool) => state.itemIds.has(tool));
   }
 
   /**
    * Check if player has required input materials
    */
   private hasRequiredInputs(
-    playerId: string,
+    state: InventoryState,
     recipe: CraftingRecipeData,
   ): boolean {
-    const inventory = this.world.getInventory?.(playerId);
-    if (!inventory || !Array.isArray(inventory)) return false;
-
-    const inventoryCounts = new Map<string, number>();
-    for (const item of inventory) {
-      if (!isLooseInventoryItem(item)) continue;
-      const count = inventoryCounts.get(item.itemId) || 0;
-      inventoryCounts.set(item.itemId, count + getItemQuantity(item));
-    }
-
     return recipe.inputs.every((input) => {
-      const count = inventoryCounts.get(input.item) || 0;
+      const count = state.counts.get(input.item) || 0;
       return count >= input.amount;
     });
   }
@@ -577,22 +601,11 @@ export class CraftingSystem extends SystemBase {
    * Check if player has required consumables (e.g., thread)
    */
   private hasRequiredConsumables(
-    playerId: string,
+    state: InventoryState,
     recipe: CraftingRecipeData,
   ): boolean {
     if (recipe.consumables.length === 0) return true;
-
-    const inventory = this.world.getInventory?.(playerId);
-    if (!inventory || !Array.isArray(inventory)) return false;
-
-    const inventoryItemIds = new Set<string>();
-    for (const item of inventory) {
-      if (isLooseInventoryItem(item)) {
-        inventoryItemIds.add(item.itemId);
-      }
-    }
-
-    return recipe.consumables.every((c) => inventoryItemIds.has(c.item));
+    return recipe.consumables.every((c) => state.itemIds.has(c.item));
   }
 
   /**
@@ -636,12 +649,15 @@ export class CraftingSystem extends SystemBase {
     }
     this.lastProcessedTick = currentTick;
 
-    // Process all active sessions that have reached their completion tick
-    // Use Array.from to safely iterate while potentially modifying the map
-    for (const [playerId, session] of Array.from(this.activeSessions)) {
+    // Collect completed session IDs first, then process (avoids Map snapshot allocation)
+    this.completedPlayerIds.length = 0;
+    for (const [playerId, session] of this.activeSessions) {
       if (currentTick >= session.completionTick) {
-        this.completeCraft(playerId);
+        this.completedPlayerIds.push(playerId);
       }
+    }
+    for (const playerId of this.completedPlayerIds) {
+      this.completeCraft(playerId);
     }
   }
 
