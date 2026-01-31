@@ -191,8 +191,29 @@ const STORAGE_KEY = "hyperscape-window-layout";
  * - 13: Add anchor property to windows for responsive viewport scaling
  * - 14: New flush layout with proportional scaling (Minimap→Quests→Skills→Inventory→Menubar right column, Chat left, Action bar bottom center)
  * - 15: Improved flush layout with proper height distribution - right column fills entire viewport height
+ * - 16: Combat merged into Skills/Prayer window as first tab, menubar width aligned with inventory
+ * - 17: Simplified menubar - removed 3x3 snapping, simple scaling with min size
+ * - 18: Compact menubar height - brings right column panels closer to bottom
+ * - 19: Menubar positioned flush to bottom edge
+ * - 20: Increased mobile breakpoint to 1024, larger chat panel
+ * - 21: Menubar redesign - fluid 5x2 grid with buttons that scale with container
+ * - 22: Larger chat panel in default layout
+ * - 23: Wider minimap in default layout (300px)
+ * - 24: Vertically smaller chat panel
+ * - 25: Taller and slightly wider chat panel
+ * - 26: Consistent minWidth (235px) for right column panels (prayer, spells)
+ * - 27: Reduced minHeight for combat/skills panels (235px) for compact layout
+ * - 28: Increased minHeight for combat/skills/prayer panels (280px)
+ * - 29: Smaller menubar/action bar (height 62px from 80px)
+ * - 30: Wider chat panel in default layout
+ * - 31: Even smaller menubar/action bar (height 50px)
+ * - 32: Smaller action bar slots (30px from 36px)
+ * - 33: Action bar anchored flush to bottom of viewport
+ * - 34: Action bar positioned 4px lower (compensate for window chrome)
+ * - 35: Action bar flush at bottom (proper fix: -1px for border)
+ * - 36: Action bar stays centered when size changes
  */
-const SCHEMA_VERSION = 15;
+const SCHEMA_VERSION = 36;
 
 /** Panel ID to icon mapping for tab display migration */
 const PANEL_ICONS: Record<string, string> = {
@@ -588,6 +609,173 @@ const migrations: Record<number, MigrationFn> = {
   15: () => {
     debugLog(
       "[WindowStore Migration v15] Clearing all windows for improved flush layout",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v16: Combat merged into Skills/Prayer window as first tab
+  // Remove combat-window, menubar width aligned with inventory panel
+  16: () => {
+    debugLog(
+      "[WindowStore Migration v16] Clearing all windows - combat merged into skills/prayer window",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v17: Simplified menubar - removed 3x3 snapping, simple scaling with min size
+  17: () => {
+    debugLog(
+      "[WindowStore Migration v17] Clearing all windows - simplified menubar scaling",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v18: Compact menubar height - brings right column panels closer to bottom
+  18: () => {
+    debugLog(
+      "[WindowStore Migration v18] Clearing all windows - compact menubar height",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v19: Menubar positioned flush to bottom edge
+  19: () => {
+    debugLog(
+      "[WindowStore Migration v19] Clearing all windows - menubar flush to bottom",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v20: Increased mobile breakpoint to 1024, larger chat panel
+  20: () => {
+    debugLog(
+      "[WindowStore Migration v20] Clearing all windows - larger chat, tablet breakpoint",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v21: Menubar redesign - fluid 5x2 grid with buttons that scale with container
+  21: () => {
+    debugLog(
+      "[WindowStore Migration v21] Clearing all windows - menubar fluid grid redesign",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v22: Larger chat panel in default layout
+  22: () => {
+    debugLog(
+      "[WindowStore Migration v22] Clearing all windows - larger chat panel",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v23: Wider minimap in default layout (300px)
+  23: () => {
+    debugLog(
+      "[WindowStore Migration v23] Clearing all windows - wider minimap",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v24: Vertically smaller chat panel
+  24: () => {
+    debugLog(
+      "[WindowStore Migration v24] Clearing all windows - smaller chat height",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v25: Taller and slightly wider chat panel
+  25: () => {
+    debugLog(
+      "[WindowStore Migration v25] Clearing all windows - taller wider chat",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v26: Consistent minWidth (235px) for right column panels (prayer, spells)
+  26: () => {
+    debugLog(
+      "[WindowStore Migration v26] Clearing all windows - consistent panel widths",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v27: Reduced minHeight for combat/skills panels for compact layout
+  27: () => {
+    debugLog(
+      "[WindowStore Migration v27] Clearing all windows - compact panel heights",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v28: Increased minHeight for combat/skills/prayer panels (280px)
+  28: () => {
+    debugLog(
+      "[WindowStore Migration v28] Clearing all windows - taller panel heights",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v29: Smaller menubar/action bar
+  29: () => {
+    debugLog(
+      "[WindowStore Migration v29] Clearing all windows - smaller menubar",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v30: Wider chat panel in default layout
+  30: () => {
+    debugLog("[WindowStore Migration v30] Clearing all windows - wider chat");
+    return new Map<string, WindowState>();
+  },
+
+  // v31: Even smaller menubar/action bar
+  31: () => {
+    debugLog(
+      "[WindowStore Migration v31] Clearing all windows - smaller menubar",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v32: Smaller action bar slots
+  32: () => {
+    debugLog(
+      "[WindowStore Migration v32] Clearing all windows - smaller action bar",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v33: Action bar anchored to bottom of viewport
+  33: () => {
+    debugLog(
+      "[WindowStore Migration v33] Clearing all windows - action bar at bottom",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v34: Action bar positioned 4px lower
+  34: () => {
+    debugLog(
+      "[WindowStore Migration v34] Clearing all windows - action bar flush bottom",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v35: Action bar flush at bottom (proper fix: -1px for border)
+  35: () => {
+    debugLog(
+      "[WindowStore Migration v35] Clearing all windows - action bar border fix",
+    );
+    return new Map<string, WindowState>();
+  },
+
+  // v36: Action bar stays centered when size changes
+  36: () => {
+    debugLog(
+      "[WindowStore Migration v36] Clearing all windows - action bar centering",
     );
     return new Map<string, WindowState>();
   },
@@ -1045,7 +1233,7 @@ export const useWindowStore = create<WindowStoreState>()(
         };
 
         // Detect mobile/desktop mode change between saved and current viewport
-        const MOBILE_BREAKPOINT = 768;
+        const MOBILE_BREAKPOINT = 1024; // Increased for better tablet support
         const savedWasMobile = savedViewport.width < MOBILE_BREAKPOINT;
         const currentIsMobile = currentViewport.width < MOBILE_BREAKPOINT;
         const isMobileToDesktopTransition = savedWasMobile && !currentIsMobile;

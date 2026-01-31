@@ -1030,6 +1030,12 @@ export { COMBAT_CONSTANTS } from "./constants/CombatConstants";
 // Home teleport constants (cooldown, cast time)
 export { HOME_TELEPORT_CONSTANTS } from "./constants/GameConstants";
 
+// Inventory constants (slot counts, stack sizes)
+export { INVENTORY_CONSTANTS } from "./constants/GameConstants";
+
+// Player constants (health, stamina, speeds)
+export { PLAYER_CONSTANTS } from "./constants/GameConstants";
+
 // Gathering constants (tick-based timing, ranges, etc.)
 export { GATHERING_CONSTANTS } from "./constants/GatheringConstants";
 

@@ -39,6 +39,7 @@ import {
   isNotedItem,
   getPrimaryAction,
   CONTEXT_MENU_COLORS,
+  INVENTORY_CONSTANTS,
   type PrimaryActionType,
 } from "@hyperscape/shared";
 import { getItemIcon } from "@/utils";
@@ -49,9 +50,9 @@ import { CoinPouch } from "./inventory";
 
 /**
  * Maximum inventory slots (OSRS-style: 28 slots)
- * Matches INPUT_LIMITS.MAX_INVENTORY_SLOTS from shared constants
+ * Uses INVENTORY_CONSTANTS from shared package as single source of truth
  */
-const MAX_SLOTS = 28;
+const MAX_SLOTS = INVENTORY_CONSTANTS.MAX_INVENTORY_SLOTS;
 
 type InventorySlotViewItem = Pick<
   InventorySlotItem,
