@@ -49,6 +49,7 @@ export interface PlayerRow {
   smithingLevel: number;
   agilityLevel: number;
   craftingLevel: number;
+  fletchingLevel: number;
   attackXp: number;
   strengthXp: number;
   defenseXp: number;
@@ -63,6 +64,7 @@ export interface PlayerRow {
   smithingXp: number;
   agilityXp: number;
   craftingXp: number;
+  fletchingXp: number;
   health: number;
   maxHealth: number;
   coins: number;

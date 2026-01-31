@@ -413,6 +413,27 @@ export class FletchingSystem extends SystemBase {
       return;
     }
 
+    // Re-verify inventory before consuming (guard against external modifications)
+    const invState = this.getInventoryState(playerId);
+    if (!invState || !this.hasRequiredInputs(invState, recipe)) {
+      this.emitTypedEvent(EventType.UI_MESSAGE, {
+        playerId,
+        message: "You have run out of materials.",
+        type: "info",
+      });
+      this.completeFletching(playerId);
+      return;
+    }
+    if (!this.hasRequiredTools(invState, recipe)) {
+      this.emitTypedEvent(EventType.UI_MESSAGE, {
+        playerId,
+        message: "You no longer have the required tools.",
+        type: "info",
+      });
+      this.completeFletching(playerId);
+      return;
+    }
+
     // Play fletching animation
     this.emitTypedEvent(EventType.ANIMATION_PLAY, {
       entityId: playerId,

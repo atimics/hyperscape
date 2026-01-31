@@ -153,6 +153,14 @@ export const SKILL_DEFINITIONS: readonly SkillDefinition[] = [
     category: "production",
     defaultLevel: 1,
   },
+  // Row 6: Fletching
+  {
+    key: "fletching",
+    label: "Fletching",
+    icon: "🏹",
+    category: "production",
+    defaultLevel: 1,
+  },
 ] as const;
 
 /**
@@ -199,6 +207,7 @@ export const SKILL_ICONS: Readonly<Record<string, string>> = {
   mining: "⛏️",
   smithing: "🔨",
   crafting: "🧵",
+  fletching: "🏹",
   herblore: "🧪",
   agility: "🏃",
   thieving: "🗝️",

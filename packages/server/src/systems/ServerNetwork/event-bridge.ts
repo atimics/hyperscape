@@ -17,7 +17,7 @@
  * ```
  */
 
-import type { World } from "@hyperscape/shared";
+import type { World, FletchingInterfaceOpenPayload } from "@hyperscape/shared";
 import { EventType, ALL_WORLD_AREAS } from "@hyperscape/shared";
 import type { BroadcastManager } from "./broadcast";
 import { BankRepository } from "../../database/repositories/BankRepository";
@@ -1196,22 +1196,7 @@ export class EventBridge {
     try {
       // Forward fletching interface open events to specific player
       this.world.on(EventType.FLETCHING_INTERFACE_OPEN, (payload: unknown) => {
-        const data = payload as {
-          playerId: string;
-          availableRecipes: Array<{
-            recipeId: string;
-            output: string;
-            name: string;
-            category: string;
-            outputQuantity: number;
-            inputs: Array<{ item: string; amount: number }>;
-            tools: string[];
-            level: number;
-            xp: number;
-            meetsLevel: boolean;
-            hasInputs: boolean;
-          }>;
-        };
+        const data = payload as FletchingInterfaceOpenPayload;
 
         if (data.playerId) {
           this.broadcast.sendToPlayer(data.playerId, "fletchingInterfaceOpen", {

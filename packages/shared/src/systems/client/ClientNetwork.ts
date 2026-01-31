@@ -102,6 +102,7 @@ import type {
 } from "../../types";
 import type { Entity } from "../../entities/Entity";
 import { EventType } from "../../types/events";
+import type { FletchingInterfaceOpenPayload } from "../../types/events";
 import { DeathState } from "../../types/entities";
 // Social system types - use shared types for consistency
 import type {
@@ -2092,6 +2093,23 @@ export class ClientNetwork extends SystemBase {
   onCraftingClose = (_data: { reason?: string }) => {
     this.world.emit(EventType.UI_UPDATE, {
       component: "craftingClose",
+      data: _data,
+    });
+  };
+
+  // --- Fletching interface handler ---
+  onFletchingInterfaceOpen = (
+    data: Omit<FletchingInterfaceOpenPayload, "playerId">,
+  ) => {
+    this.world.emit(EventType.FLETCHING_INTERFACE_OPEN, {
+      playerId: this.world?.entities?.player?.id || "",
+      availableRecipes: data.availableRecipes,
+    });
+  };
+
+  onFletchingClose = (_data: { reason?: string }) => {
+    this.world.emit(EventType.UI_UPDATE, {
+      component: "fletchingClose",
       data: _data,
     });
   };
