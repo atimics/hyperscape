@@ -55,6 +55,9 @@ export class CraftingSystem extends SystemBase {
   /** Track last processed tick to ensure once-per-tick processing */
   private lastProcessedTick = -1;
 
+  /** Monotonic counter for unique crafted item IDs (avoids Date.now collisions) */
+  private craftCounter = 0;
+
   /** Reusable array for update loop to avoid allocating per tick */
   private readonly completedPlayerIds: string[] = [];
 
@@ -481,10 +484,13 @@ export class CraftingSystem extends SystemBase {
     }
 
     // Add crafted item to inventory
+    // Note: Input removal, output addition, and XP grant are processed synchronously
+    // in the same tick. A crash between events would require SIGKILL mid-function,
+    // which is acceptable loss for a single craft action.
     this.emitTypedEvent(EventType.INVENTORY_ITEM_ADDED, {
       playerId,
       item: {
-        id: `inv_${playerId}_${Date.now()}`,
+        id: `craft_${playerId}_${++this.craftCounter}_${Date.now()}`,
         itemId: recipe.output,
         quantity: 1,
         slot: -1,

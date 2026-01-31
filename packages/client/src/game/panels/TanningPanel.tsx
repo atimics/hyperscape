@@ -248,7 +248,7 @@ export function TanningPanel({
                       </button>
                     ))}
                     <button
-                      onClick={() => handleTan(selectedRecipe, 28)}
+                      onClick={() => handleTan(selectedRecipe, -1)}
                       className="flex-1 px-2 py-1.5 rounded text-xs font-medium transition-colors hover:brightness-110"
                       style={{
                         background: `${theme.colors.accent.primary}20`,

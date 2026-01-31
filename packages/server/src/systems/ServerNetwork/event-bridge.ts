@@ -328,11 +328,13 @@ export class EventBridge {
           Number.isFinite(data.newLevel)
         ) {
           // Map skill name to database column names
+          // Round XP to integer at DB boundary (XP columns are integer type,
+          // but recipes use float values like 13.8, 67.5 for OSRS accuracy)
           const skillLevelKey = `${data.skill}Level`;
           const skillXpKey = `${data.skill}Xp`;
           dbSystem.savePlayer(data.playerId, {
             [skillLevelKey]: data.newLevel,
-            [skillXpKey]: data.newXp,
+            [skillXpKey]: Math.round(data.newXp),
           });
         }
       });

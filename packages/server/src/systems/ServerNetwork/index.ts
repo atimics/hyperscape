@@ -1724,12 +1724,17 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      // Quantity validation with bounds
-      const quantity =
+      // Quantity validation with bounds (-1 = "All", server computes actual max)
+      let quantity = 1;
+      if (
         typeof payload.quantity === "number" &&
         Number.isFinite(payload.quantity)
-          ? Math.floor(Math.max(1, Math.min(payload.quantity, 10000)))
-          : 1;
+      ) {
+        quantity =
+          payload.quantity === -1
+            ? 10000
+            : Math.floor(Math.max(1, Math.min(payload.quantity, 10000)));
+      }
 
       // Emit event for CraftingSystem to handle
       this.world.emit(EventType.PROCESSING_CRAFTING_REQUEST, {
@@ -1764,12 +1769,17 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      // Quantity validation with bounds
-      const quantity =
+      // Quantity validation with bounds (-1 = "All", server computes actual max)
+      let quantity = 1;
+      if (
         typeof payload.quantity === "number" &&
         Number.isFinite(payload.quantity)
-          ? Math.floor(Math.max(1, Math.min(payload.quantity, 10000)))
-          : 1;
+      ) {
+        quantity =
+          payload.quantity === -1
+            ? 10000
+            : Math.floor(Math.max(1, Math.min(payload.quantity, 10000)));
+      }
 
       // Emit event for TanningSystem to handle
       this.world.emit(EventType.TANNING_REQUEST, {
