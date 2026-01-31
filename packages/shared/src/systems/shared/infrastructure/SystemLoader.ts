@@ -136,6 +136,8 @@ import { ActionRegistry } from "..";
 import { SkillsSystem } from "..";
 import { SmeltingSystem } from "..";
 import { SmithingSystem } from "..";
+import { CraftingSystem } from "..";
+import { TanningSystem } from "..";
 import { HealthRegenSystem } from "..";
 import { PrayerSystem } from "..";
 import { QuestSystem } from "..";
@@ -337,6 +339,12 @@ export async function registerSystems(world: World): Promise<void> {
 
   // 18b. Smithing system - Anvil smithing (depends on inventory, skills)
   world.register("smithing", SmithingSystem);
+
+  // 18c. Crafting system - Leather, jewelry, gem cutting (depends on inventory, skills)
+  world.register("crafting", CraftingSystem);
+
+  // 18d. Tanning system - NPC tanner: hides → leather (depends on inventory)
+  world.register("tanning", TanningSystem);
 
   // === GAMEPLAY SYSTEMS ===
   // These systems provide advanced gameplay mechanics

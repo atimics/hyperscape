@@ -1659,6 +1659,136 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       });
     };
 
+    // Crafting - player initiated crafting (needle, chisel, or furnace jewelry)
+    this.handlers["onCraftingSourceInteract"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      // Rate limiting - prevent inventory/recipe computation spam
+      if (!this.canProcessRequest(player.id)) {
+        return;
+      }
+
+      const payload = data as {
+        triggerType?: string;
+        stationId?: string;
+        inputItemId?: string;
+      };
+      if (!payload.triggerType) return;
+
+      // Validate triggerType
+      if (!["needle", "chisel", "furnace"].includes(payload.triggerType)) {
+        return;
+      }
+
+      // Validate inputItemId if provided
+      if (
+        payload.inputItemId !== undefined &&
+        (typeof payload.inputItemId !== "string" ||
+          payload.inputItemId.length > 64)
+      ) {
+        return;
+      }
+
+      // Emit event for CraftingSystem to handle
+      this.world.emit(EventType.CRAFTING_INTERACT, {
+        playerId: player.id,
+        triggerType: payload.triggerType,
+        stationId: payload.stationId,
+        inputItemId: payload.inputItemId,
+      });
+    };
+
+    // Processing crafting - player selected item to craft from UI
+    this.handlers["onProcessingCrafting"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      // Rate limiting - prevent request spam
+      if (!this.canProcessRequest(player.id)) {
+        return;
+      }
+
+      const payload = data as {
+        recipeId?: unknown;
+        quantity?: unknown;
+      };
+
+      // Type validation
+      if (typeof payload.recipeId !== "string") {
+        return;
+      }
+
+      // Length validation (prevent memory abuse)
+      if (payload.recipeId.length > 64) {
+        return;
+      }
+
+      // Quantity validation with bounds (-1 = "All", server computes actual max)
+      let quantity = 1;
+      if (
+        typeof payload.quantity === "number" &&
+        Number.isFinite(payload.quantity)
+      ) {
+        quantity =
+          payload.quantity === -1
+            ? 10000
+            : Math.floor(Math.max(1, Math.min(payload.quantity, 10000)));
+      }
+
+      // Emit event for CraftingSystem to handle
+      this.world.emit(EventType.PROCESSING_CRAFTING_REQUEST, {
+        playerId: player.id,
+        recipeId: payload.recipeId,
+        quantity,
+      });
+    };
+
+    // Tanning - player selected hide to tan from UI
+    this.handlers["onProcessingTanning"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      // Rate limiting - prevent request spam
+      if (!this.canProcessRequest(player.id)) {
+        return;
+      }
+
+      const payload = data as {
+        inputItemId?: unknown;
+        quantity?: unknown;
+      };
+
+      // Type validation
+      if (typeof payload.inputItemId !== "string") {
+        return;
+      }
+
+      // Length validation (prevent memory abuse)
+      if (payload.inputItemId.length > 64) {
+        return;
+      }
+
+      // Quantity validation with bounds (-1 = "All", server computes actual max)
+      let quantity = 1;
+      if (
+        typeof payload.quantity === "number" &&
+        Number.isFinite(payload.quantity)
+      ) {
+        quantity =
+          payload.quantity === -1
+            ? 10000
+            : Math.floor(Math.max(1, Math.min(payload.quantity, 10000)));
+      }
+
+      // Emit event for TanningSystem to handle
+      this.world.emit(EventType.TANNING_REQUEST, {
+        playerId: player.id,
+        inputItemId: payload.inputItemId,
+        quantity,
+      });
+    };
+
     // Route movement and combat through action queue for OSRS-style tick processing
     // Actions are queued and processed on tick boundaries, not immediately
     this.handlers["onMoveRequest"] = (socket, data) => {

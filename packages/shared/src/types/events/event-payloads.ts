@@ -633,6 +633,117 @@ export interface SmithingCompletePayload {
 }
 
 // =========================================================================
+// CRAFTING EVENT PAYLOADS
+// =========================================================================
+
+/**
+ * Player initiated crafting (used needle, chisel, or gold bar on furnace)
+ */
+export interface CraftingInteractPayload {
+  playerId: string;
+  /** How the crafting was initiated */
+  triggerType: "needle" | "chisel" | "furnace";
+  /** Optional station entity ID for furnace crafting */
+  stationId?: string;
+  /** Specific input material for recipe filtering (e.g., "leather", "uncut_sapphire") */
+  inputItemId?: string;
+}
+
+/**
+ * Crafting interface opened - show available recipes to player
+ */
+export interface CraftingInterfaceOpenPayload {
+  playerId: string;
+  availableRecipes: Array<{
+    output: string;
+    name: string;
+    category: string;
+    inputs: Array<{ item: string; amount: number }>;
+    tools: string[];
+    level: number;
+    xp: number;
+    meetsLevel: boolean;
+    hasInputs: boolean;
+  }>;
+  station: string;
+}
+
+/**
+ * Request to craft a specific item
+ */
+export interface ProcessingCraftingRequestPayload {
+  playerId: string;
+  recipeId: string;
+  quantity: number;
+}
+
+/**
+ * Crafting process started
+ */
+export interface CraftingStartPayload {
+  playerId: string;
+  recipeId: string;
+}
+
+/**
+ * Crafting batch completed
+ */
+export interface CraftingCompletePayload {
+  playerId: string;
+  recipeId: string;
+  outputItemId: string;
+  totalCrafted: number;
+  totalXp: number;
+}
+
+// =========================================================================
+// TANNING EVENT PAYLOADS
+// =========================================================================
+
+/**
+ * Player interacted with tanner NPC
+ */
+export interface TanningInteractPayload {
+  playerId: string;
+  npcId: string;
+}
+
+/**
+ * Tanning interface opened - show available hides to tan
+ */
+export interface TanningInterfaceOpenPayload {
+  playerId: string;
+  availableRecipes: Array<{
+    input: string;
+    output: string;
+    cost: number;
+    name: string;
+    hasHide: boolean;
+    hideCount: number;
+  }>;
+}
+
+/**
+ * Request to tan hides
+ */
+export interface TanningRequestPayload {
+  playerId: string;
+  inputItemId: string;
+  quantity: number;
+}
+
+/**
+ * Tanning completed
+ */
+export interface TanningCompletePayload {
+  playerId: string;
+  inputItemId: string;
+  outputItemId: string;
+  totalTanned: number;
+  totalCost: number;
+}
+
+// =========================================================================
 // TYPE-SAFE EVENT MAPPING
 // =========================================================================
 
@@ -974,6 +1085,19 @@ export interface EventMap {
   [EventType.SMITHING_START]: SmithingStartPayload;
   [EventType.SMITHING_COMPLETE]: SmithingCompletePayload;
   [EventType.PROCESSING_SMITHING_REQUEST]: ProcessingSmithingRequestPayload;
+
+  // Crafting Events (leather, jewelry, gem cutting)
+  [EventType.CRAFTING_INTERACT]: CraftingInteractPayload;
+  [EventType.CRAFTING_INTERFACE_OPEN]: CraftingInterfaceOpenPayload;
+  [EventType.CRAFTING_START]: CraftingStartPayload;
+  [EventType.CRAFTING_COMPLETE]: CraftingCompletePayload;
+  [EventType.PROCESSING_CRAFTING_REQUEST]: ProcessingCraftingRequestPayload;
+
+  // Tanning Events (NPC tanner: hides → leather)
+  [EventType.TANNING_INTERACT]: TanningInteractPayload;
+  [EventType.TANNING_INTERFACE_OPEN]: TanningInterfaceOpenPayload;
+  [EventType.TANNING_REQUEST]: TanningRequestPayload;
+  [EventType.TANNING_COMPLETE]: TanningCompletePayload;
 
   // Quest Events
   [EventType.QUEST_START_CONFIRM]: QuestStartConfirmPayload;

@@ -97,6 +97,8 @@ export class EventBridge {
     this.setupStoreEvents();
     this.setupFireEvents();
     this.setupSmeltingEvents();
+    this.setupCraftingEvents();
+    this.setupTanningEvents();
     this.setupQuestEvents();
     this.setupTradeEvents();
   }
@@ -326,11 +328,13 @@ export class EventBridge {
           Number.isFinite(data.newLevel)
         ) {
           // Map skill name to database column names
+          // Round XP to integer at DB boundary (XP columns are integer type,
+          // but recipes use float values like 13.8, 67.5 for OSRS accuracy)
           const skillLevelKey = `${data.skill}Level`;
           const skillXpKey = `${data.skill}Xp`;
           dbSystem.savePlayer(data.playerId, {
             [skillLevelKey]: data.newLevel,
-            [skillXpKey]: data.newXp,
+            [skillXpKey]: Math.round(data.newXp),
           });
         }
       });
@@ -1136,6 +1140,81 @@ export class EventBridge {
       });
     } catch (_err) {
       console.error("[EventBridge] Error setting up smelting events:", _err);
+    }
+  }
+
+  /**
+   * Setup crafting system event listeners
+   *
+   * Forwards crafting interface open events to specific players
+   * so they can see the crafting UI with available recipes.
+   *
+   * @private
+   */
+  private setupCraftingEvents(): void {
+    try {
+      // Forward crafting interface open events to specific player
+      this.world.on(EventType.CRAFTING_INTERFACE_OPEN, (payload: unknown) => {
+        const data = payload as {
+          playerId: string;
+          availableRecipes: Array<{
+            output: string;
+            name: string;
+            category: string;
+            inputs: Array<{ item: string; amount: number }>;
+            tools: string[];
+            level: number;
+            xp: number;
+            meetsLevel: boolean;
+            hasInputs: boolean;
+          }>;
+          station: string;
+        };
+
+        if (data.playerId) {
+          this.broadcast.sendToPlayer(data.playerId, "craftingInterfaceOpen", {
+            availableRecipes: data.availableRecipes,
+            station: data.station,
+          });
+        }
+      });
+    } catch (_err) {
+      console.error("[EventBridge] Error setting up crafting events:", _err);
+    }
+  }
+
+  /**
+   * Setup tanning system event listeners
+   *
+   * Forwards tanning interface open events to specific players
+   * so they can see the tanning UI with available hides.
+   *
+   * @private
+   */
+  private setupTanningEvents(): void {
+    try {
+      // Forward tanning interface open events to specific player
+      this.world.on(EventType.TANNING_INTERFACE_OPEN, (payload: unknown) => {
+        const data = payload as {
+          playerId: string;
+          availableRecipes: Array<{
+            input: string;
+            output: string;
+            cost: number;
+            name: string;
+            hasHide: boolean;
+            hideCount: number;
+          }>;
+        };
+
+        if (data.playerId) {
+          this.broadcast.sendToPlayer(data.playerId, "tanningInterfaceOpen", {
+            availableRecipes: data.availableRecipes,
+          });
+        }
+      });
+    } catch (_err) {
+      console.error("[EventBridge] Error setting up tanning events:", _err);
     }
   }
 

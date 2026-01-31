@@ -386,6 +386,7 @@ export class PlayerLocal extends Entity implements HotReloadable {
     cooking: { level: 1, xp: 0 },
     smithing: { level: 1, xp: 0 },
     agility: { level: 1, xp: 0 },
+    crafting: { level: 1, xp: 0 },
   };
   equipment: PlayerEquipmentItems = {
     weapon: null,

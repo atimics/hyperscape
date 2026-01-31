@@ -204,6 +204,13 @@
       "when": 1769723433000,
       "tag": "0028_add_inventory_quantity_constraint",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1769810000000,
+      "tag": "0029_add_crafting_skill",
+      "breakpoints": true
     }
   ]
 }

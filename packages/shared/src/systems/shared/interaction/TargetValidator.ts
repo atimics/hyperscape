@@ -20,7 +20,7 @@ export interface TargetValidationResult {
   /** Valid target IDs (item IDs or entity IDs) */
   validTargetIds: Set<string>;
   /** Action type this will trigger */
-  actionType: "firemaking" | "cooking" | "smelting" | "none";
+  actionType: "firemaking" | "cooking" | "smelting" | "crafting" | "none";
   /** Error message if canUse is false */
   error?: string;
 }
@@ -129,6 +129,22 @@ export class TargetValidator {
     // Check if ore - targets furnace in world
     if (processingDataProvider.isSmeltableOre(itemId)) {
       return this.validateOreUse(itemId);
+    }
+
+    // Check if needle - targets leather/hide items in inventory
+    if (itemId === "needle") {
+      return this.validateCraftingToolUse(playerId, "needle");
+    }
+
+    // Check if chisel - targets uncut gems in inventory
+    if (itemId === "chisel") {
+      return this.validateCraftingToolUse(playerId, "chisel");
+    }
+
+    // Check if item is a crafting input (e.g., leather → targets needle, uncut gem → targets chisel)
+    const craftingTool = processingDataProvider.getCraftingToolForInput(itemId);
+    if (craftingTool) {
+      return this.validateCraftingInputUse(playerId, craftingTool);
     }
 
     // No valid targets for this item
@@ -289,6 +305,86 @@ export class TargetValidator {
   }
 
   /**
+   * Validate crafting tool use (needle/chisel) - targets crafting input items in inventory.
+   */
+  private validateCraftingToolUse(
+    playerId: string,
+    toolId: string,
+  ): TargetValidationResult {
+    const validInputs = processingDataProvider.getCraftingInputsForTool(toolId);
+    const validIds = new Set<string>();
+
+    if (this.inventoryChecker) {
+      const inventoryItems = this.inventoryChecker.getItemIds(playerId);
+      for (const itemId of inventoryItems) {
+        if (validInputs.has(itemId)) {
+          validIds.add(itemId);
+        }
+      }
+    } else {
+      // Fallback: all known inputs for this tool
+      for (const inputId of validInputs) {
+        validIds.add(inputId);
+      }
+    }
+
+    if (validIds.size === 0) {
+      const toolName = toolId === "needle" ? "needle" : "chisel";
+      return {
+        canUse: false,
+        validTargetTypes: [],
+        validTargetIds: new Set(),
+        actionType: "none",
+        error: `You don't have anything to use the ${toolName} on.`,
+      };
+    }
+
+    return {
+      canUse: true,
+      validTargetTypes: ["inventory_item"],
+      validTargetIds: validIds,
+      actionType: "crafting",
+    };
+  }
+
+  /**
+   * Validate crafting input use (leather, uncut gem) - targets the tool in inventory.
+   */
+  private validateCraftingInputUse(
+    playerId: string,
+    toolId: string,
+  ): TargetValidationResult {
+    const validIds = new Set<string>();
+
+    if (this.inventoryChecker) {
+      if (this.inventoryChecker.hasItem(playerId, toolId)) {
+        validIds.add(toolId);
+      }
+    } else {
+      // Fallback: tool is potentially valid
+      validIds.add(toolId);
+    }
+
+    if (validIds.size === 0) {
+      const toolName = toolId === "needle" ? "a needle" : "a chisel";
+      return {
+        canUse: false,
+        validTargetTypes: [],
+        validTargetIds: new Set(),
+        actionType: "none",
+        error: `You need ${toolName} to craft with that.`,
+      };
+    }
+
+    return {
+      canUse: true,
+      validTargetTypes: ["inventory_item"],
+      validTargetIds: validIds,
+      actionType: "crafting",
+    };
+  }
+
+  /**
    * Check if a specific target is valid for a source item.
    *
    * @param sourceItemId - Source item ID
@@ -325,6 +421,27 @@ export class TargetValidator {
         targetId.includes("furnace") ||
         this.isFurnaceEntity(targetId)
       );
+    }
+
+    // Needle → crafting inputs (leather, hides)
+    if (sourceItemId === "needle") {
+      return processingDataProvider
+        .getCraftingInputsForTool("needle")
+        .has(targetId);
+    }
+
+    // Chisel → crafting inputs (uncut gems)
+    if (sourceItemId === "chisel") {
+      return processingDataProvider
+        .getCraftingInputsForTool("chisel")
+        .has(targetId);
+    }
+
+    // Crafting input → tool (reverse direction)
+    const requiredTool =
+      processingDataProvider.getCraftingToolForInput(sourceItemId);
+    if (requiredTool) {
+      return targetId === requiredTool;
     }
 
     return false;
@@ -372,7 +489,7 @@ export class TargetValidator {
    */
   getActionType(
     sourceItemId: string,
-  ): "firemaking" | "cooking" | "smelting" | "none" {
+  ): "firemaking" | "cooking" | "smelting" | "crafting" | "none" {
     if (sourceItemId === "tinderbox") {
       return "firemaking";
     }
@@ -387,6 +504,14 @@ export class TargetValidator {
 
     if (processingDataProvider.isSmeltableOre(sourceItemId)) {
       return "smelting";
+    }
+
+    if (sourceItemId === "needle" || sourceItemId === "chisel") {
+      return "crafting";
+    }
+
+    if (processingDataProvider.isCraftingInput(sourceItemId)) {
+      return "crafting";
     }
 
     return "none";

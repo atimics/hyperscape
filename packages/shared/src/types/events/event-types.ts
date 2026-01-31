@@ -466,6 +466,19 @@ export enum EventType {
   SMITHING_COMPLETE = "smithing:complete",
   PROCESSING_SMITHING_REQUEST = "processing:smithing:request",
 
+  // Crafting Events (leather, jewelry, gem cutting)
+  CRAFTING_INTERACT = "crafting:interact",
+  CRAFTING_INTERFACE_OPEN = "crafting:interface:open",
+  CRAFTING_START = "crafting:start",
+  CRAFTING_COMPLETE = "crafting:complete",
+  PROCESSING_CRAFTING_REQUEST = "processing:crafting:request",
+
+  // Tanning Events (NPC tanner: hides → leather)
+  TANNING_INTERACT = "tanning:interact",
+  TANNING_INTERFACE_OPEN = "tanning:interface:open",
+  TANNING_REQUEST = "tanning:request",
+  TANNING_COMPLETE = "tanning:complete",
+
   // Death System
   DEATH_LOOT_COLLECT = "death:loot:collect",
   DEATH_HEADSTONE_EXPIRED = "death:headstone:expired",

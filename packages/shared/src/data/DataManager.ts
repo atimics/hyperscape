@@ -43,6 +43,8 @@ import {
   type FiremakingManifest,
   type SmeltingManifest,
   type SmithingManifest,
+  type CraftingManifest,
+  type TanningManifest,
 } from "./ProcessingDataProvider";
 import {
   stationDataProvider,
@@ -896,6 +898,28 @@ export class DataManager {
       );
     }
 
+    // Load crafting recipes
+    try {
+      const craftingRes = await fetch(`${baseUrl}/recipes/crafting.json`);
+      const craftingManifest = (await craftingRes.json()) as CraftingManifest;
+      processingDataProvider.loadCraftingRecipes(craftingManifest);
+    } catch {
+      console.warn(
+        "[DataManager] recipes/crafting.json not found, crafting will be unavailable",
+      );
+    }
+
+    // Load tanning recipes
+    try {
+      const tanningRes = await fetch(`${baseUrl}/recipes/tanning.json`);
+      const tanningManifest = (await tanningRes.json()) as TanningManifest;
+      processingDataProvider.loadTanningRecipes(tanningManifest);
+    } catch {
+      console.warn(
+        "[DataManager] recipes/tanning.json not found, tanning will be unavailable",
+      );
+    }
+
     // Rebuild ProcessingDataProvider to use the loaded manifests
     // This is necessary in case it was already lazy-initialized before manifests loaded
     processingDataProvider.rebuild();
@@ -993,6 +1017,30 @@ export class DataManager {
     } catch {
       console.warn(
         "[DataManager] recipes/smithing.json not found, falling back to embedded item data",
+      );
+    }
+
+    // Load crafting recipes
+    try {
+      const craftingPath = path.join(recipesDir, "crafting.json");
+      const craftingData = await fs.readFile(craftingPath, "utf-8");
+      const craftingManifest = JSON.parse(craftingData) as CraftingManifest;
+      processingDataProvider.loadCraftingRecipes(craftingManifest);
+    } catch {
+      console.warn(
+        "[DataManager] recipes/crafting.json not found, crafting will be unavailable",
+      );
+    }
+
+    // Load tanning recipes
+    try {
+      const tanningPath = path.join(recipesDir, "tanning.json");
+      const tanningData = await fs.readFile(tanningPath, "utf-8");
+      const tanningManifest = JSON.parse(tanningData) as TanningManifest;
+      processingDataProvider.loadTanningRecipes(tanningManifest);
+    } catch {
+      console.warn(
+        "[DataManager] recipes/tanning.json not found, tanning will be unavailable",
       );
     }
 

@@ -131,7 +131,7 @@ export const SKILL_DEFINITIONS: readonly SkillDefinition[] = [
     category: "gathering",
     defaultLevel: 1,
   },
-  // Row 5: Magic, Prayer
+  // Row 5: Magic, Prayer, Crafting
   {
     key: "magic",
     label: "Magic",
@@ -144,6 +144,13 @@ export const SKILL_DEFINITIONS: readonly SkillDefinition[] = [
     label: "Prayer",
     icon: "✨",
     category: "combat",
+    defaultLevel: 1,
+  },
+  {
+    key: "crafting",
+    label: "Crafting",
+    icon: "🧵",
+    category: "production",
     defaultLevel: 1,
   },
 ] as const;
@@ -191,6 +198,7 @@ export const SKILL_ICONS: Readonly<Record<string, string>> = {
   firemaking: "🔥",
   mining: "⛏️",
   smithing: "🔨",
+  crafting: "🧵",
   herblore: "🧪",
   agility: "🏃",
   thieving: "🗝️",

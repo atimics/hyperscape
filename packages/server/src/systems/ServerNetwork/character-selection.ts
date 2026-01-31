@@ -680,6 +680,11 @@ export async function handleEnterWorld(
               level: (savedData as { agilityLevel?: number }).agilityLevel || 1,
               xp: (savedData as { agilityXp?: number }).agilityXp || 0,
             },
+            crafting: {
+              level:
+                (savedData as { craftingLevel?: number }).craftingLevel || 1,
+              xp: (savedData as { craftingXp?: number }).craftingXp || 0,
+            },
           };
           // Load auto-retaliate preference (1=ON, 0=OFF, default ON)
           savedAutoRetaliate =
