@@ -12,6 +12,7 @@
 import React, { useState, useMemo } from "react";
 import type { ClientWorld } from "../../types";
 import { useThemeStore } from "@/ui";
+import { formatItemName } from "@/utils";
 
 interface CraftingRecipe {
   output: string;
@@ -72,13 +73,6 @@ function getItemIcon(output: string, category: string): string {
   if (category === "gem_cutting") return "💎";
 
   return "🧵";
-}
-
-/**
- * Format item name from itemId
- */
-function formatItemName(itemId: string): string {
-  return itemId.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
 }
 
 /**

@@ -12,6 +12,7 @@
 import React, { useState, useMemo } from "react";
 import type { ClientWorld } from "../../types";
 import { useThemeStore } from "@/ui";
+import { formatItemName } from "@/utils";
 
 interface SmithingRecipe {
   itemId: string;
@@ -88,13 +89,6 @@ function getBarIcon(barType: string): string {
   if (type.includes("adamant")) return "🟢";
   if (type.includes("rune") || type.includes("runite")) return "🔷";
   return "🔶";
-}
-
-/**
- * Format item name from itemId
- */
-function formatItemName(itemId: string): string {
-  return itemId.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
 }
 
 /**
