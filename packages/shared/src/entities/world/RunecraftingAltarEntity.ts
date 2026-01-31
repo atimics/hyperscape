@@ -71,9 +71,10 @@ export class RunecraftingAltarEntity extends InteractableEntity {
   private footprint: FootprintSpec;
 
   constructor(world: World, config: RunecraftingAltarEntityConfig) {
+    const defaultName = `${config.runeType.charAt(0).toUpperCase()}${config.runeType.slice(1)} Altar`;
     const interactableConfig: InteractableConfig = {
       id: config.id,
-      name: config.name || "Runecrafting Altar",
+      name: config.name || defaultName,
       type: EntityType.RUNECRAFTING_ALTAR,
       position: config.position,
       rotation: config.rotation
@@ -106,7 +107,7 @@ export class RunecraftingAltarEntity extends InteractableEntity {
     };
 
     super(world, interactableConfig);
-    this.displayName = config.name || "Runecrafting Altar";
+    this.displayName = config.name || defaultName;
     this.runeType = config.runeType;
 
     // Get footprint from manifest (data-driven), allow per-instance override

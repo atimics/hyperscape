@@ -938,7 +938,10 @@ export class Entities extends SystemBase implements IEntities {
         number,
         number,
       ];
-      const name = data.name || "Runecrafting Altar";
+      const runeType = (data.runeType as string) || "air";
+      const name =
+        data.name ||
+        `${runeType.charAt(0).toUpperCase()}${runeType.slice(1)} Altar`;
 
       const rcAltarConfig: RunecraftingAltarEntityConfig = {
         id: data.id,

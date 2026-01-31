@@ -111,10 +111,11 @@ export class StationSpawnerSystem extends SystemBase {
               bankId: station.bankId ?? "spawn_bank",
             },
           }),
-          // Runecrafting altar: pass runeType for altar identification
+          // Runecrafting altar: pass runeType and derive name (e.g. "Air Altar")
           ...(station.type === "runecrafting_altar" && {
             runeType:
               (station as unknown as { runeType?: string }).runeType ?? "air",
+            name: `${((station as unknown as { runeType?: string }).runeType ?? "air").charAt(0).toUpperCase()}${((station as unknown as { runeType?: string }).runeType ?? "air").slice(1)} Altar`,
           }),
         };
 

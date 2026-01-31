@@ -103,14 +103,10 @@ export class RunecraftingAltarInteractionHandler extends BaseInteractionHandler 
     const player = this.getPlayer();
     if (!player) return;
 
-    // Get runeType from entity userData
-    const runeType =
-      (target.entity as { runeType?: string } | null)?.runeType ?? "air";
-
-    // Send to server — RunecraftingSystem will process and send back results
+    // Send altar ID to server — server determines runeType from the altar entity
+    // This is more secure (client can't fake runeType) and avoids client-side lookup issues
     this.send("runecraftingAltarInteract", {
       altarId: target.entityId,
-      runeType,
     });
   }
 }

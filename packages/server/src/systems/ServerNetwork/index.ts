@@ -1895,7 +1895,6 @@ export class ServerNetwork extends System implements NetworkWithSocket {
 
       const payload = data as {
         altarId?: unknown;
-        runeType?: unknown;
       };
 
       // Validate altarId
@@ -1903,19 +1902,19 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
-      // Validate runeType
-      if (
-        typeof payload.runeType !== "string" ||
-        payload.runeType.length > 32
-      ) {
-        return;
-      }
+      // Look up the altar entity to get the authoritative runeType
+      const altarEntity = this.world.entities.get(payload.altarId);
+      if (!altarEntity) return;
+
+      const runeType = (altarEntity as unknown as { runeType?: string })
+        .runeType;
+      if (!runeType) return;
 
       // Emit event for RunecraftingSystem to handle
       this.world.emit(EventType.RUNECRAFTING_INTERACT, {
         playerId: player.id,
         altarId: payload.altarId,
-        runeType: payload.runeType,
+        runeType,
       });
     };
     this.handlers["runecraftingAltarInteract"] =

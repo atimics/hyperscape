@@ -17,6 +17,7 @@
 import {
   isLooseInventoryItem,
   getItemQuantity,
+  hasSkills,
 } from "../../../constants/SmithingConstants";
 import { processingDataProvider } from "../../../data/ProcessingDataProvider";
 import { EventType } from "../../../types/events";
@@ -96,6 +97,9 @@ export class RunecraftingSystem extends SystemBase {
 
     // Get player's runecrafting level
     const rcLevel = this.getRunecraftingLevel(playerId);
+    console.log(
+      `[RunecraftingSystem] Player ${playerId} attempting ${runeType} runes. RC level: ${rcLevel}, required: ${recipe.levelRequired}`,
+    );
 
     // Check level requirement
     if (rcLevel < recipe.levelRequired) {
@@ -206,21 +210,16 @@ export class RunecraftingSystem extends SystemBase {
   private getRunecraftingLevel(playerId: string): number {
     // Try cached skills first
     const cached = this.playerSkills.get(playerId);
-    if (cached?.runecrafting) {
+    if (cached?.runecrafting?.level != null) {
       return cached.runecrafting.level;
     }
 
-    // Fall back to player entity lookup
+    // Fall back to player entity using type-safe guard
     const player = this.world.getPlayer(playerId);
-    if (!player) return 1;
-
-    const skills = (player as { skills?: Record<string, { level: number }> })
-      .skills;
-    if (skills?.runecrafting) {
-      return skills.runecrafting.level;
-    }
-
-    return 1;
+    if (!hasSkills(player)) return 1;
+    const runecraftingSkill =
+      player.skills?.["runecrafting" as keyof typeof player.skills];
+    return runecraftingSkill?.level ?? 1;
   }
 
   update(_dt: number): void {
