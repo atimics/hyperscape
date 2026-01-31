@@ -127,16 +127,16 @@ describe.skipIf(!manifestsAvailable)(
         const weapons = Array.from(ITEMS.values()).filter(
           (item) => item.type === "weapon" && !item.id.endsWith("_noted"),
         );
-        // 6 swords: bronze, iron, steel, mithril, adamant, rune
-        expect(weapons.length).toBe(6);
+        // 6 swords + 12 bows (6 shortbows + 6 longbows) + staffs/wands
+        expect(weapons.length).toBe(24);
       });
 
       it("has correct tool count", () => {
         const tools = Array.from(ITEMS.values()).filter(
           (item) => item.type === "tool" && !item.id.endsWith("_noted"),
         );
-        // 6 hatchets + 6 pickaxes + fishing rod, fly fishing rod, net, hammer, tinderbox, etc.
-        expect(tools.length).toBe(19);
+        // 6 hatchets + 6 pickaxes + fishing rod, fly fishing rod, net, hammer, tinderbox, knife, chisel, needle, etc.
+        expect(tools.length).toBe(25);
       });
 
       it("has correct resource count", () => {
@@ -152,7 +152,7 @@ describe.skipIf(!manifestsAvailable)(
         const consumables = Array.from(ITEMS.values()).filter(
           (item) => item.type === "consumable" && !item.id.endsWith("_noted"),
         );
-        expect(consumables.length).toBe(12);
+        expect(consumables.length).toBe(13);
       });
 
       it("has correct junk count", () => {
