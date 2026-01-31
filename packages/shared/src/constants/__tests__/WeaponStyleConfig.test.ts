@@ -58,14 +58,30 @@ describe("WeaponStyleConfig", () => {
       expect(styles).not.toContain("controlled");
     });
 
-    it("returns only accurate for ranged weapons (MVP)", () => {
-      expect(getAvailableStyles(WeaponType.BOW)).toEqual(["accurate"]);
-      expect(getAvailableStyles(WeaponType.CROSSBOW)).toEqual(["accurate"]);
+    it("returns accurate, rapid, longrange for ranged weapons", () => {
+      expect(getAvailableStyles(WeaponType.BOW)).toEqual([
+        "accurate",
+        "rapid",
+        "longrange",
+      ]);
+      expect(getAvailableStyles(WeaponType.CROSSBOW)).toEqual([
+        "accurate",
+        "rapid",
+        "longrange",
+      ]);
     });
 
-    it("returns only accurate for magic weapons (MVP)", () => {
-      expect(getAvailableStyles(WeaponType.STAFF)).toEqual(["accurate"]);
-      expect(getAvailableStyles(WeaponType.WAND)).toEqual(["accurate"]);
+    it("returns accurate, longrange, autocast for magic weapons", () => {
+      expect(getAvailableStyles(WeaponType.STAFF)).toEqual([
+        "accurate",
+        "longrange",
+        "autocast",
+      ]);
+      expect(getAvailableStyles(WeaponType.WAND)).toEqual([
+        "accurate",
+        "longrange",
+        "autocast",
+      ]);
     });
 
     it("returns defensive for shields", () => {
@@ -174,7 +190,15 @@ describe("WeaponStyleConfig", () => {
     });
 
     it("all style arrays contain only valid CombatStyle values", () => {
-      const validStyles = ["accurate", "aggressive", "defensive", "controlled"];
+      const validStyles = [
+        "accurate",
+        "aggressive",
+        "defensive",
+        "controlled",
+        "rapid",
+        "longrange",
+        "autocast",
+      ];
       Object.values(WEAPON_STYLE_CONFIG).forEach((styles) => {
         styles.forEach((style) => {
           expect(validStyles).toContain(style);

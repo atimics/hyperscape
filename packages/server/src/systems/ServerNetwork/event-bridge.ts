@@ -17,7 +17,7 @@
  * ```
  */
 
-import type { World } from "@hyperscape/shared";
+import type { World, FletchingInterfaceOpenPayload } from "@hyperscape/shared";
 import { EventType, ALL_WORLD_AREAS } from "@hyperscape/shared";
 import type { BroadcastManager } from "./broadcast";
 import { BankRepository } from "../../database/repositories/BankRepository";
@@ -98,6 +98,7 @@ export class EventBridge {
     this.setupFireEvents();
     this.setupSmeltingEvents();
     this.setupCraftingEvents();
+    this.setupFletchingEvents();
     this.setupTanningEvents();
     this.setupQuestEvents();
     this.setupTradeEvents();
@@ -1180,6 +1181,31 @@ export class EventBridge {
       });
     } catch (_err) {
       console.error("[EventBridge] Error setting up crafting events:", _err);
+    }
+  }
+
+  /**
+   * Setup fletching system event listeners
+   *
+   * Forwards fletching interface open events to specific players
+   * so they can see the fletching UI with available recipes.
+   *
+   * @private
+   */
+  private setupFletchingEvents(): void {
+    try {
+      // Forward fletching interface open events to specific player
+      this.world.on(EventType.FLETCHING_INTERFACE_OPEN, (payload: unknown) => {
+        const data = payload as FletchingInterfaceOpenPayload;
+
+        if (data.playerId) {
+          this.broadcast.sendToPlayer(data.playerId, "fletchingInterfaceOpen", {
+            availableRecipes: data.availableRecipes,
+          });
+        }
+      });
+    } catch (_err) {
+      console.error("[EventBridge] Error setting up fletching events:", _err);
     }
   }
 

@@ -828,6 +828,7 @@ export type {
   SkillsLevelUpEvent,
   EquipmentSyncData,
   InventorySyncData,
+  FletchingInterfaceOpenPayload,
 } from "./types/events";
 
 // Export additional core types
