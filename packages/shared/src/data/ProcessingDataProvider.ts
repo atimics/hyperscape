@@ -1166,7 +1166,151 @@ export class ProcessingDataProvider {
   private buildCraftingDataFromManifest(): void {
     if (!this.craftingManifest) return;
 
-    for (const recipe of this.craftingManifest.recipes) {
+    const VALID_STATIONS = new Set(["none", "furnace"]);
+    const errors: string[] = [];
+
+    for (let i = 0; i < this.craftingManifest.recipes.length; i++) {
+      const recipe = this.craftingManifest.recipes[i];
+      const label = recipe.output || `index ${i}`;
+
+      // Required string fields
+      if (!recipe.output || typeof recipe.output !== "string") {
+        errors.push(`[${label}] missing or invalid 'output'`);
+        continue;
+      }
+      if (!recipe.category || typeof recipe.category !== "string") {
+        errors.push(`[${label}] missing or invalid 'category'`);
+        continue;
+      }
+
+      // Level: integer in [1, 99]
+      if (
+        typeof recipe.level !== "number" ||
+        !Number.isFinite(recipe.level) ||
+        recipe.level < 1 ||
+        recipe.level > 99
+      ) {
+        errors.push(`[${label}] level must be 1–99, got ${recipe.level}`);
+        continue;
+      }
+
+      // XP > 0
+      if (
+        typeof recipe.xp !== "number" ||
+        !Number.isFinite(recipe.xp) ||
+        recipe.xp <= 0
+      ) {
+        errors.push(`[${label}] xp must be > 0, got ${recipe.xp}`);
+        continue;
+      }
+
+      // Ticks > 0
+      if (
+        typeof recipe.ticks !== "number" ||
+        !Number.isFinite(recipe.ticks) ||
+        recipe.ticks <= 0
+      ) {
+        errors.push(`[${label}] ticks must be > 0, got ${recipe.ticks}`);
+        continue;
+      }
+
+      // Station must be "none" or "furnace"
+      if (!VALID_STATIONS.has(recipe.station)) {
+        errors.push(
+          `[${label}] station must be 'none' or 'furnace', got '${recipe.station}'`,
+        );
+        continue;
+      }
+
+      // Inputs: non-empty array with valid entries
+      if (!Array.isArray(recipe.inputs) || recipe.inputs.length === 0) {
+        errors.push(`[${label}] inputs must be a non-empty array`);
+        continue;
+      }
+
+      let inputsValid = true;
+      for (const inp of recipe.inputs) {
+        if (!inp.item || typeof inp.item !== "string") {
+          errors.push(`[${label}] input has missing/invalid 'item'`);
+          inputsValid = false;
+          break;
+        }
+        if (
+          typeof inp.amount !== "number" ||
+          !Number.isFinite(inp.amount) ||
+          inp.amount < 1
+        ) {
+          errors.push(
+            `[${label}] input '${inp.item}' has invalid amount: ${inp.amount}`,
+          );
+          inputsValid = false;
+          break;
+        }
+        if (!ITEMS.has(inp.item)) {
+          errors.push(
+            `[${label}] input '${inp.item}' not found in ITEMS manifest`,
+          );
+          inputsValid = false;
+          break;
+        }
+      }
+      if (!inputsValid) continue;
+
+      // Tools: validate each exists in ITEMS
+      if (!Array.isArray(recipe.tools)) {
+        errors.push(`[${label}] tools must be an array`);
+        continue;
+      }
+      let toolsValid = true;
+      for (const tool of recipe.tools) {
+        if (!tool || typeof tool !== "string") {
+          errors.push(`[${label}] tool has invalid ID`);
+          toolsValid = false;
+          break;
+        }
+        if (!ITEMS.has(tool)) {
+          errors.push(`[${label}] tool '${tool}' not found in ITEMS manifest`);
+          toolsValid = false;
+          break;
+        }
+      }
+      if (!toolsValid) continue;
+
+      // Consumables: validate if present
+      const consumables = recipe.consumables || [];
+      if (!Array.isArray(consumables)) {
+        errors.push(`[${label}] consumables must be an array`);
+        continue;
+      }
+      let consumablesValid = true;
+      for (const con of consumables) {
+        if (!con.item || typeof con.item !== "string") {
+          errors.push(`[${label}] consumable has missing/invalid 'item'`);
+          consumablesValid = false;
+          break;
+        }
+        if (
+          typeof con.uses !== "number" ||
+          !Number.isFinite(con.uses) ||
+          con.uses < 1
+        ) {
+          errors.push(
+            `[${label}] consumable '${con.item}' has invalid uses: ${con.uses}`,
+          );
+          consumablesValid = false;
+          break;
+        }
+      }
+      if (!consumablesValid) continue;
+
+      // Output item should exist in ITEMS
+      if (!ITEMS.has(recipe.output)) {
+        errors.push(`[${label}] output not found in ITEMS manifest`);
+        continue;
+      }
+
+      // ---- Validated — build runtime data ----
+
       const item = ITEMS.get(recipe.output);
       const name = item?.name || recipe.output;
 
@@ -1176,7 +1320,7 @@ export class ProcessingDataProvider {
         category: recipe.category,
         inputs: recipe.inputs,
         tools: recipe.tools,
-        consumables: recipe.consumables || [],
+        consumables: consumables,
         level: recipe.level,
         xp: recipe.xp,
         ticks: recipe.ticks,
@@ -1202,6 +1346,12 @@ export class ProcessingDataProvider {
           this.allCraftingInputIds.add(input.item);
         }
       }
+    }
+
+    if (errors.length > 0) {
+      console.warn(
+        `[ProcessingDataProvider] Crafting manifest validation errors (${errors.length}):\n  ${errors.join("\n  ")}`,
+      );
     }
   }
 
