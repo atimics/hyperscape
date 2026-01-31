@@ -141,6 +141,11 @@ const names = [
   'processingCrafting',     // Client -> Server: player selected item to craft from UI
   'craftingInterfaceOpen',  // Server -> Client: show crafting interface with available recipes
   'craftingClose',          // Server -> Client: close crafting interface
+  // Fletching packets (knife + logs, stringing, arrow tipping)
+  'fletchingSourceInteract', // Client -> Server: player used knife on logs or item-on-item
+  'processingFletching',     // Client -> Server: player selected recipe to fletch from UI
+  'fletchingInterfaceOpen',  // Server -> Client: show fletching interface with available recipes
+  'fletchingClose',          // Server -> Client: close fletching interface
   // Tanning packets (NPC tanner)
   'processingTanning',      // Client -> Server: player selected hides to tan from UI
   'tanningInterfaceOpen',   // Server -> Client: show tanning interface with available hides

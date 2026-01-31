@@ -1187,6 +1187,30 @@ export class InventoryInteractionSystem extends SystemBase {
       },
     });
 
+    // Knife: Use on logs to fletch bows/arrow shafts
+    this.registerAction("processing", {
+      id: "use",
+      label: "Use",
+      priority: 1,
+      condition: (item: Item) => item.id === "knife",
+      callback: (playerId: string, itemId: string, slot: number | null) => {
+        this.startTargetingMode(playerId, itemId, slot ?? 0);
+      },
+    });
+
+    // Fletching inputs (bowstring, arrowtips, headless arrows, etc.): Use for item-on-item
+    this.registerAction("processing", {
+      id: "use",
+      label: "Use",
+      priority: 1,
+      condition: (item: Item) =>
+        processingDataProvider.isFletchingInput(item.id) &&
+        !processingDataProvider.isBurnableLog(item.id),
+      callback: (playerId: string, itemId: string, slot: number | null) => {
+        this.startTargetingMode(playerId, itemId, slot ?? 0);
+      },
+    });
+
     // Universal actions
     this.registerAction("universal", {
       id: "examine",
@@ -1668,6 +1692,52 @@ export class InventoryInteractionSystem extends SystemBase {
         playerId,
         triggerType,
         inputItemId,
+        sourceItemId,
+        targetId,
+      });
+    } else if (actionType === "fletching") {
+      // Fletching: knife + logs, bowstring + unstrung bow, arrowtips + headless arrows
+      let triggerType: "knife" | "item_on_item" = "item_on_item";
+      let inputItemId = sourceItemId;
+      let secondaryItemId: string | undefined;
+
+      if (sourceItemId === "knife") {
+        // Knife is the tool, target is the material (e.g., logs)
+        triggerType = "knife";
+        inputItemId = targetId;
+      } else if (targetId === "knife") {
+        // Reverse: material used on knife
+        triggerType = "knife";
+        inputItemId = sourceItemId;
+      } else {
+        // Item-on-item: bowstring + unstrung bow, arrowtips + headless arrows
+        triggerType = "item_on_item";
+        inputItemId = sourceItemId;
+        secondaryItemId = targetId;
+      }
+
+      // Send to server for authoritative processing
+      if (this.world.network?.send) {
+        this.world.network.send("fletchingSourceInteract", {
+          triggerType,
+          inputItemId,
+          secondaryItemId,
+        });
+      } else {
+        // Fallback: emit local event
+        this.emitTypedEvent(EventType.FLETCHING_INTERACT, {
+          playerId,
+          triggerType,
+          inputItemId,
+          secondaryItemId,
+        });
+      }
+
+      Logger.system("InventoryInteractionSystem", "Fletching request", {
+        playerId,
+        triggerType,
+        inputItemId,
+        secondaryItemId,
         sourceItemId,
         targetId,
       });

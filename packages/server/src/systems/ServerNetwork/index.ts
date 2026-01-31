@@ -1744,6 +1744,99 @@ export class ServerNetwork extends System implements NetworkWithSocket {
       });
     };
 
+    // Fletching source interaction - player used knife on logs or item-on-item
+    this.handlers["onFletchingSourceInteract"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      // Rate limiting - prevent inventory/recipe computation spam
+      if (!this.canProcessRequest(player.id)) {
+        return;
+      }
+
+      const payload = data as {
+        triggerType?: string;
+        inputItemId?: string;
+        secondaryItemId?: string;
+      };
+      if (!payload.triggerType) return;
+
+      // Validate triggerType
+      if (!["knife", "item_on_item"].includes(payload.triggerType)) {
+        return;
+      }
+
+      // Validate inputItemId (required)
+      if (
+        typeof payload.inputItemId !== "string" ||
+        payload.inputItemId.length > 64
+      ) {
+        return;
+      }
+
+      // Validate optional secondaryItemId
+      if (
+        payload.secondaryItemId !== undefined &&
+        (typeof payload.secondaryItemId !== "string" ||
+          payload.secondaryItemId.length > 64)
+      ) {
+        return;
+      }
+
+      // Emit event for FletchingSystem to handle
+      this.world.emit(EventType.FLETCHING_INTERACT, {
+        playerId: player.id,
+        triggerType: payload.triggerType,
+        inputItemId: payload.inputItemId,
+        secondaryItemId: payload.secondaryItemId,
+      });
+    };
+
+    // Processing fletching - player selected recipe to fletch from UI
+    this.handlers["onProcessingFletching"] = (socket, data) => {
+      const player = socket.player;
+      if (!player) return;
+
+      // Rate limiting - prevent request spam
+      if (!this.canProcessRequest(player.id)) {
+        return;
+      }
+
+      const payload = data as {
+        recipeId?: unknown;
+        quantity?: unknown;
+      };
+
+      // Type validation
+      if (typeof payload.recipeId !== "string") {
+        return;
+      }
+
+      // Length validation (prevent memory abuse)
+      if (payload.recipeId.length > 64) {
+        return;
+      }
+
+      // Quantity validation with bounds (-1 = "All", server computes actual max)
+      let quantity = 1;
+      if (
+        typeof payload.quantity === "number" &&
+        Number.isFinite(payload.quantity)
+      ) {
+        quantity =
+          payload.quantity === -1
+            ? 10000
+            : Math.floor(Math.max(1, Math.min(payload.quantity, 10000)));
+      }
+
+      // Emit event for FletchingSystem to handle
+      this.world.emit(EventType.PROCESSING_FLETCHING_REQUEST, {
+        playerId: player.id,
+        recipeId: payload.recipeId,
+        quantity,
+      });
+    };
+
     // Tanning - player selected hide to tan from UI
     this.handlers["onProcessingTanning"] = (socket, data) => {
       const player = socket.player;
