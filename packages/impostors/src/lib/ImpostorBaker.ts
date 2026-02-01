@@ -841,11 +841,14 @@ export class ImpostorBaker {
     sourceCopy.position.set(-center.x, -center.y, -center.z);
 
     // Scale to fit in camera view: orthoSize is 0.5, camera captures 1.0x1.0
-    // scaleFactor = 0.5 / radius makes diameter fill view
-    // Using 1.15 margin (15%) to prevent edge clipping on trees with foliage
-    // The 5% margin was too tight and clipped tree leaves
-    const radius = boundingSphere.radius * 1.15;
-    const scaleFactor = 0.5 / radius;
+    // Use the MAXIMUM dimension (typically height for trees) instead of sphere radius
+    // This ensures tall narrow objects fill the cell properly
+    // Sphere radius would leave too much empty space for non-spherical objects
+    const boxSize = boundingBox.getSize(new THREE.Vector3());
+    const maxDimension = Math.max(boxSize.x, boxSize.y, boxSize.z);
+    // Add 15% margin to prevent edge clipping
+    const effectiveRadius = (maxDimension / 2) * 1.15;
+    const scaleFactor = 0.5 / effectiveRadius;
     sourceCopy.scale.setScalar(scaleFactor);
     sourceCopy.position.multiplyScalar(scaleFactor);
 
@@ -1096,8 +1099,11 @@ export class ImpostorBaker {
     sourceCopy.position.set(-center.x, -center.y, -center.z);
 
     // Scale to fit in camera view (same as bake())
-    const radius = boundingSphere.radius * 1.15;
-    const scaleFactor = 0.5 / radius;
+    // Use max dimension instead of sphere radius for better framing
+    const boxSize = boundingBox.getSize(new THREE.Vector3());
+    const maxDimension = Math.max(boxSize.x, boxSize.y, boxSize.z);
+    const effectiveRadius = (maxDimension / 2) * 1.15;
+    const scaleFactor = 0.5 / effectiveRadius;
     sourceCopy.scale.setScalar(scaleFactor);
     sourceCopy.position.multiplyScalar(scaleFactor);
 
@@ -1677,11 +1683,19 @@ export class ImpostorBaker {
     this.renderScene.add(sourceCopy);
 
     // Center and scale - MUST match bake() scale exactly
-    // bake() uses: scaleFactor = 0.5 / (boundingSphere.radius * 1.15)
+    // bake() uses max dimension instead of sphere radius
     const center = colorResult.boundingSphere.center.clone();
     sourceCopy.position.set(-center.x, -center.y, -center.z);
-    const radius = colorResult.boundingSphere.radius * 1.15;
-    const scaleFactor = 0.5 / radius;
+    let effectiveRadius: number;
+    if (colorResult.boundingBox) {
+      const boxSize = colorResult.boundingBox.getSize(new THREE.Vector3());
+      const maxDimension = Math.max(boxSize.x, boxSize.y, boxSize.z);
+      effectiveRadius = (maxDimension / 2) * 1.15;
+    } else {
+      // Fallback to sphere radius if bounding box not available
+      effectiveRadius = colorResult.boundingSphere.radius * 1.15;
+    }
+    const scaleFactor = 0.5 / effectiveRadius;
     sourceCopy.scale.setScalar(scaleFactor);
     sourceCopy.position.multiplyScalar(scaleFactor);
 
@@ -1890,8 +1904,11 @@ export class ImpostorBaker {
     // Center and scale the cloned mesh (same as bake())
     const center = boundingSphere.center.clone();
     sourceCopy.position.set(-center.x, -center.y, -center.z);
-    const radius = boundingSphere.radius * 1.15;
-    const scaleFactor = 0.5 / radius;
+    // Use max dimension instead of sphere radius for better framing
+    const boxSize = boundingBox.getSize(new THREE.Vector3());
+    const maxDimension = Math.max(boxSize.x, boxSize.y, boxSize.z);
+    const effectiveRadius = (maxDimension / 2) * 1.15;
+    const scaleFactor = 0.5 / effectiveRadius;
     sourceCopy.scale.setScalar(scaleFactor);
     sourceCopy.position.multiplyScalar(scaleFactor);
 

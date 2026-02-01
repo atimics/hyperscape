@@ -638,9 +638,9 @@ export class VegetationSystem extends System {
         );
       }
     } catch (error) {
-      console.error(
-        "[VegetationSystem] Error loading vegetation manifest:",
-        error,
+      // Vegetation manifest is optional - silently continue without it
+      console.warn(
+        "[VegetationSystem] Vegetation manifest not available, continuing without vegetation assets",
       );
     }
   }

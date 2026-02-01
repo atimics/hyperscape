@@ -73,6 +73,7 @@ import {
   deserializeColor,
   type SerializedTreeVariant,
   type SerializedGeometry,
+  type SerializedLeafInstances,
 } from "../../../utils/rendering/ProcgenCacheDB";
 
 // TSL functions from three/webgpu
@@ -108,7 +109,7 @@ const VARIANTS_PER_PRESET = 3;
  *
  * Version 2: Mobile-optimized LOD geometry (cheaper trees, trunk-only LOD1/LOD2)
  */
-const CACHE_VERSION = 3; // Bumped to regenerate trees with leaf transforms for cluster system
+const CACHE_VERSION = 4; // Bumped to include leaf instances serialization for cluster generation
 
 /**
  * Crown shape types for LOD2 procedural billboards.
@@ -809,15 +810,56 @@ function generateLOD2CardTree(
 
 /**
  * Serialize a THREE.Group's meshes to an array of geometries.
+ * Also returns leaf instances if found (for cluster generation).
  */
 function serializeGroupGeometries(group: THREE.Group): SerializedGeometry[] {
   const geometries: SerializedGeometry[] = [];
   group.traverse((child) => {
-    if (child instanceof THREE.Mesh && child.geometry) {
+    // Skip InstancedMesh (handled separately for leaf instances)
+    const isInstancedMesh =
+      (child as THREE.Object3D & { isInstancedMesh?: boolean })
+        .isInstancedMesh === true;
+    if (!isInstancedMesh && child instanceof THREE.Mesh && child.geometry) {
       geometries.push(serializeGeometry(child.geometry));
     }
   });
   return geometries;
+}
+
+/**
+ * Extract and serialize leaf instances from a tree group.
+ * Returns null if no InstancedMesh (leaves) found.
+ */
+function extractLeafInstances(
+  group: THREE.Group,
+): SerializedLeafInstances | null {
+  let leafInstances: SerializedLeafInstances | null = null;
+
+  group.traverse((child) => {
+    const isInstancedMesh =
+      (child as THREE.Object3D & { isInstancedMesh?: boolean })
+        .isInstancedMesh === true;
+    if (isInstancedMesh && !leafInstances) {
+      const instancedMesh = child as THREE.InstancedMesh;
+      const count = instancedMesh.count;
+      const matrices: number[] = [];
+      const tempMatrix = new THREE.Matrix4();
+
+      // Extract all instance matrices
+      for (let i = 0; i < count; i++) {
+        instancedMesh.getMatrixAt(i, tempMatrix);
+        matrices.push(...tempMatrix.elements);
+      }
+
+      leafInstances = {
+        matrices,
+        count,
+        geometry: serializeGeometry(instancedMesh.geometry),
+      };
+    }
+  });
+
+  return leafInstances;
 }
 
 /**
@@ -832,6 +874,7 @@ function serializeTreeVariant(variant: TreeVariant): SerializedTreeVariant {
     lod2Geometries: variant.lod2Group
       ? serializeGroupGeometries(variant.lod2Group)
       : undefined,
+    leafInstances: extractLeafInstances(variant.group) ?? undefined,
     dimensions: { ...variant.dimensions },
     leafColor: serializeColor(variant.leafColor),
     barkColor: serializeColor(variant.barkColor),
@@ -859,22 +902,50 @@ async function deserializeTreeVariant(
   const group = new THREE.Group();
   group.name = `Tree_${presetName}_LOD0`;
 
-  // Create meshes from serialized geometries
-  // First geometry is typically trunk/branches, second is leaves
+  // Create meshes from serialized geometries (trunk/branches)
   for (let i = 0; i < data.geometries.length; i++) {
     const geo = deserializeGeometry(data.geometries[i]);
     const mat = new MeshBasicNodeMaterial();
 
-    // Use vertex colors if available, otherwise use bark/leaf color
+    // Use vertex colors if available, otherwise use bark color
     if (geo.attributes.color) {
       mat.vertexColors = true;
     } else {
-      mat.color = i === 0 ? barkColor.clone() : leafColor.clone();
+      mat.color = barkColor.clone();
     }
 
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.name = i === 0 ? "Trunk" : "Leaves";
+    mesh.name = i === 0 ? "Trunk" : `Branch_${i}`;
     group.add(mesh);
+  }
+
+  // Recreate leaf InstancedMesh from serialized data (critical for cluster generation)
+  if (data.leafInstances && data.leafInstances.count > 0) {
+    const leafGeo = deserializeGeometry(data.leafInstances.geometry);
+    const leafMat = new MeshBasicNodeMaterial();
+    leafMat.color = leafColor.clone();
+    leafMat.side = THREE.DoubleSide;
+
+    const instancedLeaves = new THREE.InstancedMesh(
+      leafGeo,
+      leafMat,
+      data.leafInstances.count,
+    );
+    instancedLeaves.name = "Leaves";
+
+    // Restore instance matrices
+    const tempMatrix = new THREE.Matrix4();
+    for (let i = 0; i < data.leafInstances.count; i++) {
+      const offset = i * 16;
+      tempMatrix.fromArray(data.leafInstances.matrices, offset);
+      instancedLeaves.setMatrixAt(i, tempMatrix);
+    }
+    instancedLeaves.instanceMatrix.needsUpdate = true;
+
+    group.add(instancedLeaves);
+    console.log(
+      `[ProcgenTreeCache] Restored ${data.leafInstances.count} leaf instances for ${presetName}`,
+    );
   }
 
   // Reconstruct LOD1 group

@@ -288,6 +288,9 @@ export class ImpostorManager {
   private baking = false;
   private lastBakeTime = 0;
 
+  // Pending bake promises for deduplication - prevents multiple simultaneous bakes of the same key
+  private pendingBakes = new Map<string, Promise<ImpostorBakeResult>>();
+
   // Statistics
   private stats = {
     cacheHits: 0,
@@ -374,13 +377,22 @@ export class ImpostorManager {
       }
     }
 
+    // Check if there's already a pending bake for this key (deduplication)
+    const pendingBake = this.pendingBakes.get(cacheKey);
+    if (pendingBake && !options.forceBake) {
+      console.log(
+        `[ImpostorManager] ⏳ Bake already pending for ${modelId} - reusing promise`,
+      );
+      return pendingBake;
+    }
+
     this.stats.cacheMisses++;
     console.log(
       `[ImpostorManager] ❌ Cache MISS: ${modelId} - queuing for bake`,
     );
 
-    // Queue for baking
-    return new Promise((resolve, reject) => {
+    // Queue for baking with deduplication
+    const bakePromise = new Promise<ImpostorBakeResult>((resolve, reject) => {
       const request: BakeRequest = {
         modelId,
         source,
@@ -404,6 +416,16 @@ export class ImpostorManager {
       // Start processing if not already
       this.processBakeQueue();
     });
+
+    // Store pending promise for deduplication
+    this.pendingBakes.set(cacheKey, bakePromise);
+
+    // Clean up pending promise when done (success or failure)
+    bakePromise.finally(() => {
+      this.pendingBakes.delete(cacheKey);
+    });
+
+    return bakePromise;
   }
 
   /**

@@ -807,12 +807,14 @@ export class ProcgenRockInstancer {
     );
 
     for (const presetName of presets) {
-      const impostorKey = `rock_${presetName}`;
+      // IMPORTANT: Key must match bakeImpostor() which uses `rock_${presetName}_v2`
+      const impostorKey = `rock_${presetName}_v2`;
       const cached = await this.impostorManager.preload(impostorKey, {
         atlasSize: IMPOSTOR_SIZE,
         gridSizeX: 16,
         gridSizeY: 8,
         hemisphere: true,
+        bakeMode: ImpostorBakeMode.STANDARD, // Must match bakeImpostor options
       });
 
       if (cached) {

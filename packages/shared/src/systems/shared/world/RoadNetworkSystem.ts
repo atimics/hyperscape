@@ -224,6 +224,13 @@ export class RoadNetworkSystem extends System {
     const towns = this.townSystem.getTowns();
     if (towns.length === 0) {
       Logger.systemWarn("RoadNetworkSystem", "No towns for roads");
+      // Still emit event so terrain can proceed with tile generation
+      this.world.emit(EventType.ROADS_GENERATED, {
+        roadCount: 0,
+        townCount: 0,
+        poiCount: 0,
+        explorationRoadCount: 0,
+      });
       return;
     }
 
@@ -1921,6 +1928,16 @@ export class RoadNetworkSystem extends System {
     // Phase 3: Also detect boundary exits for road endpoints not captured by clipping
     // This catches exploration roads that end at natural features near tile edges
     this.detectRoadEndpointBoundaryExits();
+
+    // Log tile cache statistics for debugging
+    let totalSegments = 0;
+    for (const segments of this.tileRoadCache.values()) {
+      totalSegments += segments.length;
+    }
+    Logger.system(
+      "RoadNetworkSystem",
+      `Tile cache built: ${this.tileRoadCache.size} tiles containing ${totalSegments} road segments`,
+    );
 
     if (this.boundaryExits.length > 0) {
       Logger.system(

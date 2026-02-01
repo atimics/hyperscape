@@ -46,13 +46,10 @@ import type { VRMHumanBoneName } from "@pixiv/three-vrm";
 
 import { getTextureBytesFromMaterial } from "./getTextureBytesFromMaterial";
 import { getTrianglesFromGeometry } from "./getTrianglesFromGeometry";
-import THREE, { MeshStandardNodeMaterial } from "./three";
-import { MeshBasicNodeMaterial } from "three/webgpu";
+import THREE from "./three";
 
 const v1 = new THREE.Vector3();
 const v2 = new THREE.Vector3();
-const _boneWorldPos = new THREE.Vector3();
-const _scenePos = new THREE.Vector3();
 
 // Pre-allocated matrices for VRM instance move() to avoid per-frame allocations
 // These are used by the create() closure for each instance
@@ -61,15 +58,22 @@ const _scaleMatrix = new THREE.Matrix4();
 const _tempMatrix1 = new THREE.Matrix4();
 const _tempMatrix2 = new THREE.Matrix4();
 
-// VRM Factory Animation Update Architecture:
-// All animation throttling is handled externally by AnimationLOD at the entity level.
-// This ensures consistent throttling behavior across all entity types (PlayerLocal,
-// PlayerRemote, MobEntity, NPCEntity) and avoids conflicting rate limiting.
-//
-// The VRM factory's update() function passes delta directly to the AnimationMixer
-// without any internal accumulation or rate limiting.
+/** How often to check avatar distance for LOD (seconds) */
+const DIST_CHECK_RATE = 1;
 
-const material = new MeshBasicNodeMaterial();
+/** Minimum update rate for close avatars (updates/second) */
+const DIST_MIN_RATE = 1 / 5;
+
+/** Maximum update rate for far avatars (updates/second) */
+const DIST_MAX_RATE = 1 / 25;
+
+/** Distance for minimum update rate (meters) */
+const DIST_MIN = 30;
+
+/** Distance for maximum update rate (meters) */
+const DIST_MAX = 60;
+
+const material = new THREE.MeshBasicMaterial();
 
 /**
  * Create VRM Avatar Factory
@@ -84,17 +88,6 @@ export function createVRMFactory(
   glb: GLBData,
   setupMaterial?: (material: THREE.Material) => void,
 ) {
-  // Debug: Check VRM data at factory creation time
-  const inputVrmData = glb.userData?.vrm;
-  console.log("[createVRMFactory] Input GLB userData:", {
-    hasUserData: !!glb.userData,
-    hasVRM: !!inputVrmData,
-    hasHumanoid: !!inputVrmData?.humanoid,
-    humanoidType: inputVrmData?.humanoid?.constructor?.name,
-    hasUpdateMethod: typeof inputVrmData?.humanoid?.update,
-    hasCloneMethod: typeof inputVrmData?.humanoid?.clone,
-  });
-
   // we'll update matrix ourselves
   glb.scene.matrixAutoUpdate = false;
   glb.scene.matrixWorldAutoUpdate = false;
@@ -113,10 +106,10 @@ export function createVRMFactory(
       obj.castShadow = true;
       obj.receiveShadow = true;
 
-      // Convert materials to MeshStandardNodeMaterial for WebGPU-native TSL support
+      // Convert materials to MeshStandardMaterial for proper sun/moon/environment lighting
       const convertMaterial = (
         mat: THREE.Material,
-      ): MeshStandardNodeMaterial => {
+      ): THREE.MeshStandardMaterial => {
         // Extract textures and colors from original material
         const originalMat = mat as THREE.Material & {
           map?: THREE.Texture | null;
@@ -142,10 +135,12 @@ export function createVRMFactory(
           originalMat.emissive?.clone() ||
           baseColor.clone().multiplyScalar(0.15);
 
-        // NOTE: Only include texture properties if they actually exist
-        // Passing undefined explicitly triggers THREE.js warnings
+        // NOTE: Use undefined instead of null for optional textures
         // Setting null causes WebGPU texture cache corruption (WeakMap key error)
-        const materialParams: THREE.MeshStandardMaterialParameters = {
+        const newMat = new THREE.MeshStandardMaterial({
+          map: originalMat.map || undefined,
+          normalMap: originalMat.normalMap || undefined,
+          emissiveMap: originalMat.emissiveMap || undefined,
           color: baseColor,
           emissive: emissiveColor,
           emissiveIntensity: 0.3, // Subtle glow - matches PlayerEntity placeholder
@@ -156,16 +151,7 @@ export function createVRMFactory(
           roughness: 1.0,
           metalness: 0.0,
           envMapIntensity: 1.0, // Respond to environment map
-        };
-
-        // Only add texture properties if they exist (avoids THREE.js warnings)
-        if (originalMat.map) materialParams.map = originalMat.map;
-        if (originalMat.normalMap)
-          materialParams.normalMap = originalMat.normalMap;
-        if (originalMat.emissiveMap)
-          materialParams.emissiveMap = originalMat.emissiveMap;
-
-        const newMat = new MeshStandardNodeMaterial(materialParams);
+        });
 
         // Copy name for debugging
         newMat.name = originalMat.name || "VRM_Standard";
@@ -315,14 +301,6 @@ export function createVRMFactory(
     const vrm = cloneGLB(glb);
     const _tvrm = vrm.userData?.vrm;
 
-    // Debug: Log what we got from cloning
-    console.log("[VRMFactory.create] Cloned VRM userData:", {
-      hasVrm: !!_tvrm,
-      hasHumanoid: !!_tvrm?.humanoid,
-      humanoidType: _tvrm?.humanoid?.constructor?.name,
-      hasUpdate: typeof _tvrm?.humanoid?.update,
-    });
-
     const skinnedMeshes = getSkinnedMeshes(vrm.scene as THREE.Scene);
     const skeleton = skinnedMeshes[0].skeleton;
     const rootBone = skeleton.bones[0];
@@ -336,7 +314,6 @@ export function createVRMFactory(
     // Normalized bones are cloned with the scene, so each instance has its own
     // CRITICAL: Use the CLONED humanoid (_tvrm?.humanoid) for bone lookups, not the original
     const clonedHumanoid = _tvrm?.humanoid;
-
     const getBoneName = (vrmBoneName: string): string | undefined => {
       // Guard against undefined/null bone names
       if (!vrmBoneName || !clonedHumanoid) return undefined;
@@ -412,8 +389,7 @@ export function createVRMFactory(
         "[VRMFactory] WARNING: No scene in hooks, using alternate scene from node.ctx.stage.scene",
       );
       alternateScene.add(vrm.scene);
-    } else if (!hooks?.templateMode) {
-      // Only log error if not in template mode - template extraction doesn't need a scene
+    } else {
       console.error(
         "[VRMFactory] ERROR: No scene available, VRM will not be visible!",
       );
@@ -466,123 +442,61 @@ export function createVRMFactory(
     // IDEA: we should use a global frame "budget" to distribute across avatars
     // https://chatgpt.com/c/4bbd469d-982e-4987-ad30-97e9c5ee6729
 
+    let elapsed = 0;
+    let rate = 0;
+    let rateCheckedAt = 999;
+    let rateCheck = true;
     let hasLoggedUpdatePipeline = false;
     // Track death animation state for future debugging/logging
     let _deathAnimationActive = false;
     let _deathUpdateLogCount = 0;
-
-    // Track if we've applied idle pose as fallback (only log once)
-    let hasAppliedIdleFallback = false;
-
-    /**
-     * Update animation with delta time.
-     *
-     * Animation throttling is handled externally by AnimationLOD at the entity level.
-     * This function passes delta directly to the mixer without internal accumulation
-     * or rate limiting, ensuring consistent timing across all entity types.
-     *
-     * CRITICAL: If no emote is playing (during loading or when cleared), we apply
-     * the VRM's normalized rest pose to prevent showing T-pose. This ensures the
-     * avatar always shows a reasonable pose, never the raw bind pose.
-     *
-     * @param delta - Delta time from AnimationLOD.effectiveDelta (may be accumulated for skipped frames)
-     */
-    const update = (delta: number) => {
-      // Skip negative delta (invalid state)
-      // NOTE: delta=0 is allowed - it applies current animation state without advancing time
-      // This is needed for impostor baking (prepareForBake calls update(0))
-      if (delta < 0) return;
-
-      // HYBRID APPROACH - Asset Forge animation pipeline:
-
-      // Check if we have a valid animation playing
-      const hasValidAnimation = currentEmote?.action && !currentEmote.loading;
-
-      // Step 1: Update AnimationMixer (animates normalized bones)
-      // delta=0 applies current state without advancing time (useful for baking)
-      if (mixer && hasValidAnimation) {
-        mixer.update(delta);
-      } else if (
-        clonedHumanoid &&
-        "resetPose" in clonedHumanoid &&
-        !hasValidAnimation
-      ) {
-        // NO ANIMATION PLAYING: Apply rest pose to prevent T-pose
-        // This happens during emote loading or when no emote is set
-        // resetPose() sets the VRM to its normalized rest pose (usually A-pose)
-        // which is much better than showing T-pose
-        (clonedHumanoid as { resetPose: () => void }).resetPose();
-
-        if (!hasAppliedIdleFallback) {
-          hasAppliedIdleFallback = true;
-          // Only log once to avoid spam
-          console.log(
-            `[VRM] Applied rest pose fallback - no valid animation playing`,
-          );
+    const update = (delta) => {
+      elapsed += delta;
+      let should = true;
+      if (rateCheck) {
+        // periodically calculate update rate based on distance to camera
+        rateCheckedAt += delta;
+        if (rateCheckedAt >= DIST_CHECK_RATE) {
+          const vrmPos = v1.setFromMatrixPosition(vrm.scene.matrix);
+          const camPos = v2.setFromMatrixPosition((hooks.camera as THREE.Camera).matrixWorld) // prettier-ignore
+          const distance = vrmPos.distanceTo(camPos);
+          const clampedDistance = Math.max(distance - DIST_MIN, 0);
+          const normalizedDistance = Math.min(clampedDistance / (DIST_MAX - DIST_MIN), 1) // prettier-ignore
+          rate = DIST_MAX_RATE + normalizedDistance * (DIST_MIN_RATE - DIST_MAX_RATE) // prettier-ignore
+          rateCheckedAt = 0;
         }
+        should = elapsed >= rate;
       }
 
-      // Step 2: CRITICAL - Propagate normalized bone transforms to raw bones
-      // This is where the VRM library's automatic A-pose handling happens
-      // Without this, normalized bone changes never reach the visible skeleton
-      if (_tvrm?.humanoid?.update) {
-        _tvrm.humanoid.update(delta);
-      } else {
-        // FALLBACK: Manually propagate normalized bones to raw bones
-        // This mimics what humanoid.update() does internally
-        const humanoid = _tvrm?.humanoid;
-        if (humanoid) {
-          const normalizedBones = humanoid._normalizedHumanBones?.humanBones;
-          const rawBones = humanoid._rawHumanBones?.humanBones;
-          if (normalizedBones && rawBones) {
-            // Copy transforms from normalized to raw bones
-            for (const [boneName, rawBoneData] of Object.entries(rawBones)) {
-              const normalizedBoneData = normalizedBones[boneName];
-              const rawBoneNode = (rawBoneData as { node?: THREE.Object3D })
-                ?.node;
-              const normalizedBoneNode = (
-                normalizedBoneData as { node?: THREE.Object3D }
-              )?.node;
-              if (rawBoneNode && normalizedBoneNode) {
-                // Copy local transforms from normalized to raw bone
-                rawBoneNode.quaternion.copy(normalizedBoneNode.quaternion);
-                rawBoneNode.position.copy(normalizedBoneNode.position);
-              }
-            }
-          }
+      if (should) {
+        // HYBRID APPROACH - Asset Forge animation pipeline:
+
+        // Step 1: Update AnimationMixer (animates normalized bones)
+        if (mixer) {
+          mixer.update(elapsed);
         }
-        if (!hasLoggedUpdatePipeline) {
+
+        // Step 2: CRITICAL - Propagate normalized bone transforms to raw bones
+        // This is where the VRM library's automatic A-pose handling happens
+        // Without this, normalized bone changes never reach the visible skeleton
+        if (_tvrm?.humanoid?.update) {
+          _tvrm.humanoid.update(elapsed);
+        } else if (!hasLoggedUpdatePipeline) {
           hasLoggedUpdatePipeline = true;
           console.warn(
-            `[VRM] ⚠️ humanoid.update NOT available - using manual bone propagation fallback`,
-            {
-              _tvrm: !!_tvrm,
-              humanoid: !!_tvrm?.humanoid,
-              humanoidType: _tvrm?.humanoid?.constructor?.name,
-              updateMethod: typeof _tvrm?.humanoid?.update,
-              vrmUserData: vrm.userData,
-              hasNormalizedBones:
-                !!_tvrm?.humanoid?._normalizedHumanBones?.humanBones,
-              hasRawBones: !!_tvrm?.humanoid?._rawHumanBones?.humanBones,
-            },
+            `[VRM] ⚠️ humanoid.update NOT available - animations may not propagate to visible skeleton!`,
           );
         }
-      }
 
-      // Step 3: Update skeleton matrices for skinning
-      // Use for-loop instead of forEach to avoid callback allocation
-      const bones = skeleton.bones;
-      for (let i = 0; i < bones.length; i++) {
-        const bone = bones[i];
-        if (bone) {
-          bone.updateMatrixWorld();
+        // Step 3: Update skeleton matrices for skinning
+        // Use for-loop instead of forEach to avoid callback allocation
+        const bones = skeleton.bones;
+        for (let i = 0; i < bones.length; i++) {
+          bones[i].updateMatrixWorld();
         }
-      }
-      skeleton.update();
+        skeleton.update();
 
-      // Reset the fallback flag once we have a valid animation again
-      if (hasValidAnimation) {
-        hasAppliedIdleFallback = false;
+        elapsed = 0;
       }
     };
     // world.updater.add(update)
@@ -663,8 +577,6 @@ export function createVRMFactory(
               version,
               getBoneName,
             });
-            // NOTE: Main branch does NOT filter tracks - the mixer handles missing bones gracefully
-            // Track filtering was causing ALL tracks to be removed for some VRMs
             const action = mixer.clipAction(clip);
             action.timeScale = speed;
             newEmote.action = action;
@@ -690,180 +602,6 @@ export function createVRMFactory(
             console.error(`[VRM] Failed to load emote:`, url, err);
           });
       }
-    };
-
-    /**
-     * Pre-load an emote without playing it.
-     * Use this to warm the emote cache and prevent T-pose flash on first use.
-     * Fire-and-forget - doesn't block or return a promise.
-     *
-     * @param url - Emote URL to pre-load
-     */
-    const preloadEmote = (url: string) => {
-      if (!url || emotes[url]) {
-        // Already loaded or loading
-        return;
-      }
-
-      const opts = getQueryParams(url);
-      const speed = parseFloat(opts.s || "1");
-
-      const newEmote: EmoteData = {
-        url,
-        loading: true,
-        action: null,
-      };
-      emotes[url] = newEmote;
-
-      type LoaderType = {
-        load: (
-          type: string,
-          url: string,
-        ) => Promise<{ toClip: (opts: unknown) => THREE.AnimationClip }>;
-      };
-
-      (hooks.loader as LoaderType)
-        .load("emote", url)
-        .then((emo) => {
-          const clip = emo.toClip({
-            rootToHips,
-            version,
-            getBoneName,
-          });
-          // NOTE: Main branch does NOT filter tracks - the mixer handles missing bones gracefully
-          const action = mixer.clipAction(clip);
-          action.timeScale = speed;
-          newEmote.action = action;
-          newEmote.loading = false;
-          // Don't play - just cache it
-        })
-        .catch((err) => {
-          console.warn(`[VRM] Failed to preload emote:`, url, err);
-          // Remove failed emote from cache so it can be retried
-          delete emotes[url];
-        });
-    };
-
-    /**
-     * Set emote and wait for it to be fully loaded and playing.
-     * Returns a Promise that resolves when the emote animation is ready.
-     * Use this when you need to guarantee the animation is visible before showing the avatar.
-     *
-     * @param url - Emote URL to load and play
-     * @param timeoutMs - Maximum time to wait (default 3000ms)
-     * @returns Promise that resolves when emote is playing, rejects on timeout or error
-     */
-    const setEmoteAndWait = (url: string, timeoutMs = 3000): Promise<void> => {
-      return new Promise((resolve, reject) => {
-        if (!url) {
-          // No emote requested - resolve immediately (will show rest pose)
-          resolve();
-          return;
-        }
-
-        // Check if emote is already cached and ready
-        const cached = emotes[url];
-        if (cached && cached.action && !cached.loading) {
-          // Emote is ready - set it and resolve
-          setEmote(url);
-          // Apply first frame immediately
-          if (mixer) {
-            mixer.update(0);
-          }
-          resolve();
-          return;
-        }
-
-        // Need to load the emote - set up timeout
-        const timeoutId = setTimeout(() => {
-          reject(
-            new Error(
-              `[VRM] setEmoteAndWait timed out after ${timeoutMs}ms for: ${url}`,
-            ),
-          );
-        }, timeoutMs);
-
-        const opts = getQueryParams(url);
-        const loop = opts.l !== "0";
-        const speed = parseFloat(opts.s || "1");
-
-        // Check if already loading
-        if (cached && cached.loading) {
-          // Poll for completion
-          const checkInterval = setInterval(() => {
-            if (cached.action && !cached.loading) {
-              clearInterval(checkInterval);
-              clearTimeout(timeoutId);
-              setEmote(url);
-              if (mixer) {
-                mixer.update(0);
-              }
-              resolve();
-            }
-          }, 16); // Check every frame
-          return;
-        }
-
-        // Start loading
-        const newEmote: EmoteData = {
-          url,
-          loading: true,
-          action: null,
-        };
-        emotes[url] = newEmote;
-        currentEmote = newEmote;
-
-        type LoaderType = {
-          load: (
-            type: string,
-            url: string,
-          ) => Promise<{ toClip: (opts: unknown) => THREE.AnimationClip }>;
-        };
-
-        (hooks.loader as LoaderType)
-          .load("emote", url)
-          .then((emo) => {
-            clearTimeout(timeoutId);
-
-            const clip = emo.toClip({
-              rootToHips,
-              version,
-              getBoneName,
-            });
-            // NOTE: Main branch does NOT filter tracks - the mixer handles missing bones gracefully
-            const action = mixer.clipAction(clip);
-            action.timeScale = speed;
-            newEmote.action = action;
-            newEmote.loading = false;
-
-            // Play if still the current emote
-            if (currentEmote === newEmote) {
-              action.clampWhenFinished = !loop;
-              action.setLoop(
-                loop ? THREE.LoopRepeat : THREE.LoopOnce,
-                Infinity,
-              );
-              action.reset().fadeIn(0.15).play();
-
-              // Apply first frame immediately
-              if (mixer) {
-                mixer.update(0);
-              }
-
-              if (url?.includes("death")) {
-                _deathAnimationActive = true;
-                _deathUpdateLogCount = 0;
-              }
-            }
-
-            resolve();
-          })
-          .catch((err) => {
-            clearTimeout(timeoutId);
-            console.error(`[VRM] setEmoteAndWait failed:`, url, err);
-            reject(err);
-          });
-      });
     };
 
     const bonesByName = {};
@@ -903,138 +641,14 @@ export function createVRMFactory(
       update(delta);
     };
 
-    /**
-     * Get the lowest bone Y position in world space after animation
-     * Checks ALL major bones to find the absolute lowest point - critical for death animations
-     * where the character lies down and spine/hips may be lower than feet
-     * @returns World-space Y coordinate of the lowest bone, or null if bones not found
-     */
-    const getLowestBoneY = (): number | null => {
-      // Check ALL bones that could be the lowest point in any pose
-      // For standing: feet/toes are lowest
-      // For lying down (death): spine/hips/head may be lowest
-      // For crouching: knees/feet may be lowest
-      const groundContactBones = [
-        // Feet and toes (standing poses)
-        "leftFoot",
-        "rightFoot",
-        "leftToes",
-        "rightToes",
-        // Legs (crouching, kneeling)
-        "leftLowerLeg",
-        "rightLowerLeg",
-        "leftUpperLeg",
-        "rightUpperLeg",
-        // Spine and torso (lying down, death)
-        "hips",
-        "spine",
-        "chest",
-        "upperChest",
-        // Head (lying face down or back)
-        "head",
-        "neck",
-        // Hands (some poses have hands touching ground)
-        "leftHand",
-        "rightHand",
-      ];
-
-      let minY: number | null = null;
-
-      for (const boneName of groundContactBones) {
-        const bone = findBone(boneName);
-        if (bone) {
-          // Get bone world position (includes VRM scene transform + animation)
-          bone.getWorldPosition(_boneWorldPos);
-          if (minY === null || _boneWorldPos.y < minY) {
-            minY = _boneWorldPos.y;
-          }
-        }
-      }
-
-      return minY;
-    };
-
-    /**
-     * Clamp avatar to ground - ensures feet touch terrain (not below, not floating)
-     * Call this AFTER update() and move() to verify ground contact
-     *
-     * CRITICAL: move() sets vrm.scene.matrix directly, so vrm.scene.position is STALE.
-     * We must extract position from matrix, not use the position property.
-     *
-     * @param groundY - Terrain height at the avatar's position
-     * @returns The Y adjustment applied (positive = lifted up, negative = pushed down)
-     */
-    const clampToGround = (groundY: number): number => {
-      const lowestY = getLowestBoneY();
-      if (lowestY === null) return 0;
-
-      // Foot mesh extends below the bone position (bones are at joint centers)
-      // Add offset so the mesh touches ground, not the bone
-      const FOOT_MESH_OFFSET = 0.1; // 10cm - foot mesh extends below bone
-
-      // Calculate target Y for the lowest bone (should be above ground by offset amount)
-      const targetBoneY = groundY + FOOT_MESH_OFFSET;
-
-      // Calculate how far the bone is from target
-      // Positive = bone above target (floating), Negative = bone below target (sinking)
-      const difference = lowestY - targetBoneY;
-
-      // Only adjust if bone is significantly off target (tolerance for floating point)
-      if (Math.abs(difference) > 0.002) {
-        // Extract current position from matrix (NOT from position property - it's stale!)
-        _scenePos.setFromMatrixPosition(vrm.scene.matrix);
-
-        // Adjust Y to bring bone to target height (offset above ground)
-        // If difference > 0 (bone too high), we subtract to push down
-        // If difference < 0 (bone too low), we subtract a negative (add) to lift up
-        _scenePos.y -= difference;
-
-        // Update the matrix with new position (setPosition modifies in place)
-        vrm.scene.matrix.setPosition(_scenePos);
-        vrm.scene.matrixWorld.setPosition(_scenePos);
-
-        // Force update all children to reflect the new position
-        vrm.scene.updateMatrixWorld(true);
-
-        // Return the adjustment made (negative of difference)
-        // Positive return = lifted up, Negative return = pushed down
-        return -difference;
-      }
-
-      return 0;
-    };
-
-    // Track the last ground adjustment to apply in move()
-    // This ensures ground clamping persists across frames without modifying node.position
-    // (modifying node.position would cause camera jitter since camera follows node.position)
-    let lastGroundAdjustment = 0;
-
     return {
       raw: vrm,
       height,
       headToHeight,
       setEmote,
-      preloadEmote,
-      setEmoteAndWait,
       setFirstPerson,
       update: wrappedUpdate,
       getBoneTransform,
-      getLowestBoneY,
-      clampToGround,
-      /**
-       * Store a ground adjustment to be applied in subsequent move() calls.
-       * This is called AFTER clampToGround() to persist the adjustment without
-       * modifying the entity's node.position (which would cause camera jitter).
-       */
-      setGroundAdjustment(adjustment: number) {
-        lastGroundAdjustment = adjustment;
-      },
-      /**
-       * Get the current stored ground adjustment
-       */
-      getGroundAdjustment(): number {
-        return lastGroundAdjustment;
-      },
       move(_matrix: THREE.Matrix4) {
         matrix.copy(_matrix);
         // CRITICAL: Also update the VRM scene's transform to follow the player
@@ -1054,14 +668,6 @@ export function createVRMFactory(
         );
         _tempMatrix2.multiplyMatrices(finalMatrix, _scaleMatrix);
 
-        // Apply stored ground adjustment to keep VRM grounded
-        // This adjustment was calculated by clampToGround() and stored via setGroundAdjustment()
-        if (Math.abs(lastGroundAdjustment) > 0.001) {
-          _scenePos.setFromMatrixPosition(_tempMatrix2);
-          _scenePos.y += lastGroundAdjustment;
-          _tempMatrix2.setPosition(_scenePos);
-        }
-
         vrm.scene.matrix.copy(_tempMatrix2);
         vrm.scene.matrixWorld.copy(_tempMatrix2);
         vrm.scene.updateMatrixWorld(true); // Force update all children
@@ -1070,9 +676,7 @@ export function createVRMFactory(
         }
       },
       disableRateCheck() {
-        // No-op: Rate checking has been removed from VRM factory.
-        // All animation throttling is now handled by AnimationLOD at the entity level.
-        // This method is kept for backward compatibility with existing code.
+        rateCheck = false;
       },
       destroy() {
         if (hooks?.scene) {
@@ -1100,32 +704,8 @@ export function createVRMFactory(
  * - Hyperscape: efficient cloning for multiple instances
  */
 function cloneGLB(glb: GLBData): GLBData {
-  // Validate skeletons before cloning - filter out undefined bones (can happen with WebGPU)
-  glb.scene.traverse((child) => {
-    if (child instanceof THREE.SkinnedMesh && child.skeleton) {
-      const validBones = child.skeleton.bones.filter(
-        (bone): bone is THREE.Bone => bone !== undefined && bone !== null,
-      );
-      if (validBones.length !== child.skeleton.bones.length) {
-        child.skeleton.bones = validBones;
-      }
-    }
-  });
-
   // Deep clone the scene (including skeleton and skinned meshes)
   const clonedScene = SkeletonUtils.clone(glb.scene) as THREE.Scene;
-
-  // Validate cloned skeletons - filter out undefined bones (can happen with WebGPU)
-  clonedScene.traverse((child) => {
-    if (child instanceof THREE.SkinnedMesh && child.skeleton) {
-      const validBones = child.skeleton.bones.filter(
-        (bone): bone is THREE.Bone => bone !== undefined && bone !== null,
-      );
-      if (validBones.length !== child.skeleton.bones.length) {
-        child.skeleton.bones = validBones;
-      }
-    }
-  });
 
   // CRITICAL: Preserve scale from original scene (height normalization)
   clonedScene.scale.copy(glb.scene.scale);
@@ -1133,79 +713,28 @@ function cloneGLB(glb: GLBData): GLBData {
 
   const originalVRM = glb.userData?.vrm;
 
-  // If no VRM, just return cloned scene
-  if (!originalVRM) {
-    console.warn("[cloneGLB] No VRM data in userData - not a VRM file?");
+  // If no VRM or no humanoid, just return cloned scene
+  if (!originalVRM?.humanoid?.clone) {
     return { ...glb, scene: clonedScene };
   }
 
-  // Debug: Log what we have in the original VRM
-  console.log("[cloneGLB] Original VRM:", {
-    hasHumanoid: !!originalVRM.humanoid,
-    humanoidType: originalVRM.humanoid?.constructor?.name,
-    hasCloneMethod: typeof originalVRM.humanoid?.clone,
-    hasUpdateMethod: typeof originalVRM.humanoid?.update,
-    humanoidKeys: originalVRM.humanoid ? Object.keys(originalVRM.humanoid) : [],
-  });
+  // Clone the VRM humanoid
+  const clonedHumanoid = originalVRM.humanoid.clone();
 
-  // If humanoid.clone() is available, use proper cloning
-  if (originalVRM.humanoid?.clone) {
-    // Clone the VRM humanoid
-    const clonedHumanoid = originalVRM.humanoid.clone();
-    console.log("[cloneGLB] Cloned humanoid:", {
-      clonedType: clonedHumanoid?.constructor?.name,
-      hasUpdate: typeof clonedHumanoid?.update,
-      clonedPrototype: Object.getPrototypeOf(clonedHumanoid)?.constructor?.name,
-      clonedKeys: clonedHumanoid ? Object.keys(clonedHumanoid) : [],
-    });
+  // CRITICAL: Remap humanoid bone references to cloned scene
+  remapHumanoidBonesToClonedScene(clonedHumanoid, clonedScene);
 
-    // CRITICAL: Remap humanoid bone references to cloned scene
-    remapHumanoidBonesToClonedScene(clonedHumanoid, clonedScene);
+  // Create cloned VRM with remapped humanoid
+  const clonedVRM = {
+    ...originalVRM,
+    scene: clonedScene,
+    humanoid: clonedHumanoid,
+  };
 
-    console.log(
-      "[cloneGLB] After remapping, humanoid update:",
-      typeof clonedHumanoid?.update,
-    );
-
-    // Create cloned VRM with remapped humanoid
-    const clonedVRM = {
-      ...originalVRM,
-      scene: clonedScene,
-      humanoid: clonedHumanoid,
-    };
-
-    console.log(
-      "[cloneGLB] Final clonedVRM.humanoid.update:",
-      typeof clonedVRM.humanoid?.update,
-    );
-
-    const result = {
-      ...glb,
-      scene: clonedScene,
-      userData: { vrm: clonedVRM },
-    };
-
-    console.log(
-      "[cloneGLB] Return value userData.vrm.humanoid.update:",
-      typeof result.userData?.vrm?.humanoid?.update,
-    );
-
-    return result;
-  }
-
-  // FALLBACK: If humanoid.clone() is not available, still pass VRM reference
-  // This allows humanoid.update() to work (shared across instances, but better than nothing)
-  // The humanoid will point to original bones, but at least animations will propagate
-  console.warn(
-    "[cloneGLB] VRM humanoid.clone() not available - using shared humanoid reference. " +
-      "Animations may be shared across instances.",
-  );
-
-  // Pass the original VRM with its humanoid - animations will be shared but at least work
   return {
     ...glb,
     scene: clonedScene,
-    userData: { vrm: originalVRM },
+    userData: { vrm: clonedVRM },
   };
 }
 

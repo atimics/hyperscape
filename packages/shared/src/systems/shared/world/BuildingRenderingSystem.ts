@@ -494,8 +494,10 @@ interface TownData {
 const BUILDING_PERF_CONFIG = {
   /** Enable static batching (merge all buildings in a town into single mesh) */
   enableStaticBatching: true,
-  /** Enable town-level impostor atlas (batch all impostors into single instanced mesh) */
-  enableImpostorAtlas: true,
+  /** Enable town-level impostor atlas (batch all impostors into single instanced mesh)
+   * DISABLED: Atlas implementation is incomplete - doesn't blit individual textures.
+   * Individual impostor meshes (via ImpostorManager) work correctly and are used instead. */
+  enableImpostorAtlas: false,
   /** Enable lazy collision (create PhysX bodies only when player approaches) */
   enableLazyCollision: true,
   /** Distance at which to trigger collision creation */
@@ -1095,11 +1097,11 @@ export class BuildingRenderingSystem extends SystemBase {
             building.position.z,
           );
 
-          // Use the building's stored Y position, NOT terrain getHeightAt()
-          // The building position was set BEFORE flat zones were registered,
-          // so it contains the original terrain height. Using getHeightAt() here
-          // would return the flat zone height (terrain + FOUNDATION_HEIGHT),
-          // causing buildings to be positioned 0.5m too high.
+          // Use the building's stored Y position which was updated to maxGroundY
+          // during collision registration (TownSystem.registerBuildingCollision).
+          // This ensures the rendered mesh matches collision and flat zone heights.
+          // Do NOT use terrain getHeightAt() here as it returns the flat zone height
+          // (maxGroundY + FOUNDATION_HEIGHT), causing buildings to be 0.5m too high.
           const groundY = building.position.y;
 
           // Position and rotate the mesh (using grid-aligned position)

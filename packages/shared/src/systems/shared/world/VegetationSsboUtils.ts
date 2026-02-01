@@ -265,26 +265,52 @@ export class VegetationSsboUtils {
   /**
    * Compute Y offset from terrain heightmap
    *
-   * Samples the heightmap texture to place vegetation at terrain surface.
-   * Note: UV y-coordinate is flipped for proper heightmap sampling.
+   * IMPORTANT: This must be called AFTER setHeightmapTexture() has been called,
+   * because the shader code is compiled at first use. The caller should check
+   * if a heightmap is available before using this function.
    *
    * @param worldPos - World position of the vegetation instance (vec3)
    * @returns Y offset value (height at this position)
    */
+  static getComputeYOffset(): TSLFn {
+    // Create the shader function dynamically so heightmapTexture is captured
+    // at call time, not at module load time
+    return Fn(
+      // @ts-expect-error TSL array destructuring not typed correctly
+      ([worldPos = vec3(0)]) => {
+        const uvCoord = tslUtils.computeMapUvByPosition(worldPos.xz);
+
+        // Heightmap must be set before this is called
+        if (heightmapTexture) {
+          // Flip Y coordinate for proper heightmap sampling
+          const fixedUv = vec2(uvCoord.x, float(1).sub(uvCoord.y));
+          // Sample heightmap (0-1) and scale by max height
+          const normalizedHeight = texture(heightmapTexture, fixedUv).r;
+          return normalizedHeight.mul(float(heightmapMax));
+        }
+
+        // Fallback: ground level (should not happen if heightmap is set)
+        console.warn(
+          "[VegetationSsboUtils] computeYOffset called without heightmap!",
+        );
+        return float(0);
+      },
+    );
+  }
+
+  // Legacy static property - DO NOT USE for new code, use getComputeYOffset() instead
+  // This is kept for backwards compatibility but will always return 0
   static computeYOffset: TSLFn = Fn(
     // @ts-expect-error TSL array destructuring not typed correctly
     ([worldPos = vec3(0)]) => {
+      // This is evaluated at module load time when heightmapTexture is null
+      // For correct behavior, use getComputeYOffset() instead
       const uvCoord = tslUtils.computeMapUvByPosition(worldPos.xz);
-
-      // If heightmap texture is available, sample it
       if (heightmapTexture) {
-        // Flip Y coordinate for proper heightmap sampling
         const fixedUv = vec2(uvCoord.x, float(1).sub(uvCoord.y));
-        const height = texture(heightmapTexture, fixedUv).r;
-        return height;
+        const normalizedHeight = texture(heightmapTexture, fixedUv).r;
+        return normalizedHeight.mul(float(heightmapMax));
       }
-
-      // Fallback: ground level
       return float(0);
     },
   );

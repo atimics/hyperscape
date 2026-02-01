@@ -971,6 +971,11 @@ export class TownSystem extends System {
           generated.layout,
         );
 
+        // CRITICAL: Update building.position.y to maxGroundY for consistency
+        // This ensures the rendered mesh matches collision and flat zone heights
+        // Without this, on slopes: mesh renders at center height, but collision/flat zones use max height
+        building.position.y = maxGroundY;
+
         // Convert BuildingLayout to BuildingLayoutInput for collision service
         const layoutInput = this.convertLayoutToInput(generated.layout);
 
@@ -980,7 +985,11 @@ export class TownSystem extends System {
           building.id,
           town.id,
           layoutInput,
-          { x: building.position.x, y: maxGroundY, z: building.position.z },
+          {
+            x: building.position.x,
+            y: building.position.y,
+            z: building.position.z,
+          },
           building.rotation,
         );
 

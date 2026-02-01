@@ -38,7 +38,11 @@ import { SpriteNodeMaterial } from "three/webgpu";
 import { System } from "../infrastructure/System";
 import type { World } from "../../../types";
 import { tslUtils } from "../../../utils/TSLUtils";
-import { VegetationSsboUtils, getHeightmapMax } from "./VegetationSsboUtils";
+import {
+  VegetationSsboUtils,
+  getHeightmapMax,
+  setHeightmapTexture,
+} from "./VegetationSsboUtils";
 import { windManager } from "./Wind";
 
 // TSL types - use any for dynamic TSL function signatures
@@ -112,11 +116,25 @@ type InstancedArrayBuffer = ReturnType<typeof instancedArray>;
 class FlowerSsbo {
   private buffer: InstancedArrayBuffer;
 
+  // Compute shaders - initialized in constructor after heightmap is ready
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  computeInit: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  computeUpdate: any;
+
   constructor() {
     this.buffer = instancedArray(config.COUNT, "vec4");
-    this.computeUpdate.onInit(({ renderer }) => {
-      renderer.computeAsync(this.computeInit);
-    });
+
+    // Create compute shaders AFTER buffer is ready
+    // These capture the current heightmapTexture value from VegetationSsboUtils
+    this.computeInit = this.createComputeInit();
+    this.computeUpdate = this.createComputeUpdate();
+
+    this.computeUpdate.onInit(
+      ({ renderer }: { renderer: THREE.WebGPURenderer }) => {
+        renderer.computeAsync(this.computeInit);
+      },
+    );
   }
 
   get computeBuffer(): InstancedArrayBuffer {
@@ -124,7 +142,7 @@ class FlowerSsbo {
   }
 
   // ============================================================================
-  // UNPACKING FUNCTIONS
+  // UNPACKING FUNCTIONS - Created as methods to capture current heightmapMax
   // ============================================================================
 
   // @ts-expect-error TSL Fn with array destructuring params - dynamic typing
@@ -179,102 +197,110 @@ class FlowerSsbo {
   });
 
   // ============================================================================
-  // COMPUTE INIT
+  // COMPUTE INIT - Created in constructor to capture current texture state
   // ============================================================================
 
-  computeInit = Fn(() => {
-    const data = this.buffer.element(instanceIndex);
+  private createComputeInit() {
+    return Fn(() => {
+      const data = this.buffer.element(instanceIndex);
 
-    // Position XZ in grid
-    const row = floor(float(instanceIndex).div(config.FLOWERS_PER_SIDE));
-    const col = float(instanceIndex).mod(config.FLOWERS_PER_SIDE);
+      // Position XZ in grid
+      const row = floor(float(instanceIndex).div(config.FLOWERS_PER_SIDE));
+      const col = float(instanceIndex).mod(config.FLOWERS_PER_SIDE);
 
-    const randX = hash(instanceIndex.add(4321));
-    const randZ = hash(instanceIndex.add(1234));
-    const offsetX = col
-      .mul(config.SPACING)
-      .sub(config.TILE_HALF_SIZE)
-      .add(randX.mul(config.SPACING * 0.5));
-    const offsetZ = row
-      .mul(config.SPACING)
-      .sub(config.TILE_HALF_SIZE)
-      .add(randZ.mul(config.SPACING * 0.5));
+      const randX = hash(instanceIndex.add(4321));
+      const randZ = hash(instanceIndex.add(1234));
+      const offsetX = col
+        .mul(config.SPACING)
+        .sub(config.TILE_HALF_SIZE)
+        .add(randX.mul(config.SPACING * 0.5));
+      const offsetZ = row
+        .mul(config.SPACING)
+        .sub(config.TILE_HALF_SIZE)
+        .add(randZ.mul(config.SPACING * 0.5));
 
-    // UV for noise sampling
-    const _uv = vec3(offsetX, 0, offsetZ)
-      .xz.add(config.TILE_HALF_SIZE)
-      .div(config.TILE_SIZE)
-      .abs();
+      // UV for noise sampling
+      const _uv = vec3(offsetX, 0, offsetZ)
+        .xz.add(config.TILE_HALF_SIZE)
+        .div(config.TILE_SIZE)
+        .abs();
 
-    // Sample noise for position variation
-    // Use hash as fallback since it's always available
-    const noiseR = flowerNoiseTexture
-      ? texture(flowerNoiseTexture, _uv).r
-      : hash(instanceIndex.mul(0.73));
-    const noiseG = flowerNoiseTexture
-      ? texture(flowerNoiseTexture, _uv).g
-      : hash(instanceIndex.mul(1.27));
-    const noiseB = flowerNoiseTexture
-      ? texture(flowerNoiseTexture, _uv).b
-      : hash(instanceIndex.mul(0.91));
-    const noiseA = flowerNoiseTexture
-      ? texture(flowerNoiseTexture, _uv).a
-      : hash(instanceIndex.mul(1.53));
+      // Sample noise for position variation
+      // Use hash as fallback since it's always available
+      const noiseR = flowerNoiseTexture
+        ? texture(flowerNoiseTexture, _uv).r
+        : hash(instanceIndex.mul(0.73));
+      const noiseG = flowerNoiseTexture
+        ? texture(flowerNoiseTexture, _uv).g
+        : hash(instanceIndex.mul(1.27));
+      const noiseB = flowerNoiseTexture
+        ? texture(flowerNoiseTexture, _uv).b
+        : hash(instanceIndex.mul(0.91));
+      const noiseA = flowerNoiseTexture
+        ? texture(flowerNoiseTexture, _uv).a
+        : hash(instanceIndex.mul(1.53));
 
-    const noiseVec = vec4(noiseR, noiseG, noiseB, noiseA);
-    data.assign(this.setNoise(data, noiseVec));
-    const wrapNoise = noiseR;
+      const noiseVec = vec4(noiseR, noiseG, noiseB, noiseA);
+      data.assign(this.setNoise(data, noiseVec));
+      const wrapNoise = noiseR;
 
-    const noiseX = wrapNoise.mul(99.37);
-    const noiseZ = wrapNoise.mul(49.71);
+      const noiseX = wrapNoise.mul(99.37);
+      const noiseZ = wrapNoise.mul(49.71);
 
-    data.x = offsetX.add(noiseX);
-    data.y = offsetZ.add(noiseZ);
-  })().compute(config.COUNT, [config.WORKGROUP_SIZE]);
+      data.x = offsetX.add(noiseX);
+      data.y = offsetZ.add(noiseZ);
+    })().compute(config.COUNT, [config.WORKGROUP_SIZE]);
+  }
 
   // ============================================================================
-  // COMPUTE UPDATE
+  // COMPUTE UPDATE - Created in constructor to capture current heightmap
   // ============================================================================
 
-  computeUpdate = Fn(() => {
-    const data = this.buffer.element(instanceIndex);
+  private createComputeUpdate() {
+    // Get the computeYOffset function dynamically - it captures current heightmapTexture
+    const computeYOffset = VegetationSsboUtils.getComputeYOffset();
 
-    // Position wrapping using shared utility
-    const pos = VegetationSsboUtils.wrapPosition(
-      vec2(data.x, data.y),
-      uniforms.uPlayerDeltaXZ,
-      config.TILE_SIZE,
-    );
+    return Fn(() => {
+      const data = this.buffer.element(instanceIndex);
 
-    data.x = pos.x;
-    data.y = pos.z;
+      // Position wrapping using shared utility
+      const pos = VegetationSsboUtils.wrapPosition(
+        vec2(data.x, data.y),
+        uniforms.uPlayerDeltaXZ,
+        config.TILE_SIZE,
+      );
 
-    const worldPos = pos.add(uniforms.uPlayerPosition);
+      data.x = pos.x;
+      data.y = pos.z;
 
-    // Visibility check using shared utility
-    const isVisible = VegetationSsboUtils.computeVisibility(
-      worldPos,
-      uniforms.uCameraMatrix,
-      uniforms.uFx,
-      uniforms.uFy,
-      config.FLOWER_BOUNDING_SPHERE_RADIUS,
-      uniforms.uCullPadNDCX,
-      uniforms.uCullPadNDCYNear,
-      uniforms.uCullPadNDCYFar,
-    );
+      const worldPos = pos.add(uniforms.uPlayerPosition);
 
-    data.assign(this.setVisibility(data, isVisible));
+      // Visibility check using shared utility
+      const isVisible = VegetationSsboUtils.computeVisibility(
+        worldPos,
+        uniforms.uCameraMatrix,
+        uniforms.uFx,
+        uniforms.uFy,
+        config.FLOWER_BOUNDING_SPHERE_RADIUS,
+        uniforms.uCullPadNDCX,
+        uniforms.uCullPadNDCYNear,
+        uniforms.uCullPadNDCYFar,
+      );
 
-    If(isVisible, () => {
-      // Y offset from heightmap using shared utility
-      const yOffset = VegetationSsboUtils.computeYOffset(worldPos);
-      data.assign(this.setYOffset(data, yOffset));
+      data.assign(this.setVisibility(data, isVisible));
 
-      // Alpha from grass map using shared utility
-      const alphaVisibility = VegetationSsboUtils.computeAlpha(worldPos);
-      data.assign(this.setVisibility(data, alphaVisibility));
-    });
-  })().compute(config.COUNT, [config.WORKGROUP_SIZE]);
+      If(isVisible, () => {
+        // Y offset from heightmap - use the dynamically created function
+        // that captures the current heightmapTexture
+        const yOffset = computeYOffset(worldPos);
+        data.assign(this.setYOffset(data, yOffset));
+
+        // Alpha from grass map using shared utility
+        const alphaVisibility = VegetationSsboUtils.computeAlpha(worldPos);
+        data.assign(this.setVisibility(data, alphaVisibility));
+      });
+    })().compute(config.COUNT, [config.WORKGROUP_SIZE]);
+  }
 }
 
 // ============================================================================
@@ -480,6 +506,9 @@ export class ProceduralFlowerSystem extends System {
     // Load textures first
     await this.loadTextures();
 
+    // Setup heightmap for VegetationSsboUtils (so flowers follow terrain)
+    await this.setupHeightmap();
+
     // Create SSBO
     this.ssbo = new FlowerSsbo();
 
@@ -501,6 +530,79 @@ export class ProceduralFlowerSystem extends System {
 
     console.log(
       `[ProceduralFlowers] Initialized with ${config.COUNT.toLocaleString()} flowers`,
+    );
+  }
+
+  /**
+   * Setup heightmap texture for VegetationSsboUtils
+   * This allows flowers to be placed at correct terrain height
+   */
+  private async setupHeightmap(): Promise<void> {
+    // Get terrain system for height sampling
+    interface TerrainSystemInterface {
+      getHeightAt?: (x: number, z: number) => number;
+    }
+    const terrainSystem = this.world.getSystem(
+      "terrain",
+    ) as TerrainSystemInterface | null;
+
+    if (!terrainSystem || typeof terrainSystem.getHeightAt !== "function") {
+      console.warn(
+        "[ProceduralFlowers] No terrain system - flowers will be at Y=0",
+      );
+      return;
+    }
+
+    // Generate heightmap by sampling terrain
+    const size = 256;
+    const worldSize = 800; // Should match terrain size
+    const data = new Float32Array(size * size * 4);
+    const halfWorld = worldSize / 2;
+
+    let maxHeight = 0;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const worldX = (x / size) * worldSize - halfWorld;
+        const worldZ = (y / size) * worldSize - halfWorld;
+        const height = terrainSystem.getHeightAt(worldX, worldZ);
+
+        const idx = (y * size + x) * 4;
+        data[idx] = height;
+        data[idx + 1] = height;
+        data[idx + 2] = height;
+        data[idx + 3] = 1;
+
+        if (height > maxHeight) maxHeight = height;
+      }
+    }
+
+    // Normalize to 0-1 range
+    if (maxHeight > 0) {
+      for (let i = 0; i < data.length; i += 4) {
+        data[i] /= maxHeight;
+        data[i + 1] /= maxHeight;
+        data[i + 2] /= maxHeight;
+      }
+    }
+
+    const heightmapTexture = new THREE.DataTexture(
+      data,
+      size,
+      size,
+      THREE.RGBAFormat,
+      THREE.FloatType,
+    );
+    heightmapTexture.wrapS = THREE.ClampToEdgeWrapping;
+    heightmapTexture.wrapT = THREE.ClampToEdgeWrapping;
+    heightmapTexture.minFilter = THREE.LinearFilter;
+    heightmapTexture.magFilter = THREE.LinearFilter;
+    heightmapTexture.needsUpdate = true;
+
+    // Set on VegetationSsboUtils so computeYOffset works
+    setHeightmapTexture(heightmapTexture, maxHeight);
+
+    console.log(
+      `[ProceduralFlowers] Heightmap ready: ${size}x${size}, max height: ${maxHeight.toFixed(1)}m`,
     );
   }
 

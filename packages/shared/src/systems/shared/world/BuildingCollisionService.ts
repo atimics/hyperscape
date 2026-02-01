@@ -1006,12 +1006,11 @@ export class BuildingCollisionService {
       }
     }
 
-    if (this._debugLogging) {
-      console.log(
-        `[BuildingCollision] ${building.buildingId}: Registered ${registeredCount} wall flags in CollisionMatrix ` +
-          `(skipped ${skippedCount} with openings)`,
-      );
-    }
+    // Always log wall registration for debugging navigation issues
+    console.log(
+      `[BuildingCollision] ${building.buildingId}: Registered ${registeredCount} wall flags in CollisionMatrix ` +
+        `(skipped ${skippedCount} with openings, total wallSegments: ${groundFloor.wallSegments.length})`,
+    );
   }
 
   /**
@@ -3183,11 +3182,12 @@ export class BuildingCollisionService {
       let iterations = 0;
       const visited = new Set<string>();
       const queue: TileCoord[] = [startTile];
+      let queueReadIndex = 0; // PERF: Use read index instead of shift() which is O(n)
       visited.add(tileKey(startTile.x, startTile.z));
 
-      while (queue.length > 0 && iterations < MAX_ITERATIONS) {
+      while (queueReadIndex < queue.length && iterations < MAX_ITERATIONS) {
         iterations++;
-        const current = queue.shift()!;
+        const current = queue[queueReadIndex++]; // O(1) instead of O(n) shift()
         const currentKey = tileKey(current.x, current.z);
 
         // Only count tiles that are actually in the building's walkable set

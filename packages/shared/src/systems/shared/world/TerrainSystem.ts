@@ -91,10 +91,8 @@ import {
   type GPURoadSegment,
 } from "../../../utils/compute";
 
-// Road coloring constants
-const ROAD_COLOR = { r: 0.45, g: 0.35, b: 0.25 }; // Dirt brown color
-const ROAD_EDGE_COLOR = { r: 0.5, g: 0.4, b: 0.3 }; // Slightly lighter for edges
-const ROAD_BLEND_WIDTH = 2; // Extra blend distance beyond road width
+// Road influence blending - used for shader's roadInfluence attribute
+const ROAD_BLEND_WIDTH = 2; // Extra blend distance beyond road width (meters)
 
 interface BiomeCenter {
   x: number;
@@ -797,25 +795,9 @@ export class TerrainSystem extends System {
           }
         }
 
+        // Store road influence - shader uses this attribute for road coloring
+        // (vertex colors are NOT used for roads, shader computes colors procedurally)
         roadInfluences[i] = roadInfluence;
-
-        // Blend road color into pre-computed colors
-        if (roadInfluence > 0) {
-          const edgeFactor = 1.0 - roadInfluence;
-          const roadR =
-            ROAD_COLOR.r * roadInfluence + ROAD_EDGE_COLOR.r * edgeFactor * 0.3;
-          const roadG =
-            ROAD_COLOR.g * roadInfluence + ROAD_EDGE_COLOR.g * edgeFactor * 0.3;
-          const roadB =
-            ROAD_COLOR.b * roadInfluence + ROAD_EDGE_COLOR.b * edgeFactor * 0.3;
-
-          colorData[i * 3] =
-            colorData[i * 3] * (1 - roadInfluence) + roadR * roadInfluence;
-          colorData[i * 3 + 1] =
-            colorData[i * 3 + 1] * (1 - roadInfluence) + roadG * roadInfluence;
-          colorData[i * 3 + 2] =
-            colorData[i * 3 + 2] * (1 - roadInfluence) + roadB * roadInfluence;
-        }
       }
     }
 
@@ -1513,36 +1495,47 @@ export class TerrainSystem extends System {
       this.setupClientTerrain();
     }
 
-    // Load initial tiles
-    this.loadInitialTiles();
-
-    // Get road network system reference (may not be available yet if roads depend on terrain)
-    // Roads will be applied when tiles are regenerated after road system initializes
-    this.roadNetworkSystem = this.world.getSystem("roads") as
-      | RoadNetworkSystem
-      | undefined;
-
     // Initialize GPU compute context for accelerated terrain operations (client only)
     if (isClient && isTerrainComputeAvailable()) {
       this.terrainComputeContext = new TerrainComputeContext({
         minVerticesForGPU: 1000,
         minRoadsForGPU: 3,
       });
-      // Will be fully initialized when renderer is available
       console.log(
         "[TerrainSystem] GPU compute context created (pending renderer init)",
       );
     }
 
-    // Subscribe to roads generated event to refresh existing tile colors
+    // OPTIMIZATION: Wait for roads before generating visual tiles
+    // This avoids generating tiles twice (once without roads, once with)
+    // getHeightAt() works without tiles, so RoadNetworkSystem can still query heights
     this.world.on(EventType.ROADS_GENERATED, () => {
-      // Get road system reference now that it's ready
       this.roadNetworkSystem = this.world.getSystem("roads") as
         | RoadNetworkSystem
         | undefined;
-      // Refresh all loaded tiles to apply road coloring
-      this.refreshTileColors();
+
+      // Now that roads are ready, generate tiles WITH road influence
+      if (!this._initialTilesReady) {
+        console.log(
+          "[TerrainSystem] Roads ready, generating initial tiles with road data",
+        );
+        this.loadInitialTiles();
+      } else {
+        // Tiles already exist (shouldn't happen normally, but handle gracefully)
+        this.refreshRoadInfluence();
+      }
     });
+
+    // Fallback: If no roads event within 2 seconds, generate tiles anyway
+    // This is a safety net - normally ROADS_GENERATED should always fire
+    setTimeout(() => {
+      if (!this._initialTilesReady) {
+        console.warn(
+          "[TerrainSystem] Timeout: No roads event received, generating initial tiles",
+        );
+        this.loadInitialTiles();
+      }
+    }, 2000);
 
     // Start player-based terrain update loop
     this.terrainUpdateIntervalId = setInterval(() => {
@@ -2100,31 +2093,16 @@ export class TerrainSystem extends System {
         colorB = colorB + (0.333 - colorB) * shoreFactor;
       }
 
-      // Apply road coloring based on distance to road segments
-      const roadInfluence = this.calculateRoadInfluenceAtVertex(
+      // Calculate road influence - shader uses this attribute for road coloring
+      // (vertex colors are NOT modified for roads, shader handles this procedurally)
+      roadInfluences[i] = this.calculateRoadInfluenceAtVertex(
         x,
         z,
         tileX,
         tileZ,
       );
-      roadInfluences[i] = roadInfluence;
-      if (roadInfluence > 0) {
-        // Blend toward road color based on influence (1.0 = fully on road)
-        // Use slightly different colors for center vs edge of road
-        const edgeFactor = 1.0 - roadInfluence; // Higher at edges
-        const roadR =
-          ROAD_COLOR.r * roadInfluence + ROAD_EDGE_COLOR.r * edgeFactor * 0.3;
-        const roadG =
-          ROAD_COLOR.g * roadInfluence + ROAD_EDGE_COLOR.g * edgeFactor * 0.3;
-        const roadB =
-          ROAD_COLOR.b * roadInfluence + ROAD_EDGE_COLOR.b * edgeFactor * 0.3;
 
-        colorR = colorR * (1 - roadInfluence) + roadR * roadInfluence;
-        colorG = colorG * (1 - roadInfluence) + roadG * roadInfluence;
-        colorB = colorB * (1 - roadInfluence) + roadB * roadInfluence;
-      }
-
-      // Store blended color
+      // Store biome color (kept for potential fallback/debug rendering)
       colors[i * 3] = colorR;
       colors[i * 3 + 1] = colorG;
       colors[i * 3 + 2] = colorB;
@@ -2395,14 +2373,32 @@ export class TerrainSystem extends System {
    * MAIN THREAD PROTECTION: Processes tiles in batches with yielding
    * to prevent frame drops during road color updates.
    */
-  private async refreshTileColors(): Promise<void> {
+  /**
+   * Refresh road influence for all loaded terrain tiles.
+   * Called when road network becomes available to apply road coloring.
+   *
+   * NOTE: The terrain shader uses the `roadInfluence` attribute for road coloring,
+   * NOT vertex colors. Colors are computed procedurally in the shader from height/slope/noise.
+   *
+   * MAIN THREAD PROTECTION: Processes tiles in batches with yielding.
+   */
+  private async refreshRoadInfluence(): Promise<void> {
+    if (!this.roadNetworkSystem) {
+      console.warn(
+        "[TerrainSystem] Cannot refresh road influence - road system not available",
+      );
+      return;
+    }
+
+    const roads = this.roadNetworkSystem.getRoads();
     console.log(
-      `[TerrainSystem] Refreshing tile colors for ${this.terrainTiles.size} tiles after road generation`,
+      `[TerrainSystem] Refreshing road influence for ${this.terrainTiles.size} tiles (${roads.length} roads in network)`,
     );
 
     const tiles = Array.from(this.terrainTiles.entries());
-    const TILES_PER_BATCH = 2; // Process 2 tiles per batch
-    const VERTICES_PER_YIELD = 2000; // Yield after this many vertices
+    const TILES_PER_BATCH = 4; // Process 4 tiles per batch
+    let tilesUpdated = 0;
+    let totalVerticesWithRoads = 0;
 
     for (let tileIdx = 0; tileIdx < tiles.length; tileIdx += TILES_PER_BATCH) {
       const batchEnd = Math.min(tileIdx + TILES_PER_BATCH, tiles.length);
@@ -2416,94 +2412,58 @@ export class TerrainSystem extends System {
         const tileX = parseInt(parts[0], 10);
         const tileZ = parseInt(parts[1], 10);
 
-        // Get geometry
+        // Check if this tile has any road segments (skip if none)
+        const segments = this.roadNetworkSystem.getRoadSegmentsForTile(
+          tileX,
+          tileZ,
+        );
+        if (segments.length === 0) continue;
+
+        // Get geometry and roadInfluence attribute
         const geometry = (tile.mesh as THREE.Mesh)
           .geometry as THREE.BufferGeometry;
         if (!geometry) continue;
 
         const positions = geometry.attributes.position;
-        const colors = geometry.attributes.color;
-        if (!positions || !colors) continue;
-        const roadInfluenceAttribute = geometry.getAttribute("roadInfluence");
-        const roadInfluenceBuffer =
-          roadInfluenceAttribute instanceof THREE.BufferAttribute
-            ? roadInfluenceAttribute
-            : null;
+        const roadInfluenceAttr = geometry.getAttribute("roadInfluence");
+        if (!positions || !(roadInfluenceAttr instanceof THREE.BufferAttribute))
+          continue;
 
-        // Verify biome data is loaded
-        if (Object.keys(BIOMES).length === 0) continue;
+        const roadInfluenceArray = roadInfluenceAttr.array as Float32Array;
+        let verticesWithRoadInfluence = 0;
 
-        // Update colors with road influence
-        const colorArray = colors.array as Float32Array;
-        const roadInfluenceArray = roadInfluenceBuffer
-          ? (roadInfluenceBuffer.array as Float32Array)
-          : null;
-
-        // Process vertices in chunks with yielding for very large tiles
+        // Update road influence for each vertex
         for (let i = 0; i < positions.count; i++) {
           const localX = positions.getX(i);
           const localZ = positions.getZ(i);
-          const x = localX + tileX * this.CONFIG.TILE_SIZE;
-          const z = localZ + tileZ * this.CONFIG.TILE_SIZE;
+          const worldX = localX + tileX * this.CONFIG.TILE_SIZE;
+          const worldZ = localZ + tileZ * this.CONFIG.TILE_SIZE;
 
-          // Get current color
-          let colorR = colorArray[i * 3];
-          let colorG = colorArray[i * 3 + 1];
-          let colorB = colorArray[i * 3 + 2];
-
-          // Apply road coloring based on distance to road segments
-          const roadInfluence = this.calculateRoadInfluenceAtVertex(
-            x,
-            z,
+          const influence = this.calculateRoadInfluenceAtVertex(
+            worldX,
+            worldZ,
             tileX,
             tileZ,
           );
-          if (roadInfluenceArray) {
-            roadInfluenceArray[i] = roadInfluence;
-          }
-          if (roadInfluence > 0) {
-            // Blend toward road color based on influence
-            const edgeFactor = 1.0 - roadInfluence;
-            const roadR =
-              ROAD_COLOR.r * roadInfluence +
-              ROAD_EDGE_COLOR.r * edgeFactor * 0.3;
-            const roadG =
-              ROAD_COLOR.g * roadInfluence +
-              ROAD_EDGE_COLOR.g * edgeFactor * 0.3;
-            const roadB =
-              ROAD_COLOR.b * roadInfluence +
-              ROAD_EDGE_COLOR.b * edgeFactor * 0.3;
-
-            colorR = colorR * (1 - roadInfluence) + roadR * roadInfluence;
-            colorG = colorG * (1 - roadInfluence) + roadG * roadInfluence;
-            colorB = colorB * (1 - roadInfluence) + roadB * roadInfluence;
-
-            // Update color array
-            colorArray[i * 3] = colorR;
-            colorArray[i * 3 + 1] = colorG;
-            colorArray[i * 3 + 2] = colorB;
-          }
-
-          // Yield to main thread periodically for very large tiles
-          if (i > 0 && i % VERTICES_PER_YIELD === 0) {
-            await new Promise<void>((resolve) => setTimeout(resolve, 0));
-          }
+          roadInfluenceArray[i] = influence;
+          if (influence > 0) verticesWithRoadInfluence++;
         }
 
-        // Mark color attribute as needing update
-        colors.needsUpdate = true;
-        if (roadInfluenceBuffer) {
-          roadInfluenceBuffer.needsUpdate = true;
-        }
+        // Mark attribute as needing GPU update
+        roadInfluenceAttr.needsUpdate = true;
+        tilesUpdated++;
+        totalVerticesWithRoads += verticesWithRoadInfluence;
       }
 
-      // Yield to main thread between tile batches
+      // Yield to main thread between batches
       if (batchEnd < tiles.length) {
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
     }
 
-    console.log("[TerrainSystem] Tile color refresh complete");
+    console.log(
+      `[TerrainSystem] Road influence refresh complete: ${tilesUpdated} tiles updated, ${totalVerticesWithRoads} vertices with road influence`,
+    );
   }
 
   /**

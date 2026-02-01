@@ -326,29 +326,19 @@ export function createClientWorld() {
       })();
 
       // Pre-warm mob/NPC animated impostors AFTER renderer is ready
-      // This pre-bakes GLB mob animated impostor atlases at load time.
-      // VRM mobs will still be baked on-demand (they need the full avatar system).
-      // Uses modelCache.loadModel() for consistent loading with MobEntity.
-      (async () => {
-        try {
-          // Wait for renderer to be initialized (graphics system creates it)
-          await waitForPhysX("MobImpostorPrewarm", 120000);
-
-          // Give renderer and modelCache a moment to initialize
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-
-          console.log(
-            "[createClientWorld] Starting mob impostor pre-baking...",
-          );
-
-          await prewarmMobImpostors(world);
-        } catch (err) {
-          console.warn(
-            "[createClientWorld] Mob impostor pre-warm failed:",
-            err,
-          );
-        }
-      })();
+      // DISABLED: Currently using VRM mobs which need the full avatar system.
+      // Animated impostors will be baked on-demand when mobs spawn.
+      // TODO: Enable this when mobs migrate to GLB format for pre-baking support.
+      // (async () => {
+      //   try {
+      //     await waitForPhysX("MobImpostorPrewarm", 120000);
+      //     await new Promise((resolve) => setTimeout(resolve, 1000));
+      //     console.log("[createClientWorld] Starting mob impostor pre-baking...");
+      //     await prewarmMobImpostors(world);
+      //   } catch (err) {
+      //     console.warn("[createClientWorld] Mob impostor pre-warm failed:", err);
+      //   }
+      // })();
 
       // CRITICAL: Initialize newly registered systems
       const worldOptions = {

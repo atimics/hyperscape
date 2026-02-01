@@ -50,6 +50,7 @@ import { windManager } from "./Wind";
 // ============================================================================
 
 const getConfig = () => {
+  // REVO REALMS EXACT VALUES
   const BLADE_WIDTH = 0.1;
   const BLADE_HEIGHT = 1.45;
   const TILE_SIZE = 50;
@@ -93,7 +94,7 @@ const uniforms = {
   uWindStrength: uniform(1.25),
   uWindSpeed: uniform(0.25),
   uvWindScale: uniform(1.75),
-  // Color
+  // Color - Revo Realms exact (brownish/yellowish stylized grass)
   uBaseColor: uniform(new THREE.Color().setRGB(0.07, 0.07, 0)),
   uTipColor: uniform(new THREE.Color().setRGB(0.23, 0.11, 0.05)),
   uAoScale: uniform(1.5),
@@ -121,31 +122,54 @@ let heightmapTexture: THREE.Texture | null = null;
 let heightmapMax = 100;
 
 // ============================================================================
-// GRASS SSBO - Two-buffer bit-packed data structure (Revo Realms exact)
+// GRASS SSBO - Three-buffer structure (Revo Realms + Heightmap)
 // ============================================================================
 // Buffer1 (vec4):
-//   x -> offsetX
-//   y -> offsetZ
+//   x -> offsetX (local to player)
+//   y -> offsetZ (local to player)
 //   z -> 0/12 windX - 12/12 windZ
 //   w -> 0/8 current scale - 8/8 original scale - 16/1 shadow - 17/1 visibility - 18/6 wind noise factor
 //
 // Buffer2 (float):
 //   0/4 position based noise
+//
+// Buffer3 (float): HYPERSCAPE ADDITION
+//   heightmapY - terrain height at this blade's world position
 
 type InstancedArrayBuffer = ReturnType<typeof instancedArray>;
+
+// Heightmap texture node for compute shader
+let heightmapTextureNode: ReturnType<typeof texture> | null = null;
+const uHeightmapMax = uniform(100);
+const uHeightmapWorldSize = uniform(800);
 
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call */
 // @ts-nocheck - TSL functions use dynamic typing that TypeScript can't understand
 class GrassSsbo {
   private buffer1: InstancedArrayBuffer;
   private buffer2: InstancedArrayBuffer;
+  private buffer3: InstancedArrayBuffer; // heightmapY
+
+  // Compute shaders - initialized in constructor after buffers
+  computeInit: any;
+  computeUpdate: any;
 
   constructor() {
+    // Create buffers FIRST
     this.buffer1 = instancedArray(config.COUNT, "vec4");
     this.buffer2 = instancedArray(config.COUNT, "float");
-    this.computeUpdate.onInit(({ renderer }) => {
-      renderer.computeAsync(this.computeInit);
-    });
+    this.buffer3 = instancedArray(config.COUNT, "float");
+
+    // Then create compute shaders that reference the buffers
+    this.computeInit = this.createComputeInit();
+    this.computeUpdate = this.createComputeUpdate();
+
+    // Hook up init to run when update first runs
+    this.computeUpdate.onInit(
+      ({ renderer }: { renderer: THREE.WebGPURenderer }) => {
+        renderer.computeAsync(this.computeInit);
+      },
+    );
   }
 
   get computeBuffer1(): InstancedArrayBuffer {
@@ -154,6 +178,10 @@ class GrassSsbo {
 
   get computeBuffer2(): InstancedArrayBuffer {
     return this.buffer2;
+  }
+
+  get computeBuffer3(): InstancedArrayBuffer {
+    return this.buffer3;
   }
 
   // Unpacking functions (Revo Realms exact)
@@ -269,68 +297,74 @@ class GrassSsbo {
     return tslUtils.packUnit(data, 0, 4, value);
   });
 
-  // Compute Init - Revo Realms exact
-  computeInit = Fn(() => {
-    const data1 = this.buffer1.element(instanceIndex);
-    const data2 = this.buffer2.element(instanceIndex);
+  // Compute Init - Revo Realms + heightmap sampling
+  private createComputeInit() {
+    return Fn(() => {
+      const data1 = this.buffer1.element(instanceIndex);
+      const data2 = this.buffer2.element(instanceIndex);
+      const data3 = this.buffer3.element(instanceIndex);
 
-    // Position XZ in grid
-    const row = floor(float(instanceIndex).div(config.BLADES_PER_SIDE));
-    const col = float(instanceIndex).mod(config.BLADES_PER_SIDE);
-    const randX = hash(instanceIndex.add(4321));
-    const randZ = hash(instanceIndex.add(1234));
-    const offsetX = col
-      .mul(config.SPACING)
-      .sub(config.TILE_HALF_SIZE)
-      .add(randX.mul(config.SPACING * 0.5));
-    const offsetZ = row
-      .mul(config.SPACING)
-      .sub(config.TILE_HALF_SIZE)
-      .add(randZ.mul(config.SPACING * 0.5));
+      // Position XZ in grid
+      const row = floor(float(instanceIndex).div(config.BLADES_PER_SIDE));
+      const col = float(instanceIndex).mod(config.BLADES_PER_SIDE);
+      const randX = hash(instanceIndex.add(4321));
+      const randZ = hash(instanceIndex.add(1234));
+      const offsetX = col
+        .mul(config.SPACING)
+        .sub(config.TILE_HALF_SIZE)
+        .add(randX.mul(config.SPACING * 0.5));
+      const offsetZ = row
+        .mul(config.SPACING)
+        .sub(config.TILE_HALF_SIZE)
+        .add(randZ.mul(config.SPACING * 0.5));
 
-    // UV for noise texture sampling
-    const _uv = vec3(offsetX, 0, offsetZ)
-      .xz.add(config.TILE_HALF_SIZE)
-      .div(config.TILE_SIZE)
-      .abs()
-      .fract();
+      // UV for noise texture sampling
+      const _uv = vec3(offsetX, 0, offsetZ)
+        .xz.add(config.TILE_HALF_SIZE)
+        .div(config.TILE_SIZE)
+        .abs()
+        .fract();
 
-    // Sample noise texture for position jitter (or use hash fallback)
-    let noiseR: ReturnType<typeof float>;
-    let noiseB: ReturnType<typeof float>;
+      // Sample noise texture for position jitter (or use hash fallback)
+      let noiseR: ReturnType<typeof float>;
+      let noiseB: ReturnType<typeof float>;
 
-    if (noiseAtlasTexture) {
-      const noise = texture(noiseAtlasTexture, _uv);
-      noiseR = noise.r;
-      noiseB = noise.b;
-    } else {
-      noiseR = hash(instanceIndex.mul(0.73));
-      noiseB = hash(instanceIndex.mul(0.91));
-    }
+      if (noiseAtlasTexture) {
+        const noise = texture(noiseAtlasTexture, _uv);
+        noiseR = noise.r;
+        noiseB = noise.b;
+      } else {
+        noiseR = hash(instanceIndex.mul(0.73));
+        noiseB = hash(instanceIndex.mul(0.91));
+      }
 
-    const noiseX = noiseR.sub(0.5).mul(17).fract();
-    const noiseZ = noiseB.sub(0.5).mul(13).fract();
-    data1.x = offsetX.add(noiseX);
-    data1.y = offsetZ.add(noiseZ);
+      const noiseX = noiseR.sub(0.5).mul(17).fract();
+      const noiseZ = noiseB.sub(0.5).mul(13).fract();
+      data1.x = offsetX.add(noiseX);
+      data1.y = offsetZ.add(noiseZ);
 
-    data2.assign(this.setPositionNoise(data2, noiseR));
+      data2.assign(this.setPositionNoise(data2, noiseR));
 
-    // Scale - random within range (shaped distribution)
-    const n = noiseB;
-    const shaped = n.mul(n);
-    const randomScale = remap(
-      shaped,
-      0,
-      1,
-      uniforms.uBladeMinScale,
-      uniforms.uBladeMaxScale,
-    );
-    data1.assign(this.setScale(data1, randomScale));
-    data1.assign(this.setOriginalScale(data1, randomScale));
+      // Scale - random within range (shaped distribution)
+      const n = noiseB;
+      const shaped = n.mul(n);
+      const randomScale = remap(
+        shaped,
+        0,
+        1,
+        uniforms.uBladeMinScale,
+        uniforms.uBladeMaxScale,
+      );
+      data1.assign(this.setScale(data1, randomScale));
+      data1.assign(this.setOriginalScale(data1, randomScale));
 
-    // Set visibility to 1 initially (visible)
-    data1.assign(this.setVisibility(data1, float(1)));
-  })().compute(config.COUNT, [config.WORKGROUP_SIZE]);
+      // Set visibility to 1 initially (visible)
+      data1.assign(this.setVisibility(data1, float(1)));
+
+      // Initialize heightmapY to 0 (will be updated in computeUpdate)
+      data3.assign(float(0));
+    })().compute(config.COUNT, [config.WORKGROUP_SIZE]);
+  }
 
   // Compute Wind - Revo Realms exact
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -403,50 +437,79 @@ class GrassSsbo {
     },
   );
 
-  // Compute Update - Revo Realms exact (no visibility computation)
-  computeUpdate = Fn(() => {
-    const data1 = this.buffer1.element(instanceIndex);
+  // Compute Update - Revo Realms + heightmap Y update
+  private createComputeUpdate() {
+    return Fn(() => {
+      const data1 = this.buffer1.element(instanceIndex);
+      const data3 = this.buffer3.element(instanceIndex);
 
-    // Position
-    const pos = vec3(data1.x, 0, data1.y);
-    const worldPos = pos.add(uniforms.uPlayerPosition);
+      // Local offset position
+      const offsetX = data1.x;
+      const offsetZ = data1.y;
 
-    const data2 = this.buffer2.element(instanceIndex);
+      // World position = local offset + player position
+      const worldX = offsetX.add(uniforms.uPlayerPosition.x);
+      const worldZ = offsetZ.add(uniforms.uPlayerPosition.z);
+      const worldPos = vec3(worldX, 0, worldZ);
 
-    // Compute distance to player
-    const diff = worldPos.xz.sub(uniforms.uPlayerPosition.xz);
-    const distSq = diff.dot(diff);
+      const data2 = this.buffer2.element(instanceIndex);
 
-    // Check if player is on ground
-    const isPlayerGrounded = clamp(
-      float(1).sub(uniforms.uPlayerPosition.y.sub(worldPos.y).abs().div(2)),
-      0,
-      1,
-    );
+      // Sample heightmap for Y position (HYPERSCAPE ADDITION)
+      // Convert world position to heightmap UV (0-1)
+      const halfWorld = uHeightmapWorldSize.mul(0.5);
+      const hmUvX = worldX.add(halfWorld).div(uHeightmapWorldSize);
+      const hmUvZ = worldZ.add(halfWorld).div(uHeightmapWorldSize);
+      const hmUV = vec2(
+        hmUvX.clamp(float(0.001), float(0.999)),
+        hmUvZ.clamp(float(0.001), float(0.999)),
+      );
 
-    const inner = uniforms.uTrailRadiusSquared.mul(0.35);
-    const outer = uniforms.uTrailRadiusSquared;
-    const contact = float(1.0)
-      .sub(smoothstep(inner, outer, distSq))
-      .mul(isPlayerGrounded);
+      // Sample heightmap and compute world Y
+      let heightmapY: ReturnType<typeof float>;
+      if (heightmapTextureNode) {
+        const hmSample = heightmapTextureNode.uv(hmUV);
+        heightmapY = hmSample.r.mul(uHeightmapMax);
+      } else {
+        // Fallback: use player Y if no heightmap
+        heightmapY = uniforms.uPlayerPosition.y;
+      }
+      data3.assign(heightmapY);
 
-    // Trail scale
-    const currentScale = this.getScale(data1);
-    const originalScale = this.getOriginalScale(data1);
-    const newScale = this.computeTrailScale(
-      originalScale,
-      currentScale,
-      contact,
-    );
-    data1.assign(this.setScale(data1, newScale));
+      // Compute distance to player (XZ only)
+      const diff = vec2(worldX, worldZ).sub(uniforms.uPlayerPosition.xz);
+      const distSq = diff.dot(diff);
 
-    // Wind
-    const positionNoise = this.getPositionNoise(data2);
-    const prevWind = this.getWind(data1);
-    const newWind = this.computeWind(prevWind, worldPos, positionNoise);
-    data1.assign(this.setWind(data1, newWind.xy));
-    data1.assign(this.setWindNoise(data1, newWind.z));
-  })().compute(config.COUNT, [config.WORKGROUP_SIZE]);
+      // Check if player is on ground (compare grass height to player height)
+      const isPlayerGrounded = clamp(
+        float(1).sub(uniforms.uPlayerPosition.y.sub(heightmapY).abs().div(2)),
+        0,
+        1,
+      );
+
+      const inner = uniforms.uTrailRadiusSquared.mul(0.35);
+      const outer = uniforms.uTrailRadiusSquared;
+      const contact = float(1.0)
+        .sub(smoothstep(inner, outer, distSq))
+        .mul(isPlayerGrounded);
+
+      // Trail scale
+      const currentScale = this.getScale(data1);
+      const originalScale = this.getOriginalScale(data1);
+      const newScale = this.computeTrailScale(
+        originalScale,
+        currentScale,
+        contact,
+      );
+      data1.assign(this.setScale(data1, newScale));
+
+      // Wind
+      const positionNoise = this.getPositionNoise(data2);
+      const prevWind = this.getWind(data1);
+      const newWind = this.computeWind(prevWind, worldPos, positionNoise);
+      data1.assign(this.setWind(data1, newWind.xy));
+      data1.assign(this.setWindNoise(data1, newWind.z));
+    })().compute(config.COUNT, [config.WORKGROUP_SIZE]);
+  }
 }
 
 // ============================================================================
@@ -471,6 +534,7 @@ class GrassMaterial extends SpriteNodeMaterial {
     // Get data from SSBO
     const data1 = this.ssbo.computeBuffer1.element(instanceIndex);
     const data2 = this.ssbo.computeBuffer2.element(instanceIndex);
+    const data3 = this.ssbo.computeBuffer3.element(instanceIndex);
     const offsetX = data1.x;
     const offsetZ = data1.y;
     const windXZ = this.ssbo.getWind(data1);
@@ -478,6 +542,10 @@ class GrassMaterial extends SpriteNodeMaterial {
     const isVisible = this.ssbo.getVisibility(data1);
     const windNoiseFactor = this.ssbo.getWindNoise(data1);
     const positionNoise = this.ssbo.getPositionNoise(data2);
+
+    // Get heightmapY from compute shader (HYPERSCAPE ADDITION)
+    // data3 stores the world Y position computed from heightmap in computeUpdate
+    const heightmapY = data3;
 
     // OPACITY - NOT SET (Revo Realms has this commented out)
     // this.opacityNode = isVisible;
@@ -504,26 +572,12 @@ class GrassMaterial extends SpriteNodeMaterial {
       .mul(1e6)
       .mul(float(1).sub(isVisible));
 
-    // Get Y offset from heightmap (HYPERSCAPE ADDITION)
-    let offsetY: ReturnType<typeof float>;
-    if (heightmapTexture) {
-      // Sample heightmap at world position
-      const worldX = offsetX.add(uniforms.uPlayerPosition.x);
-      const worldZ = offsetZ.add(uniforms.uPlayerPosition.z);
-      const hmapUv = tslUtils.computeMapUvByPosition(vec2(worldX, worldZ));
-      const fixedUv = vec2(hmapUv.x, float(1).sub(hmapUv.y));
-      offsetY = texture(heightmapTexture, fixedUv).r.mul(heightmapMax);
-    } else {
-      // No heightmap - use player Y as base
-      offsetY = uniforms.uPlayerPosition.y;
-    }
+    // Y offset: heightmapY is world Y, mesh is at (playerX, 0, playerZ)
+    // So local Y = heightmapY (absolute world height)
+    const offsetY = heightmapY;
 
     // Base offset with heightmap Y
-    const bladePosition = vec3(
-      offsetX,
-      offsetY.sub(uniforms.uPlayerPosition.y),
-      offsetZ,
-    );
+    const bladePosition = vec3(offsetX, offsetY, offsetZ);
 
     // Sway effect - Revo Realms exact (uses time instead of gameTime)
     const randomPhase = positionNoise.mul(PI2);
@@ -622,22 +676,18 @@ export class ProceduralGrassSystem extends System {
   }
 
   private async loadTextures(): Promise<void> {
-    // Try to get terrain textures
-    const terrainSystem = this.world.getSystem("terrain") as {
-      heightmapTexture?: THREE.Texture;
-      heightmapMax?: number;
-    } | null;
+    // Get terrain system for height sampling
+    const terrainSystem = this.world.getSystem(
+      "terrain",
+    ) as TerrainSystemInterface | null;
 
-    if (terrainSystem?.heightmapTexture) {
-      heightmapTexture = terrainSystem.heightmapTexture;
-      heightmapMax = terrainSystem.heightmapMax ?? 100;
-      console.log(
-        "[ProceduralGrass] Using terrain heightmap, max:",
-        heightmapMax,
-      );
+    if (terrainSystem && typeof terrainSystem.getHeightAt === "function") {
+      // Generate heightmap by sampling terrain
+      console.log("[ProceduralGrass] Generating heightmap from terrain...");
+      await this.generateHeightmapTexture(terrainSystem);
     } else {
       console.log(
-        "[ProceduralGrass] No heightmap - grass will be at player Y level",
+        "[ProceduralGrass] No terrain system - grass will be at player Y level",
       );
     }
 
@@ -661,6 +711,92 @@ export class ProceduralGrassSystem extends System {
     } catch {
       console.log("[ProceduralGrass] Using hash fallback for noise");
     }
+  }
+
+  /**
+   * Generate heightmap texture by sampling terrain heights
+   * This runs on CPU once at startup - GPU compute then samples this texture
+   */
+  private async generateHeightmapTexture(
+    terrainSystem: TerrainSystemInterface,
+  ): Promise<void> {
+    const HEIGHTMAP_SIZE = 1024;
+    const HEIGHTMAP_WORLD_SIZE = 800;
+    const MAX_HEIGHT = 100;
+
+    const size = HEIGHTMAP_SIZE;
+    const worldSize = HEIGHTMAP_WORLD_SIZE;
+    const maxHeight = MAX_HEIGHT;
+    const halfWorld = worldSize / 2;
+
+    console.log(
+      `[ProceduralGrass] Generating ${size}x${size} heightmap (world size: ${worldSize}m)...`,
+    );
+
+    let minH = Infinity;
+    let maxH = -Infinity;
+
+    // Create RGBA float texture (R = normalized height)
+    const rgbaHeightData = new Float32Array(size * size * 4);
+
+    for (let z = 0; z < size; z++) {
+      for (let x = 0; x < size; x++) {
+        // Convert pixel to world position
+        const worldX = (x / size) * worldSize - halfWorld;
+        const worldZ = (z / size) * worldSize - halfWorld;
+
+        // Get height from terrain system
+        let height = 0;
+        try {
+          height = terrainSystem.getHeightAt(worldX, worldZ);
+        } catch {
+          height = 0;
+        }
+
+        // Track min/max for debugging
+        if (height < minH) minH = height;
+        if (height > maxH) maxH = height;
+
+        // Normalize height to 0-1 range
+        const normalizedHeight = Math.max(0, Math.min(1, height / maxHeight));
+
+        const idx = (z * size + x) * 4;
+        rgbaHeightData[idx + 0] = normalizedHeight; // R = height
+        rgbaHeightData[idx + 1] = 1.0; // G = grassiness (1.0 = full grass)
+        rgbaHeightData[idx + 2] = 0.0; // B = slope (unused)
+        rgbaHeightData[idx + 3] = 1.0; // A = 1
+      }
+    }
+
+    console.log(
+      `[ProceduralGrass] Heightmap generated: range ${minH.toFixed(1)} to ${maxH.toFixed(1)}, normalized max: ${maxHeight}`,
+    );
+    console.log(
+      `[ProceduralGrass] Sample heights at (0,0): ${terrainSystem.getHeightAt(0, 0).toFixed(1)}, (100,100): ${terrainSystem.getHeightAt(100, 100).toFixed(1)}`,
+    );
+
+    // Create THREE.js texture
+    const hmTexture = new THREE.DataTexture(
+      rgbaHeightData,
+      size,
+      size,
+      THREE.RGBAFormat,
+      THREE.FloatType,
+    );
+    hmTexture.wrapS = THREE.ClampToEdgeWrapping;
+    hmTexture.wrapT = THREE.ClampToEdgeWrapping;
+    hmTexture.magFilter = THREE.LinearFilter;
+    hmTexture.minFilter = THREE.LinearFilter;
+    hmTexture.needsUpdate = true;
+
+    // Set module-level variables
+    heightmapTexture = hmTexture;
+    heightmapTextureNode = texture(hmTexture);
+    heightmapMax = maxHeight;
+    uHeightmapMax.value = maxHeight;
+    uHeightmapWorldSize.value = worldSize;
+
+    console.log("[ProceduralGrass] Heightmap texture ready");
   }
 
   private async initializeGrass(): Promise<void> {
@@ -687,6 +823,11 @@ export class ProceduralGrassSystem extends System {
     try {
       await this.loadTextures();
 
+      console.log(
+        "[ProceduralGrass] After loadTextures - heightmapTextureNode:",
+        heightmapTextureNode ? "SET" : "NULL",
+      );
+
       // Create SSBO
       this.ssbo = new GrassSsbo();
 
@@ -706,6 +847,10 @@ export class ProceduralGrassSystem extends System {
 
       console.log(
         `[ProceduralGrass] Initialized with ${config.COUNT.toLocaleString()} blades`,
+        "| Heightmap max:",
+        heightmapMax,
+        "| World size:",
+        uHeightmapWorldSize.value,
       );
     } catch (error) {
       console.error("[ProceduralGrass] ERROR:", error);
@@ -846,5 +991,14 @@ export class ProceduralGrassSystem extends System {
     this.noiseTexture?.dispose();
     noiseAtlasTexture = null;
     heightmapTexture = null;
+    heightmapTextureNode = null;
   }
+}
+
+// ============================================================================
+// TERRAIN SYSTEM INTERFACE
+// ============================================================================
+
+interface TerrainSystemInterface {
+  getHeightAt(worldX: number, worldZ: number): number;
 }

@@ -61,12 +61,26 @@ export interface SerializedRockVariant {
 }
 
 /**
+ * Serialized leaf instance data (for InstancedMesh recreation)
+ */
+export interface SerializedLeafInstances {
+  /** Instance matrix elements (16 floats per instance) */
+  matrices: number[];
+  /** Number of leaf instances */
+  count: number;
+  /** Leaf geometry (single leaf card) */
+  geometry: SerializedGeometry;
+}
+
+/**
  * Serialized tree variant
  */
 export interface SerializedTreeVariant {
   geometries: SerializedGeometry[]; // Multiple meshes (trunk, branches, leaves)
   lod1Geometries?: SerializedGeometry[];
   lod2Geometries?: SerializedGeometry[]; // Card planes
+  /** Leaf instances for cluster generation (InstancedMesh data) */
+  leafInstances?: SerializedLeafInstances;
   dimensions: { width: number; height: number; trunkHeight: number };
   leafColor: { r: number; g: number; b: number };
   barkColor: { r: number; g: number; b: number };

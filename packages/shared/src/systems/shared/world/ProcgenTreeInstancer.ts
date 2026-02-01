@@ -202,7 +202,8 @@ interface TreeInstance {
   lodIndices: [number, number, number, number]; // [lod0, lod1, lod2, impostor] mesh indices
   transition: { from: number; to: number; start: number } | null;
   radius: number;
-  clusterLOD: number; // Current cluster LOD level (-1 = no clusters)
+  hasGlobalLeaves: boolean; // Has individual leaves (LOD0 only)
+  clusterLOD: number; // Current cluster LOD level (-1 = no clusters, 1-2 = clusters)
   clusterDensity: number; // Current cluster density (0-1)
 }
 
@@ -1894,8 +1895,9 @@ export class ProcgenTreeInstancer {
     // Use FULL bake mode to get normals + depth atlas for AAA quality:
     // - Normal atlas: dynamic lighting
     // - Depth atlas: depth-based frame blending (reduces ghosting/artifacts)
-    // v6: Increased baking margin from 5% to 15% to prevent tree clipping
-    const result = await mgr.getOrCreate(`procgen_tree_${name}_v6`, src, {
+    // v7: Fixed framing to use max dimension instead of sphere radius
+    //     Impostor now fills the cell properly for tall narrow trees
+    const result = await mgr.getOrCreate(`procgen_tree_${name}_v7`, src, {
       atlasSize: IMPOSTOR_SIZE,
       hemisphere: true,
       priority: BakePriority.NORMAL,
@@ -1914,10 +1916,15 @@ export class ProcgenTreeInstancer {
       gridSizeY: result.gridSizeY,
     });
 
+    // Calculate impostor dimensions to match baking
+    // Baking fills a square cell based on MAX dimension (typically height for trees)
+    // So the impostor plane must also be square based on max dimension
     const box = new THREE.Box3().setFromObject(src);
     const size = box.getSize(new THREE.Vector3());
-    const w = Math.max(size.x, size.z);
-    const h = size.y;
+    const maxDim = Math.max(size.x, size.y, size.z);
+    // Use max dimension for both width and height to match baked square cell
+    const w = maxDim;
+    const h = maxDim;
 
     const geo = new THREE.PlaneGeometry(1, 1);
     // Pass normal + depth atlas textures for AAA quality
@@ -2293,6 +2300,7 @@ export class ProcgenTreeInstancer {
       lodIndices: [-1, -1, -1, -1],
       transition: null,
       radius: d ? Math.max(d.width, d.height) * scale * 0.5 : 5,
+      hasGlobalLeaves: false,
       clusterLOD: -1,
       clusterDensity: 0,
     };
@@ -2356,11 +2364,47 @@ export class ProcgenTreeInstancer {
     inst.clusterDensity = 0;
   }
 
+  /**
+   * Add individual leaves for a tree (LOD0 only - high detail).
+   */
+  private addTreeLeavesToGlobal(preset: string, inst: TreeInstance): void {
+    if (!this.globalLeaves || inst.hasGlobalLeaves) return;
+
+    const leafData = this.presetLeafData.get(preset);
+    if (!leafData || leafData.transforms.length === 0) return;
+
+    // Apply tree transform to leaf matrices
+    const worldTransforms: THREE.Matrix4[] = [];
+    const treeMat = new THREE.Matrix4();
+    treeMat.makeRotationY(inst.rotation);
+    treeMat.setPosition(inst.position);
+    treeMat.scale(new THREE.Vector3(inst.scale, inst.scale, inst.scale));
+
+    for (const localMat of leafData.transforms) {
+      const worldMat = new THREE.Matrix4().multiplyMatrices(treeMat, localMat);
+      worldTransforms.push(worldMat);
+    }
+
+    this.globalLeaves.addTreeLeaves(inst.id, worldTransforms, leafData.color);
+    inst.hasGlobalLeaves = true;
+  }
+
+  /**
+   * Remove individual leaves for a tree.
+   */
+  private removeTreeLeavesFromGlobal(inst: TreeInstance): void {
+    if (!this.globalLeaves || !inst.hasGlobalLeaves) return;
+
+    this.globalLeaves.removeTreeLeaves(inst.id);
+    inst.hasGlobalLeaves = false;
+  }
+
   removeInstance(preset: string, id: string, _lodLevel = 0): void {
     const tracked = this.instances.get(id);
     if (!tracked) return;
 
-    // Remove clusters from global buffer
+    // Remove leaves and clusters from global buffers
+    this.removeTreeLeavesFromGlobal(tracked.inst);
     this.removeTreeClustersFromGlobal(tracked.inst);
 
     this.transitions.delete(id);
@@ -2420,41 +2464,48 @@ export class ProcgenTreeInstancer {
 
     if (target === cur) return;
 
-    // Handle leaf clusters visibility (clusters used for ALL mesh LODs)
-    // LOD0: 100% cluster density
-    // LOD1: 50% cluster density
-    // LOD2: 20% cluster density
-    // LOD3+: No clusters (impostors have baked leaves)
-    const showClusters = target >= 0 && target <= 2;
-    const hadClusters = cur >= 0 && cur <= 2;
+    // Handle foliage visibility:
+    // LOD0: Individual leaves (high detail via GlobalLeafInstancer)
+    // LOD1/LOD2: Clusters (optimized via GlobalLeafClusterInstancer)
+    // LOD3+: Neither (impostors have baked leaves)
 
-    // Determine cluster density for target LOD
+    const wantsIndividualLeaves = target === 0;
+    const wantsClusters = target === 1 || target === 2;
+    const hadIndividualLeaves = inst.hasGlobalLeaves;
+    const hadClusters = inst.clusterLOD >= 0;
+
+    // Individual leaves transitions (LOD0 only)
+    if (wantsIndividualLeaves && !hadIndividualLeaves) {
+      // Entering LOD0 - add individual leaves
+      this.addTreeLeavesToGlobal(preset, inst);
+    } else if (!wantsIndividualLeaves && hadIndividualLeaves) {
+      // Leaving LOD0 - remove individual leaves
+      this.removeTreeLeavesFromGlobal(inst);
+    }
+
+    // Cluster transitions (LOD1 and LOD2 only)
     const targetDensity =
-      target === 0
-        ? CLUSTER_DENSITY.lod0
-        : target === 1
-          ? CLUSTER_DENSITY.lod1
-          : target === 2
-            ? CLUSTER_DENSITY.lod2
-            : 0;
+      target === 1
+        ? CLUSTER_DENSITY.lod1
+        : target === 2
+          ? CLUSTER_DENSITY.lod2
+          : 0;
 
-    // Cluster transitions
-    if (showClusters) {
+    if (wantsClusters) {
       if (!hadClusters) {
-        // Entering mesh LODs - add clusters with target density
+        // Entering cluster LODs - add clusters with target density
         this.addTreeClustersToGlobal(preset, inst, targetDensity);
         inst.clusterLOD = target;
         inst.clusterDensity = targetDensity;
       } else if (inst.clusterDensity !== targetDensity) {
-        // Changing LOD within mesh range - update cluster density
-        // For now, remove and re-add with new density (could optimize later)
+        // Changing LOD within cluster range - update density
         this.removeTreeClustersFromGlobal(inst);
         this.addTreeClustersToGlobal(preset, inst, targetDensity);
         inst.clusterLOD = target;
         inst.clusterDensity = targetDensity;
       }
     } else if (hadClusters) {
-      // Transitioning to impostor/culled - remove clusters
+      // Leaving cluster LODs - remove clusters
       this.removeTreeClustersFromGlobal(inst);
       inst.clusterLOD = -1;
       inst.clusterDensity = 0;
@@ -2499,8 +2550,17 @@ export class ProcgenTreeInstancer {
       }
     }
 
-    // Handle cluster fades (all mesh LODs use clusters now)
-    if (lod <= 2 && this.globalClusters && inst.clusterLOD >= 0) {
+    // Handle individual leaf fades (LOD0 only)
+    if (lod === 0 && this.globalLeaves && inst.hasGlobalLeaves) {
+      this.globalLeaves.setTreeFade(inst.id, fade);
+    }
+
+    // Handle cluster fades (LOD1 and LOD2 only)
+    if (
+      (lod === 1 || lod === 2) &&
+      this.globalClusters &&
+      inst.clusterLOD >= 0
+    ) {
       this.globalClusters.setFade(inst.id, fade);
     }
   }
