@@ -14,12 +14,6 @@ export * from "./DialogueSystem";
 export * from "./ItemTargetingSystem";
 export * from "./TargetValidator";
 
-// Split Processing Systems (SRP)
-// These can be used instead of ProcessingSystem when more granular control is needed
-export * from "./ProcessingSystemBase";
-export * from "./FiremakingSystem";
-export * from "./CookingSystem";
-
 // Smithing skill systems (furnace smelting, anvil smithing)
 export * from "./SmeltingSystem";
 export * from "./SmithingSystem";
