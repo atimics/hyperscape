@@ -390,6 +390,18 @@ export class DataManager {
       // Load recipe manifests for ProcessingDataProvider
       await this.loadRecipeManifestsFromCDN(baseUrl);
 
+      // Load skill unlocks
+      try {
+        const skillUnlocksRes = await fetch(`${baseUrl}/skill-unlocks.json`);
+        const skillUnlocksManifest =
+          (await skillUnlocksRes.json()) as SkillUnlocksManifest;
+        loadSkillUnlocks(skillUnlocksManifest);
+      } catch {
+        console.warn(
+          "[DataManager] skill-unlocks.json not available from CDN, skill guide will be empty",
+        );
+      }
+
       // Build EXTERNAL_TOOLS from items where item.tool is defined
       // This replaces the old tools.json loading
       this.buildToolsFromItems();

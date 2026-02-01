@@ -150,6 +150,7 @@ export {
   SKILL_UNLOCKS,
   getUnlocksAtLevel,
   getUnlocksUpToLevel,
+  getUnlocksForSkill,
   getAllSkillUnlocks,
   clearSkillUnlocksCache,
   loadSkillUnlocks,
