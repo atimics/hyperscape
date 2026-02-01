@@ -1092,6 +1092,15 @@ export class ProjectileRenderer extends System {
       }
     }
 
+    // Dispose arrow mesh materials (shaft + head)
+    if (proj.type === "arrow" && proj.sprite instanceof THREE.Group) {
+      proj.sprite.traverse((child) => {
+        if (child instanceof THREE.Mesh && child.material) {
+          (child.material as THREE.Material).dispose();
+        }
+      });
+    }
+
     this.world.stage.scene.remove(proj.sprite);
 
     // Dispose trail mesh materials
