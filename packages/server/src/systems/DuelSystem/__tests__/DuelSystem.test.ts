@@ -126,7 +126,8 @@ describe("DuelSystem", () => {
       }
 
       // Try to challenge player2 from player3
-      const result = duelSystem.createChallenge(
+      const result = createTestChallenge(
+        duelSystem,
         "player3",
         "P3",
         "player2",
@@ -910,7 +911,8 @@ describe("DuelSystem", () => {
       world.addPlayer({ id: "player3", position: { x: 70, y: 0, z: 70 } });
       world.addPlayer({ id: "player4", position: { x: 72, y: 0, z: 70 } });
 
-      const challenge2 = duelSystem.createChallenge(
+      const challenge2 = createTestChallenge(
+        duelSystem,
         "player3",
         "P3",
         "player4",
@@ -1223,7 +1225,8 @@ describe("DuelSystem", () => {
       world.addPlayer({ id: "player3", position: { x: 70, y: 0, z: 70 } });
       world.addPlayer({ id: "player4", position: { x: 72, y: 0, z: 70 } });
 
-      const challenge2 = duelSystem.createChallenge(
+      const challenge2 = createTestChallenge(
+        duelSystem,
         "player3",
         "P3",
         "player4",
