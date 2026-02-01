@@ -30,7 +30,7 @@ import {
   calculateQuestProgress,
   CATEGORY_CONFIG,
 } from "@/game/systems";
-import { panelStyles, COLORS, spacing, typography } from "../../constants";
+import { COLORS, spacing, typography } from "../../constants";
 import { parseJSONWithDefault } from "../../utils/validation";
 import type { ClientWorld } from "../../types";
 
