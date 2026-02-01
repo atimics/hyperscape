@@ -440,9 +440,9 @@ export class ProjectileRenderer extends System {
     const sparkMeshes: THREE.Mesh[] = [];
 
     // Layer 1: Outer glow — soft, larger, semi-transparent
-    const outerMat = this.createGlowMaterial(palette.mid, 1.5, 0.4);
+    const outerMat = this.createGlowMaterial(palette.mid, 1.5, 0.6);
     const outerMesh = new THREE.Mesh(geom, outerMat);
-    const outerSize = config.size * 2.0;
+    const outerSize = config.size * 2.5;
     outerMesh.scale.set(outerSize, outerSize, outerSize);
     outerMesh.renderOrder = 998;
     outerMesh.frustumCulled = false;
@@ -897,7 +897,7 @@ export class ProjectileRenderer extends System {
             proj.billboardMeshes[0]
           ) {
             const outerMesh = proj.billboardMeshes[0];
-            const baseSize = spellConfig.size * 2.0;
+            const baseSize = spellConfig.size * 2.5;
             const scaledSize = baseSize * (1 + pulse * pulseAmount);
             outerMesh.scale.setScalar(scaledSize);
           }
