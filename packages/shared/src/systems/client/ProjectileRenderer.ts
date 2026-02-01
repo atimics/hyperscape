@@ -965,12 +965,16 @@ export class ProjectileRenderer extends System {
           }
         }
 
-        // Animate orbiting sparks for bolt-tier spells
+        // Animate bolt-tier spells: orbiting sparks + pulsing outer glow
         if (proj.sparkMeshes && proj.sparkMeshes.length > 0) {
           const spellConfig = proj.visualConfig as SpellVisualConfig;
           const orbitRadius = spellConfig.size * 0.8;
           const orbitSpeed = 6.0; // radians per second
           const t = elapsed * 0.001;
+          const pulseSpeed = spellConfig.pulseSpeed ?? 0;
+          const pulseAmount = spellConfig.pulseAmount ?? 0;
+          const pulse = Math.sin(t * pulseSpeed * Math.PI * 2);
+
           for (let s = 0; s < proj.sparkMeshes.length; s++) {
             const angle = t * orbitSpeed + s * Math.PI; // Evenly spaced
             proj.sparkMeshes[s].position.set(
@@ -978,6 +982,24 @@ export class ProjectileRenderer extends System {
               Math.sin(angle) * orbitRadius,
               0,
             );
+
+            // Oscillate spark opacity
+            const sparkMat = proj.sparkMeshes[s]
+              .material as THREE.MeshBasicMaterial;
+            sparkMat.opacity =
+              (sparkMat.userData.baseOpacity ?? 0.8) * (0.7 + 0.3 * pulse);
+          }
+
+          // Pulse outer glow scale (first billboard mesh is outer glow)
+          if (
+            pulseSpeed > 0 &&
+            proj.billboardMeshes &&
+            proj.billboardMeshes[0]
+          ) {
+            const outerMesh = proj.billboardMeshes[0];
+            const baseSize = spellConfig.size * 2.0;
+            const scaledSize = baseSize * (1 + pulse * pulseAmount);
+            outerMesh.scale.setScalar(scaledSize);
           }
         }
       }
