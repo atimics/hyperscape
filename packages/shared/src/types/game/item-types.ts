@@ -168,9 +168,10 @@ export interface Item {
   // Ground item display overrides
   /** Scale for 3D model when displayed as ground item (default: 0.3) */
   modelScale?: number;
-  /** Ground item Y positioning. When <= 0, model bottom is bbox-snapped to terrain surface
-   *  with this value as additional offset (0 = exactly on ground). When > 0 or undefined,
-   *  item uses default floating animation at this height (default: 0.5) */
+  /** Ground item Y positioning:
+   *  - When <= 0: model bottom is bbox-snapped to terrain with this as offset (0 = flush)
+   *  - When > 0: item floats at this height with bobbing animation
+   *  - When undefined: defaults to 0.5 (standard floating ground item) */
   groundOffset?: number;
 
   // Consumable properties - only for food/consumables

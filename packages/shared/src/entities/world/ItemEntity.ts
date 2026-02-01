@@ -132,7 +132,10 @@ export class ItemEntity extends InteractableEntity {
           const gOffset = this.config.groundOffset;
           if (gOffset !== undefined && gOffset <= 0) {
             const bbox = new THREE.Box3().setFromObject(this.mesh);
-            this.mesh.position.y = -bbox.min.y - 0.2 + gOffset;
+            // 0.2 matches the yOffset passed to groundToTerrain() in GroundItemSystem
+            const GROUND_ITEM_TERRAIN_OFFSET = 0.2;
+            this.mesh.position.y =
+              -bbox.min.y - GROUND_ITEM_TERRAIN_OFFSET + gOffset;
           }
 
           // PERFORMANCE: Set item mesh to layer 1 (main camera only, not minimap)
