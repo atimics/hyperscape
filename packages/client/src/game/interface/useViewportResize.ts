@@ -34,8 +34,8 @@ function snapToGrid(value: number, gridSize: number): number {
   return Math.round(value / gridSize) * gridSize;
 }
 
-/** Mobile breakpoint threshold - increased for better tablet support */
-const MOBILE_BREAKPOINT = 1024;
+/** Mobile breakpoint threshold - aligned with breakpoints.md (640px) */
+const MOBILE_BREAKPOINT = 640;
 
 /** Design resolution used as stable reference for scaling */
 const DESIGN_RESOLUTION = { width: 1920, height: 1080 };

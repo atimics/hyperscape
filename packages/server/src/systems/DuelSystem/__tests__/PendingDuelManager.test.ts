@@ -21,12 +21,13 @@ function createTestChallenge(
   challengerName: string,
   targetId: string,
   targetName: string,
+  combatLevel: number = 100,
 ) {
   return manager.createChallenge(
     createPlayerID(challengerId),
     challengerName,
     `socket-${challengerId}`, // challengerSocketId
-    100, // challengerCombatLevel
+    combatLevel,
     createPlayerID(targetId),
     targetName,
   );

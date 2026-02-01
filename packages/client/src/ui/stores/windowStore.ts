@@ -1054,7 +1054,7 @@ export const useWindowStore = create<WindowStoreState>()(
         };
 
         // Detect mobile/desktop mode change between saved and current viewport
-        const MOBILE_BREAKPOINT = 1024; // Increased for better tablet support
+        const MOBILE_BREAKPOINT = 640; // Aligned with breakpoints.md
         const savedWasMobile = savedViewport.width < MOBILE_BREAKPOINT;
         const currentIsMobile = currentViewport.width < MOBILE_BREAKPOINT;
         const isMobileToDesktopTransition = savedWasMobile && !currentIsMobile;

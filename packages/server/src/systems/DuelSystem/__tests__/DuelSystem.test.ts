@@ -22,12 +22,13 @@ function createTestChallenge(
   challengerName: string,
   targetId: string,
   targetName: string,
+  combatLevel: number = 100,
 ) {
   return duelSystem.createChallenge(
     challengerId,
     challengerName,
     `socket-${challengerId}`, // challengerSocketId
-    100, // challengerCombatLevel
+    combatLevel,
     targetId,
     targetName,
   );
