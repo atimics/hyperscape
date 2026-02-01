@@ -338,15 +338,34 @@ export class ProjectileRenderer extends System {
   }
 
   /**
+   * Get or create a cached DataTexture for the given color/sharpness combo.
+   * Avoids creating duplicate textures for the same visual parameters.
+   */
+  private getCachedGlowTexture(
+    colorHex: number,
+    size: number,
+    sharpness: number,
+  ): THREE.DataTexture {
+    const key = `${colorHex}-${size}-${sharpness}`;
+    let tex = this.spellGlowTextures.get(key);
+    if (!tex) {
+      tex = this.createColoredGlowTexture(colorHex, size, sharpness);
+      this.spellGlowTextures.set(key, tex);
+    }
+    return tex;
+  }
+
+  /**
    * Create a billboard glow material with color baked into the texture.
    * Uses CircleGeometry + MeshBasicMaterial with AdditiveBlending.
+   * Textures are cached and shared; materials are per-projectile (unique opacity).
    */
   private createGlowMaterial(
     colorHex: number,
     sharpness: number,
     initialOpacity: number,
   ): THREE.MeshBasicMaterial {
-    const tex = this.createColoredGlowTexture(colorHex, 64, sharpness);
+    const tex = this.getCachedGlowTexture(colorHex, 64, sharpness);
     const mat = new THREE.MeshBasicMaterial({
       map: tex,
       transparent: true,
@@ -1041,8 +1060,18 @@ export class ProjectileRenderer extends System {
    * Remove a projectile and its trail from the scene
    */
   private removeProjectile(proj: ActiveProjectile): void {
+    // Dispose materials for billboard meshes (textures are cached and shared, not disposed here)
+    if (proj.billboardMeshes) {
+      for (const mesh of proj.billboardMeshes) {
+        (mesh.material as THREE.Material).dispose();
+      }
+    }
+
     this.world.stage.scene.remove(proj.sprite);
+
+    // Dispose trail sprite materials
     for (const trail of proj.trailSprites) {
+      trail.sprite.material.dispose();
       this.world.stage.scene.remove(trail.sprite);
     }
   }
@@ -1067,10 +1096,37 @@ export class ProjectileRenderer extends System {
     }
     this.activeProjectiles = [];
 
-    // Clear texture caches (let GC handle actual disposal)
+    // Dispose and clear all texture caches
+    for (const tex of this.arrowTextures.values()) {
+      tex.dispose();
+    }
     this.arrowTextures.clear();
+
+    for (const tex of this.spellTextures.values()) {
+      tex.dispose();
+    }
     this.spellTextures.clear();
-    this.trailTexture = null;
+
+    for (const tex of this.spellGlowTextures.values()) {
+      tex.dispose();
+    }
+    this.spellGlowTextures.clear();
+
+    for (const tex of this.spellTrailTextures.values()) {
+      tex.dispose();
+    }
+    this.spellTrailTextures.clear();
+
+    if (this.trailTexture) {
+      this.trailTexture.dispose();
+      this.trailTexture = null;
+    }
+
+    // Dispose shared geometry
+    if (ProjectileRenderer.particleGeometry) {
+      ProjectileRenderer.particleGeometry.dispose();
+      ProjectileRenderer.particleGeometry = null;
+    }
 
     super.destroy();
   }
