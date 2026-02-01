@@ -48,7 +48,7 @@ interface TrailSprite {
  * Active projectile being rendered
  */
 interface ActiveProjectile {
-  /** Main visual - sprite for spells, Group for arrows */
+  /** Main visual - Group for both spells (multi-layer) and arrows (mesh parts) */
   sprite: THREE.Sprite | THREE.Group;
   /** Current position of projectile */
   currentPos: THREE.Vector3;
@@ -78,6 +78,10 @@ interface ActiveProjectile {
   trailPositions: THREE.Vector3[];
   /** Current trail position index */
   trailIndex: number;
+  /** Orbiting spark meshes for bolt-tier spells (animated in update) */
+  sparkMeshes?: THREE.Mesh[];
+  /** Billboard mesh children that need to face camera each frame */
+  billboardMeshes?: THREE.Mesh[];
 }
 
 /**
@@ -343,7 +347,7 @@ export class ProjectileRenderer extends System {
     initialOpacity: number,
   ): THREE.MeshBasicMaterial {
     const tex = this.createColoredGlowTexture(colorHex, 64, sharpness);
-    return new THREE.MeshBasicMaterial({
+    const mat = new THREE.MeshBasicMaterial({
       map: tex,
       transparent: true,
       opacity: initialOpacity,
@@ -353,6 +357,9 @@ export class ProjectileRenderer extends System {
       side: THREE.DoubleSide,
       fog: false,
     });
+    // Store base opacity for fade-out calculations
+    mat.userData.baseOpacity = initialOpacity;
+    return mat;
   }
 
   /**
@@ -377,6 +384,71 @@ export class ProjectileRenderer extends System {
       Math.round(mb * 0.6);
 
     return { core, mid, outer };
+  }
+
+  /**
+   * Create a multi-layer spell projectile group.
+   * Returns a THREE.Group with billboard meshes (core orb + outer glow),
+   * plus orbiting sparks for bolt-tier spells.
+   *
+   * Layer structure:
+   * - Core orb: bright center, sharp glow (sharpness 3.0)
+   * - Outer glow: element color, soft glow (sharpness 1.5), 2x size, semi-transparent
+   * - Sparks (bolt only): 2 tiny bright particles that orbit the core
+   */
+  private createSpellGroup(
+    config: SpellVisualConfig,
+    startX: number,
+    startY: number,
+    startZ: number,
+  ): {
+    group: THREE.Group;
+    sparkMeshes: THREE.Mesh[];
+    billboardMeshes: THREE.Mesh[];
+  } {
+    const palette = this.getSpellColorPalette(config);
+    const geom = ProjectileRenderer.getParticleGeometry();
+    const group = new THREE.Group();
+    const billboardMeshes: THREE.Mesh[] = [];
+    const sparkMeshes: THREE.Mesh[] = [];
+
+    // Layer 1: Outer glow — soft, larger, semi-transparent
+    const outerMat = this.createGlowMaterial(palette.mid, 1.5, 0.4);
+    const outerMesh = new THREE.Mesh(geom, outerMat);
+    const outerSize = config.size * 2.0;
+    outerMesh.scale.set(outerSize, outerSize, outerSize);
+    outerMesh.renderOrder = 998;
+    outerMesh.frustumCulled = false;
+    group.add(outerMesh);
+    billboardMeshes.push(outerMesh);
+
+    // Layer 2: Core orb — bright center, sharp
+    const coreMat = this.createGlowMaterial(palette.core, 3.0, 0.9);
+    const coreMesh = new THREE.Mesh(geom, coreMat);
+    coreMesh.scale.set(config.size, config.size, config.size);
+    coreMesh.renderOrder = 999;
+    coreMesh.frustumCulled = false;
+    group.add(coreMesh);
+    billboardMeshes.push(coreMesh);
+
+    // Layer 3: Orbiting sparks — bolt-tier spells only (have pulseSpeed > 0)
+    if (config.pulseSpeed && config.pulseSpeed > 0) {
+      for (let i = 0; i < 2; i++) {
+        const sparkMat = this.createGlowMaterial(palette.core, 4.0, 0.8);
+        const sparkMesh = new THREE.Mesh(geom, sparkMat);
+        const sparkSize = config.size * 0.3;
+        sparkMesh.scale.set(sparkSize, sparkSize, sparkSize);
+        sparkMesh.renderOrder = 999;
+        sparkMesh.frustumCulled = false;
+        group.add(sparkMesh);
+        billboardMeshes.push(sparkMesh);
+        sparkMeshes.push(sparkMesh);
+      }
+    }
+
+    group.position.set(startX, startY, startZ);
+
+    return { group, sparkMeshes, billboardMeshes };
   }
 
   /**
@@ -641,6 +713,8 @@ export class ProjectileRenderer extends System {
     // Get visual config
     let visualConfig: SpellVisualConfig | ArrowVisualConfig;
     let projectileObject: THREE.Sprite | THREE.Group;
+    let spellSparkMeshes: THREE.Mesh[] = [];
+    let spellBillboardMeshes: THREE.Mesh[] = [];
 
     if (type === "arrow") {
       // Create 3D arrow mesh that naturally points toward target
@@ -655,33 +729,19 @@ export class ProjectileRenderer extends System {
       const targetPoint = new THREE.Vector3(targetPos.x, endY, targetPos.z);
       projectileObject.lookAt(targetPoint);
     } else {
-      // Create spell sprite
+      // Create multi-layer spell projectile group
       visualConfig = getSpellVisual(spellId ?? "");
       const spellConfig = visualConfig as SpellVisualConfig;
 
-      // Create texture if not cached
-      if (spellId && !this.spellTextures.has(spellId)) {
-        this.createSpellTexture(spellId, spellConfig);
-      }
-      const texture = spellId
-        ? (this.spellTextures.get(spellId) ?? null)
-        : null;
-
-      if (!texture) {
-        return;
-      }
-
-      const material = new THREE.SpriteMaterial({
-        map: texture,
-        transparent: true,
-        depthTest: true,
-        blending: THREE.AdditiveBlending,
-      });
-
-      const sprite = new THREE.Sprite(material);
-      sprite.scale.set(spellConfig.size, spellConfig.size, 1);
-      sprite.position.set(sourcePos.x, startY, sourcePos.z);
-      projectileObject = sprite;
+      const spellResult = this.createSpellGroup(
+        spellConfig,
+        sourcePos.x,
+        startY,
+        sourcePos.z,
+      );
+      projectileObject = spellResult.group;
+      spellSparkMeshes = spellResult.sparkMeshes;
+      spellBillboardMeshes = spellResult.billboardMeshes;
     }
 
     // Add to scene
@@ -746,6 +806,9 @@ export class ProjectileRenderer extends System {
       trailSprites,
       trailPositions,
       trailIndex: 0,
+      sparkMeshes: spellSparkMeshes.length > 0 ? spellSparkMeshes : undefined,
+      billboardMeshes:
+        spellBillboardMeshes.length > 0 ? spellBillboardMeshes : undefined,
     });
   }
 
@@ -844,15 +907,29 @@ export class ProjectileRenderer extends System {
         // Spell - direct movement, no arc
         proj.sprite.position.copy(proj.currentPos);
 
-        // Spell effects: pulsing
-        const spellConfig = proj.visualConfig as SpellVisualConfig;
-        if (spellConfig.pulseSpeed && spellConfig.pulseAmount) {
-          const pulse =
-            1 +
-            Math.sin(elapsed * spellConfig.pulseSpeed * 0.001) *
-              spellConfig.pulseAmount;
-          const baseSize = spellConfig.size;
-          proj.sprite.scale.set(baseSize * pulse, baseSize * pulse, 1);
+        // Billboard rotation: face all mesh children toward camera
+        const cam = this.world.camera;
+        const camQuat = cam?.quaternion;
+        if (camQuat && proj.billboardMeshes) {
+          for (const mesh of proj.billboardMeshes) {
+            mesh.quaternion.copy(camQuat);
+          }
+        }
+
+        // Animate orbiting sparks for bolt-tier spells
+        if (proj.sparkMeshes && proj.sparkMeshes.length > 0) {
+          const spellConfig = proj.visualConfig as SpellVisualConfig;
+          const orbitRadius = spellConfig.size * 0.8;
+          const orbitSpeed = 6.0; // radians per second
+          const t = elapsed * 0.001;
+          for (let s = 0; s < proj.sparkMeshes.length; s++) {
+            const angle = t * orbitSpeed + s * Math.PI; // Evenly spaced
+            proj.sparkMeshes[s].position.set(
+              Math.cos(angle) * orbitRadius,
+              Math.sin(angle) * orbitRadius,
+              0,
+            );
+          }
         }
       }
 
@@ -874,29 +951,32 @@ export class ProjectileRenderer extends System {
       if (distanceToTarget < this.HIT_THRESHOLD * 3) {
         const fadeProgress = 1 - distanceToTarget / (this.HIT_THRESHOLD * 3);
 
-        if (proj.sprite instanceof THREE.Sprite) {
-          if (proj.sprite.material instanceof THREE.SpriteMaterial) {
-            proj.sprite.material.opacity = 1 - fadeProgress;
-          }
-
-          for (const trail of proj.trailSprites) {
-            if (trail.sprite.material instanceof THREE.SpriteMaterial) {
-              const baseOpacity = this.getTrailOpacity(
-                trail.index,
-                proj.trailSprites.length,
-                proj.visualConfig as SpellVisualConfig,
-              );
-              trail.sprite.material.opacity = baseOpacity * (1 - fadeProgress);
-            }
-          }
-        } else if (proj.sprite instanceof THREE.Group) {
+        if (proj.sprite instanceof THREE.Group) {
+          // Fade all mesh children (spell layers + arrow parts)
           proj.sprite.traverse((child) => {
             if (child instanceof THREE.Mesh && child.material) {
               const mat = child.material as THREE.MeshBasicMaterial;
               mat.transparent = true;
-              mat.opacity = 1 - fadeProgress;
+              mat.opacity =
+                (1 - fadeProgress) * (mat.userData.baseOpacity ?? 1);
             }
           });
+        } else if (proj.sprite instanceof THREE.Sprite) {
+          if (proj.sprite.material instanceof THREE.SpriteMaterial) {
+            proj.sprite.material.opacity = 1 - fadeProgress;
+          }
+        }
+
+        // Fade trail sprites (still THREE.Sprite-based)
+        for (const trail of proj.trailSprites) {
+          if (trail.sprite.material instanceof THREE.SpriteMaterial) {
+            const baseOpacity = this.getTrailOpacity(
+              trail.index,
+              proj.trailSprites.length,
+              proj.visualConfig as SpellVisualConfig,
+            );
+            trail.sprite.material.opacity = baseOpacity * (1 - fadeProgress);
+          }
         }
       }
     }
