@@ -17,8 +17,6 @@
  * **Runs on:** Server only (uses Node.js crypto)
  */
 
-type CryptoModule = typeof import("crypto");
-
 // Lazy-loaded crypto module (Node.js only)
 let cryptoModule: typeof import("crypto") | null = null;
 let cryptoLoadAttempted = false;
