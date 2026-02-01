@@ -109,6 +109,13 @@ export class ProjectileRenderer extends System {
   private spellTextures: Map<string, THREE.Texture> = new Map();
   private trailTexture: THREE.Texture | null = null;
 
+  // DataTexture-based glow caches (WebGPU-safe, color baked into pixels)
+  private spellGlowTextures: Map<string, THREE.DataTexture> = new Map();
+  private spellTrailTextures: Map<string, THREE.DataTexture> = new Map();
+
+  // Shared geometry for billboard particles (reused across all projectiles)
+  private static particleGeometry: THREE.CircleGeometry | null = null;
+
   // Last trail update time
   private lastTrailUpdate = 0;
 
@@ -270,6 +277,106 @@ export class ProjectileRenderer extends System {
     const g = Math.max(0, parseInt(hex.slice(2, 4), 16) - 40);
     const b = Math.max(0, parseInt(hex.slice(4, 6), 16) - 40);
     return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+  }
+
+  /**
+   * Get shared CircleGeometry for billboard particles.
+   * Reused across all projectile particles to avoid per-particle geometry allocation.
+   */
+  private static getParticleGeometry(): THREE.CircleGeometry {
+    if (!ProjectileRenderer.particleGeometry) {
+      ProjectileRenderer.particleGeometry = new THREE.CircleGeometry(0.5, 16);
+    }
+    return ProjectileRenderer.particleGeometry;
+  }
+
+  /**
+   * Create a color-baked radial glow DataTexture.
+   * Color is baked directly into RGBA pixels (not via material.color) because
+   * material.color tinting doesn't reliably produce colored output in the
+   * WebGPU renderer path. Follows the RunecraftingAltarEntity pattern.
+   *
+   * @param colorHex - Hex color to bake (e.g. 0xff4500)
+   * @param size - Texture dimensions (square, e.g. 64)
+   * @param sharpness - Falloff exponent: 1.5 = soft glow, 4.0 = sharp spark
+   */
+  private createColoredGlowTexture(
+    colorHex: number,
+    size: number,
+    sharpness: number,
+  ): THREE.DataTexture {
+    const r = (colorHex >> 16) & 0xff;
+    const g = (colorHex >> 8) & 0xff;
+    const b = colorHex & 0xff;
+    const data = new Uint8Array(size * size * 4);
+    const half = size / 2;
+
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const dx = (x + 0.5 - half) / half;
+        const dy = (y + 0.5 - half) / half;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const falloff = Math.max(0, 1 - dist);
+        const strength = Math.pow(falloff, sharpness);
+        const idx = (y * size + x) * 4;
+        data[idx] = Math.round(r * strength);
+        data[idx + 1] = Math.round(g * strength);
+        data[idx + 2] = Math.round(b * strength);
+        data[idx + 3] = Math.round(255 * strength);
+      }
+    }
+
+    const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  /**
+   * Create a billboard glow material with color baked into the texture.
+   * Uses CircleGeometry + MeshBasicMaterial with AdditiveBlending.
+   */
+  private createGlowMaterial(
+    colorHex: number,
+    sharpness: number,
+    initialOpacity: number,
+  ): THREE.MeshBasicMaterial {
+    const tex = this.createColoredGlowTexture(colorHex, 64, sharpness);
+    return new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      opacity: initialOpacity,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.DoubleSide,
+      fog: false,
+    });
+  }
+
+  /**
+   * Get a 3-color palette from a spell's visual config.
+   * Returns core (bright center), mid (primary element), outer (darkened trail/ambient).
+   */
+  private getSpellColorPalette(config: SpellVisualConfig): {
+    core: number;
+    mid: number;
+    outer: number;
+  } {
+    const mid = config.color;
+    const core = config.coreColor ?? 0xffffff;
+
+    // Darken mid color by ~40% for outer
+    const mr = (mid >> 16) & 0xff;
+    const mg = (mid >> 8) & 0xff;
+    const mb = mid & 0xff;
+    const outer =
+      (Math.round(mr * 0.6) << 16) |
+      (Math.round(mg * 0.6) << 8) |
+      Math.round(mb * 0.6);
+
+    return { core, mid, outer };
   }
 
   /**
