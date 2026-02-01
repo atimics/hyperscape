@@ -57,6 +57,8 @@ export class PendingDuelManager {
   createChallenge(
     challengerId: PlayerID,
     challengerName: string,
+    challengerSocketId: string,
+    challengerCombatLevel: number,
     targetId: PlayerID,
     targetName: string,
   ):
@@ -112,6 +114,8 @@ export class PendingDuelManager {
       challengeId,
       challengerId,
       challengerName,
+      challengerSocketId,
+      challengerCombatLevel,
       targetId,
       targetName,
       createdAt: Date.now(),
