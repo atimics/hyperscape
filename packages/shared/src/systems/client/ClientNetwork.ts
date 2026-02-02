@@ -1237,6 +1237,7 @@ export class ClientNetwork extends SystemBase {
         }
 
         // Clear stale 'death' emote so subsequent packets don't think mob is still dead
+        // (also cleared in MobEntity.modify() respawn block as defense in depth)
         (entity.data as Record<string, unknown>).e = undefined;
         (entity.data as Record<string, unknown>).emote = undefined;
 

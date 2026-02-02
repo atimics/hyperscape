@@ -2925,6 +2925,7 @@ export class MobEntity extends CombatantEntity {
             // CRITICAL: Clear stale 'death' emote — without this,
             // onEntityModified thinks mob is still dead on subsequent packets
             // (it checks entity.data.e for 'death' in isDeadMob calculation)
+            // (also cleared in ClientNetwork.onEntityModified respawn path as defense in depth)
             (this.data as Record<string, unknown>).e = undefined;
             (this.data as Record<string, unknown>).emote = undefined;
 
