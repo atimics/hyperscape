@@ -151,6 +151,14 @@ if (typeof ProgressEvent === "undefined") {
   ).ProgressEvent = ProgressEventPolyfill;
 }
 
+/** Valid melee attack styles for XP validation (avoids granting wrong XP type) */
+const MELEE_STYLES = new Set([
+  "accurate",
+  "aggressive",
+  "defensive",
+  "controlled",
+]);
+
 export class MobEntity extends CombatantEntity {
   protected config: MobEntityConfig;
 
@@ -2421,13 +2429,10 @@ export class MobEntity extends CombatantEntity {
       const weapon = equipment?.weapon?.item;
       let attackStyle = "aggressive"; // Default
 
-      // Debug logging for XP assignment
-      console.log(
-        `[MobEntity] XP Debug - attacker: ${lastAttackerId}, weapon:`,
-        weapon
-          ? { weaponType: weapon.weaponType, attackType: weapon.attackType }
-          : "none",
-      );
+      // Check if player has a spell selected (needed for magic detection)
+      const playerEntity = this.world.getPlayer?.(lastAttackerId);
+      const selectedSpell = (playerEntity?.data as { selectedSpell?: string })
+        ?.selectedSpell;
 
       if (weapon) {
         // Check attackType first (preferred), then weaponType (legacy)
@@ -2443,25 +2448,29 @@ export class MobEntity extends CombatantEntity {
           // Ranged weapon - use "ranged" style for Ranged XP
           attackStyle = "ranged";
         } else if (
-          attackType === "magic" ||
-          weaponType === "staff" ||
-          weaponType === "wand"
+          (attackType === "magic" ||
+            weaponType === "staff" ||
+            weaponType === "wand") &&
+          selectedSpell
         ) {
-          // Magic weapon - use "magic" style for Magic XP
+          // Magic weapon WITH active spell - use "magic" style for Magic XP
+          // OSRS-accurate: staffs used for melee (no spell) grant melee XP
           attackStyle = "magic";
         } else {
-          // Melee weapon - use player's selected melee attack style
+          // Melee attack (or staff/wand without a spell) - use player's selected attack style
+          // but only if it's a valid melee style; non-melee styles (longrange, autocast, rapid)
+          // would grant wrong XP type
           const attackStyleData =
             playerSystem?.getPlayerAttackStyle?.(lastAttackerId);
-          attackStyle = attackStyleData?.id || "aggressive";
+          const playerStyle = attackStyleData?.id;
+          attackStyle =
+            playerStyle && MELEE_STYLES.has(playerStyle)
+              ? playerStyle
+              : "aggressive";
         }
       } else {
         // No weapon (unarmed) - check if player has a spell selected
         // OSRS-accurate: You can cast spells without a staff
-        const playerEntity = this.world.getPlayer?.(lastAttackerId);
-        const selectedSpell = (playerEntity?.data as { selectedSpell?: string })
-          ?.selectedSpell;
-
         if (selectedSpell) {
           // Player has a spell selected - use "magic" for Magic XP
           attackStyle = "magic";
@@ -2469,13 +2478,13 @@ export class MobEntity extends CombatantEntity {
           // No spell, no weapon - use player's melee attack style
           const attackStyleData =
             playerSystem?.getPlayerAttackStyle?.(lastAttackerId);
-          attackStyle = attackStyleData?.id || "aggressive";
+          const playerStyle = attackStyleData?.id;
+          attackStyle =
+            playerStyle && MELEE_STYLES.has(playerStyle)
+              ? playerStyle
+              : "aggressive";
         }
       }
-
-      console.log(
-        `[MobEntity] XP Debug - determined attackStyle: ${attackStyle}`,
-      );
 
       this.world.emit(EventType.COMBAT_KILL, {
         attackerId: lastAttackerId,
