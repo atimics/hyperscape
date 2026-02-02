@@ -9,7 +9,32 @@
 
 export { createClientWorld } from "./runtime/createClientWorld";
 export { createViewerWorld } from "./runtime/createViewerWorld";
+export {
+  createEditorWorld,
+  initEditorWorld,
+  EditorWorld,
+} from "./runtime/createEditorWorld";
+export type { EditorWorldOptions } from "./runtime/createEditorWorld";
 export { World } from "./core/World";
+
+// Export editor systems
+export {
+  EditorCameraSystem,
+  EditorSelectionSystem,
+  EditorGizmoSystem,
+} from "./systems/editor";
+export type {
+  EditorCameraMode,
+  EditorCameraConfig,
+  CameraBookmark,
+  Selectable,
+  SelectionChangeEvent,
+  EditorSelectionConfig,
+  TransformMode,
+  TransformSpace,
+  TransformEvent,
+  EditorGizmoConfig,
+} from "./systems/editor";
 
 // Export entity classes
 export { Entity } from "./entities/Entity";
@@ -277,8 +302,8 @@ export { Curve } from "./extras/animation/Curve";
 export { buttons, propToLabel } from "./extras/ui/buttons";
 // GLTFLoader export disabled due to TypeScript declaration generation issues
 // Users can import it directly: import { GLTFLoader } from './libs/gltfloader/GLTFLoader';
-export { CSM } from "./libs/csm/CSM";
-export type { CSMOptions } from "./libs/csm/CSM";
+
+// NOTE: CSM (WebGL) removed - use CSMShadowNode from three/addons/csm/CSMShadowNode.js for WebGPU
 
 // PhysX asset path helper function
 export function getPhysXAssetPath(assetName: string): string {

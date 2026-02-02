@@ -15,6 +15,7 @@ import {
   Globe,
   Route,
   Sprout,
+  Gamepad2,
 } from "lucide-react";
 import React, { useState, useRef, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -22,6 +23,7 @@ import { Link, useLocation } from "react-router-dom";
 import { ROUTES } from "../../constants";
 
 // Procedural generator menu items
+// Note: Leaf Clusters consolidated into Trees
 const GENERATOR_ITEMS = [
   { route: ROUTES.BUILDING_GEN, label: "Buildings & Towns", icon: Building2 },
   { route: ROUTES.TERRAIN_GEN, label: "Terrain", icon: Mountain },
@@ -29,7 +31,11 @@ const GENERATOR_ITEMS = [
   { route: ROUTES.TREE_GEN, label: "Trees", icon: TreePine },
   { route: ROUTES.ROCK_GEN, label: "Rocks", icon: Globe },
   { route: ROUTES.PLANT_GEN, label: "Plants", icon: Flower2 },
-  { route: ROUTES.GRASS_GEN, label: "Grass", icon: Sprout },
+  {
+    route: ROUTES.VEGETATION_GEN,
+    label: "Vegetation (Grass+Flowers)",
+    icon: Sprout,
+  },
 ] as const;
 
 const Navigation: React.FC = () => {
@@ -168,6 +174,15 @@ const Navigation: React.FC = () => {
           >
             <Globe size={18} />
             <span>World</span>
+          </Link>
+
+          <Link
+            to={ROUTES.WORLD_EDITOR}
+            className={navLinkClass(ROUTES.WORLD_EDITOR)}
+            title="World Editor using real game systems"
+          >
+            <Gamepad2 size={18} />
+            <span>Editor</span>
           </Link>
 
           <Link

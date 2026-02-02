@@ -10,9 +10,11 @@ import { ArmorFittingPage } from "./pages/ArmorFittingPage";
 import { AssetsPage } from "./pages/AssetsPage";
 import { BuildingGenPage } from "./pages/BuildingGenPage";
 import { EquipmentPage } from "./pages/EquipmentPage";
+import { FlowerGenPage } from "./pages/FlowerGenPage";
 import { GenerationPage } from "./pages/GenerationPage";
 import { GrassGenPage } from "./pages/GrassGenPage";
 import { HandRiggingPage } from "./pages/HandRiggingPage";
+// LeafClusterPage consolidated into TreeGenPage - clusters are now auto-generated
 import { ManifestsPage } from "./pages/ManifestsPage";
 import { PlantGenPage } from "./pages/PlantGenPage";
 import { RetargetAnimatePage } from "./pages/RetargetAnimatePage";
@@ -20,7 +22,9 @@ import { RoadsGenPage } from "./pages/RoadsGenPage";
 import { RockGenPage } from "./pages/RockGenPage";
 import { TerrainGenPage } from "./pages/TerrainGenPage";
 import { TreeGenPage } from "./pages/TreeGenPage";
+import { VegetationGenPage } from "./pages/VegetationGenPage";
 import { WorldBuilderPage } from "./pages/WorldBuilderPage";
+import { WorldEditorPage } from "./pages/WorldEditorPage";
 
 function AppLayout() {
   return (
@@ -67,6 +71,7 @@ function AppLayout() {
               element={<RetargetAnimatePage />}
             />
             <Route path={ROUTES.WORLD_BUILDER} element={<WorldBuilderPage />} />
+            <Route path={ROUTES.WORLD_EDITOR} element={<WorldEditorPage />} />
             <Route path={ROUTES.MANIFESTS} element={<ManifestsPage />} />
 
             {/* Procedural Generators */}
@@ -77,7 +82,11 @@ function AppLayout() {
             <Route path={ROUTES.TERRAIN_GEN} element={<TerrainGenPage />} />
             <Route path={ROUTES.ROADS_GEN} element={<RoadsGenPage />} />
             <Route path={ROUTES.GRASS_GEN} element={<GrassGenPage />} />
-            <Route path={ROUTES.GRASS_GEN} element={<GrassGenPage />} />
+            <Route path={ROUTES.FLOWER_GEN} element={<FlowerGenPage />} />
+            <Route
+              path={ROUTES.VEGETATION_GEN}
+              element={<VegetationGenPage />}
+            />
 
             {/* Catch-all redirect */}
             <Route

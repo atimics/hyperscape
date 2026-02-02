@@ -549,8 +549,8 @@ export { Curve } from "./extras/animation/Curve";
 export { buttons, propToLabel } from "./extras/ui/buttons";
 // GLTFLoader export disabled due to TypeScript declaration generation issues
 // Users can import it directly: import { GLTFLoader } from './libs/gltfloader/GLTFLoader';
-export { CSM } from "./libs/csm/CSM";
-export type { CSMOptions } from "./libs/csm/CSM";
+
+// NOTE: CSM (WebGL) removed - use CSMShadowNode from three/addons/csm/CSMShadowNode.js for WebGPU
 
 // PhysX asset path helper function
 export function getPhysXAssetPath(assetName: string): string {

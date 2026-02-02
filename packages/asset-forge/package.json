@@ -53,6 +53,7 @@
     "@hyperscape/decimation": "workspace:*",
     "@hyperscape/impostor": "workspace:*",
     "@hyperscape/procgen": "workspace:*",
+    "@hyperscape/shared": "workspace:*",
     "@mediapipe/hands": "^0.4.1675469240",
     "@pixiv/three-vrm": "^3.4.3",
     "@react-three/drei": "^10.7.6",

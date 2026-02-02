@@ -504,6 +504,8 @@ export interface WorldOptions {
   wsUrl?: string;
   name?: string;
   avatar?: string;
+  /** DOM element to render into (client/editor only) */
+  viewport?: HTMLElement;
 }
 
 // Use the actual World class from core/World.ts

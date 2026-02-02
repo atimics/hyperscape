@@ -7,11 +7,15 @@ export type NavigationView =
   | "armorFitting"
   | "retargetAnimate"
   | "worldBuilder"
+  | "worldEditor" // New: Uses real game systems
   | "manifests"
   | "buildingGen"
   | "treeGen"
+  // leafClusterGen removed - consolidated into treeGen
   | "rockGen"
   | "plantGen"
   | "terrainGen"
   | "roadsGen"
-  | "grassGen";
+  | "grassGen"
+  | "flowerGen"
+  | "vegetationGen";
