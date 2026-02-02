@@ -46,6 +46,7 @@ import {
   validateTransactionRequest,
   executeSecureTransaction,
   executeInventoryTransaction,
+  emitInventorySyncEvents,
   sendToSocket,
   sendErrorToast,
   sendSuccessToast,
@@ -358,7 +359,12 @@ export async function handleStoreBuy(
     coins: result.newCoinBalance,
   });
 
-  // NOTE: emitInventorySyncEvents removed - reloadFromDatabase() handles in-memory sync
+  // Sync CoinPouchSystem in-memory cache with the new DB balance.
+  // reloadFromDatabase() only reloads inventory items, NOT coins.
+  // Without this, the stale in-memory balance overwrites the DB on next auto-save.
+  emitInventorySyncEvents(ctx, {
+    newCoinBalance: result.newCoinBalance,
+  });
 
   sendSuccessToast(
     socket,
@@ -580,7 +586,12 @@ export async function handleStoreSell(
     coins: result.newCoinBalance,
   });
 
-  // NOTE: emitInventorySyncEvents removed - reloadFromDatabase() handles in-memory sync
+  // Sync CoinPouchSystem in-memory cache with the new DB balance.
+  // reloadFromDatabase() only reloads inventory items, NOT coins.
+  // Without this, the stale in-memory balance overwrites the DB on next auto-save.
+  emitInventorySyncEvents(ctx, {
+    newCoinBalance: result.newCoinBalance,
+  });
 
   sendSuccessToast(
     socket,
