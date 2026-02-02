@@ -692,7 +692,6 @@ export class DevStats extends System {
     this.frameTriangles = info.render.triangles;
 
     // Reset for next frame so values don't accumulate forever
-    // Both WebGLRenderer and WebGPURenderer support info.reset()
     if (info.reset) {
       info.reset();
     }

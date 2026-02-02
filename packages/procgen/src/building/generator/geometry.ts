@@ -4,6 +4,274 @@
  */
 
 import * as THREE from "three";
+import { applyWorldSpaceUVs, applyWallUVs, applyFloorUVs } from "./uvUtils";
+
+// ============================================================================
+// TANGENT COMPUTATION FOR NON-INDEXED GEOMETRY
+// ============================================================================
+
+/**
+ * Compute tangents for non-indexed geometry using MikkTSpace algorithm.
+ *
+ * For each triangle, computes the tangent from the UV gradient direction.
+ * This ensures tangents align with UV mapping for correct normal map application.
+ *
+ * Requires: position, normal, uv attributes (all non-indexed)
+ *
+ * @param geometry - Non-indexed BufferGeometry with position, normal, uv
+ * @returns The same geometry with tangent attribute added (vec4: xyz = tangent, w = handedness)
+ */
+/**
+ * Compute flat face normals for non-indexed geometry.
+ *
+ * For each triangle, computes the face normal from the cross product of edge vectors
+ * and assigns the same normal to all three vertices of that triangle.
+ * This produces flat shading with hard edges - correct for architectural geometry.
+ *
+ * IMPORTANT: Unlike computeVertexNormals() which may smooth normals at shared vertices,
+ * this function guarantees each face has its own independent normal.
+ *
+ * @param geometry - Non-indexed BufferGeometry (must have position attribute)
+ * @returns The same geometry with flat normal attribute added/replaced
+ */
+export function computeFlatNormals(
+  geometry: THREE.BufferGeometry,
+): THREE.BufferGeometry {
+  const positionAttr = geometry.getAttribute("position");
+
+  if (!positionAttr) {
+    // This is a critical error - geometry without positions is invalid
+    throw new Error(
+      "[computeFlatNormals] Missing position attribute - geometry is invalid",
+    );
+  }
+
+  const vertexCount = positionAttr.count;
+  if (vertexCount % 3 !== 0) {
+    // This indicates corrupted geometry - should not happen with valid Three.js geometry
+    throw new Error(
+      `[computeFlatNormals] Vertex count (${vertexCount}) not divisible by 3 - geometry is not valid triangles`,
+    );
+  }
+
+  if (vertexCount === 0) {
+    // Empty geometry is valid but has nothing to compute
+    return geometry;
+  }
+
+  const normals = new Float32Array(vertexCount * 3);
+
+  // Temporary vectors for calculations
+  const p0 = new THREE.Vector3();
+  const p1 = new THREE.Vector3();
+  const p2 = new THREE.Vector3();
+  const edge1 = new THREE.Vector3();
+  const edge2 = new THREE.Vector3();
+  const faceNormal = new THREE.Vector3();
+
+  // Process each triangle
+  const triangleCount = vertexCount / 3;
+  for (let t = 0; t < triangleCount; t++) {
+    const i0 = t * 3;
+    const i1 = t * 3 + 1;
+    const i2 = t * 3 + 2;
+
+    // Get vertex positions
+    p0.set(positionAttr.getX(i0), positionAttr.getY(i0), positionAttr.getZ(i0));
+    p1.set(positionAttr.getX(i1), positionAttr.getY(i1), positionAttr.getZ(i1));
+    p2.set(positionAttr.getX(i2), positionAttr.getY(i2), positionAttr.getZ(i2));
+
+    // Compute edge vectors
+    edge1.subVectors(p1, p0);
+    edge2.subVectors(p2, p0);
+
+    // Compute face normal from cross product (CCW winding = outward normal)
+    faceNormal.crossVectors(edge1, edge2);
+
+    // Handle degenerate triangles (zero-area)
+    const lengthSq = faceNormal.lengthSq();
+    if (lengthSq > 1e-12) {
+      faceNormal.divideScalar(Math.sqrt(lengthSq));
+    } else {
+      // Degenerate triangle - use default up normal
+      faceNormal.set(0, 1, 0);
+    }
+
+    // Store the same normal for all 3 vertices of this triangle
+    for (let vi = 0; vi < 3; vi++) {
+      const idx = (t * 3 + vi) * 3;
+      normals[idx] = faceNormal.x;
+      normals[idx + 1] = faceNormal.y;
+      normals[idx + 2] = faceNormal.z;
+    }
+  }
+
+  // Add or replace normal attribute
+  geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+
+  return geometry;
+}
+
+/**
+ * Compute tangents for non-indexed geometry using MikkTSpace-like algorithm.
+ *
+ * NOTE: This function is currently NOT INTEGRATED into the building generation pipeline.
+ * The current building materials use procedural patterns (TSL) that don't require normal maps,
+ * so tangents are not needed. This function is available for future use when/if
+ * normal-mapped materials are added.
+ *
+ * To integrate: Call this after computeFlatNormals() in removeInternalFaces() or
+ * after geometry is cleaned in the BuildingGenerator.
+ *
+ * @param geometry - Non-indexed BufferGeometry with position, normal, and uv attributes
+ * @returns The same geometry with tangent attribute added (vec4: xyz = tangent, w = handedness)
+ */
+export function computeTangentsForNonIndexed(
+  geometry: THREE.BufferGeometry,
+): THREE.BufferGeometry {
+  const positionAttr = geometry.getAttribute("position");
+  const normalAttr = geometry.getAttribute("normal");
+  const uvAttr = geometry.getAttribute("uv");
+
+  if (!positionAttr || !normalAttr || !uvAttr) {
+    console.warn(
+      "[computeTangentsForNonIndexed] Missing required attributes (position, normal, uv)",
+    );
+    return geometry;
+  }
+
+  const vertexCount = positionAttr.count;
+  if (vertexCount % 3 !== 0) {
+    console.warn(
+      "[computeTangentsForNonIndexed] Vertex count not divisible by 3 (not triangles)",
+    );
+    return geometry;
+  }
+
+  // Tangent storage (vec4: xyz = tangent direction, w = handedness)
+  const tangents = new Float32Array(vertexCount * 4);
+
+  // Temporary vectors for calculations
+  const p0 = new THREE.Vector3();
+  const p1 = new THREE.Vector3();
+  const p2 = new THREE.Vector3();
+  const edge1 = new THREE.Vector3();
+  const edge2 = new THREE.Vector3();
+  const normal = new THREE.Vector3();
+  const tangent = new THREE.Vector3();
+  const bitangent = new THREE.Vector3();
+
+  // Process each triangle
+  const triangleCount = vertexCount / 3;
+  for (let t = 0; t < triangleCount; t++) {
+    const i0 = t * 3;
+    const i1 = t * 3 + 1;
+    const i2 = t * 3 + 2;
+
+    // Get vertex positions
+    p0.set(positionAttr.getX(i0), positionAttr.getY(i0), positionAttr.getZ(i0));
+    p1.set(positionAttr.getX(i1), positionAttr.getY(i1), positionAttr.getZ(i1));
+    p2.set(positionAttr.getX(i2), positionAttr.getY(i2), positionAttr.getZ(i2));
+
+    // Get UVs
+    const u0 = uvAttr.getX(i0);
+    const v0 = uvAttr.getY(i0);
+    const u1 = uvAttr.getX(i1);
+    const v1 = uvAttr.getY(i1);
+    const u2 = uvAttr.getX(i2);
+    const v2 = uvAttr.getY(i2);
+
+    // Compute edge vectors
+    edge1.subVectors(p1, p0);
+    edge2.subVectors(p2, p0);
+
+    // Compute UV deltas
+    const deltaU1 = u1 - u0;
+    const deltaV1 = v1 - v0;
+    const deltaU2 = u2 - u0;
+    const deltaV2 = v2 - v0;
+
+    // Compute tangent using MikkTSpace formula
+    const det = deltaU1 * deltaV2 - deltaU2 * deltaV1;
+
+    if (Math.abs(det) < 1e-8) {
+      // Degenerate UV mapping - fall back to normal-derived tangent
+      normal.set(normalAttr.getX(i0), normalAttr.getY(i0), normalAttr.getZ(i0));
+
+      // For mostly-horizontal surfaces, use world X as tangent
+      // For mostly-vertical surfaces, compute tangent from cross(up, normal)
+      if (Math.abs(normal.y) > 0.7) {
+        tangent.set(1, 0, 0);
+      } else {
+        tangent.set(0, 1, 0).cross(normal).normalize();
+        if (tangent.lengthSq() < 0.001) {
+          tangent.set(1, 0, 0);
+        }
+      }
+
+      // Store tangent for all 3 vertices (handedness = 1)
+      for (let vi = 0; vi < 3; vi++) {
+        const idx = (t * 3 + vi) * 4;
+        tangents[idx] = tangent.x;
+        tangents[idx + 1] = tangent.y;
+        tangents[idx + 2] = tangent.z;
+        tangents[idx + 3] = 1.0; // Handedness
+      }
+      continue;
+    }
+
+    const invDet = 1.0 / det;
+
+    // Tangent: direction of increasing U
+    tangent
+      .set(
+        invDet * (deltaV2 * edge1.x - deltaV1 * edge2.x),
+        invDet * (deltaV2 * edge1.y - deltaV1 * edge2.y),
+        invDet * (deltaV2 * edge1.z - deltaV1 * edge2.z),
+      )
+      .normalize();
+
+    // Bitangent: direction of increasing V
+    bitangent
+      .set(
+        invDet * (-deltaU2 * edge1.x + deltaU1 * edge2.x),
+        invDet * (-deltaU2 * edge1.y + deltaU1 * edge2.y),
+        invDet * (-deltaU2 * edge1.z + deltaU1 * edge2.z),
+      )
+      .normalize();
+
+    // Get face normal (average of vertex normals for this face)
+    normal
+      .set(
+        (normalAttr.getX(i0) + normalAttr.getX(i1) + normalAttr.getX(i2)) / 3,
+        (normalAttr.getY(i0) + normalAttr.getY(i1) + normalAttr.getY(i2)) / 3,
+        (normalAttr.getZ(i0) + normalAttr.getZ(i1) + normalAttr.getZ(i2)) / 3,
+      )
+      .normalize();
+
+    // Orthogonalize tangent (Gram-Schmidt)
+    const nDotT = normal.dot(tangent);
+    tangent.sub(normal.clone().multiplyScalar(nDotT)).normalize();
+
+    // Compute handedness (sign of determinant of TBN matrix)
+    const handedness =
+      normal.clone().cross(tangent).dot(bitangent) < 0 ? -1.0 : 1.0;
+
+    // Store tangent for all 3 vertices of this triangle
+    for (let vi = 0; vi < 3; vi++) {
+      const idx = (t * 3 + vi) * 4;
+      tangents[idx] = tangent.x;
+      tangents[idx + 1] = tangent.y;
+      tangents[idx + 2] = tangent.z;
+      tangents[idx + 3] = handedness;
+    }
+  }
+
+  // Add tangent attribute to geometry
+  geometry.setAttribute("tangent", new THREE.BufferAttribute(tangents, 4));
+
+  return geometry;
+}
 
 /**
  * Fractional part of a number
@@ -30,7 +298,68 @@ export function layeredNoise(x: number, y: number, z: number): number {
 }
 
 /**
- * Apply vertex colors to a geometry with optional noise variation
+ * Configuration for geometry attributes (vertex colors and UVs)
+ */
+export interface GeometryAttributeConfig {
+  /** UV scale (world units per UV unit). Default: 1.0 */
+  uvScale?: number;
+  /** Whether to apply UVs. Default: true */
+  applyUVs?: boolean;
+  /** UV offset. Default: { u: 0, v: 0 } */
+  uvOffset?: { u: number; v: number };
+  /** Noise scale for vertex color variation. Default: 0.35 */
+  noiseScale?: number;
+  /** Noise amplitude for vertex color variation. Default: 0.35 */
+  noiseAmp?: number;
+  /** Minimum shade value for vertex colors. Default: 0.78 */
+  minShade?: number;
+  /**
+   * Material ID for shader pattern selection. Stored in UV2.x
+   * Values: 0.0 = brick, 0.2 = stone, 0.4 = timber, 0.6 = stucco, 0.8 = wood
+   */
+  materialId?: number;
+}
+
+/**
+ * Apply UV2 attribute for material ID encoding.
+ * The material ID is stored in the U component for shader lookup.
+ *
+ * CRITICAL: This MUST be called on ALL building geometries to ensure consistent
+ * attributes when merging. mergeGeometries requires all input geometries to have
+ * the same attributes, or it will produce undefined/garbage results.
+ *
+ * @param geometry - BufferGeometry to modify
+ * @param materialId - Material ID value (0.0-1.0), defaults to 0.0 (brick)
+ */
+function applyMaterialIdUV2(
+  geometry: THREE.BufferGeometry,
+  materialId: number = 0.0,
+): void {
+  const positionAttr = geometry.getAttribute("position");
+  if (!positionAttr) return;
+
+  const vertexCount = positionAttr.count;
+  const uv2 = new Float32Array(vertexCount * 2);
+
+  // Store materialId in U, 0 in V
+  for (let i = 0; i < vertexCount; i++) {
+    uv2[i * 2] = materialId;
+    uv2[i * 2 + 1] = 0.0;
+  }
+
+  geometry.setAttribute("uv2", new THREE.BufferAttribute(uv2, 2));
+}
+
+/**
+ * Surface type for UV projection
+ */
+export type SurfaceType = "wall" | "floor" | "ceiling" | "roof" | "generic";
+
+/**
+ * Apply vertex colors to a geometry with optional noise variation.
+ *
+ * IMPORTANT: This function also adds UV2 attribute for material ID encoding
+ * to ensure ALL building geometries have consistent attributes for mergeGeometries.
  */
 export function applyVertexColors(
   geometry: THREE.BufferGeometry,
@@ -78,6 +407,139 @@ export function applyVertexColors(
   }
 
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+
+  // CRITICAL: Also add UV2 for material ID encoding (default to 0.0 = brick)
+  // This ensures ALL building geometries have consistent attributes for mergeGeometries
+  if (!geometry.hasAttribute("uv2")) {
+    const uv2 = new Float32Array(position.count * 2);
+    for (let i = 0; i < position.count; i++) {
+      uv2[i * 2] = 0.0; // materialId (default brick)
+      uv2[i * 2 + 1] = 0.0; // unused
+    }
+    geometry.setAttribute("uv2", new THREE.BufferAttribute(uv2, 2));
+  }
+}
+
+/**
+ * Apply both vertex colors and UV coordinates to a geometry.
+ *
+ * This is the primary function for preparing building geometry with:
+ * - Vertex colors for ambient occlusion and subtle color variation
+ * - UV coordinates for procedural texture sampling
+ *
+ * @param geometry - BufferGeometry to process
+ * @param color - Base color for vertex coloring
+ * @param surfaceType - Type of surface for appropriate UV projection
+ * @param config - Configuration options
+ * @param isVerticalWall - For wall surfaces, whether wall runs along Z axis
+ */
+export function applyGeometryAttributes(
+  geometry: THREE.BufferGeometry,
+  color: THREE.Color,
+  surfaceType: SurfaceType = "generic",
+  config: GeometryAttributeConfig = {},
+  isVerticalWall: boolean = false,
+): void {
+  const {
+    uvScale = 1.0,
+    applyUVs = true,
+    uvOffset = { u: 0, v: 0 },
+    noiseScale = 0.35,
+    noiseAmp = 0.35,
+    minShade = 0.78,
+    materialId,
+  } = config;
+
+  // Apply vertex colors
+  applyVertexColors(geometry, color, noiseScale, noiseAmp, minShade);
+
+  // Apply UVs based on surface type
+  if (applyUVs) {
+    const uvConfig = {
+      scale: uvScale,
+      offset: uvOffset,
+    };
+
+    switch (surfaceType) {
+      case "wall":
+        applyWallUVs(geometry, uvConfig, isVerticalWall);
+        break;
+      case "floor":
+      case "ceiling":
+        applyFloorUVs(geometry, uvConfig);
+        break;
+      case "roof":
+        // Roof uses generic world-space projection
+        // Could be enhanced with applyRoofUVs for sloped surfaces
+        applyWorldSpaceUVs(geometry, uvConfig);
+        break;
+      case "generic":
+      default:
+        applyWorldSpaceUVs(geometry, uvConfig);
+        break;
+    }
+  }
+
+  // CRITICAL: ALWAYS apply UV2 for material ID encoding
+  // mergeGeometries requires all geometries to have consistent attributes
+  // Default to 0.0 (brick) for non-wall surfaces like floors, roofs, foundations
+  applyMaterialIdUV2(geometry, materialId ?? 0.0);
+}
+
+/**
+ * Apply wall-specific geometry attributes.
+ *
+ * Convenience function for wall geometry with appropriate defaults.
+ *
+ * @param geometry - Wall geometry
+ * @param color - Wall color
+ * @param isVertical - Whether wall runs along Z axis (true) or X axis (false)
+ * @param uvScale - UV scale for texture density
+ */
+export function applyWallAttributes(
+  geometry: THREE.BufferGeometry,
+  color: THREE.Color,
+  isVertical: boolean,
+  uvScale: number = 1.0,
+  materialId?: number,
+): void {
+  applyGeometryAttributes(
+    geometry,
+    color,
+    "wall",
+    { uvScale, materialId },
+    isVertical,
+  );
+}
+
+/**
+ * Apply floor/ceiling-specific geometry attributes.
+ *
+ * @param geometry - Floor or ceiling geometry
+ * @param color - Surface color
+ * @param uvScale - UV scale for texture density
+ */
+export function applyFloorAttributes(
+  geometry: THREE.BufferGeometry,
+  color: THREE.Color,
+  uvScale: number = 1.0,
+): void {
+  applyGeometryAttributes(geometry, color, "floor", { uvScale });
+}
+
+/**
+ * Apply roof-specific geometry attributes.
+ *
+ * @param geometry - Roof geometry
+ * @param color - Roof color
+ * @param uvScale - UV scale for texture density
+ */
+export function applyRoofAttributes(
+  geometry: THREE.BufferGeometry,
+  color: THREE.Color,
+  uvScale: number = 0.3,
+): void {
+  applyGeometryAttributes(geometry, color, "roof", { uvScale });
 }
 
 /**
@@ -102,8 +564,16 @@ export function removeInternalFaces(
   const nonIndexed = geometry.toNonIndexed();
   const position = nonIndexed.attributes.position;
   const color = nonIndexed.attributes.color;
+  const uv = nonIndexed.attributes.uv;
+  const uv2 = nonIndexed.attributes.uv2; // CRITICAL: Preserve UV2 for material ID
+  const originalNormal = nonIndexed.attributes.normal; // CRITICAL: Preserve original normals!
   const posArray = position.array as Float32Array;
   const colorArray = color ? (color.array as Float32Array) : null;
+  const uvArray = uv ? (uv.array as Float32Array) : null;
+  const uv2Array = uv2 ? (uv2.array as Float32Array) : null;
+  const originalNormalArray = originalNormal
+    ? (originalNormal.array as Float32Array)
+    : null;
   const triCount = position.count / 3;
 
   const precision = 1000; // Snap to 1mm precision
@@ -227,19 +697,40 @@ export function removeInternalFaces(
   }
 
   // Step 4: Build cleaned geometry with only external faces
+  // CRITICAL: Preserve original normals from BoxGeometry - they are correct!
   const newPos = new Float32Array(keptCount * 9);
+  const newNormal = new Float32Array(keptCount * 9); // Preserve original normals
   const newColor = colorArray ? new Float32Array(keptCount * 9) : null;
+  const newUV = uvArray ? new Float32Array(keptCount * 6) : null; // 2 components per vertex, 3 vertices per tri = 6
+  const newUV2 = uv2Array ? new Float32Array(keptCount * 6) : null; // CRITICAL: Preserve UV2 for material ID
   let dst = 0;
+  let uvDst = 0;
 
   for (let tri = 0; tri < triCount; tri += 1) {
     if (!keep[tri]) continue;
     const src = tri * 9;
+    const uvSrc = tri * 6;
     for (let i = 0; i < 9; i += 1) {
       newPos[dst + i] = posArray[src + i];
       if (newColor && colorArray) {
         newColor[dst + i] = colorArray[src + i];
       }
+      // Preserve original normals from the input geometry
+      if (originalNormalArray) {
+        newNormal[dst + i] = originalNormalArray[src + i];
+      }
     }
+    if (newUV && uvArray) {
+      for (let i = 0; i < 6; i += 1) {
+        newUV[uvDst + i] = uvArray[uvSrc + i];
+      }
+    }
+    if (newUV2 && uv2Array) {
+      for (let i = 0; i < 6; i += 1) {
+        newUV2[uvDst + i] = uv2Array[uvSrc + i];
+      }
+    }
+    uvDst += 6;
     dst += 9;
   }
 
@@ -251,10 +742,22 @@ export function removeInternalFaces(
   if (newColor) {
     cleaned.setAttribute("color", new THREE.BufferAttribute(newColor, 3));
   }
+  if (newUV) {
+    cleaned.setAttribute("uv", new THREE.BufferAttribute(newUV, 2));
+  }
+  if (newUV2) {
+    cleaned.setAttribute("uv2", new THREE.BufferAttribute(newUV2, 2));
+  }
 
-  // Step 5: Compute per-face normals BEFORE any vertex merging
-  // This ensures hard edges at corners (correct for architectural geometry)
-  cleaned.computeVertexNormals();
+  // Step 5: Set normals - prefer original normals from BoxGeometry (they are correct!)
+  // Only compute from scratch if original normals were not available
+  if (originalNormalArray) {
+    // Use preserved original normals - these are correct from BoxGeometry
+    cleaned.setAttribute("normal", new THREE.BufferAttribute(newNormal, 3));
+  } else {
+    // Fallback: compute flat normals from vertex positions
+    computeFlatNormals(cleaned);
+  }
 
   // Step 6: Smart vertex merging - only merge vertices with SAME position, color, AND normal
   // This preserves:
@@ -271,10 +774,10 @@ export function removeInternalFaces(
 }
 
 /**
- * Merge vertices that have the same position, color, AND normal.
+ * Merge vertices that have the same position, color, normal, UV, AND UV2.
  * Unlike Three.js mergeVertices, this preserves hard edges and color boundaries.
  *
- * @param geometry - Non-indexed geometry with position, color, and normal attributes
+ * @param geometry - Non-indexed geometry with position, color, normal, uv, and uv2 attributes
  * @param posPrecision - Position precision (vertices within 1/precision are considered same)
  * @param colorPrecision - Color precision (colors within 1/colorPrecision are considered same)
  */
@@ -286,20 +789,25 @@ function mergeVerticesPreservingAttributes(
   const position = geometry.attributes.position;
   const color = geometry.attributes.color;
   const normal = geometry.attributes.normal;
+  const uv = geometry.attributes.uv;
+  const uv2 = geometry.attributes.uv2; // CRITICAL: Preserve UV2 for material ID
 
   if (!position) return geometry;
 
   const vertexCount = position.count;
+  const uvPrecision = 1000; // UV precision
 
-  // Build a map of unique vertices (position + color + normal)
+  // Build a map of unique vertices (position + color + normal + uv + uv2)
   const vertexMap = new Map<string, number>();
   const uniquePositions: number[] = [];
   const uniqueColors: number[] = [];
   const uniqueNormals: number[] = [];
+  const uniqueUVs: number[] = [];
+  const uniqueUV2s: number[] = [];
   const indexMap: number[] = []; // Maps old vertex index to new index
 
   for (let i = 0; i < vertexCount; i++) {
-    // Create key from position, color, and normal
+    // Create key from position, color, normal, uv, and uv2
     const px = Math.round(position.getX(i) * posPrecision);
     const py = Math.round(position.getY(i) * posPrecision);
     const pz = Math.round(position.getZ(i) * posPrecision);
@@ -321,6 +829,19 @@ function mergeVerticesPreservingAttributes(
       key += `|${nx},${ny},${nz}`;
     }
 
+    if (uv) {
+      const uvU = Math.round(uv.getX(i) * uvPrecision);
+      const uvV = Math.round(uv.getY(i) * uvPrecision);
+      key += `|${uvU},${uvV}`;
+    }
+
+    if (uv2) {
+      // UV2 stores material ID, include in key to preserve material boundaries
+      const uv2U = Math.round(uv2.getX(i) * uvPrecision);
+      const uv2V = Math.round(uv2.getY(i) * uvPrecision);
+      key += `|${uv2U},${uv2V}`;
+    }
+
     let newIndex = vertexMap.get(key);
     if (newIndex === undefined) {
       // New unique vertex
@@ -337,6 +858,12 @@ function mergeVerticesPreservingAttributes(
       }
       if (normal) {
         uniqueNormals.push(normal.getX(i), normal.getY(i), normal.getZ(i));
+      }
+      if (uv) {
+        uniqueUVs.push(uv.getX(i), uv.getY(i));
+      }
+      if (uv2) {
+        uniqueUV2s.push(uv2.getX(i), uv2.getY(i));
       }
     }
 
@@ -366,6 +893,20 @@ function mergeVerticesPreservingAttributes(
     result.setAttribute(
       "normal",
       new THREE.BufferAttribute(new Float32Array(uniqueNormals), 3),
+    );
+  }
+
+  if (uv && uniqueUVs.length > 0) {
+    result.setAttribute(
+      "uv",
+      new THREE.BufferAttribute(new Float32Array(uniqueUVs), 2),
+    );
+  }
+
+  if (uv2 && uniqueUV2s.length > 0) {
+    result.setAttribute(
+      "uv2",
+      new THREE.BufferAttribute(new Float32Array(uniqueUV2s), 2),
     );
   }
 
@@ -518,6 +1059,142 @@ export function createFlatQuad(
   return geometry;
 }
 
+// ============================================================
+// INTERIOR SURFACE GEOMETRY - NO SIDE FACES
+// ============================================================
+
+/**
+ * Create a flat plane for interior floors (top face only, no side faces).
+ * This prevents z-fighting with walls and eliminates unnecessary geometry.
+ *
+ * @param width - Width of the plane (X axis)
+ * @param depth - Depth of the plane (Z axis)
+ * @returns PlaneGeometry rotated to face upward (+Y)
+ */
+export function createFloorPlane(
+  width: number,
+  depth: number,
+): THREE.BufferGeometry {
+  // PlaneGeometry is created facing +Z by default, rotate to face +Y
+  const geometry = new THREE.PlaneGeometry(width, depth);
+  geometry.rotateX(-Math.PI / 2);
+  return geometry;
+}
+
+/**
+ * Create a flat plane for interior ceilings (bottom face only, no side faces).
+ * This prevents z-fighting with walls and eliminates unnecessary geometry.
+ *
+ * @param width - Width of the plane (X axis)
+ * @param depth - Depth of the plane (Z axis)
+ * @returns PlaneGeometry rotated to face downward (-Y)
+ */
+export function createCeilingPlane(
+  width: number,
+  depth: number,
+): THREE.BufferGeometry {
+  // PlaneGeometry is created facing +Z by default, rotate to face -Y
+  const geometry = new THREE.PlaneGeometry(width, depth);
+  geometry.rotateX(Math.PI / 2);
+  return geometry;
+}
+
+/**
+ * Create floor plane geometry for a merged region with per-edge insets.
+ * Uses a single upward-facing plane instead of a box - no side faces.
+ *
+ * @param rect - The grid rectangle from greedy meshing
+ * @param cellSize - Size of each cell in world units
+ * @param y - Y position of the floor surface (top of floor slab)
+ * @param gridWidth - Total grid width in cells
+ * @param gridDepth - Total grid depth in cells
+ * @param edgeInsets - Per-edge inset amounts (0 for interior edges, INTERIOR_INSET for exterior)
+ */
+export function createInteriorFloorGeometry(
+  rect: GridRect,
+  cellSize: number,
+  y: number,
+  gridWidth: number,
+  gridDepth: number,
+  edgeInsets: EdgeInsets,
+): THREE.BufferGeometry {
+  const halfGridWidth = (gridWidth * cellSize) / 2;
+  const halfGridDepth = (gridDepth * cellSize) / 2;
+
+  // Calculate base world position (without insets)
+  const baseStartX = rect.col * cellSize - halfGridWidth;
+  const baseStartZ = rect.row * cellSize - halfGridDepth;
+  const baseWidth = rect.width * cellSize;
+  const baseDepth = rect.height * cellSize;
+
+  // Apply per-edge insets
+  const startX = baseStartX + edgeInsets.west;
+  const startZ = baseStartZ + edgeInsets.north;
+  const width = baseWidth - edgeInsets.west - edgeInsets.east;
+  const depth = baseDepth - edgeInsets.north - edgeInsets.south;
+
+  // Ensure minimum size to avoid degenerate geometry
+  const finalWidth = Math.max(width, 0.01);
+  const finalDepth = Math.max(depth, 0.01);
+
+  const centerX = startX + finalWidth / 2;
+  const centerZ = startZ + finalDepth / 2;
+
+  // Use flat plane instead of box - only visible face, no side faces
+  const geometry = createFloorPlane(finalWidth, finalDepth);
+  geometry.translate(centerX, y, centerZ);
+
+  return geometry;
+}
+
+/**
+ * Create ceiling plane geometry for a merged region with per-edge insets.
+ * Uses a single downward-facing plane instead of a box - no side faces.
+ *
+ * @param rect - The grid rectangle from greedy meshing
+ * @param cellSize - Size of each cell in world units
+ * @param y - Y position of the ceiling surface (bottom of ceiling slab)
+ * @param gridWidth - Total grid width in cells
+ * @param gridDepth - Total grid depth in cells
+ * @param edgeInsets - Per-edge inset amounts (0 for interior edges, INTERIOR_INSET for exterior)
+ */
+export function createInteriorCeilingGeometry(
+  rect: GridRect,
+  cellSize: number,
+  y: number,
+  gridWidth: number,
+  gridDepth: number,
+  edgeInsets: EdgeInsets,
+): THREE.BufferGeometry {
+  const halfGridWidth = (gridWidth * cellSize) / 2;
+  const halfGridDepth = (gridDepth * cellSize) / 2;
+
+  // Calculate base world position (without insets)
+  const baseStartX = rect.col * cellSize - halfGridWidth;
+  const baseStartZ = rect.row * cellSize - halfGridDepth;
+  const baseWidth = rect.width * cellSize;
+  const baseDepth = rect.height * cellSize;
+
+  // Apply per-edge insets
+  const startX = baseStartX + edgeInsets.west;
+  const startZ = baseStartZ + edgeInsets.north;
+  const width = baseWidth - edgeInsets.west - edgeInsets.east;
+  const depth = baseDepth - edgeInsets.north - edgeInsets.south;
+
+  // Ensure minimum size to avoid degenerate geometry
+  const finalWidth = Math.max(width, 0.01);
+  const finalDepth = Math.max(depth, 0.01);
+
+  const centerX = startX + finalWidth / 2;
+  const centerZ = startZ + finalDepth / 2;
+
+  // Use flat plane instead of box - only visible face, no side faces
+  const geometry = createCeilingPlane(finalWidth, finalDepth);
+  geometry.translate(centerX, y, centerZ);
+
+  return geometry;
+}
+
 /**
  * Create geometry for a merged floor/ceiling region
  */
@@ -546,6 +1223,140 @@ export function createMergedFloorGeometry(
   geometry.translate(centerX, y, centerZ);
 
   return geometry;
+}
+
+/**
+ * Per-edge inset configuration for floor/ceiling tiles
+ */
+export interface EdgeInsets {
+  /** Inset from west (negative X) edge */
+  west: number;
+  /** Inset from east (positive X) edge */
+  east: number;
+  /** Inset from north (negative Z) edge */
+  north: number;
+  /** Inset from south (positive Z) edge */
+  south: number;
+}
+
+/**
+ * Create geometry for a merged floor/ceiling region with per-edge insets.
+ * This properly handles interior edges (no inset) vs exterior edges (inset from walls).
+ *
+ * @param rect - The grid rectangle from greedy meshing
+ * @param cellSize - Size of each cell in world units
+ * @param thickness - Thickness of the floor/ceiling slab
+ * @param y - Y position (center of slab)
+ * @param gridWidth - Total grid width in cells
+ * @param gridDepth - Total grid depth in cells
+ * @param edgeInsets - Per-edge inset amounts (0 for interior edges, WALL_THICKNESS/2 for exterior)
+ */
+export function createMergedFloorGeometryWithEdgeInsets(
+  rect: GridRect,
+  cellSize: number,
+  thickness: number,
+  y: number,
+  gridWidth: number,
+  gridDepth: number,
+  edgeInsets: EdgeInsets,
+): THREE.BufferGeometry {
+  const halfGridWidth = (gridWidth * cellSize) / 2;
+  const halfGridDepth = (gridDepth * cellSize) / 2;
+
+  // Calculate base world position (without insets)
+  const baseStartX = rect.col * cellSize - halfGridWidth;
+  const baseStartZ = rect.row * cellSize - halfGridDepth;
+  const baseWidth = rect.width * cellSize;
+  const baseDepth = rect.height * cellSize;
+
+  // Apply per-edge insets
+  const startX = baseStartX + edgeInsets.west;
+  const startZ = baseStartZ + edgeInsets.north;
+  const width = baseWidth - edgeInsets.west - edgeInsets.east;
+  const depth = baseDepth - edgeInsets.north - edgeInsets.south;
+
+  // Ensure minimum size to avoid degenerate geometry
+  const finalWidth = Math.max(width, 0.01);
+  const finalDepth = Math.max(depth, 0.01);
+
+  const centerX = startX + finalWidth / 2;
+  const centerZ = startZ + finalDepth / 2;
+
+  const geometry = new THREE.BoxGeometry(
+    finalWidth,
+    thickness,
+    finalDepth,
+    1,
+    1,
+    1,
+  );
+  geometry.translate(centerX, y, centerZ);
+
+  return geometry;
+}
+
+/**
+ * Calculate edge insets for a merged floor/ceiling rectangle based on building footprint.
+ * Returns insets for edges that are against external walls (outside the footprint).
+ *
+ * @param rect - The grid rectangle from greedy meshing
+ * @param footprint - The building footprint (true = cell exists)
+ * @param wallInset - The inset amount for edges against external walls (typically WALL_THICKNESS/2)
+ * @returns EdgeInsets with appropriate inset for each edge
+ */
+export function calculateEdgeInsetsForRect(
+  rect: GridRect,
+  footprint: boolean[][],
+  wallInset: number,
+): EdgeInsets {
+  const rows = footprint.length;
+  const cols = footprint[0]?.length ?? 0;
+
+  // Helper to check if a cell is occupied in the footprint
+  const isCellOccupied = (col: number, row: number): boolean => {
+    if (row < 0 || row >= rows || col < 0 || col >= cols) return false;
+    return footprint[row][col] ?? false;
+  };
+
+  // Check if entire edge is against external wall (no cells adjacent on that side)
+  // West edge: check column to the left of rect.col
+  let westIsExternal = true;
+  for (let r = rect.row; r < rect.row + rect.height && westIsExternal; r++) {
+    if (isCellOccupied(rect.col - 1, r)) {
+      westIsExternal = false;
+    }
+  }
+
+  // East edge: check column to the right of rect.col + rect.width - 1
+  let eastIsExternal = true;
+  for (let r = rect.row; r < rect.row + rect.height && eastIsExternal; r++) {
+    if (isCellOccupied(rect.col + rect.width, r)) {
+      eastIsExternal = false;
+    }
+  }
+
+  // North edge: check row above rect.row
+  let northIsExternal = true;
+  for (let c = rect.col; c < rect.col + rect.width && northIsExternal; c++) {
+    if (isCellOccupied(c, rect.row - 1)) {
+      northIsExternal = false;
+    }
+  }
+
+  // South edge: check row below rect.row + rect.height - 1
+  let southIsExternal = true;
+  for (let c = rect.col; c < rect.col + rect.width && southIsExternal; c++) {
+    if (isCellOccupied(c, rect.row + rect.height)) {
+      southIsExternal = false;
+    }
+  }
+
+  return {
+    west: westIsExternal ? wallInset : 0,
+    east: eastIsExternal ? wallInset : 0,
+    north: northIsExternal ? wallInset : 0,
+    south: southIsExternal ? wallInset : 0,
+  };
 }
 
 // ============================================================
@@ -904,4 +1715,327 @@ export function createChamferedWallGeometry(
   }
 
   return geometry;
+}
+
+/**
+ * Merge multiple buffer geometries into one, preserving vertex colors, UVs, and UV2.
+ * @param geometries - Array of geometries to merge
+ * @param disposeSource - Whether to dispose source geometries after merge (default: true)
+ */
+export function mergeBufferGeometries(
+  geometries: THREE.BufferGeometry[],
+  disposeSource: boolean = true,
+): THREE.BufferGeometry {
+  if (geometries.length === 0) return new THREE.BufferGeometry();
+  if (geometries.length === 1)
+    return disposeSource ? geometries[0] : geometries[0].clone();
+
+  let totalVertices = 0;
+  let hasColor = true;
+  let hasUV = true;
+  let hasUV2 = true;
+
+  for (const geo of geometries) {
+    const pos = geo.attributes.position;
+    if (pos) totalVertices += pos.count;
+    if (!geo.attributes.color) hasColor = false;
+    if (!geo.attributes.uv) hasUV = false;
+    if (!geo.attributes.uv2) hasUV2 = false;
+  }
+
+  const positions = new Float32Array(totalVertices * 3);
+  const normals = new Float32Array(totalVertices * 3);
+  const colors = hasColor ? new Float32Array(totalVertices * 3) : null;
+  const uvs = hasUV ? new Float32Array(totalVertices * 2) : null;
+  const uv2s = hasUV2 ? new Float32Array(totalVertices * 2) : null;
+
+  let offset = 0;
+  for (const geo of geometries) {
+    const pos = geo.attributes.position;
+    if (!pos) continue;
+
+    const count = pos.count;
+    positions.set(pos.array as Float32Array, offset * 3);
+
+    let normalAttr = geo.attributes.normal;
+    if (!normalAttr) {
+      geo.computeVertexNormals();
+      normalAttr = geo.attributes.normal;
+    }
+    if (normalAttr) {
+      normals.set(normalAttr.array as Float32Array, offset * 3);
+    }
+
+    if (colors && geo.attributes.color) {
+      colors.set(geo.attributes.color.array as Float32Array, offset * 3);
+    }
+    if (uvs && geo.attributes.uv) {
+      uvs.set(geo.attributes.uv.array as Float32Array, offset * 2);
+    }
+    if (uv2s && geo.attributes.uv2) {
+      uv2s.set(geo.attributes.uv2.array as Float32Array, offset * 2);
+    }
+
+    offset += count;
+  }
+
+  const result = new THREE.BufferGeometry();
+  result.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  result.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+  if (colors)
+    result.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  if (uvs) result.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  if (uv2s) result.setAttribute("uv2", new THREE.BufferAttribute(uv2s, 2));
+
+  if (disposeSource) {
+    for (const geo of geometries) geo.dispose();
+  }
+
+  return result;
+}
+
+// ============================================================
+// GEOMETRY INTERSECTION VALIDATION
+// ============================================================
+
+/**
+ * Axis-aligned bounding box for intersection detection
+ */
+export interface AABB {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
+  label: string;
+}
+
+/**
+ * Result of geometry intersection validation
+ */
+export interface GeometryIntersectionResult {
+  valid: boolean;
+  intersections: Array<{
+    label1: string;
+    label2: string;
+    overlapVolume: number;
+  }>;
+}
+
+/**
+ * Extract AABB from a BufferGeometry
+ */
+export function geometryToAABB(
+  geometry: THREE.BufferGeometry,
+  label: string,
+): AABB {
+  geometry.computeBoundingBox();
+  const box = geometry.boundingBox;
+
+  if (!box) {
+    return {
+      minX: 0,
+      maxX: 0,
+      minY: 0,
+      maxY: 0,
+      minZ: 0,
+      maxZ: 0,
+      label,
+    };
+  }
+
+  return {
+    minX: box.min.x,
+    maxX: box.max.x,
+    minY: box.min.y,
+    maxY: box.max.y,
+    minZ: box.min.z,
+    maxZ: box.max.z,
+    label,
+  };
+}
+
+/**
+ * Calculate the volume of overlap between two AABBs
+ * Returns 0 if no overlap
+ */
+export function getAABBOverlapVolume(a: AABB, b: AABB): number {
+  const overlapX = Math.max(
+    0,
+    Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX),
+  );
+  const overlapY = Math.max(
+    0,
+    Math.min(a.maxY, b.maxY) - Math.max(a.minY, b.minY),
+  );
+  const overlapZ = Math.max(
+    0,
+    Math.min(a.maxZ, b.maxZ) - Math.max(a.minZ, b.minZ),
+  );
+  return overlapX * overlapY * overlapZ;
+}
+
+/**
+ * Check if two AABBs overlap beyond a small epsilon tolerance.
+ * Returns true if boxes overlap in volume (not just touch at faces/edges/corners)
+ */
+export function aabbsOverlap(
+  a: AABB,
+  b: AABB,
+  epsilon: number = 0.001,
+): boolean {
+  // Boxes overlap if they overlap on ALL three axes
+  const overlapX = a.minX < b.maxX - epsilon && a.maxX > b.minX + epsilon;
+  const overlapY = a.minY < b.maxY - epsilon && a.maxY > b.minY + epsilon;
+  const overlapZ = a.minZ < b.maxZ - epsilon && a.maxZ > b.minZ + epsilon;
+  return overlapX && overlapY && overlapZ;
+}
+
+/**
+ * Validate that building geometry pieces don't intersect beyond a tolerance.
+ *
+ * @param geometries - Array of geometries with labels to check
+ * @param epsilon - Tolerance for intersection detection (default 0.001 = 1mm)
+ * @param minOverlapVolume - Minimum overlap volume to report (default 0.0001 = 0.1 cm³)
+ * @returns Validation result with any detected intersections
+ */
+export function validateGeometryNoIntersections(
+  geometries: Array<{ geometry: THREE.BufferGeometry; label: string }>,
+  epsilon: number = 0.001,
+  minOverlapVolume: number = 0.0001,
+): GeometryIntersectionResult {
+  const aabbs: AABB[] = geometries.map(({ geometry, label }) =>
+    geometryToAABB(geometry, label),
+  );
+
+  const intersections: GeometryIntersectionResult["intersections"] = [];
+
+  // Check all pairs of AABBs for intersection
+  for (let i = 0; i < aabbs.length; i++) {
+    for (let j = i + 1; j < aabbs.length; j++) {
+      const a = aabbs[i];
+      const b = aabbs[j];
+
+      if (aabbsOverlap(a, b, epsilon)) {
+        const overlapVolume = getAABBOverlapVolume(a, b);
+
+        // Only report if overlap volume is significant
+        if (overlapVolume > minOverlapVolume) {
+          intersections.push({
+            label1: a.label,
+            label2: b.label,
+            overlapVolume,
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    valid: intersections.length === 0,
+    intersections,
+  };
+}
+
+/**
+ * Check if a geometry's vertices are within acceptable bounds relative to another geometry.
+ * Useful for verifying floor/ceiling tiles don't protrude past wall boundaries.
+ *
+ * @param innerGeometry - The geometry that should be contained (e.g., ceiling tile)
+ * @param outerGeometry - The geometry that should contain it (e.g., wall perimeter)
+ * @param epsilon - Tolerance for boundary checking
+ * @returns True if inner geometry is within outer bounds (with epsilon tolerance)
+ */
+export function geometryWithinBounds(
+  innerGeometry: THREE.BufferGeometry,
+  outerBounds: AABB,
+  epsilon: number = 0.001,
+): boolean {
+  innerGeometry.computeBoundingBox();
+  const innerBox = innerGeometry.boundingBox;
+
+  if (!innerBox) return true;
+
+  return (
+    innerBox.min.x >= outerBounds.minX - epsilon &&
+    innerBox.max.x <= outerBounds.maxX + epsilon &&
+    innerBox.min.y >= outerBounds.minY - epsilon &&
+    innerBox.max.y <= outerBounds.maxY + epsilon &&
+    innerBox.min.z >= outerBounds.minZ - epsilon &&
+    innerBox.max.z <= outerBounds.maxZ + epsilon
+  );
+}
+
+/**
+ * Verify a floor/ceiling tile doesn't extend past wall boundaries on any side.
+ * This is a more targeted check than general intersection detection.
+ *
+ * @param tileGeometry - The floor/ceiling tile geometry
+ * @param wallInset - The expected inset from wall surfaces (typically WALL_THICKNESS/2)
+ * @param cellBounds - The cell boundaries where the tile exists
+ * @param externalEdges - Which edges of the cell have external walls
+ * @param epsilon - Tolerance for the check
+ * @returns Object with validity and any violations
+ */
+export function validateTileInset(
+  tileGeometry: THREE.BufferGeometry,
+  wallInset: number,
+  cellBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  externalEdges: {
+    north: boolean;
+    south: boolean;
+    east: boolean;
+    west: boolean;
+  },
+  epsilon: number = 0.001,
+): { valid: boolean; violations: string[] } {
+  tileGeometry.computeBoundingBox();
+  const box = tileGeometry.boundingBox;
+
+  if (!box) return { valid: true, violations: [] };
+
+  const violations: string[] = [];
+
+  // Check each edge
+  if (externalEdges.west) {
+    const expectedMinX = cellBounds.minX + wallInset;
+    if (box.min.x < expectedMinX - epsilon) {
+      violations.push(
+        `West edge extends ${(expectedMinX - box.min.x).toFixed(4)}m past expected inset`,
+      );
+    }
+  }
+
+  if (externalEdges.east) {
+    const expectedMaxX = cellBounds.maxX - wallInset;
+    if (box.max.x > expectedMaxX + epsilon) {
+      violations.push(
+        `East edge extends ${(box.max.x - expectedMaxX).toFixed(4)}m past expected inset`,
+      );
+    }
+  }
+
+  if (externalEdges.north) {
+    const expectedMinZ = cellBounds.minZ + wallInset;
+    if (box.min.z < expectedMinZ - epsilon) {
+      violations.push(
+        `North edge extends ${(expectedMinZ - box.min.z).toFixed(4)}m past expected inset`,
+      );
+    }
+  }
+
+  if (externalEdges.south) {
+    const expectedMaxZ = cellBounds.maxZ - wallInset;
+    if (box.max.z > expectedMaxZ + epsilon) {
+      violations.push(
+        `South edge extends ${(box.max.z - expectedMaxZ).toFixed(4)}m past expected inset`,
+      );
+    }
+  }
+
+  return {
+    valid: violations.length === 0,
+    violations,
+  };
 }

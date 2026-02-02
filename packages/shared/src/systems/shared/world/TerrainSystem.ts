@@ -147,6 +147,8 @@ export class TerrainSystem extends System {
   private terrainUpdateIntervalId?: NodeJS.Timeout;
   private serializationIntervalId?: NodeJS.Timeout;
   private boundingBoxIntervalId?: NodeJS.Timeout;
+  /** Timeout ID for fallback terrain generation if ROADS_GENERATED event is delayed */
+  private roadsTimeoutId?: NodeJS.Timeout;
   private activeChunks = new Set<string>();
 
   private coreChunkRange = 2; // 9 core chunks (5x5 grid)
@@ -1510,6 +1512,12 @@ export class TerrainSystem extends System {
     // This avoids generating tiles twice (once without roads, once with)
     // getHeightAt() works without tiles, so RoadNetworkSystem can still query heights
     this.world.on(EventType.ROADS_GENERATED, () => {
+      // Clear the fallback timeout since we received the event
+      if (this.roadsTimeoutId) {
+        clearTimeout(this.roadsTimeoutId);
+        this.roadsTimeoutId = undefined;
+      }
+
       this.roadNetworkSystem = this.world.getSystem("roads") as
         | RoadNetworkSystem
         | undefined;
@@ -1526,16 +1534,19 @@ export class TerrainSystem extends System {
       }
     });
 
-    // Fallback: If no roads event within 2 seconds, generate tiles anyway
+    // Fallback: If no roads event within 15 seconds, generate tiles anyway
     // This is a safety net - normally ROADS_GENERATED should always fire
-    setTimeout(() => {
+    // NOTE: Timeout increased from 2s to 15s because TownSystem.start() can take
+    // significant time evaluating town candidates (each requires multiple terrain height lookups).
+    // With a 15x15 candidate grid and ~136 height lookups per candidate, this can take 5-10 seconds.
+    this.roadsTimeoutId = setTimeout(() => {
       if (!this._initialTilesReady) {
         console.warn(
-          "[TerrainSystem] Timeout: No roads event received, generating initial tiles",
+          "[TerrainSystem] Timeout: No roads event received after 15s, generating initial tiles without road data",
         );
         this.loadInitialTiles();
       }
-    }, 2000);
+    }, 15000);
 
     // Start player-based terrain update loop
     this.terrainUpdateIntervalId = setInterval(() => {
@@ -2873,8 +2884,19 @@ export class TerrainSystem extends System {
 
   /**
    * Compute height using noise functions (expensive, used when tile not cached)
+   *
+   * CRITICAL: Also checks flat zones to ensure terrain mesh vertices are at the correct
+   * height under buildings/stations. Without this, terrain mesh would render at procedural
+   * height while building floors are at flat zone height, causing z-fighting.
    */
   private getHeightAtComputed(worldX: number, worldZ: number): number {
+    // Check flat zones FIRST - buildings and stations need terrain at their floor height
+    // to prevent z-fighting between terrain mesh and building floor geometry
+    const flatHeight = this.getFlatZoneHeight(worldX, worldZ);
+    if (flatHeight !== null) {
+      return flatHeight;
+    }
+
     const baseHeight = this.getHeightAtWithoutShore(worldX, worldZ);
     const waterThreshold = this.CONFIG.WATER_THRESHOLD;
     const landBand = this.CONFIG.SHORELINE_LAND_BAND;
@@ -3774,13 +3796,14 @@ export class TerrainSystem extends System {
     biomeData: BiomeData,
   ): void {
     // Use default rock config if not specified in biome
+    // Scale range reduced from [0.3, 1.5] to [0.2, 0.9] for more realistic ground rocks
     const rockConfig = biomeData.rocks ?? {
       enabled: true,
       density: 8, // 8 rocks per 100m²
       presets: BIOME_ROCK_PRESETS[tile.biome] ?? ["boulder", "pebble"],
-      scaleRange: [0.3, 1.5] as [number, number],
+      scaleRange: [0.2, 0.9] as [number, number],
       clusterChance: 0.3,
-      minSpacing: 3,
+      minSpacing: 2.5, // Reduced spacing since rocks are smaller
     };
 
     if (!rockConfig.enabled) {
@@ -5378,6 +5401,9 @@ export class TerrainSystem extends System {
     }
     if (this.boundingBoxIntervalId) {
       clearInterval(this.boundingBoxIntervalId);
+    }
+    if (this.roadsTimeoutId) {
+      clearTimeout(this.roadsTimeoutId);
     }
 
     // Save all modified chunks before shutdown

@@ -3,22 +3,18 @@
  * Page for procedural grass generation with wind animation preview
  *
  * Features:
- * - Real-time grass rendering with GLSL wind shaders
+ * - Real-time grass rendering with TSL (Three Shading Language) wind shaders
+ * - Native WebGPU rendering for optimal performance
  * - Wind animation controls
  * - Biome density presets
  * - Performance statistics
  * - Export grass configuration
  *
- * NOTE: This preview page uses GLSL ShaderMaterial for the grass visualization.
- * This is intentional for the asset-forge tooling environment which may run
- * in WebGL contexts. The actual game engine uses TSL/WebGPU for grass rendering
- * via the VegetationSystem and GPUVegetation systems in packages/shared.
- *
- * For WebGPU-compatible grass rendering at runtime, see:
- * - packages/shared/src/systems/shared/world/VegetationSystem.ts
- * - packages/shared/src/systems/shared/world/GPUVegetation.ts
+ * This preview page uses the shared grass generation from @hyperscape/procgen,
+ * ensuring consistency with the game engine.
  */
 
+import { GrassGen } from "@hyperscape/procgen";
 import {
   Leaf,
   RefreshCw,
@@ -42,10 +38,10 @@ import {
 } from "@/utils/webgpu-renderer";
 
 // ============================================================================
-// GRASS CONFIGURATION
+// LOCAL CONFIG (UI-specific, maps to procgen types)
 // ============================================================================
 
-interface GrassConfig {
+interface GrassUIConfig {
   bladeHeight: number;
   bladeWidth: number;
   bladeSegments: number;
@@ -60,7 +56,7 @@ interface GrassConfig {
   dryColorMix: number;
 }
 
-const DEFAULT_CONFIG: GrassConfig = {
+const DEFAULT_UI_CONFIG: GrassUIConfig = {
   bladeHeight: 0.4,
   bladeWidth: 0.04,
   bladeSegments: 4,
@@ -76,13 +72,13 @@ const DEFAULT_CONFIG: GrassConfig = {
   dryColorMix: 0.2,
 };
 
-// Biome presets - colors matched to TerrainShader.ts
-const BIOME_PRESETS: Record<string, Partial<GrassConfig>> = {
+// Map UI biome presets to procgen GrassConfig
+const BIOME_UI_PRESETS: Record<string, Partial<GrassUIConfig>> = {
   plains: {
     density: 10,
     bladeHeight: 0.45,
     windStrength: 1.2,
-    baseColor: "#4d8c26", // Matches terrain grassGreen
+    baseColor: "#4d8c26",
     tipColor: "#619e38",
     dryColorMix: 0.15,
   },
@@ -90,7 +86,7 @@ const BIOME_PRESETS: Record<string, Partial<GrassConfig>> = {
     density: 5,
     bladeHeight: 0.35,
     windStrength: 0.6,
-    baseColor: "#386b1a", // Matches terrain grassDark
+    baseColor: "#386b1a",
     tipColor: "#4d8c26",
     dryColorMix: 0.1,
   },
@@ -106,7 +102,7 @@ const BIOME_PRESETS: Record<string, Partial<GrassConfig>> = {
     density: 6,
     bladeHeight: 0.55,
     windStrength: 0.4,
-    baseColor: "#386b1a", // Darker, wetter grass
+    baseColor: "#386b1a",
     tipColor: "#4d8c26",
     dryColorMix: 0.05,
   },
@@ -114,265 +110,60 @@ const BIOME_PRESETS: Record<string, Partial<GrassConfig>> = {
     density: 4,
     bladeHeight: 0.7,
     windStrength: 1.8,
-    baseColor: "#6b8c3b", // Yellower for dry savanna
+    baseColor: "#6b8c3b",
     tipColor: "#8ca852",
     dryColorMix: 0.4,
   },
 };
 
-// ============================================================================
-// GRASS SHADERS (GLSL)
-// ============================================================================
-
-const GRASS_VERTEX_SHADER = `
-  uniform float time;
-  uniform float windStrength;
-  uniform float windSpeed;
-  uniform float gustSpeed;
-  uniform float flutterIntensity;
-  uniform vec3 windDirection;
-  uniform float bladeHeight;
-  uniform float bladeWidth;
-
-  attribute vec4 instancePosition;
-  attribute vec4 instanceVariation;
-
-  varying vec2 vUv;
-  varying float vColorVar;
-
-  void main() {
-    vUv = uv;
-
-    // Instance data
-    vec3 worldPos = instancePosition.xyz;
-    float heightScale = instancePosition.w;
-    float rotation = instanceVariation.x;
-    float widthScale = instanceVariation.y;
-    vColorVar = instanceVariation.z;
-    float phaseOffset = instanceVariation.w;
-
-    // Scale blade
-    float scaledHeight = bladeHeight * heightScale;
-    float scaledWidth = bladeWidth * widthScale;
-
-    // Height along blade (0 at base, 1 at tip)
-    float heightT = position.y;
-
-    // Wind animation
-    float spatialPhase = worldPos.x * 0.1 + worldPos.z * 0.13;
-    float primaryWave = sin(time * windSpeed + spatialPhase + phaseOffset);
-    float gustWave = sin(time * gustSpeed + spatialPhase * 0.7);
-    float flutterWave = sin(time * 4.0 + phaseOffset * 10.0);
-
-    // Height-based influence (more bend at top)
-    float heightInfluence = heightT * heightT;
-    float tipInfluence = heightT * heightT * heightT;
-
-    float windBend = (primaryWave * 0.7 + gustWave * 0.3) * heightInfluence * windStrength * 0.5;
-    float flutter = flutterWave * tipInfluence * flutterIntensity * windStrength;
-
-    // Apply transformations
-    float scaledX = position.x * scaledWidth;
-    float scaledY = position.y * scaledHeight;
-
-    // Rotate around Y axis
-    float cosR = cos(rotation);
-    float sinR = sin(rotation);
-    float rotatedX = scaledX * cosR;
-    float rotatedZ = scaledX * sinR;
-
-    // Apply wind
-    float windOffsetX = windBend * windDirection.x * scaledHeight;
-    float windOffsetZ = windBend * windDirection.z * scaledHeight;
-    float flutterOffsetX = flutter * (-windDirection.z);
-    float flutterOffsetZ = flutter * windDirection.x;
-
-    // Final position
-    vec3 finalPos;
-    finalPos.x = worldPos.x + rotatedX + windOffsetX + flutterOffsetX;
-    finalPos.y = worldPos.y + scaledY;
-    finalPos.z = worldPos.z + rotatedZ + windOffsetZ + flutterOffsetZ;
-
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(finalPos, 1.0);
+/**
+ * Convert hex color to RGB object
+ */
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!result) {
+    return { r: 0.3, g: 0.5, b: 0.15 };
   }
-`;
-
-const GRASS_FRAGMENT_SHADER = `
-  uniform vec3 baseColor;
-  uniform vec3 tipColor;
-  uniform vec3 darkColor;
-  uniform float dryColorMix;
-
-  varying vec2 vUv;
-  varying float vColorVar;
-
-  void main() {
-    // Subtle gradient from base to tip (darker at base, lighter at tip)
-    vec3 gradientColor = mix(baseColor, tipColor, vUv.y * 0.6);
-
-    // Mix in darker color for natural variety (like terrain grass variation)
-    vec3 finalColor = mix(gradientColor, darkColor, vColorVar * dryColorMix);
-
-    // Simple AO at base for grounding effect
-    float ao = smoothstep(0.0, 0.25, vUv.y);
-    finalColor *= 0.65 + 0.35 * ao;
-
-    gl_FragColor = vec4(finalColor, 1.0);
-  }
-`;
-
-// ============================================================================
-// GRASS GEOMETRY GENERATION
-// ============================================================================
-
-function createGrassBladeGeometry(segments: number): THREE.BufferGeometry {
-  const geometry = new THREE.BufferGeometry();
-  const vertexCount = (segments + 1) * 2;
-  const positions = new Float32Array(vertexCount * 3);
-  const uvs = new Float32Array(vertexCount * 2);
-  const normals = new Float32Array(vertexCount * 3);
-
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments;
-    const y = t;
-    const width = 1.0 - t * 0.7;
-
-    const leftIdx = i * 2;
-    positions[leftIdx * 3 + 0] = -0.5 * width;
-    positions[leftIdx * 3 + 1] = y;
-    positions[leftIdx * 3 + 2] = 0;
-    uvs[leftIdx * 2 + 0] = 0;
-    uvs[leftIdx * 2 + 1] = t;
-    normals[leftIdx * 3 + 0] = 0;
-    normals[leftIdx * 3 + 1] = 0;
-    normals[leftIdx * 3 + 2] = 1;
-
-    const rightIdx = i * 2 + 1;
-    positions[rightIdx * 3 + 0] = 0.5 * width;
-    positions[rightIdx * 3 + 1] = y;
-    positions[rightIdx * 3 + 2] = 0;
-    uvs[rightIdx * 2 + 0] = 1;
-    uvs[rightIdx * 2 + 1] = t;
-    normals[rightIdx * 3 + 0] = 0;
-    normals[rightIdx * 3 + 1] = 0;
-    normals[rightIdx * 3 + 2] = 1;
-  }
-
-  const triangleCount = segments * 2;
-  const indices = new Uint16Array(triangleCount * 3);
-  let idx = 0;
-
-  for (let i = 0; i < segments; i++) {
-    const base = i * 2;
-    indices[idx++] = base;
-    indices[idx++] = base + 1;
-    indices[idx++] = base + 2;
-    indices[idx++] = base + 1;
-    indices[idx++] = base + 3;
-    indices[idx++] = base + 2;
-  }
-
-  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
-  geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
-
-  return geometry;
+  return {
+    r: parseInt(result[1], 16) / 255,
+    g: parseInt(result[2], 16) / 255,
+    b: parseInt(result[3], 16) / 255,
+  };
 }
 
-// ============================================================================
-// GRASS PATCH GENERATION
-// ============================================================================
+/**
+ * Convert UI config to procgen GrassConfig
+ */
+function uiConfigToProcgenConfig(
+  uiConfig: GrassUIConfig,
+): Partial<GrassGen.GrassConfig> {
+  const baseColor = hexToRgb(uiConfig.baseColor);
+  const tipColor = hexToRgb(uiConfig.tipColor);
 
-function generateGrassPatch(
-  geometry: THREE.BufferGeometry,
-  config: GrassConfig,
-): { mesh: THREE.InstancedMesh; uniforms: Record<string, THREE.Uniform> } {
-  const { density, patchSize } = config;
-  const instanceCount = Math.floor(patchSize * patchSize * density);
-
-  // Create uniforms
-  const uniforms: Record<string, THREE.Uniform> = {
-    time: new THREE.Uniform(0.0),
-    windStrength: new THREE.Uniform(config.windStrength),
-    windSpeed: new THREE.Uniform(config.windSpeed),
-    gustSpeed: new THREE.Uniform(config.gustSpeed),
-    flutterIntensity: new THREE.Uniform(config.flutterIntensity),
-    windDirection: new THREE.Uniform(new THREE.Vector3(1, 0, 0.3).normalize()),
-    bladeHeight: new THREE.Uniform(config.bladeHeight),
-    bladeWidth: new THREE.Uniform(config.bladeWidth),
-    baseColor: new THREE.Uniform(new THREE.Color(config.baseColor)),
-    tipColor: new THREE.Uniform(new THREE.Color(config.tipColor)),
-    darkColor: new THREE.Uniform(new THREE.Color(0.22, 0.42, 0.1)), // Matches terrain grassDark
-    dryColorMix: new THREE.Uniform(config.dryColorMix),
+  return {
+    blade: {
+      height: uiConfig.bladeHeight,
+      width: uiConfig.bladeWidth,
+      segments: uiConfig.bladeSegments,
+      tipTaper: 0.3,
+    },
+    wind: {
+      strength: uiConfig.windStrength,
+      speed: uiConfig.windSpeed,
+      gustSpeed: uiConfig.gustSpeed,
+      flutterIntensity: uiConfig.flutterIntensity,
+      direction: { x: 1, z: 0.3 },
+    },
+    color: {
+      baseColor,
+      tipColor,
+      darkColor: { r: 0.22, g: 0.42, b: 0.1 },
+      dryColorMix: uiConfig.dryColorMix,
+      aoStrength: 0.5,
+    },
+    density: uiConfig.density,
+    patchSize: uiConfig.patchSize,
   };
-
-  // Create shader material
-  const material = new THREE.ShaderMaterial({
-    uniforms,
-    vertexShader: GRASS_VERTEX_SHADER,
-    fragmentShader: GRASS_FRAGMENT_SHADER,
-    side: THREE.DoubleSide,
-  });
-
-  // Create instance attributes
-  const instancePosition = new THREE.InstancedBufferAttribute(
-    new Float32Array(instanceCount * 4),
-    4,
-  );
-  const instanceVariation = new THREE.InstancedBufferAttribute(
-    new Float32Array(instanceCount * 4),
-    4,
-  );
-
-  // Seeded random
-  let seed = 12345;
-  const random = () => {
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-    return seed / 0x7fffffff;
-  };
-
-  const halfSize = patchSize / 2;
-  const spacing = Math.sqrt(1 / density);
-
-  let count = 0;
-  for (let gx = 0; gx < patchSize && count < instanceCount; gx += spacing) {
-    for (let gz = 0; gz < patchSize && count < instanceCount; gz += spacing) {
-      const jitterX = (random() - 0.5) * spacing * 0.8;
-      const jitterZ = (random() - 0.5) * spacing * 0.8;
-
-      const x = gx - halfSize + jitterX;
-      const z = gz - halfSize + jitterZ;
-      const y = 0;
-
-      const heightScale = 0.7 + random() * 0.6;
-      const rotation = random() * Math.PI * 2;
-      const widthScale = 0.8 + random() * 0.4;
-      const colorVar = random();
-      const phaseOffset = random() * Math.PI * 2;
-
-      instancePosition.setXYZW(count, x, y, z, heightScale);
-      instanceVariation.setXYZW(
-        count,
-        rotation,
-        widthScale,
-        colorVar,
-        phaseOffset,
-      );
-
-      count++;
-    }
-  }
-
-  const clonedGeometry = geometry.clone();
-  clonedGeometry.setAttribute("instancePosition", instancePosition);
-  clonedGeometry.setAttribute("instanceVariation", instanceVariation);
-
-  const mesh = new THREE.InstancedMesh(clonedGeometry, material, count);
-  mesh.count = count;
-  mesh.frustumCulled = false;
-
-  return { mesh, uniforms };
 }
 
 // ============================================================================
@@ -385,13 +176,12 @@ export const GrassGenPage: React.FC = () => {
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
-  const grassMeshRef = useRef<THREE.InstancedMesh | null>(null);
-  const uniformsRef = useRef<Record<string, THREE.Uniform> | null>(null);
+  const grassFieldRef = useRef<GrassGen.GrassFieldResult | null>(null);
   const animationRef = useRef<number>(0);
   const clockRef = useRef<THREE.Clock>(new THREE.Clock());
   const generateGrassRef = useRef<(() => void) | null>(null);
 
-  const [config, setConfig] = useState<GrassConfig>(DEFAULT_CONFIG);
+  const [config, setConfig] = useState<GrassUIConfig>(DEFAULT_UI_CONFIG);
   const [selectedBiome, setSelectedBiome] = useState<string>("plains");
   const [stats, setStats] = useState<{
     instances: number;
@@ -421,7 +211,7 @@ export const GrassGenPage: React.FC = () => {
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
 
-    // Lighting (can add before renderer)
+    // Lighting
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
     scene.add(ambientLight);
 
@@ -430,7 +220,6 @@ export const GrassGenPage: React.FC = () => {
     directionalLight.castShadow = true;
     scene.add(directionalLight);
 
-    // Hemisphere light for better outdoor lighting
     const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x3d5a2c, 0.4);
     scene.add(hemiLight);
 
@@ -467,7 +256,7 @@ export const GrassGenPage: React.FC = () => {
       container.appendChild(renderer.domElement);
       rendererRef.current = renderer;
 
-      // Controls (need renderer.domElement)
+      // Controls
       const controls = new OrbitControls(camera, renderer.domElement);
       controls.enableDamping = true;
       controls.dampingFactor = 0.05;
@@ -475,8 +264,7 @@ export const GrassGenPage: React.FC = () => {
       controls.update();
       controlsRef.current = controls;
 
-      // Generate initial grass (after renderer is ready)
-      // Use ref to avoid dependency on generateGrass callback
+      // Generate initial grass
       generateGrassRef.current?.();
 
       // Animation loop
@@ -488,11 +276,10 @@ export const GrassGenPage: React.FC = () => {
         animationRef.current = requestAnimationFrame(animate);
 
         const delta = clockRef.current.getDelta();
-        const elapsed = clockRef.current.getElapsedTime();
 
-        // Update wind uniforms
-        if (uniformsRef.current) {
-          uniformsRef.current.time.value = elapsed;
+        // Update grass animation using procgen's update function
+        if (grassFieldRef.current) {
+          grassFieldRef.current.update(delta);
         }
 
         controls.update();
@@ -531,7 +318,13 @@ export const GrassGenPage: React.FC = () => {
       window.removeEventListener("resize", handleResize);
       cancelAnimationFrame(animationRef.current);
 
-      // Dispose WebGPU renderer
+      // Dispose grass field
+      if (grassFieldRef.current) {
+        grassFieldRef.current.dispose();
+        grassFieldRef.current = null;
+      }
+
+      // Dispose renderer
       if (rendererRef.current) {
         if (container.contains(rendererRef.current.domElement)) {
           container.removeChild(rendererRef.current.domElement);
@@ -544,37 +337,40 @@ export const GrassGenPage: React.FC = () => {
     };
   }, [isDarkMode]);
 
-  // Generate grass
+  // Generate grass using procgen's GrassGenerator
   const generateGrass = useCallback(() => {
     if (!sceneRef.current) return;
 
     setIsGenerating(true);
 
     // Remove existing grass
-    if (grassMeshRef.current) {
-      sceneRef.current.remove(grassMeshRef.current);
-      grassMeshRef.current.geometry.dispose();
-      if (grassMeshRef.current.material instanceof THREE.Material) {
-        grassMeshRef.current.material.dispose();
-      }
+    if (grassFieldRef.current) {
+      sceneRef.current.remove(grassFieldRef.current.lod0Mesh);
+      grassFieldRef.current.dispose();
+      grassFieldRef.current = null;
     }
 
     try {
-      const geometry = createGrassBladeGeometry(config.bladeSegments);
-      const { mesh, uniforms } = generateGrassPatch(geometry, config);
+      // Convert UI config to procgen config and generate
+      const procgenConfig = uiConfigToProcgenConfig(config);
+      const field = GrassGen.GrassGenerator.generateField({
+        config: procgenConfig,
+        seed: Date.now(),
+      });
 
-      sceneRef.current.add(mesh);
-      grassMeshRef.current = mesh;
-      uniformsRef.current = uniforms;
+      sceneRef.current.add(field.lod0Mesh);
+      grassFieldRef.current = field;
 
-      const triangles = mesh.count * config.bladeSegments * 2;
+      const triangles = field.lod0Count * config.bladeSegments * 2;
       setStats({
-        instances: mesh.count,
-        fps: 0, // Will be updated by animation loop
+        instances: field.lod0Count,
+        fps: 0,
         triangles,
       });
 
-      notify.success(`Generated ${mesh.count.toLocaleString()} grass blades`);
+      notify.success(
+        `Generated ${field.lod0Count.toLocaleString()} grass blades`,
+      );
     } catch (error) {
       console.error("Failed to generate grass:", error);
       notify.error("Failed to generate grass");
@@ -583,14 +379,14 @@ export const GrassGenPage: React.FC = () => {
     setIsGenerating(false);
   }, [config]);
 
-  // Keep ref updated for initialization effect
+  // Keep ref updated for initialization
   useEffect(() => {
     generateGrassRef.current = generateGrass;
   }, [generateGrass]);
 
   // Apply biome preset
   const applyBiomePreset = (biomeName: string) => {
-    const preset = BIOME_PRESETS[biomeName];
+    const preset = BIOME_UI_PRESETS[biomeName];
     if (preset) {
       setConfig((prev) => ({ ...prev, ...preset }));
       setSelectedBiome(biomeName);
@@ -598,16 +394,22 @@ export const GrassGenPage: React.FC = () => {
   };
 
   // Update config handler
-  const updateConfig = <K extends keyof GrassConfig>(
+  const updateConfig = <K extends keyof GrassUIConfig>(
     key: K,
-    value: GrassConfig[K],
+    value: GrassUIConfig[K],
   ) => {
     setConfig((prev) => ({ ...prev, [key]: value }));
   };
 
   // Export config
   const exportConfig = () => {
-    const configJson = JSON.stringify(config, null, 2);
+    const procgenConfig = uiConfigToProcgenConfig(config);
+    const exportData = {
+      uiConfig: config,
+      procgenConfig,
+      biome: selectedBiome,
+    };
+    const configJson = JSON.stringify(exportData, null, 2);
     const blob = new Blob([configJson], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -634,9 +436,8 @@ export const GrassGenPage: React.FC = () => {
           {/* Info Box */}
           <div className="bg-bg-tertiary rounded-md p-3 text-xs text-text-secondary">
             <p>
-              <strong>WebGPU Preview:</strong> This preview uses WebGL shaders.
-              In the game engine, grass renders with optimized WebGPU TSL
-              shaders for better performance with millions of blades.
+              <strong>WebGPU Preview:</strong> Uses shared @hyperscape/procgen
+              grass generation for consistency with the game engine.
             </p>
           </div>
 
@@ -651,7 +452,7 @@ export const GrassGenPage: React.FC = () => {
               onChange={(e) => applyBiomePreset(e.target.value)}
               className="w-full bg-bg-tertiary border border-border-primary rounded-md px-3 py-2 text-sm text-text-primary"
             >
-              {Object.keys(BIOME_PRESETS).map((biome) => (
+              {Object.keys(BIOME_UI_PRESETS).map((biome) => (
                 <option key={biome} value={biome}>
                   {biome.charAt(0).toUpperCase() + biome.slice(1)}
                 </option>
@@ -738,13 +539,9 @@ export const GrassGenPage: React.FC = () => {
                   max="3"
                   step="0.1"
                   value={config.windStrength}
-                  onChange={(e) => {
-                    const val = parseFloat(e.target.value);
-                    updateConfig("windStrength", val);
-                    if (uniformsRef.current) {
-                      uniformsRef.current.windStrength.value = val;
-                    }
-                  }}
+                  onChange={(e) =>
+                    updateConfig("windStrength", parseFloat(e.target.value))
+                  }
                   className="w-full"
                 />
               </div>
@@ -759,13 +556,9 @@ export const GrassGenPage: React.FC = () => {
                   max="3"
                   step="0.1"
                   value={config.windSpeed}
-                  onChange={(e) => {
-                    const val = parseFloat(e.target.value);
-                    updateConfig("windSpeed", val);
-                    if (uniformsRef.current) {
-                      uniformsRef.current.windSpeed.value = val;
-                    }
-                  }}
+                  onChange={(e) =>
+                    updateConfig("windSpeed", parseFloat(e.target.value))
+                  }
                   className="w-full"
                 />
               </div>
@@ -780,13 +573,9 @@ export const GrassGenPage: React.FC = () => {
                   max="0.5"
                   step="0.05"
                   value={config.flutterIntensity}
-                  onChange={(e) => {
-                    const val = parseFloat(e.target.value);
-                    updateConfig("flutterIntensity", val);
-                    if (uniformsRef.current) {
-                      uniformsRef.current.flutterIntensity.value = val;
-                    }
-                  }}
+                  onChange={(e) =>
+                    updateConfig("flutterIntensity", parseFloat(e.target.value))
+                  }
                   className="w-full"
                 />
               </div>

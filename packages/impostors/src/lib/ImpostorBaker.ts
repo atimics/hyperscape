@@ -285,20 +285,6 @@ export class ImpostorBaker {
     this.renderScene.add(this.directionalLight);
   }
 
-  /**
-   * Render helper - uses renderAsync for WebGPU render targets
-   */
-  private async doRender(
-    scene: THREE.Object3D,
-    camera: THREE.Camera,
-  ): Promise<void> {
-    if (this.renderer.renderAsync) {
-      await this.renderer.renderAsync(scene, camera);
-    } else {
-      this.renderer.render(scene, camera);
-    }
-  }
-
   private configureAtlasRenderTarget(
     target: THREE.RenderTarget,
     colorSpace: THREE.ColorSpace | string,
@@ -333,18 +319,24 @@ export class ImpostorBaker {
     source.updateWorldMatrix(true, true);
 
     source.traverse((node) => {
-      if (node instanceof THREE.InstancedMesh) {
+      // Use duck-typing for InstancedMesh detection instead of instanceof
+      // This handles cross-package compatibility (three vs three/webgpu)
+      const isInstancedMesh =
+        (node as THREE.Object3D & { isInstancedMesh?: boolean })
+          .isInstancedMesh === true;
+      if (isInstancedMesh) {
         // For InstancedMesh, compute bounds from all instances
+        const instancedNode = node as THREE.InstancedMesh;
         // Must apply both instance matrix AND node's world matrix
-        const geometry = node.geometry;
+        const geometry = instancedNode.geometry;
         geometry.computeBoundingBox();
         const baseBox = geometry.boundingBox!;
         const orientationAttr = geometry.attributes.instanceOrientation as
           | THREE.BufferAttribute
           | undefined;
 
-        for (let i = 0; i < node.count; i++) {
-          node.getMatrixAt(i, tempMatrix);
+        for (let i = 0; i < instancedNode.count; i++) {
+          instancedNode.getMatrixAt(i, tempMatrix);
           tempMatrix.decompose(tempPos, tempQuat, tempScale);
 
           if (orientationAttr) {
@@ -363,19 +355,24 @@ export class ImpostorBaker {
           translateMatrix.makeTranslation(tempPos.x, tempPos.y, tempPos.z);
 
           combinedMatrix
-            .copy(node.matrixWorld)
+            .copy(instancedNode.matrixWorld)
             .multiply(translateMatrix)
             .multiply(scaleMatrix)
             .multiply(rotMatrix);
           tempBox.copy(baseBox).applyMatrix4(combinedMatrix);
           box.union(tempBox);
         }
-      } else if (node instanceof THREE.Mesh && node.geometry) {
-        node.geometry.computeBoundingBox();
-        if (node.geometry.boundingBox) {
-          tempBox.copy(node.geometry.boundingBox);
+      }
+      // Use duck-typing for Mesh detection too
+      const isMesh =
+        (node as THREE.Object3D & { isMesh?: boolean }).isMesh === true;
+      const meshNode = node as THREE.Mesh;
+      if (!isInstancedMesh && isMesh && meshNode.geometry) {
+        meshNode.geometry.computeBoundingBox();
+        if (meshNode.geometry.boundingBox) {
+          tempBox.copy(meshNode.geometry.boundingBox);
           // Apply node's world transform
-          tempBox.applyMatrix4(node.matrixWorld);
+          tempBox.applyMatrix4(meshNode.matrixWorld);
           box.union(tempBox);
         }
       }
@@ -586,10 +583,16 @@ export class ImpostorBaker {
     source.updateWorldMatrix(true, true);
 
     source.traverse((node) => {
-      if (node instanceof THREE.InstancedMesh) {
+      // Use duck-typing for InstancedMesh detection instead of instanceof
+      // This handles cross-package compatibility (three vs three/webgpu)
+      const isInstancedMesh =
+        (node as THREE.Object3D & { isInstancedMesh?: boolean })
+          .isInstancedMesh === true;
+      if (isInstancedMesh) {
         // Flatten InstancedMesh into merged geometry
-        const baseGeo = node.geometry;
-        const instanceCount = node.count;
+        const instancedNode = node as THREE.InstancedMesh;
+        const baseGeo = instancedNode.geometry;
+        const instanceCount = instancedNode.count;
 
         const posAttr = baseGeo.attributes.position;
         const normAttr = baseGeo.attributes.normal;
@@ -612,7 +615,7 @@ export class ImpostorBaker {
           | undefined;
 
         for (let i = 0; i < instanceCount; i++) {
-          node.getMatrixAt(i, tempMatrix);
+          instancedNode.getMatrixAt(i, tempMatrix);
 
           // Get instance position from matrix
           const instancePos = new THREE.Vector3();
@@ -646,7 +649,7 @@ export class ImpostorBaker {
           );
           // Apply instance transform, then node's world matrix
           const finalMatrix = new THREE.Matrix4()
-            .copy(node.matrixWorld)
+            .copy(instancedNode.matrixWorld)
             .multiply(translateMatrix)
             .multiply(scaleMatrix)
             .multiply(rotMatrix);
@@ -693,7 +696,7 @@ export class ImpostorBaker {
         }
 
         // Get color from material (handles single material only for InstancedMesh)
-        const mat = node.material;
+        const mat = instancedNode.material;
         const singleMat = Array.isArray(mat) ? mat[0] : mat;
         const color = this.extractColorFromMaterial(
           singleMat,
@@ -707,16 +710,21 @@ export class ImpostorBaker {
 
         const bakedMesh = new THREE.Mesh(mergedGeo, bakeMaterial);
         result.add(bakedMesh);
-      } else if (node instanceof THREE.Mesh && node.geometry) {
+      }
+      // Use duck-typing for Mesh detection too
+      const isMesh =
+        (node as THREE.Object3D & { isMesh?: boolean }).isMesh === true;
+      const meshNode = node as THREE.Mesh;
+      if (!isInstancedMesh && isMesh && meshNode.geometry) {
         // Regular mesh - clone geometry and preserve material type
-        const clonedGeo = node.geometry.clone();
+        const clonedGeo = meshNode.geometry.clone();
 
         // Apply world transform to geometry so we can center everything
-        node.updateWorldMatrix(true, false);
-        clonedGeo.applyMatrix4(node.matrixWorld);
+        meshNode.updateWorldMatrix(true, false);
+        clonedGeo.applyMatrix4(meshNode.matrixWorld);
 
         // Handle material arrays (like colored cube with 6 face materials)
-        const mat = node.material;
+        const mat = meshNode.material;
         let clonedMaterial: THREE.Material | THREE.Material[];
 
         if (Array.isArray(mat)) {
@@ -1746,33 +1754,47 @@ export class ImpostorBaker {
       THREE.LinearSRGBColorSpace,
     );
 
-    // CRITICAL: Clear the full normal atlas to neutral normal color before rendering cells
-    this.renderer.setRenderTarget(normalRenderTarget);
-    this.renderer.setScissorTest(false);
-    this.renderer.setViewport(0, 0, atlasWidth, atlasHeight);
-    this.renderer.setClearColor(0x8080ff, 1); // Neutral normal facing camera
-    this.renderer.clear();
+    const webgpuRenderer = this.renderer as THREE_WEBGPU.WebGPURenderer;
 
-    // Create blit scene for copying cell to atlas
+    // CRITICAL: Clear the full normal atlas to neutral normal color before rendering cells
+    webgpuRenderer.setRenderTarget(normalRenderTarget);
+    webgpuRenderer.setScissorTest(false);
+    webgpuRenderer.setViewport(0, 0, atlasWidth, atlasHeight);
+    webgpuRenderer.setClearColor(0x8080ff, 1); // Neutral normal facing camera
+    webgpuRenderer.clear();
+
+    // Create blit geometry and material using TSL (CRITICAL: must use TSL texture() for WebGPU)
+    const blitGeo = new THREE.PlaneGeometry(2, 2);
+    const blitNormalMat = new THREE_WEBGPU.MeshBasicNodeMaterial();
+    blitNormalMat.colorNode = THREE_WEBGPU.TSL.texture(
+      normalCellTarget.texture,
+    );
+    blitNormalMat.opacityNode = THREE_WEBGPU.TSL.texture(
+      normalCellTarget.texture,
+    ).a;
+    blitNormalMat.transparent = true;
+    blitNormalMat.depthTest = false;
+    blitNormalMat.depthWrite = false;
+    const blitNormalMesh = new THREE.Mesh(blitGeo, blitNormalMat);
     const blitScene = new THREE.Scene();
-    const blitCam = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0.1, 10);
-    blitCam.position.z = 1;
-    const blitPlaneGeom = new THREE.PlaneGeometry(1, 1);
-    const blitNormalMat = new MeshBasicNodeMaterial();
-    blitNormalMat.side = THREE.DoubleSide;
-    const blitNormalPlane = new THREE.Mesh(blitPlaneGeom, blitNormalMat);
-    blitScene.add(blitNormalPlane);
+    blitScene.add(blitNormalMesh);
+    const blitCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+    // Save autoClear state and disable it for blitting
+    const originalAutoClear = webgpuRenderer.autoClear;
+    webgpuRenderer.autoClear = false;
 
     console.log(
       `[bakeHybrid] Rendering ${gridSizeX}x${gridSizeY} normal atlas cells`,
     );
 
-    // Render normals for each cell using blit approach
+    // Render normals for each cell using blit approach (matching bake() and bakeWithNormals())
     const viewPoints = colorResult.octMeshData!.octPoints;
 
-    for (let rowIdx = 0; rowIdx < gridSizeY; rowIdx++) {
-      for (let colIdx = 0; colIdx < gridSizeX; colIdx++) {
+    for (let rowIdx = 0; rowIdx <= gridSizeY; rowIdx++) {
+      for (let colIdx = 0; colIdx <= gridSizeX; colIdx++) {
         const flatIdx = rowIdx * gridSizeX + colIdx;
+        if (flatIdx * 3 + 2 >= viewPoints.length) continue;
 
         const px = viewPoints[flatIdx * 3];
         const py = viewPoints[flatIdx * 3 + 1];
@@ -1790,28 +1812,28 @@ export class ImpostorBaker {
         });
 
         // 1. Render to cell target
-        this.renderer.setRenderTarget(normalCellTarget);
-        this.renderer.setScissorTest(false);
-        this.renderer.setViewport(0, 0, cellWidth, cellHeight);
-        this.renderer.setClearColor(0x8080ff, 1); // Neutral normal facing camera
-        this.renderer.clear();
-        await this.doRender(this.renderScene, this.renderCamera);
+        webgpuRenderer.setRenderTarget(normalCellTarget);
+        webgpuRenderer.setClearColor(0x8080ff, 1); // Neutral normal facing camera
+        webgpuRenderer.clear();
+        webgpuRenderer.render(this.renderScene, this.renderCamera);
 
-        // 2. Blit cell to atlas at correct position
-        const pixelX = Math.floor((colIdx / gridSizeX) * atlasWidth);
-        const pixelY = Math.floor((rowIdx / gridSizeY) * atlasHeight);
+        // 2. Calculate cell position in atlas (NDC) - matching bake() and bakeWithNormals()
+        const cellW = 2 / gridSizeX;
+        const cellH = 2 / gridSizeY;
+        const ndcX = -1 + (colIdx + 0.5) * cellW;
+        const ndcY = 1 - (rowIdx + 0.5) * cellH; // Flipped Y
 
-        blitNormalMat.map = normalCellTarget.texture;
-        blitNormalMat.needsUpdate = true;
+        blitNormalMesh.position.set(ndcX, ndcY, 0);
+        blitNormalMesh.scale.set(cellW / 2, cellH / 2, 1);
 
-        this.renderer.setRenderTarget(normalRenderTarget);
-        this.renderer.setScissorTest(true);
-        this.renderer.setScissor(pixelX, pixelY, cellWidth, cellHeight);
-        this.renderer.setViewport(pixelX, pixelY, cellWidth, cellHeight);
-        // Don't clear - just overdraw
-        await this.doRender(blitScene, blitCam);
+        // Blit cell to atlas (no clear!)
+        webgpuRenderer.setRenderTarget(normalRenderTarget);
+        webgpuRenderer.render(blitScene, blitCam);
       }
     }
+
+    // Restore autoClear
+    webgpuRenderer.autoClear = originalAutoClear;
 
     // Restore renderer state
     renderer.outputColorSpace = originalColorSpace;
@@ -1829,7 +1851,7 @@ export class ImpostorBaker {
     });
     normalMaterial.dispose();
     normalCellTarget.dispose();
-    blitPlaneGeom.dispose();
+    blitGeo.dispose();
     blitNormalMat.dispose();
 
     return {

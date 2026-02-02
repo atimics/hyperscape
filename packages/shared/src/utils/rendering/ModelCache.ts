@@ -64,11 +64,60 @@ export class ModelCache {
    */
   private managedMaterials = new WeakSet<THREE.Material>();
 
+  /** Track whether MeshoptDecoder WASM has been initialized */
+  private decoderReady = false;
+  private decoderReadyPromise: Promise<void> | null = null;
+
   private constructor() {
     // Use our own GLTFLoader to ensure we get pure THREE.Object3D (not Hyperscape Nodes)
     this.gltfLoader = new GLTFLoader();
     // Enable meshopt decoder for compressed GLB files (EXT_meshopt_compression)
     this.gltfLoader.setMeshoptDecoder(MeshoptDecoder);
+
+    // Pre-initialize MeshoptDecoder WASM to prevent race conditions
+    // The decoder has a 'ready' promise that must resolve before decoding
+    this.initMeshoptDecoder();
+  }
+
+  /**
+   * Pre-initialize the MeshoptDecoder WASM module.
+   * This prevents race conditions where models start loading before WASM is ready.
+   */
+  private async initMeshoptDecoder(): Promise<void> {
+    if (this.decoderReady) return;
+    if (this.decoderReadyPromise) return this.decoderReadyPromise;
+
+    this.decoderReadyPromise = (async () => {
+      try {
+        // MeshoptDecoder exports a 'ready' promise that resolves when WASM is initialized
+        const decoder = MeshoptDecoder as {
+          ready?: Promise<void>;
+          supported?: boolean;
+        };
+
+        if (decoder.ready) {
+          await decoder.ready;
+        }
+        this.decoderReady = true;
+      } catch (error) {
+        console.warn(
+          "[ModelCache] MeshoptDecoder initialization warning:",
+          error,
+        );
+        // Continue anyway - the decoder will try to initialize on first use
+        this.decoderReady = true;
+      }
+    })();
+
+    return this.decoderReadyPromise;
+  }
+
+  /**
+   * Ensure MeshoptDecoder is ready before loading models.
+   * Call this before the first model load in performance-critical scenarios.
+   */
+  async ensureDecoderReady(): Promise<void> {
+    return this.initMeshoptDecoder();
   }
 
   static getInstance(): ModelCache {
@@ -434,6 +483,10 @@ export class ModelCache {
     /** LOD bundle with decimated meshes and impostor (if generateLODs was true) */
     lodBundle?: LODBundle;
   }> {
+    // Ensure MeshoptDecoder WASM is ready before loading
+    // This prevents "Invalid typed array length" errors from race conditions
+    await this.initMeshoptDecoder();
+
     const shareMaterials = options?.shareMaterials ?? true; // Default to sharing
     const generateLODs = options?.generateLODs ?? false;
     // Resolve asset:// URLs to actual URLs
@@ -575,6 +628,7 @@ export class ModelCache {
               tile?: { x: number; z: number };
             },
           ) => Promise<File | undefined>;
+          clearCachedFile?: (url: string) => Promise<void>;
         };
 
         let file: File | undefined;
@@ -598,7 +652,34 @@ export class ModelCache {
           const buffer = await file.arrayBuffer();
           // Pass resolvedPath as base URL for resolving relative/data URIs in GLTF
           // Empty string "" causes issues with embedded base64 data URIs
-          gltf = await this.gltfLoader.parseAsync(buffer, resolvedPath);
+          try {
+            gltf = await this.gltfLoader.parseAsync(buffer, resolvedPath);
+          } catch (parseError) {
+            // Check for "Invalid typed array length" error - indicates corrupted file
+            const errorMsg =
+              parseError instanceof Error
+                ? parseError.message
+                : String(parseError);
+            if (
+              errorMsg.includes("Invalid typed array length") ||
+              errorMsg.includes("RangeError") ||
+              errorMsg.includes("Malformed buffer")
+            ) {
+              console.warn(
+                `[ModelCache] Corrupted file detected for ${resolvedPath}, clearing cache and retrying...`,
+              );
+
+              // Clear corrupted file from IndexedDB cache
+              if (loader.clearCachedFile) {
+                await loader.clearCachedFile(resolvedPath);
+              }
+
+              // Retry with direct load (bypasses corrupted cache)
+              gltf = await this.gltfLoader.loadAsync(resolvedPath);
+            } else {
+              throw parseError;
+            }
+          }
         } else {
           // Fallback to direct load if file fetch failed
           gltf = await this.gltfLoader.loadAsync(resolvedPath);

@@ -231,6 +231,13 @@ export class World extends EventEmitter {
   /** Movement state flag (used by builder/movement systems) */
   moving?: boolean;
 
+  /**
+   * Flag indicating if we're currently rendering for a reflection camera.
+   * When true, LOD systems should force impostor mode for performance.
+   * Set by WaterSystem's reflector callbacks.
+   */
+  isRenderingReflection = false;
+
   // ============================================================================
   // FRAME BUDGET MANAGEMENT
   // ============================================================================

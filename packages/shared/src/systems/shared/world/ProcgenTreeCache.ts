@@ -62,7 +62,7 @@
 
 import * as THREE from "three";
 import * as THREE_WEBGPU from "three/webgpu";
-import { MeshBasicNodeMaterial } from "three/webgpu";
+import { MeshBasicNodeMaterial, MeshStandardNodeMaterial } from "three/webgpu";
 import { ProcgenTreeInstancer } from "./ProcgenTreeInstancer";
 import type { World } from "../../../core/World";
 import {
@@ -75,6 +75,378 @@ import {
   type SerializedGeometry,
   type SerializedLeafInstances,
 } from "../../../utils/rendering/ProcgenCacheDB";
+
+// ============================================================================
+// TREE CARD BAKER - Renders actual tree geometry to billboard textures
+// ============================================================================
+
+/**
+ * Renderer interface for tree card baking.
+ * Compatible with WebGPURenderer (or WebGL fallback).
+ */
+interface CardBakerRenderer {
+  render(scene: THREE.Scene, camera: THREE.Camera): void;
+  renderAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<void>;
+  setRenderTarget(target: THREE.WebGLRenderTarget | null): void;
+  getRenderTarget(): THREE.WebGLRenderTarget | null;
+  setClearColor(color: number, alpha: number): void;
+  clear(): void;
+  readRenderTargetPixelsAsync(
+    renderTarget: THREE.WebGLRenderTarget,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    buffer: Uint8Array,
+  ): Promise<void>;
+}
+
+/**
+ * Configuration for tree card baking.
+ */
+const CARD_BAKER_CONFIG = {
+  /** Resolution of each card texture (square) */
+  textureSize: 512,
+  /** Padding around tree in texture (0-1, percentage of dimension) */
+  padding: 0.1,
+  /** Background color for baking (transparent) */
+  backgroundColor: 0x000000,
+  /** Whether to use antialiasing during bake */
+  antialias: true,
+} as const;
+
+/**
+ * Baked card data for a tree variant.
+ */
+interface BakedCardData {
+  /** Texture for card facing X axis */
+  textureX: THREE.Texture;
+  /** Texture for card facing Z axis */
+  textureZ: THREE.Texture;
+  /** Width of the card in world units */
+  cardWidth: number;
+  /** Height of the card in world units */
+  cardHeight: number;
+}
+
+/**
+ * TreeCardBaker - Renders tree meshes from orthographic views to create
+ * accurate billboard textures for LOD2 cross-cards.
+ *
+ * This replaces procedural crown shaders with actual rendered tree appearance,
+ * ensuring:
+ * - Leaves properly cover branches
+ * - Accurate silhouette matches the tree
+ * - Colors and details are preserved
+ */
+class TreeCardBaker {
+  private static instance: TreeCardBaker | null = null;
+
+  private renderer: CardBakerRenderer | null = null;
+  private renderTargetX: THREE.WebGLRenderTarget | null = null;
+  private renderTargetZ: THREE.WebGLRenderTarget | null = null;
+  private orthoCamera: THREE.OrthographicCamera;
+  private bakingScene: THREE.Scene;
+  private ambientLight: THREE.AmbientLight;
+  private directionalLight: THREE.DirectionalLight;
+  private initialized = false;
+
+  private constructor() {
+    // Orthographic camera for flat projection
+    this.orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1000);
+
+    // Dedicated scene for baking
+    this.bakingScene = new THREE.Scene();
+    this.bakingScene.background = null; // Transparent
+
+    // Lighting for baking - ambient + soft directional for depth
+    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    this.bakingScene.add(this.ambientLight);
+
+    this.directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    this.directionalLight.position.set(1, 2, 1);
+    this.bakingScene.add(this.directionalLight);
+  }
+
+  static getInstance(): TreeCardBaker {
+    if (!TreeCardBaker.instance) {
+      TreeCardBaker.instance = new TreeCardBaker();
+    }
+    return TreeCardBaker.instance;
+  }
+
+  /**
+   * Initialize the baker with a renderer.
+   * Must be called before baking.
+   */
+  init(renderer: CardBakerRenderer): boolean {
+    if (this.initialized) return true;
+
+    this.renderer = renderer;
+    const { textureSize } = CARD_BAKER_CONFIG;
+
+    // Create render targets for each card direction
+    const rtOptions = {
+      format: THREE.RGBAFormat,
+      type: THREE.UnsignedByteType,
+      minFilter: THREE.LinearMipmapLinearFilter,
+      magFilter: THREE.LinearFilter,
+      generateMipmaps: true,
+      colorSpace: THREE.SRGBColorSpace,
+    };
+
+    this.renderTargetX = new THREE.WebGLRenderTarget(
+      textureSize,
+      textureSize,
+      rtOptions,
+    );
+    this.renderTargetZ = new THREE.WebGLRenderTarget(
+      textureSize,
+      textureSize,
+      rtOptions,
+    );
+
+    this.initialized = true;
+    console.log(
+      `[TreeCardBaker] Initialized with ${textureSize}x${textureSize} textures`,
+    );
+    return true;
+  }
+
+  /**
+   * Check if baker is ready.
+   */
+  isReady(): boolean {
+    return this.initialized && this.renderer !== null;
+  }
+
+  /**
+   * Bake tree cards from a tree mesh group.
+   *
+   * Renders the tree from two orthogonal directions (X and Z) to create
+   * textures for cross-billboard cards.
+   *
+   * @param treeGroup - The LOD0 tree mesh group to bake
+   * @param dimensions - Tree dimensions for proper framing
+   * @returns Baked card data with textures, or null if baking fails
+   */
+  async bakeTreeCards(
+    treeGroup: THREE.Group,
+    dimensions: { width: number; height: number; trunkHeight: number },
+  ): Promise<BakedCardData | null> {
+    if (!this.isReady()) {
+      console.warn(
+        "[TreeCardBaker] Not initialized - using procedural fallback",
+      );
+      return null;
+    }
+
+    const { padding } = CARD_BAKER_CONFIG;
+    const { width, height, trunkHeight } = dimensions;
+
+    // Crown dimensions (foliage area above trunk)
+    const crownHeight = height - trunkHeight;
+    const crownCenterY = trunkHeight + crownHeight * 0.5;
+
+    // Card dimensions with padding
+    const cardWidth = width * (1 + padding * 2);
+    const cardHeight = (crownHeight + trunkHeight * 0.3) * (1 + padding * 2); // Include some trunk
+
+    // Clone tree for baking (don't modify original)
+    const bakeTree = treeGroup.clone(true);
+
+    // Ensure all materials are double-sided for proper baking
+    bakeTree.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material) {
+        const mat = child.material as THREE.Material;
+        mat.side = THREE.DoubleSide;
+      }
+    });
+
+    // Clear baking scene and add tree
+    this.clearBakingScene();
+    this.bakingScene.add(bakeTree);
+
+    // Position tree at origin for consistent baking
+    bakeTree.position.set(0, 0, 0);
+    bakeTree.updateMatrixWorld(true);
+
+    // Bake from X direction (looking along +X)
+    const textureX = await this.bakeFromDirection(
+      new THREE.Vector3(1, 0, 0),
+      cardWidth,
+      cardHeight,
+      crownCenterY,
+      this.renderTargetX!,
+    );
+
+    // Bake from Z direction (looking along +Z)
+    const textureZ = await this.bakeFromDirection(
+      new THREE.Vector3(0, 0, 1),
+      cardWidth,
+      cardHeight,
+      crownCenterY,
+      this.renderTargetZ!,
+    );
+
+    // Remove tree from baking scene
+    this.bakingScene.remove(bakeTree);
+
+    // Dispose cloned tree
+    bakeTree.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        // Don't dispose geometry/material - they're shared with original
+      }
+    });
+
+    if (!textureX || !textureZ) {
+      console.warn("[TreeCardBaker] Failed to bake textures");
+      return null;
+    }
+
+    return {
+      textureX,
+      textureZ,
+      cardWidth,
+      cardHeight,
+    };
+  }
+
+  /**
+   * Bake from a specific direction.
+   * Creates a new texture with copied data for each bake.
+   */
+  private async bakeFromDirection(
+    direction: THREE.Vector3,
+    width: number,
+    height: number,
+    centerY: number,
+    renderTarget: THREE.WebGLRenderTarget,
+  ): Promise<THREE.Texture | null> {
+    if (!this.renderer) return null;
+
+    const { textureSize } = CARD_BAKER_CONFIG;
+
+    // Setup orthographic camera bounds
+    this.orthoCamera.left = -width / 2;
+    this.orthoCamera.right = width / 2;
+    this.orthoCamera.top = centerY + height / 2;
+    this.orthoCamera.bottom = centerY - height / 2;
+    this.orthoCamera.near = 0.01;
+    this.orthoCamera.far = Math.max(width, height) * 4;
+    this.orthoCamera.updateProjectionMatrix();
+
+    // Position camera looking at tree center from the direction
+    const cameraDistance = Math.max(width, height) * 2;
+    const cameraTarget = new THREE.Vector3(0, centerY, 0);
+    const cameraPos = cameraTarget
+      .clone()
+      .add(direction.clone().multiplyScalar(cameraDistance));
+
+    this.orthoCamera.position.copy(cameraPos);
+    this.orthoCamera.lookAt(cameraTarget);
+    this.orthoCamera.up.set(0, 1, 0);
+
+    // Render to target
+    const originalRenderTarget = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(renderTarget);
+    this.renderer.setClearColor(CARD_BAKER_CONFIG.backgroundColor, 0);
+    this.renderer.clear();
+
+    // Render with WebGPU async
+    await this.renderer.renderAsync(this.bakingScene, this.orthoCamera);
+
+    // Read pixels back from render target to create independent texture
+    // This ensures the texture data is captured before the render target is reused
+    const pixelBuffer = new Uint8Array(textureSize * textureSize * 4);
+
+    try {
+      // WebGPU async read
+      await this.renderer.readRenderTargetPixelsAsync(
+        renderTarget,
+        0,
+        0,
+        textureSize,
+        textureSize,
+        pixelBuffer,
+      );
+    } catch {
+      // Fallback: use the render target texture directly (may cause issues)
+      console.warn(
+        "[TreeCardBaker] Failed to read pixels, using render target texture directly",
+      );
+      this.renderer.setRenderTarget(originalRenderTarget);
+      return renderTarget.texture;
+    }
+
+    // Restore render target
+    this.renderer.setRenderTarget(originalRenderTarget);
+
+    // Create DataTexture from pixel buffer
+    const texture = new THREE.DataTexture(
+      pixelBuffer,
+      textureSize,
+      textureSize,
+      THREE.RGBAFormat,
+      THREE.UnsignedByteType,
+    );
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = true;
+    texture.flipY = true; // WebGL/WebGPU render targets are flipped
+    texture.needsUpdate = true;
+
+    return texture;
+  }
+
+  /**
+   * Clear the baking scene of all objects except lights.
+   */
+  private clearBakingScene(): void {
+    const toRemove: THREE.Object3D[] = [];
+    this.bakingScene.traverse((child) => {
+      if (
+        child !== this.bakingScene &&
+        child !== this.ambientLight &&
+        child !== this.directionalLight
+      ) {
+        toRemove.push(child);
+      }
+    });
+    for (const obj of toRemove) {
+      this.bakingScene.remove(obj);
+    }
+  }
+
+  /**
+   * Dispose resources.
+   */
+  dispose(): void {
+    this.renderTargetX?.dispose();
+    this.renderTargetZ?.dispose();
+    this.renderTargetX = null;
+    this.renderTargetZ = null;
+    this.renderer = null;
+    this.initialized = false;
+    TreeCardBaker.instance = null;
+  }
+}
+
+/**
+ * Get the global TreeCardBaker instance.
+ */
+export function getTreeCardBaker(): TreeCardBaker {
+  return TreeCardBaker.getInstance();
+}
+
+/**
+ * Initialize the tree card baker with a renderer.
+ * Should be called once the renderer is available.
+ */
+export function initTreeCardBaker(renderer: CardBakerRenderer): boolean {
+  return TreeCardBaker.getInstance().init(renderer);
+}
 
 // TSL functions from three/webgpu
 const {
@@ -104,12 +476,25 @@ const {
 const VARIANTS_PER_PRESET = 3;
 
 /**
+ * USE TRADITIONAL CARDS FOR LOD2
+ * When true, LOD2 uses cross-billboard cards instead of simplified trunk geometry.
+ * This is the classic SpeedTree approach for distant trees:
+ * - Simple trunk cylinder
+ * - Two perpendicular billboard planes with procedural crown texture
+ * - Looks good from any angle
+ * - Only ~12 triangles per tree
+ */
+const USE_TRADITIONAL_CARDS_LOD2 = true;
+
+/**
  * Cache version - increment this when the generation algorithm changes
  * to invalidate cached variants and force regeneration.
  *
  * Version 2: Mobile-optimized LOD geometry (cheaper trees, trunk-only LOD1/LOD2)
+ * Version 5: Switch to traditional card trees for LOD2 (SpeedTree style)
+ * Version 6: Baked tree card textures for accurate LOD2 appearance
  */
-const CACHE_VERSION = 4; // Bumped to include leaf instances serialization for cluster generation
+const CACHE_VERSION = 6; // Bumped to use baked tree cards for LOD2
 
 /**
  * Crown shape types for LOD2 procedural billboards.
@@ -160,9 +545,26 @@ let worldRef: World | null = null;
 /**
  * Set the world reference for instancer registration.
  * Call this during game initialization.
+ * Also initializes the tree card baker if renderer is available.
  */
 export function setProcgenTreeWorld(world: World): void {
   worldRef = world;
+
+  // Initialize tree card baker if renderer is available
+  const graphics = world.graphics as
+    | { renderer?: CardBakerRenderer }
+    | undefined;
+  if (graphics?.renderer) {
+    const baker = getTreeCardBaker();
+    if (!baker.isReady()) {
+      const success = baker.init(graphics.renderer);
+      if (success) {
+        console.log(
+          "[ProcgenTreeCache] TreeCardBaker initialized with world renderer",
+        );
+      }
+    }
+  }
 }
 
 /** Base seeds for variant generation (spread apart for visual diversity) */
@@ -215,36 +617,35 @@ const LOD0_GEOMETRY_OPTIONS = {
 };
 
 /**
- * LOD1 geometry options - Trunk only (no branches)
- * Target: ~100-200 triangles per tree
+ * LOD1 geometry options - Trunk + main branches
+ * Target: ~300-400 triangles per tree
  *
- * LOD1 is used for trees 25-50m away. Trunk silhouette is enough.
+ * LOD1 is used for trees 25-50m away. Main branch structure visible.
  * Leaves at 50% density handled by clusters.
  *
  * Budget breakdown:
- * - 1 stem (trunk) × ~6 ring samples × 3 radial × 2 tris = ~36 tris
+ * - 10 stems × ~6 ring samples × 3 radial × 2 tris = ~360 branch tris
  * - Leaf clusters at 50% density (separate draw call)
- * - Total: ~36 trunk tris + clusters
  */
 const LOD1_GEOMETRY_OPTIONS = {
   radialSegments: 3, // Triangle cross-section
   maxLeaves: 0, // Clusters handle leaves at 50% density
-  maxBranchDepth: 0, // TRUNK ONLY - no branches
-  maxStems: 1, // Just the trunk
+  maxBranchDepth: 1, // Trunk + first level branches (main structure visible)
+  maxStems: 10, // Fewer branches than LOD0 but still recognizable
   segmentSamples: 2,
 };
 
 /**
- * LOD2 geometry options - Same as LOD1 (trunk only)
+ * LOD2 geometry options - Trunk + main branches (same as LOD1)
  * Leaves at 80% culled (20% visible) via clusters
  *
- * At 50-100m, trunk silhouette + sparse clusters is sufficient.
+ * At 50-100m, main branch structure + sparse clusters is sufficient.
  */
 const LOD2_GEOMETRY_OPTIONS = {
   radialSegments: 3,
   maxLeaves: 0,
-  maxBranchDepth: 0,
-  maxStems: 1,
+  maxBranchDepth: 1, // Trunk + first level branches (main structure visible)
+  maxStems: 10, // Main branches visible at distance
   segmentSamples: 1, // Minimal curve detail
 };
 
@@ -715,14 +1116,111 @@ function createProceduralCrownMaterialTSL(
 }
 
 /**
+ * Create a material using baked tree texture.
+ * This shows the actual rendered tree appearance instead of procedural silhouette.
+ */
+function createBakedCardMaterial(
+  texture: THREE.Texture,
+): MeshBasicNodeMaterial {
+  const material = new MeshBasicNodeMaterial();
+
+  // Use the baked texture directly
+  material.map = texture;
+  material.transparent = true;
+  material.alphaTest = 0.1;
+  material.side = THREE.DoubleSide;
+  material.depthWrite = true;
+
+  return material;
+}
+
+/**
+ * Generate LOD2 "card tree" using BAKED textures from actual tree geometry.
+ *
+ * This creates cross-billboard cards with textures rendered from the actual
+ * LOD0 tree, ensuring:
+ * - Leaves properly cover branches
+ * - Accurate silhouette matches the tree
+ * - Colors and details are preserved
+ *
+ * Falls back to procedural if baking is not available.
+ */
+function generateLOD2CardTreeWithBakedTextures(
+  dimensions: { width: number; height: number; trunkHeight: number },
+  barkColor: THREE.Color,
+  bakedData: BakedCardData,
+): { group: THREE.Group; vertexCount: number; triangleCount: number } {
+  const group = new THREE.Group();
+  group.name = "LOD2_CardTree_Baked";
+
+  const { width, height, trunkHeight } = dimensions;
+  const trunkRadius = width * 0.06;
+  const { cardWidth, cardHeight, textureX, textureZ } = bakedData;
+
+  // Create simple trunk (3-sided for minimum tris)
+  const trunkGeometry = new THREE.CylinderGeometry(
+    trunkRadius * 0.6,
+    trunkRadius,
+    trunkHeight,
+    LOD2_CARD_OPTIONS.trunkSegments,
+    1,
+    false,
+  );
+  const trunkMaterial = new MeshBasicNodeMaterial();
+  trunkMaterial.color = new THREE.Color(barkColor);
+  const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+  trunk.position.y = trunkHeight / 2;
+  trunk.name = "LOD2_Trunk";
+  group.add(trunk);
+
+  // Create card geometry matching baked dimensions
+  const cardGeometry = new THREE.PlaneGeometry(cardWidth, cardHeight);
+
+  // Position cards at crown center (accounting for trunk in baked image)
+  const crownHeight = height - trunkHeight;
+  const crownCenterY = trunkHeight + crownHeight * 0.5;
+
+  // Card 1: Facing X axis - use textureX
+  const card1Material = createBakedCardMaterial(textureX);
+  const card1 = new THREE.Mesh(cardGeometry, card1Material);
+  card1.position.set(0, crownCenterY, 0);
+  card1.rotation.y = Math.PI / 2; // Face along X (perpendicular to X axis)
+  card1.name = "LOD2_BakedCard_X";
+  group.add(card1);
+
+  // Card 2: Facing Z axis - use textureZ
+  const card2Material = createBakedCardMaterial(textureZ);
+  const card2 = new THREE.Mesh(cardGeometry, card2Material);
+  card2.position.set(0, crownCenterY, 0);
+  card2.rotation.y = 0; // Face along Z (perpendicular to Z axis)
+  card2.name = "LOD2_BakedCard_Z";
+  group.add(card2);
+
+  // Calculate stats
+  const trunkVerts = (LOD2_CARD_OPTIONS.trunkSegments + 1) * 2;
+  const trunkTris = LOD2_CARD_OPTIONS.trunkSegments * 2;
+  const cardVerts = 4 * 2;
+  const cardTris = 2 * 2;
+
+  return {
+    group,
+    vertexCount: trunkVerts + cardVerts,
+    triangleCount: trunkTris + cardTris,
+  };
+}
+
+/**
  * Generate LOD2 "card tree" using cross-billboard technique.
  *
  * Cross-billboard: Two perpendicular planes intersecting at center.
  * This is the industry-standard technique for distant vegetation:
  * - Looks good from any viewing angle
  * - Only 4 triangles for the foliage
- * - Procedural crown shader for organic silhouette
+ * - Procedural crown shader for organic silhouette (fallback)
  * - Crown shape matches tree type (rounded, conical, weeping, etc.)
+ *
+ * NOTE: When baked textures are available via generateLOD2CardTreeWithBakedTextures,
+ * that function should be preferred for accurate tree appearance.
  *
  * Total: ~12 triangles per tree
  */
@@ -1076,19 +1574,69 @@ async function generateVariants(presetName: string): Promise<TreeVariant[]> {
       // Yield after LOD1 generation
       await yield_();
 
-      // Generate LOD2 trunk-only geometry (leaves handled by clusters at 20% density)
-      // Falls back to card tree if trunk generation fails
-      let lod2Result = await generateLOD2Tree(presetName, seed);
+      // Generate LOD2 geometry - prioritize BAKED textures for accurate appearance
+      // Baked cards render the actual LOD0 tree to textures (best quality)
+      // Falls back to procedural cards if baking not available
+      let lod2Result: {
+        group: THREE.Group;
+        vertexCount: number;
+        triangleCount: number;
+      };
 
-      if (!lod2Result) {
-        // Fallback to card tree if trunk generation fails
-        lod2Result = generateLOD2CardTree(
-          dimensions,
-          leafColor,
-          barkColor,
-          presetName,
-          seed,
-        );
+      if (USE_TRADITIONAL_CARDS_LOD2) {
+        // Try to bake actual tree textures for accurate LOD2 cards
+        const baker = getTreeCardBaker();
+        let bakedData: BakedCardData | null = null;
+
+        if (baker.isReady()) {
+          try {
+            bakedData = await baker.bakeTreeCards(result.group, dimensions);
+          } catch (err) {
+            console.warn(
+              `[ProcgenTreeCache] Failed to bake tree cards for ${presetName}:`,
+              err,
+            );
+          }
+        }
+
+        if (bakedData) {
+          // Use baked textures (best quality - actual tree appearance)
+          lod2Result = generateLOD2CardTreeWithBakedTextures(
+            dimensions,
+            barkColor,
+            bakedData,
+          );
+          console.log(
+            `[ProcgenTreeCache] ${presetName} LOD2: Using BAKED card tree (${lod2Result.triangleCount} tris)`,
+          );
+        } else {
+          // Fallback to procedural crown shader
+          lod2Result = generateLOD2CardTree(
+            dimensions,
+            leafColor,
+            barkColor,
+            presetName,
+            seed,
+          );
+          console.log(
+            `[ProcgenTreeCache] ${presetName} LOD2: Using procedural card tree (${lod2Result.triangleCount} tris)`,
+          );
+        }
+      } else {
+        // Use trunk-only geometry (leaves handled by clusters)
+        const trunkResult = await generateLOD2Tree(presetName, seed);
+        if (trunkResult) {
+          lod2Result = trunkResult;
+        } else {
+          // Fallback to card tree if trunk generation fails
+          lod2Result = generateLOD2CardTree(
+            dimensions,
+            leafColor,
+            barkColor,
+            presetName,
+            seed,
+          );
+        }
       }
 
       // Store the variant

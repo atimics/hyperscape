@@ -10,6 +10,11 @@
  */
 
 import {
+  OctahedralImpostor,
+  OctahedronType,
+  type ImpostorInstance,
+} from "@hyperscape/impostor";
+import {
   generateFromPreset,
   getPresetNames,
   RenderQualityEnum,
@@ -26,11 +31,14 @@ import {
   Download,
   Trash2,
   Database,
+  Eye,
+  Sun,
+  Image,
 } from "lucide-react";
 import React, { useRef, useEffect, useState, useCallback } from "react";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
-import { MeshStandardNodeMaterial } from "three/webgpu";
+import { MeshStandardNodeMaterial, MeshBasicNodeMaterial } from "three/webgpu";
 
 import type { PlantPreset as PlantPresetType } from "@/types/ProcgenPresets";
 import { notify } from "@/utils/notify";
@@ -51,6 +59,13 @@ export const PlantGenPage: React.FC = () => {
   const controlsRef = useRef<OrbitControls | null>(null);
   const currentPlantRef = useRef<PlantGenerationResult | null>(null);
   const batchPlantsRef = useRef<PlantGenerationResult[]>([]);
+
+  // Impostor refs
+  const impostorRef = useRef<OctahedralImpostor | null>(null);
+  const impostorInstanceRef = useRef<ImpostorInstance | null>(null);
+  const impostorMeshRef = useRef<THREE.Mesh | null>(null);
+  const atlasDebugPlaneRef = useRef<THREE.Mesh | null>(null);
+  const normalAtlasDebugPlaneRef = useRef<THREE.Mesh | null>(null);
 
   // Generation state
   const [preset, setPreset] = useState<PlantPresetName>("monstera");
@@ -75,6 +90,19 @@ export const PlantGenPage: React.FC = () => {
   const [savedPresets, setSavedPresets] = useState<PlantPresetType[]>([]);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [newPresetName, setNewPresetName] = useState("");
+
+  // Impostor state
+  const [showImpostor, setShowImpostor] = useState(false);
+  const [impostorSettings, setImpostorSettings] = useState({
+    atlasSize: 1024,
+    gridSize: 12,
+    enableLighting: true,
+  });
+  const [isGeneratingImpostor, setIsGeneratingImpostor] = useState(false);
+  const [impostorStats, setImpostorStats] = useState<{
+    hasNormalAtlas: boolean;
+    atlasSize: number;
+  } | null>(null);
 
   const presetNames = getPresetNames();
 
@@ -632,6 +660,139 @@ export const PlantGenPage: React.FC = () => {
     [batchResults],
   );
 
+  // Clear impostor preview
+  const clearImpostorPreview = useCallback(() => {
+    if (!sceneRef.current) return;
+
+    if (impostorMeshRef.current) {
+      sceneRef.current.remove(impostorMeshRef.current);
+      impostorMeshRef.current.geometry.dispose();
+      if (impostorMeshRef.current.material instanceof THREE.Material) {
+        impostorMeshRef.current.material.dispose();
+      }
+      impostorMeshRef.current = null;
+    }
+
+    if (atlasDebugPlaneRef.current) {
+      sceneRef.current.remove(atlasDebugPlaneRef.current);
+      atlasDebugPlaneRef.current.geometry.dispose();
+      if (atlasDebugPlaneRef.current.material instanceof THREE.Material) {
+        atlasDebugPlaneRef.current.material.dispose();
+      }
+      atlasDebugPlaneRef.current = null;
+    }
+
+    if (normalAtlasDebugPlaneRef.current) {
+      sceneRef.current.remove(normalAtlasDebugPlaneRef.current);
+      normalAtlasDebugPlaneRef.current.geometry.dispose();
+      if (normalAtlasDebugPlaneRef.current.material instanceof THREE.Material) {
+        normalAtlasDebugPlaneRef.current.material.dispose();
+      }
+      normalAtlasDebugPlaneRef.current = null;
+    }
+
+    impostorInstanceRef.current = null;
+    setImpostorStats(null);
+  }, []);
+
+  // Generate impostor with normal atlas and lighting
+  const generateImpostor = useCallback(async () => {
+    if (
+      !sceneRef.current ||
+      !rendererRef.current ||
+      !currentPlantRef.current?.group
+    ) {
+      notify.error("Generate a plant first");
+      return;
+    }
+
+    setIsGeneratingImpostor(true);
+    clearImpostorPreview();
+
+    try {
+      // Create impostor
+      const impostor = new OctahedralImpostor(rendererRef.current);
+      impostorRef.current = impostor;
+
+      // Bake with normals for lighting
+      console.log("[PlantGenPage] Baking impostor with normals...");
+      const bakeResult = await impostor.bakeWithNormals(
+        currentPlantRef.current.group,
+        {
+          atlasWidth: impostorSettings.atlasSize,
+          atlasHeight: impostorSettings.atlasSize,
+          gridSizeX: impostorSettings.gridSize,
+          gridSizeY: impostorSettings.gridSize,
+          octType: OctahedronType.HEMI, // Plants are typically viewed from ground level
+          backgroundColor: 0x000000,
+          backgroundAlpha: 0,
+        },
+      );
+
+      console.log("[PlantGenPage] Bake result:", bakeResult);
+
+      // Create instance with TSL material for WebGPU
+      const instance = impostor.createInstance(bakeResult, 1, { useTSL: true });
+      impostorInstanceRef.current = instance;
+
+      // Position impostor next to plant
+      const plantBounds = new THREE.Box3().setFromObject(
+        currentPlantRef.current.group,
+      );
+      const plantSize = new THREE.Vector3();
+      plantBounds.getSize(plantSize);
+      const offsetX = plantSize.x + 1.5;
+
+      instance.mesh.position.set(offsetX, plantSize.y / 2, 0);
+      instance.mesh.name = "PlantImpostor";
+      sceneRef.current.add(instance.mesh);
+      impostorMeshRef.current = instance.mesh;
+
+      // Add debug planes for atlases
+      const atlasTexture = bakeResult.atlasTexture;
+      const normalAtlasTexture = bakeResult.normalAtlasTexture;
+
+      // Color atlas debug plane
+      if (atlasTexture) {
+        const planeMat = new MeshBasicNodeMaterial();
+        planeMat.map = atlasTexture;
+        planeMat.side = THREE.DoubleSide;
+        const planeGeo = new THREE.PlaneGeometry(2, 2);
+        const plane = new THREE.Mesh(planeGeo, planeMat);
+        plane.position.set(offsetX - 1.5, 3, 0);
+        plane.name = "ColorAtlasDebug";
+        sceneRef.current.add(plane);
+        atlasDebugPlaneRef.current = plane;
+      }
+
+      // Normal atlas debug plane
+      if (normalAtlasTexture) {
+        const normalMat = new MeshBasicNodeMaterial();
+        normalMat.map = normalAtlasTexture;
+        normalMat.side = THREE.DoubleSide;
+        const normalGeo = new THREE.PlaneGeometry(2, 2);
+        const normalPlane = new THREE.Mesh(normalGeo, normalMat);
+        normalPlane.position.set(offsetX + 1.5, 3, 0);
+        normalPlane.name = "NormalAtlasDebug";
+        sceneRef.current.add(normalPlane);
+        normalAtlasDebugPlaneRef.current = normalPlane;
+      }
+
+      setImpostorStats({
+        hasNormalAtlas: !!normalAtlasTexture,
+        atlasSize: impostorSettings.atlasSize,
+      });
+
+      setShowImpostor(true);
+      notify.success("Impostor generated with normal atlas");
+    } catch (error) {
+      console.error("Impostor generation error:", error);
+      notify.error("Failed to generate impostor");
+    }
+
+    setIsGeneratingImpostor(false);
+  }, [currentPlantRef, impostorSettings, clearImpostorPreview]);
+
   // Generate initial plant
   useEffect(() => {
     generatePlant();
@@ -880,6 +1041,117 @@ export const PlantGenPage: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* Impostor Settings */}
+          <div className="bg-bg-secondary rounded-lg p-4 border border-border-primary">
+            <h3 className="font-semibold text-text-primary mb-3 flex items-center gap-2">
+              <Image size={18} />
+              Impostor Settings
+            </h3>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-text-secondary mb-1">
+                  Atlas Size: {impostorSettings.atlasSize}px
+                </label>
+                <select
+                  value={impostorSettings.atlasSize}
+                  onChange={(e) =>
+                    setImpostorSettings((prev) => ({
+                      ...prev,
+                      atlasSize: parseInt(e.target.value),
+                    }))
+                  }
+                  className="w-full px-3 py-2 bg-bg-tertiary border border-border-primary rounded-md text-text-primary text-sm"
+                >
+                  <option value={512}>512px</option>
+                  <option value={1024}>1024px</option>
+                  <option value={2048}>2048px</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs text-text-secondary mb-1">
+                  Grid Size: {impostorSettings.gridSize}x
+                  {impostorSettings.gridSize}
+                </label>
+                <input
+                  type="range"
+                  min={8}
+                  max={24}
+                  step={2}
+                  value={impostorSettings.gridSize}
+                  onChange={(e) =>
+                    setImpostorSettings((prev) => ({
+                      ...prev,
+                      gridSize: parseInt(e.target.value),
+                    }))
+                  }
+                  className="w-full"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 text-sm text-text-primary cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={impostorSettings.enableLighting}
+                  onChange={(e) =>
+                    setImpostorSettings((prev) => ({
+                      ...prev,
+                      enableLighting: e.target.checked,
+                    }))
+                  }
+                  className="rounded"
+                />
+                <Sun size={14} />
+                Enable Lighting (Normal Atlas)
+              </label>
+
+              <button
+                onClick={generateImpostor}
+                disabled={isGeneratingImpostor || !currentPlantRef.current}
+                className="w-full py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-md transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                <Eye size={16} />
+                {isGeneratingImpostor ? "Generating..." : "Generate Impostor"}
+              </button>
+
+              {showImpostor && impostorStats && (
+                <div className="p-2 bg-bg-tertiary rounded-md text-xs text-text-secondary">
+                  <div className="flex justify-between">
+                    <span>Normal Atlas:</span>
+                    <span
+                      className={
+                        impostorStats.hasNormalAtlas
+                          ? "text-green-500"
+                          : "text-red-500"
+                      }
+                    >
+                      {impostorStats.hasNormalAtlas ? "✓ Yes" : "✗ No"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Atlas Size:</span>
+                    <span className="text-text-primary">
+                      {impostorStats.atlasSize}px
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {showImpostor && (
+                <button
+                  onClick={() => {
+                    clearImpostorPreview();
+                    setShowImpostor(false);
+                  }}
+                  className="w-full py-1.5 text-xs bg-bg-tertiary hover:bg-bg-primary text-text-secondary rounded transition-colors"
+                >
+                  Hide Impostor
+                </button>
+              )}
+            </div>
+          </div>
 
           {/* Batch Results Grid */}
           {batchMode && batchResults.length > 0 && (

@@ -11,10 +11,26 @@ export default defineConfig({
     alias: {
       "@hyperscape/procgen": resolve(__dirname, "../src"),
       "@hyperscape/impostor": resolve(__dirname, "../../impostors/src"),
+      // Use built client bundle for shared to avoid server-only imports
+      "@hyperscape/shared": resolve(
+        __dirname,
+        "../../shared/build/framework.client.js",
+      ),
     },
+  },
+  optimizeDeps: {
+    // Exclude yoga-layout from dep optimization to avoid top-level await issues
+    exclude: ["yoga-layout"],
+    esbuildOptions: {
+      target: "esnext",
+    },
+  },
+  esbuild: {
+    target: "esnext",
   },
   build: {
     outDir: resolve(__dirname, "../dist-viewer"),
     emptyOutDir: true,
+    target: "esnext",
   },
 });

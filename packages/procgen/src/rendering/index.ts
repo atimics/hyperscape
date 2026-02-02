@@ -7,7 +7,7 @@ export {
   createDefaultBranchMaterial,
   createDefaultLeafMaterial,
   createDefaultBlossomMaterial,
-  createInstancedLeafMaterial,
+  createInstancedLeafMaterialTSL,
   disposeTreeMesh,
   type TreeMeshOptions,
   type TreeMeshResult,

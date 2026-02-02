@@ -39,6 +39,13 @@ import type { World } from "../../../types";
 // ============================================================================
 
 /**
+ * TEMPORARY: Disable all animated mob impostors.
+ * When true, animated mobs use GPU dissolve fade instead of animated impostor billboards.
+ * Set to false to re-enable animated impostor system.
+ */
+const DISABLE_IMPOSTORS = true;
+
+/**
  * Animated impostor configuration
  *
  * Uses minimal asymmetric grid (6x3 = 18 views) for maximum performance:
@@ -161,6 +168,8 @@ export class AnimatedImpostorManager {
    * - "npc_banker" (all bankers share this)
    * - "player_default" (all default player models share this)
    *
+   * NOTE: When DISABLE_IMPOSTORS is true, this function returns false immediately.
+   *
    * @param modelId - Model type identifier (NOT instance ID)
    * @param source - The animated mesh (used only if not cached)
    * @param mixer - AnimationMixer (used only if not cached)
@@ -173,6 +182,9 @@ export class AnimatedImpostorManager {
     mixer: THREE.AnimationMixer,
     walkClip: THREE.AnimationClip | null | undefined,
   ): Promise<boolean> {
+    // Impostors disabled - using dissolve fade instead
+    if (DISABLE_IMPOSTORS) return false;
+
     // Skip on server
     if (this.world.isServer) return false;
 

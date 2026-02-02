@@ -232,7 +232,7 @@ export function GameClient({ wsUrl, onSetup }: GameClientProps) {
       }
 
       const baseEnvironment = {
-        model: "asset://world/base-environment.glb",
+        // model removed - base-environment.glb doesn't exist
         bg: "asset://world/day2-2k.jpg",
         hdr: "asset://world/day2.hdr",
         sunDirection: new THREE.Vector3(-1, -2, -2).normalize(),

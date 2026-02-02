@@ -925,6 +925,7 @@ const WorldTabContent: React.FC<WorldTabContentProps> = ({
             state.editing.world ? (
               <TileBasedTerrain
                 config={state.editing.world.foundation.config}
+                roads={state.editing.world.foundation.roads}
                 selectedId={state.editing.selection?.id}
                 flyModeEnabled={flyModeEnabled}
                 onFlyModeChange={setFlyModeEnabled}

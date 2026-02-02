@@ -63,21 +63,7 @@ const parentRestWorldRotation = new THREE.Quaternion();
  * No manual compensation needed!
  */
 
-const queryParamsCache: Record<string, Record<string, string>> = {};
-
-function getQueryParams(url: string): Record<string, string> {
-  if (!queryParamsCache[url]) {
-    const params: Record<string, string> = {};
-    const urlObj = new URL(url);
-    for (const [key, value] of urlObj.searchParams.entries()) {
-      params[key] = value;
-    }
-    queryParamsCache[url] = params;
-  }
-  return queryParamsCache[url];
-}
-
-export function createEmoteFactory(glb: GLBData, url: string) {
+export function createEmoteFactory(glb: GLBData, _url: string) {
   // console.time('emote-init')
 
   if (!glb.animations || glb.animations.length === 0) {
@@ -87,18 +73,13 @@ export function createEmoteFactory(glb: GLBData, url: string) {
   const clip = glb.animations[0];
 
   const scale = (glb.scene as THREE.Scene).children[0].scale.x; // armature should be here?
-  const opts = getQueryParams(url);
-  const allowHipsTranslationY = opts.ty === "1" || opts.txyz === "1";
-  const allowHipsTranslationXYZ = opts.txyz === "1";
-  const allowBoneTranslations = opts.tb === "1";
 
   // no matter what vrm/emote combo we use for some reason avatars
   // levitate roughly 5cm above ground. this is a hack but it works.
-  // Disable when we are preserving hips Y translation (grounded clips).
-  const yOffset = allowHipsTranslationY ? 0 : -0.05 / scale;
+  const yOffset = -0.05 / scale;
 
   // we only keep tracks that are:
-  // 1. the root/hips position (or all bone positions when enabled)
+  // 1. the root position
   // 2. the quaternions
   // scale and other positions are rejected.
   // NOTE: there is a risk that the first position track is not the root but
@@ -108,10 +89,7 @@ export function createEmoteFactory(glb: GLBData, url: string) {
   clip.tracks = clip.tracks.filter((track) => {
     if (track instanceof THREE.VectorKeyframeTrack) {
       const [name, type] = track.name.split(".");
-      if (type !== "position") return false;
-      if (allowBoneTranslations) {
-        return true;
-      }
+      if (type !== "position") return;
       // we need both root and hip bones
       if (name === "Root") {
         _haveRoot = true;
@@ -229,42 +207,11 @@ export function createEmoteFactory(glb: GLBData, url: string) {
               ),
             );
           } else if (track instanceof THREE.VectorKeyframeTrack) {
-            if (!allowHipsTranslationY && !allowBoneTranslations) {
-              // Skip position tracks entirely for non-grounded clips
-              // This prevents root motion (sliding, bobbing, sinking)
-              return;
-            }
-            if (!vrmBoneName) {
-              return;
-            }
-            if (vrmBoneName !== "hips" && !allowBoneTranslations) {
-              // Only allow vertical translation on hips (unless bone translations enabled)
-              return;
-            }
-
-            const scaledValues = new Float32Array(track.values.length);
-            for (let i = 0; i < track.values.length; i += 3) {
-              const x = track.values[i] * _scaler;
-              const y = track.values[i + 1] * _scaler;
-              const z = track.values[i + 2] * _scaler;
-              if (vrmBoneName === "hips") {
-                scaledValues[i] = allowHipsTranslationXYZ ? x : 0;
-                scaledValues[i + 1] = y;
-                scaledValues[i + 2] = allowHipsTranslationXYZ ? z : 0;
-              } else {
-                scaledValues[i] = x;
-                scaledValues[i + 1] = y;
-                scaledValues[i + 2] = z;
-              }
-            }
-
-            tracks.push(
-              new THREE.VectorKeyframeTrack(
-                `${vrmNodeName}.${propertyName}`,
-                track.times,
-                scaledValues,
-              ),
-            );
+            // SKIP position tracks entirely - don't add them to the animation
+            // This prevents root motion (sliding, bobbing, sinking)
+            // VRM skeleton will use its bind pose position instead
+            // Character position is controlled by game engine, not animation
+            // Don't push this track - effectively removes position animation
           }
         }
       });

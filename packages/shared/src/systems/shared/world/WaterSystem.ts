@@ -61,6 +61,9 @@ const WATER_LOD = {
   MEDIUM_DISTANCE: 200, // Distance threshold for medium->low LOD
 };
 
+// Maximum distance for reflection camera to be active (only for lakes within this range)
+const REFLECTION_MAX_DISTANCE = 200;
+
 type WaveParams = {
   w: number;
   phi: number;
@@ -281,6 +284,31 @@ export class WaterSystem {
   addToScene(scene: THREE.Scene): void {
     if (this.reflection?.target) {
       scene.add(this.reflection.target);
+
+      // Configure reflector's virtual camera to only see layer 0 (terrain)
+      // This excludes grass (layer 1), flowers, and other vegetation from reflections
+      // The reflector internally creates a camera we need to configure
+      const reflectorObj = this.reflection.target as THREE.Object3D & {
+        camera?: THREE.Camera;
+      };
+      if (reflectorObj.camera) {
+        reflectorObj.camera.layers.set(0); // Only see layer 0 (terrain, buildings)
+        reflectorObj.camera.layers.enable(2); // Also see floors
+        console.log(
+          "[WaterSystem] Reflector camera configured to ignore grass (layer 1)",
+        );
+      }
+
+      // Set up callbacks to track when reflection camera is rendering
+      // This allows LOD systems to force impostor mode during reflection passes
+      const world = this.world;
+      this.reflection.target.onBeforeRender = () => {
+        world.isRenderingReflection = true;
+      };
+      this.reflection.target.onAfterRender = () => {
+        world.isRenderingReflection = false;
+      };
+
       console.log(
         "[WaterSystem] Added reflector target to scene at y=",
         this.reflection.target.position.y,
@@ -1352,9 +1380,10 @@ export class WaterSystem {
   }
 
   /**
-   * Check if any lake water meshes are in the camera frustum and enable/disable
-   * the reflection render pass accordingly. This saves a full scene render
-   * when no lake water is visible. Ocean water never uses reflections.
+   * Check if any lake water meshes are in the camera frustum, within range,
+   * and enable/disable the reflection render pass accordingly. This saves a
+   * full scene render when no lake water is visible or nearby.
+   * Ocean water NEVER uses reflections regardless of distance.
    */
   private updateReflectionVisibility(): void {
     if (!this.reflection?.target) {
@@ -1395,8 +1424,11 @@ export class WaterSystem {
     );
     this.frustum.setFromProjectionMatrix(this.projScreenMatrix);
 
-    // Check if any LAKE water mesh is visible and in the frustum
-    // Ocean water never uses reflections
+    // Get camera position for distance checks
+    const cameraPos = camera.position;
+
+    // Check if any LAKE water mesh is visible, in frustum, AND within range
+    // Ocean water NEVER uses reflections regardless of distance
     // OPTIMIZATION: Cap meshes checked per frame to prevent frame drops with many tiles
     const MAX_MESH_CHECKS = 20;
     let anyLakeWaterVisible = false;
@@ -1412,7 +1444,7 @@ export class WaterSystem {
       // Skip meshes that have been removed from scene or are hidden
       if (!mesh.parent || !mesh.visible) continue;
 
-      // Skip ocean water - it doesn't use reflections
+      // Skip ocean water - it NEVER uses reflections
       if (mesh.userData.waterType === "ocean") continue;
 
       checked++;
@@ -1429,6 +1461,15 @@ export class WaterSystem {
       this.tempSphere.copy(boundingSphere);
       this.tempSphere.applyMatrix4(mesh.matrixWorld);
 
+      // Check distance from camera to lake water (use sphere center)
+      // Only enable reflections for lakes within REFLECTION_MAX_DISTANCE (200m)
+      const distanceToLake = cameraPos.distanceTo(this.tempSphere.center);
+      if (distanceToLake > REFLECTION_MAX_DISTANCE + this.tempSphere.radius) {
+        // Lake is too far away - skip it
+        continue;
+      }
+
+      // Check if in frustum
       if (this.frustum.intersectsSphere(this.tempSphere)) {
         anyLakeWaterVisible = true;
         break;

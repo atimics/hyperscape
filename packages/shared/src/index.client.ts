@@ -128,6 +128,7 @@ export {
   tilesAdjacent,
   tilesWithinRange,
   TILE_SIZE,
+  parseTileKey,
   type TileCoord,
 } from "./systems/shared/movement/TileSystem";
 
@@ -672,3 +673,22 @@ export { CircularSpawnArea } from "./utils/physics/CircularSpawnArea";
 
 // Export terrain system
 export { TerrainSystem } from "./systems/shared";
+
+// Export pathfinding utilities (used by NavigationVisualizer and building navigation)
+export { BFSPathfinder } from "./systems/shared/movement/BFSPathfinder";
+export type { WalkabilityChecker } from "./systems/shared/movement/BFSPathfinder";
+
+// Export building collision utilities
+export {
+  cellToWorldTile,
+  rotateWallDirection,
+  getOppositeDirection,
+  toWallDirection,
+  tileKey as buildingTileKey,
+} from "./types/world/building-collision-types";
+export type {
+  WallDirection,
+  WallSegment,
+  StairTile,
+  FloorCollisionData,
+} from "./types/world/building-collision-types";

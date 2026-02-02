@@ -3,9 +3,15 @@
  *
  * Main class for procedural rock generation using noise displacement,
  * vertex colors, and configurable presets.
+ *
+ * Supports three color modes:
+ * - Vertex: Simple vertex colors (fastest, good for LOD)
+ * - Texture: Full TSL triplanar procedural textures
+ * - Blend: TSL triplanar textures blended with vertex colors
  */
 
 import * as THREE from "three";
+import { MeshStandardNodeMaterial } from "three/webgpu";
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 import type {
@@ -19,8 +25,11 @@ import type {
 import { BaseShape, ColorMode } from "./types";
 import { SimplexNoise, hashSeed } from "./noise";
 import { DEFAULT_PARAMS, getPreset, mergeParams } from "./presets";
-import { createTriplanarRockMaterial } from "./triplanarMaterial";
 import { clamp } from "../math/Vector3.js";
+import {
+  createRockMaterial,
+  createVertexColorRockMaterial,
+} from "./RockMaterialTSL.js";
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -57,21 +66,47 @@ function lerpColor(
 }
 
 // ============================================================================
+// SCRAPING TYPES
+// ============================================================================
+
+/**
+ * A scraping plane that flattens vertices on one side
+ */
+export interface ScrapePlane {
+  /** Point on the plane (origin) */
+  origin: THREE.Vector3;
+  /** Plane normal (direction of scrape) */
+  normal: THREE.Vector3;
+  /** Radius of effect (for circular disk scrapes) */
+  radius: number;
+  /** Strength of the scrape (0-1) */
+  strength: number;
+}
+
+// ============================================================================
 // ROCK GENERATOR CLASS
 // ============================================================================
 
 /**
  * Procedural rock generator
+ *
+ * Creates realistic rocks using:
+ * 1. Base geometry (icosahedron, sphere, box, etc.)
+ * 2. Scraping algorithm - creates flat faces by projecting vertices onto planes
+ * 3. FBM noise displacement - adds surface detail
+ * 4. Ridged noise - creates cracks and crevices
+ * 5. Laplacian smoothing - softens harsh edges
+ * 6. Vertex colors - height/slope-based coloring with AO
  */
 export class RockGenerator {
-  private readonly material: THREE.MeshStandardMaterial;
+  private readonly material: MeshStandardNodeMaterial;
 
   constructor() {
-    this.material = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.85,
-      metalness: 0.0,
-    });
+    // Use WebGPU-compatible MeshStandardNodeMaterial for proper lighting
+    this.material = new MeshStandardNodeMaterial();
+    this.material.vertexColors = true;
+    this.material.roughness = 0.85;
+    this.material.metalness = 0.0;
   }
 
   /**
@@ -125,6 +160,7 @@ export class RockGenerator {
     // Create noise generators
     const noise = new SimplexNoise(seedHash);
     const noise2 = new SimplexNoise(seedHash + 12345);
+    const noise3 = new SimplexNoise(seedHash + 67890); // For scraping randomization
 
     // Create base geometry
     let geometry = this.createBaseGeometry(
@@ -143,15 +179,30 @@ export class RockGenerator {
     const position = geometry.attributes.position;
     const vertexCount = position.count;
 
-    // Apply scale and noise displacement
+    // First pass: Apply scale
+    for (let i = 0; i < vertexCount; i++) {
+      const x = position.getX(i) * params.scale.x;
+      const y = position.getY(i) * params.scale.y;
+      const z = position.getZ(i) * params.scale.z;
+      position.setXYZ(i, x, y, z);
+    }
+
+    // Generate and apply scraping planes BEFORE noise
+    // This creates the characteristic flat faces of real rocks
+    if (params.scrape.count > 0 && params.scrape.strength > 0) {
+      const scrapePlanes = this.generateScrapePlanes(params, noise3);
+      // Cast is safe: we create non-interleaved geometry via mergeVertices
+      this.applyScraping(position as THREE.BufferAttribute, scrapePlanes);
+    }
+
+    // Second pass: Apply noise displacement
     let minY = Infinity;
     let maxY = -Infinity;
 
     for (let i = 0; i < vertexCount; i++) {
-      // Get position and apply scale
-      let x = position.getX(i) * params.scale.x;
-      let y = position.getY(i) * params.scale.y;
-      let z = position.getZ(i) * params.scale.z;
+      let x = position.getX(i);
+      let y = position.getY(i);
+      let z = position.getZ(i);
 
       // Get direction from center for displacement
       const len = Math.sqrt(x * x + y * y + z * z);
@@ -290,28 +341,19 @@ export class RockGenerator {
     geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 
     // Create material based on color mode
-    let material: THREE.Material;
+    let material: MeshStandardNodeMaterial;
 
-    if (
-      params.colorMode === ColorMode.Texture ||
-      params.colorMode === ColorMode.Blend
-    ) {
-      // Use triplanar shader for procedural textures
-      const triplanarMaterial = createTriplanarRockMaterial(params);
-
-      // For pure texture mode, set blend to 1.0 (full texture)
-      if (params.colorMode === ColorMode.Texture) {
-        triplanarMaterial.uniforms.textureBlend.value = 1.0;
-      }
-
-      material = triplanarMaterial;
+    if (params.colorMode === ColorMode.Texture) {
+      // Full TSL triplanar procedural texture (no vertex colors)
+      const { material: tslMaterial } = createRockMaterial(params, true);
+      material = tslMaterial;
+    } else if (params.colorMode === ColorMode.Blend) {
+      // TSL triplanar texture blended with vertex colors
+      const { material: tslMaterial } = createRockMaterial(params, false);
+      material = tslMaterial;
     } else {
-      // Vertex colors only - use standard material
-      const stdMaterial = this.material.clone();
-      stdMaterial.flatShading = params.flatShading;
-      stdMaterial.roughness = params.material.roughness;
-      stdMaterial.metalness = params.material.metalness;
-      material = stdMaterial;
+      // Vertex colors only (fastest, good for LOD)
+      material = createVertexColorRockMaterial(params);
     }
 
     // Create mesh
@@ -478,6 +520,113 @@ export class RockGenerator {
     }
 
     pos.needsUpdate = true;
+  }
+
+  /**
+   * Generate random scraping planes based on parameters.
+   * Each plane represents a "scrape" that will flatten vertices on one side.
+   *
+   * The algorithm creates planes at random positions on the rock surface,
+   * with normals pointing inward. This simulates natural fracturing and
+   * weathering that creates flat faces on real rocks.
+   */
+  private generateScrapePlanes(
+    params: RockParams,
+    noise: SimplexNoise,
+  ): ScrapePlane[] {
+    const planes: ScrapePlane[] = [];
+    const avgRadius = (params.scale.x + params.scale.y + params.scale.z) / 3;
+
+    for (let i = 0; i < params.scrape.count; i++) {
+      // Use noise for deterministic "random" direction
+      // Generate a point on unit sphere using noise
+      const theta = noise.noise3D(i * 1.5, 0.5, 0.3) * Math.PI * 2;
+      const phi = Math.acos(noise.noise3D(0.7, i * 1.2, 0.9));
+
+      const nx = Math.sin(phi) * Math.cos(theta);
+      const ny = Math.sin(phi) * Math.sin(theta);
+      const nz = Math.cos(phi);
+
+      const normal = new THREE.Vector3(nx, ny, nz).normalize();
+
+      // Place the plane origin at a random distance from center
+      // This determines how deep the scrape cuts into the rock
+      const radiusLerp =
+        params.scrape.minRadius +
+        (params.scrape.maxRadius - params.scrape.minRadius) *
+          Math.abs(noise.noise3D(i * 0.8, 1.2, 0.4));
+
+      const originDist = avgRadius * radiusLerp;
+      const origin = normal.clone().multiplyScalar(originDist);
+
+      // Radius of effect for this scrape (circular disk, not infinite plane)
+      const effectRadius =
+        avgRadius * (0.5 + Math.abs(noise.noise3D(i * 0.6, 0.9, 1.1)) * 0.8);
+
+      planes.push({
+        origin,
+        normal: normal.negate(), // Point inward for scraping
+        radius: effectRadius,
+        strength: params.scrape.strength,
+      });
+    }
+
+    return planes;
+  }
+
+  /**
+   * Apply scraping to vertices.
+   *
+   * For each vertex, check if it's on the "outside" of any scraping plane.
+   * If so, project it onto the plane (with some falloff based on distance
+   * from the plane center).
+   *
+   * This creates the characteristic flat faces seen on real rocks that have
+   * been fractured, weathered, or eroded.
+   */
+  private applyScraping(
+    position: THREE.BufferAttribute,
+    planes: ScrapePlane[],
+  ): void {
+    const vertexCount = position.count;
+    const tempPos = new THREE.Vector3();
+    const toVertex = new THREE.Vector3();
+
+    for (let i = 0; i < vertexCount; i++) {
+      tempPos.set(position.getX(i), position.getY(i), position.getZ(i));
+
+      for (const plane of planes) {
+        // Vector from plane origin to vertex
+        toVertex.copy(tempPos).sub(plane.origin);
+
+        // Distance along plane normal (positive = on "outside" of plane)
+        const distAlongNormal = toVertex.dot(plane.normal);
+
+        // Only scrape vertices that are on the "outside" of the plane
+        if (distAlongNormal > 0) {
+          // Distance from plane origin in the plane itself
+          // (perpendicular to normal)
+          const projectedDist = Math.sqrt(
+            toVertex.lengthSq() - distAlongNormal * distAlongNormal,
+          );
+
+          // Falloff based on distance from scrape center
+          // Vertices at the center of the scrape are fully flattened,
+          // those at the edge are partially affected
+          const falloff = 1.0 - Math.min(1.0, projectedDist / plane.radius);
+
+          if (falloff > 0) {
+            // Move vertex toward the plane
+            const moveAmount = distAlongNormal * falloff * plane.strength;
+            tempPos.addScaledVector(plane.normal, -moveAmount);
+          }
+        }
+      }
+
+      position.setXYZ(i, tempPos.x, tempPos.y, tempPos.z);
+    }
+
+    position.needsUpdate = true;
   }
 
   /**

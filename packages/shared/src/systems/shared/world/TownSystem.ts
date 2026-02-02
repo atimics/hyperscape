@@ -44,11 +44,17 @@ import {
 import {
   BuildingGenerator,
   type BuildingLayout,
+  type PropPlacements,
   CELL_SIZE,
   FOUNDATION_HEIGHT,
+  COUNTER_DEPTH,
+  NPC_WIDTH,
   snapToBuildingGrid,
+  getCellCenter,
+  getSideVector,
 } from "@hyperscape/procgen/building";
 import { BuildingCollisionService } from "./BuildingCollisionService";
+import { getGrassExclusionManager } from "./GrassExclusionManager";
 import type { FlatZone } from "../../../types/world/terrain";
 import { BFSPathfinder } from "../movement/BFSPathfinder";
 import { TERRAIN_CONSTANTS } from "../../../constants/GameConstants";
@@ -181,6 +187,24 @@ const BUILDING_TYPE_TO_RECIPE: Record<string, string> = {
  */
 const STATION_TYPES = new Set(["well", "anvil"]);
 
+/** NPC spawn position calculated from building interior placement */
+interface BuildingNPCSpawn {
+  /** World position for the NPC */
+  position: { x: number; y: number; z: number };
+  /** NPC facing direction (radians) */
+  rotation: number;
+  /** NPC type to spawn (e.g., "innkeeper", "banker", "blacksmith") */
+  npcType: string;
+}
+
+/** Mapping from building type to NPC type */
+const BUILDING_NPC_TYPES: Record<string, string> = {
+  inn: "innkeeper",
+  bank: "banker",
+  smithy: "blacksmith",
+  store: "shopkeeper",
+};
+
 export class TownSystem extends System {
   private towns: ProceduralTown[] = [];
   private seed: number = 0;
@@ -199,6 +223,9 @@ export class TownSystem extends System {
 
   /** Cached building layouts by building ID (for BuildingRenderingSystem reuse) */
   private buildingLayouts: Map<string, BuildingLayout> = new Map();
+
+  /** NPC spawn positions by building ID (for spawning NPCs inside buildings) */
+  private buildingNPCSpawns: Map<string, BuildingNPCSpawn> = new Map();
 
   constructor(world: World) {
     super(world);
@@ -274,6 +301,29 @@ export class TownSystem extends System {
       terrain: terrainProvider,
       config: generatorConfig,
     });
+
+    // Debug: log the config being used
+    Logger.system(
+      "TownSystem",
+      `TownGenerator config: worldSize=${generatorConfig.worldSize}m, townCount=${generatorConfig.townCount}, minSpacing=${generatorConfig.minTownSpacing}m, waterThreshold=${generatorConfig.waterThreshold}`,
+    );
+
+    // Debug: Sample terrain heights at a few locations to verify terrain is working
+    const testPoints = [
+      { x: 0, z: 0 }, // World center
+      { x: 1000, z: 1000 }, // Northeast
+      { x: -1000, z: -1000 }, // Southwest
+      { x: 500, z: -500 }, // Southeast-ish
+    ];
+    const heights = testPoints.map((p) => ({
+      ...p,
+      height: terrainProvider.getHeightAt(p.x, p.z).toFixed(1),
+      biome: terrainProvider.getBiomeAt?.(p.x, p.z) ?? "unknown",
+    }));
+    Logger.system(
+      "TownSystem",
+      `Sample terrain heights: ${heights.map((h) => `(${h.x},${h.z}): ${h.height}m/${h.biome}`).join(", ")}`,
+    );
   }
 
   async start(): Promise<void> {
@@ -643,6 +693,16 @@ export class TownSystem extends System {
     // Generate towns using the procgen library
     const result = this.townGenerator.generate(existingTowns);
 
+    // Debug: Log generation statistics to diagnose why towns aren't being generated
+    Logger.system(
+      "TownSystem",
+      `Town generation stats: ${result.stats.candidatesEvaluated} candidates evaluated, ${result.towns.length} towns generated`,
+    );
+    Logger.system(
+      "TownSystem",
+      `Generation time: ${result.stats.generationTime.toFixed(1)}ms`,
+    );
+
     // Convert GeneratedTown to ProceduralTown and add to list
     for (const generatedTown of result.towns) {
       const proceduralTown = this.convertGeneratedTown(generatedTown);
@@ -812,38 +872,112 @@ export class TownSystem extends System {
     );
   }
 
-  /** Get NPC spawn points in front of buildings of a given type */
+  /**
+   * Get NPC spawn points INSIDE buildings of a given type.
+   * Uses the extracted prop placements from building generation for accurate
+   * interior positioning (behind counters, bars, etc.).
+   *
+   * @param buildingType - Type of building (e.g., "inn", "bank", "smithy")
+   * @returns Array of spawn points with world positions and NPC types
+   */
   getNPCSpawnPointsForBuildingType(buildingType: TownBuildingType): Array<{
     townId: string;
     townName: string;
+    buildingId: string;
     position: { x: number; y: number; z: number };
     rotation: number;
+    npcType: string;
   }> {
     const spawnPoints: Array<{
       townId: string;
       townName: string;
+      buildingId: string;
       position: { x: number; y: number; z: number };
       rotation: number;
+      npcType: string;
     }> = [];
 
     for (const town of this.towns) {
       for (const building of town.buildings) {
         if (building.type === buildingType) {
-          const offset = BUILDING_CONFIG[buildingType].depth / 2 + 1;
-          spawnPoints.push({
-            townId: town.id,
-            townName: town.name,
-            position: {
-              x: building.position.x + Math.cos(building.rotation) * offset,
-              y: building.position.y,
-              z: building.position.z + Math.sin(building.rotation) * offset,
-            },
-            rotation: building.rotation + Math.PI,
-          });
+          // Use stored NPC spawn position from building interior
+          const npcSpawn = this.buildingNPCSpawns.get(building.id);
+          if (npcSpawn) {
+            // Update Y to use the actual building position (which may have been
+            // adjusted for terrain slope)
+            const adjustedY = building.position.y + FOUNDATION_HEIGHT;
+            spawnPoints.push({
+              townId: town.id,
+              townName: town.name,
+              buildingId: building.id,
+              position: {
+                x: npcSpawn.position.x,
+                y: adjustedY,
+                z: npcSpawn.position.z,
+              },
+              rotation: npcSpawn.rotation,
+              npcType: npcSpawn.npcType,
+            });
+          } else {
+            // Fallback for buildings without prop placements (like smithy)
+            // These NPCs spawn in the center of the building
+            const npcType = BUILDING_NPC_TYPES[buildingType] || "generic";
+            spawnPoints.push({
+              townId: town.id,
+              townName: town.name,
+              buildingId: building.id,
+              position: {
+                x: building.position.x,
+                y: building.position.y + FOUNDATION_HEIGHT,
+                z: building.position.z,
+              },
+              rotation: building.rotation + Math.PI, // Face the entrance
+              npcType,
+            });
+          }
         }
       }
     }
     return spawnPoints;
+  }
+
+  /**
+   * Get all NPC spawn points for all buildings that should have NPCs.
+   * This is the main method to call when spawning building NPCs.
+   */
+  getAllBuildingNPCSpawnPoints(): Array<{
+    townId: string;
+    townName: string;
+    buildingId: string;
+    buildingType: TownBuildingType;
+    position: { x: number; y: number; z: number };
+    rotation: number;
+    npcType: string;
+  }> {
+    const allSpawnPoints: Array<{
+      townId: string;
+      townName: string;
+      buildingId: string;
+      buildingType: TownBuildingType;
+      position: { x: number; y: number; z: number };
+      rotation: number;
+      npcType: string;
+    }> = [];
+
+    // Get spawn points for each building type that has NPCs
+    for (const buildingType of Object.keys(
+      BUILDING_NPC_TYPES,
+    ) as TownBuildingType[]) {
+      const points = this.getNPCSpawnPointsForBuildingType(buildingType);
+      for (const point of points) {
+        allSpawnPoints.push({
+          ...point,
+          buildingType,
+        });
+      }
+    }
+
+    return allSpawnPoints;
   }
 
   getBuildingsByType(buildingType: TownBuildingType): TownBuilding[] {
@@ -889,6 +1023,153 @@ export class TownSystem extends System {
         stats.buildingCounts[building.type]++;
     }
     return stats;
+  }
+
+  // ============================================================================
+  // NPC SPAWN EXTRACTION
+  // ============================================================================
+
+  /**
+   * Extract NPC spawn position from building prop placements.
+   * Converts building-local coordinates to world coordinates.
+   *
+   * @param building - The building data
+   * @param layout - The building's generated layout
+   * @param propPlacements - Optional prop placements from building generator
+   */
+  private extractNPCSpawnPosition(
+    building: TownBuilding,
+    layout: BuildingLayout,
+    propPlacements?: PropPlacements,
+  ): void {
+    if (!propPlacements) return;
+
+    // Get NPC type for this building type
+    const npcType = BUILDING_NPC_TYPES[building.type];
+    if (!npcType) return;
+
+    let localX: number;
+    let localZ: number;
+    let npcRotation: number;
+
+    // Handle different building types
+    if (building.type === "smithy" && propPlacements.forge) {
+      // Blacksmith stands near the forge
+      const forgePlacement = propPlacements.forge;
+      const cellCenter = getCellCenter(
+        forgePlacement.col,
+        forgePlacement.row,
+        CELL_SIZE,
+        layout.width,
+        layout.depth,
+      );
+      // Stand next to the forge (offset by 1 meter)
+      localX = cellCenter.x + 1.0;
+      localZ = cellCenter.z;
+      // Face toward the forge (toward the entrance usually)
+      npcRotation = building.rotation + Math.PI;
+    } else {
+      // Inn bar or bank counter - NPC stands behind counter
+      let placement:
+        | {
+            col: number;
+            row: number;
+            side: string;
+            secondCell?: { col: number; row: number };
+          }
+        | null
+        | undefined;
+      if (building.type === "inn") {
+        placement = propPlacements.innBar;
+      } else if (building.type === "bank") {
+        placement = propPlacements.bankCounter;
+      }
+
+      if (!placement) return;
+
+      // Calculate cell center in building-local coordinates
+      if (placement.secondCell) {
+        // 2-tile counter: use center between the two cells
+        const cell1 = getCellCenter(
+          placement.col,
+          placement.row,
+          CELL_SIZE,
+          layout.width,
+          layout.depth,
+        );
+        const cell2 = getCellCenter(
+          placement.secondCell.col,
+          placement.secondCell.row,
+          CELL_SIZE,
+          layout.width,
+          layout.depth,
+        );
+        localX = (cell1.x + cell2.x) / 2;
+        localZ = (cell1.z + cell2.z) / 2;
+      } else {
+        // Single-tile counter
+        const cellCenter = getCellCenter(
+          placement.col,
+          placement.row,
+          CELL_SIZE,
+          layout.width,
+          layout.depth,
+        );
+        localX = cellCenter.x;
+        localZ = cellCenter.z;
+      }
+
+      // Apply NPC offset (behind the counter)
+      // The NPC stands behind the counter, offset by counter depth + NPC width
+      const sideVec = getSideVector(placement.side);
+      const npcOffset = CELL_SIZE / 4 + COUNTER_DEPTH + NPC_WIDTH / 2;
+      localX += sideVec.x * npcOffset;
+      localZ += sideVec.z * npcOffset;
+
+      // Calculate NPC facing direction (opposite of the counter side, rotated by building)
+      // NPC faces away from the wall they're against (toward customers)
+      let faceAngle = 0;
+      switch (placement.side) {
+        case "north":
+          faceAngle = Math.PI; // Face south
+          break;
+        case "south":
+          faceAngle = 0; // Face north
+          break;
+        case "east":
+          faceAngle = -Math.PI / 2; // Face west
+          break;
+        case "west":
+          faceAngle = Math.PI / 2; // Face east
+          break;
+      }
+      // Apply building rotation
+      npcRotation = faceAngle + building.rotation;
+    }
+
+    // Transform to world coordinates using building position and rotation
+    const cos = Math.cos(building.rotation);
+    const sin = Math.sin(building.rotation);
+
+    const worldX = building.position.x + localX * cos - localZ * sin;
+    const worldZ = building.position.z + localX * sin + localZ * cos;
+
+    // Y position is building floor height (FOUNDATION_HEIGHT above building.position.y)
+    // Note: building.position.y gets updated later to maxGroundY, so we store the base
+    // and compute the actual Y when reading the spawn point
+    const worldY = building.position.y + FOUNDATION_HEIGHT;
+
+    // Store the NPC spawn data
+    this.buildingNPCSpawns.set(building.id, {
+      position: { x: worldX, y: worldY, z: worldZ },
+      rotation: npcRotation,
+      npcType,
+    });
+
+    Logger.system(
+      "TownSystem",
+      `NPC spawn for ${building.id}: ${npcType} at (${worldX.toFixed(1)}, ${worldY.toFixed(1)}, ${worldZ.toFixed(1)})`,
+    );
   }
 
   // ============================================================================
@@ -963,6 +1244,13 @@ export class TownSystem extends System {
         // Cache the layout for BuildingRenderingSystem to reuse
         this.buildingLayouts.set(building.id, generated.layout);
 
+        // Extract NPC spawn position from propPlacements if available
+        this.extractNPCSpawnPosition(
+          building,
+          generated.layout,
+          generated.propPlacements,
+        );
+
         // CRITICAL: Calculate maximum terrain height under the building footprint
         // On steep hills, the building floor must be at the HIGHEST terrain point
         // Use getProceduralHeightAt to get raw terrain (ignoring previously registered flat zones)
@@ -991,6 +1279,21 @@ export class TownSystem extends System {
             z: building.position.z,
           },
           building.rotation,
+        );
+
+        // Register grass exclusion zone for this building
+        // Convert building footprint (in cells) to world units
+        const worldWidth = generated.layout.width * CELL_SIZE;
+        const worldDepth = generated.layout.depth * CELL_SIZE;
+        const exclusionManager = getGrassExclusionManager();
+        exclusionManager.addRectangularBlocker(
+          building.id,
+          building.position.x,
+          building.position.z,
+          worldWidth + 1.0, // Add 0.5m margin on each side
+          worldDepth + 1.0,
+          building.rotation,
+          0.5, // Soft fade at edges
         );
 
         // Register flat zone with TerrainSystem (like duel arena does)
@@ -1832,7 +2135,11 @@ export class TownSystem extends System {
 
     // Floor height is MAXIMUM terrain height + foundation
     // maxGroundY is already calculated by calculateMaxTerrainHeightForBuilding
-    const floorHeight = maxGroundY + FOUNDATION_HEIGHT;
+    // Subtract small offset (5cm) to prevent z-fighting with building floor geometry
+    // The building floor is at exactly maxGroundY + FOUNDATION_HEIGHT, so terrain
+    // needs to be slightly below to avoid visual z-fighting artifacts.
+    const TERRAIN_Z_FIGHT_OFFSET = 0.05;
+    const floorHeight = maxGroundY + FOUNDATION_HEIGHT - TERRAIN_Z_FIGHT_OFFSET;
 
     // Flat zone dimensions from axis-aligned bounding box
     const zoneWidth = worldMaxX - worldMinX;

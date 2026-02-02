@@ -17,39 +17,29 @@ const GRASS_CONFIG = ProceduralGrassSystem.getConfig();
 
 describe("GRASS_CONFIG", () => {
   describe("instance limits", () => {
-    it("should have positive max instances", () => {
-      expect(GRASS_CONFIG.MAX_INSTANCES).toBeGreaterThan(0);
+    it("should have positive blade count", () => {
+      expect(GRASS_CONFIG.COUNT).toBeGreaterThan(0);
     });
 
-    it("should match grid coverage exactly", () => {
-      // MAX_INSTANCES = GRID_CELLS^2 * SUB_CELLS_TOTAL
+    it("should match blades per side squared", () => {
+      // COUNT = BLADES_PER_SIDE^2
       const expected =
-        GRASS_CONFIG.GRID_CELLS *
-        GRASS_CONFIG.GRID_CELLS *
-        GRASS_CONFIG.SUB_CELLS_TOTAL;
-      expect(GRASS_CONFIG.MAX_INSTANCES).toBe(expected);
+        GRASS_CONFIG.BLADES_PER_SIDE * GRASS_CONFIG.BLADES_PER_SIDE;
+      expect(GRASS_CONFIG.COUNT).toBe(expected);
     });
   });
 
   describe("grid settings", () => {
-    it("should have positive grid radius", () => {
-      expect(GRASS_CONFIG.GRID_RADIUS).toBeGreaterThan(0);
+    it("should have positive tile size", () => {
+      expect(GRASS_CONFIG.TILE_SIZE).toBeGreaterThan(0);
     });
 
-    it("should have positive cell size", () => {
-      expect(GRASS_CONFIG.CELL_SIZE).toBeGreaterThan(0);
-    });
-  });
-
-  describe("distance settings", () => {
-    it("should have fade start < fade end", () => {
-      expect(GRASS_CONFIG.FADE_START).toBeLessThan(GRASS_CONFIG.FADE_END);
+    it("should have tile half size equal to half tile size", () => {
+      expect(GRASS_CONFIG.TILE_HALF_SIZE).toBe(GRASS_CONFIG.TILE_SIZE / 2);
     });
 
-    it("should have fade end within grid radius", () => {
-      expect(GRASS_CONFIG.FADE_END).toBeLessThanOrEqual(
-        GRASS_CONFIG.GRID_RADIUS,
-      );
+    it("should have positive spacing", () => {
+      expect(GRASS_CONFIG.SPACING).toBeGreaterThan(0);
     });
   });
 
@@ -63,60 +53,29 @@ describe("GRASS_CONFIG", () => {
       expect(GRASS_CONFIG.BLADE_WIDTH).toBeGreaterThan(0);
       expect(GRASS_CONFIG.BLADE_WIDTH).toBeLessThanOrEqual(0.5);
     });
-  });
 
-  describe("heightmap parameters", () => {
-    it("should have valid heightmap size", () => {
-      expect(GRASS_CONFIG.HEIGHTMAP_SIZE).toBeGreaterThan(0);
-      expect(GRASS_CONFIG.HEIGHTMAP_SIZE).toBeLessThanOrEqual(2048);
-    });
-
-    it("should have valid heightmap world size", () => {
-      expect(GRASS_CONFIG.HEIGHTMAP_WORLD_SIZE).toBeGreaterThan(0);
-    });
-
-    it("should have valid max height", () => {
-      expect(GRASS_CONFIG.MAX_HEIGHT).toBeGreaterThan(0);
-    });
-  });
-
-  describe("compute update threshold", () => {
-    it("should have reasonable compute update threshold", () => {
-      expect(GRASS_CONFIG.COMPUTE_UPDATE_THRESHOLD).toBeGreaterThan(0);
-      expect(GRASS_CONFIG.COMPUTE_UPDATE_THRESHOLD).toBeLessThan(
-        GRASS_CONFIG.GRID_RADIUS,
+    it("should have valid bounding sphere radius", () => {
+      expect(GRASS_CONFIG.BLADE_BOUNDING_SPHERE_RADIUS).toBeGreaterThanOrEqual(
+        GRASS_CONFIG.BLADE_HEIGHT,
       );
     });
   });
 
-  describe("wind animation", () => {
-    it("should have positive wind speed", () => {
-      expect(GRASS_CONFIG.WIND_SPEED).toBeGreaterThan(0);
+  describe("compute settings", () => {
+    it("should have positive workgroup size", () => {
+      expect(GRASS_CONFIG.WORKGROUP_SIZE).toBeGreaterThan(0);
     });
 
-    it("should have reasonable wind strength", () => {
-      expect(GRASS_CONFIG.WIND_STRENGTH).toBeGreaterThan(0);
-      expect(GRASS_CONFIG.WIND_STRENGTH).toBeLessThan(1);
+    it("should have reasonable workgroup size (power of 2, <= 256)", () => {
+      expect(GRASS_CONFIG.WORKGROUP_SIZE).toBeLessThanOrEqual(256);
+      // Check if power of 2
+      expect(
+        GRASS_CONFIG.WORKGROUP_SIZE & (GRASS_CONFIG.WORKGROUP_SIZE - 1),
+      ).toBe(0);
     });
 
-    it("should have positive wind frequency", () => {
-      expect(GRASS_CONFIG.WIND_FREQUENCY).toBeGreaterThan(0);
-    });
-  });
-
-  describe("road fade configuration", () => {
-    it("should have positive road fade width", () => {
-      expect(GRASS_CONFIG.ROAD_FADE_WIDTH).toBeGreaterThan(0);
-    });
-
-    it("should have reasonable fade width (1-5 meters)", () => {
-      expect(GRASS_CONFIG.ROAD_FADE_WIDTH).toBeGreaterThanOrEqual(1);
-      expect(GRASS_CONFIG.ROAD_FADE_WIDTH).toBeLessThanOrEqual(5);
-    });
-
-    it("road fade width should match terrain blend width (2m)", () => {
-      // ROAD_FADE_WIDTH should match ROAD_BLEND_WIDTH in TerrainSystem
-      expect(GRASS_CONFIG.ROAD_FADE_WIDTH).toBe(2.0);
+    it("should have positive segment count", () => {
+      expect(GRASS_CONFIG.SEGMENTS).toBeGreaterThan(0);
     });
   });
 });
@@ -133,17 +92,16 @@ describe("ProceduralGrassSystem", () => {
   it("getConfig should return valid configuration", () => {
     const config = ProceduralGrassSystem.getConfig();
     expect(config).toBeDefined();
-    expect(config.MAX_INSTANCES).toBeDefined();
-    expect(config.GRID_RADIUS).toBeDefined();
-    expect(config.CELL_SIZE).toBeDefined();
+    expect(config.COUNT).toBeDefined();
+    expect(config.TILE_SIZE).toBeDefined();
+    expect(config.SPACING).toBeDefined();
   });
 
-  it("config should have heightmap properties for GPU sampling", () => {
+  it("config should have blade dimension properties", () => {
     const config = ProceduralGrassSystem.getConfig();
-    // Verify heightmap properties exist for GPU texture sampling
-    expect("HEIGHTMAP_SIZE" in config).toBe(true);
-    expect("HEIGHTMAP_WORLD_SIZE" in config).toBe(true);
-    expect("MAX_HEIGHT" in config).toBe(true);
+    expect("BLADE_HEIGHT" in config).toBe(true);
+    expect("BLADE_WIDTH" in config).toBe(true);
+    expect("BLADE_BOUNDING_SPHERE_RADIUS" in config).toBe(true);
   });
 });
 

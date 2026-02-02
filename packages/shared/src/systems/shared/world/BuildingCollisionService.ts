@@ -978,6 +978,11 @@ export class BuildingCollisionService {
    * CollisionMatrix. This is because CollisionMatrix is 2D tile-based and
    * doesn't have floor awareness. Upper floor walls are handled by
    * queryCollision() which accepts a floor parameter.
+   *
+   * **Critical for navigation**: Walls must be registered on BOTH the interior
+   * tile AND the exterior tile to properly block movement in both directions.
+   * - Interior tile: has wall flag preventing exit in that direction
+   * - Exterior tile: has opposite wall flag preventing entry from that direction
    */
   private registerWallsWithCollisionMatrix(
     building: BuildingCollisionData,
@@ -992,14 +997,31 @@ export class BuildingCollisionService {
 
     let registeredCount = 0;
     let skippedCount = 0;
+    let exteriorWallCount = 0;
 
     for (const wall of groundFloor.wallSegments) {
       // Only register walls that block movement (no openings)
       if (!wall.hasOpening) {
         const flag = WALL_DIRECTION_TO_FLAG[wall.side];
         if (flag) {
+          // Register wall on the INTERIOR tile (inside building)
           collision.addFlags(wall.tileX, wall.tileZ, flag);
           registeredCount++;
+
+          // CRITICAL FIX: Also register the OPPOSITE wall flag on the EXTERIOR tile
+          // This ensures movement FROM outside TO inside is blocked
+          // Without this, CollisionMatrix.isBlocked() can't detect the wall
+          // when the source tile is outside the building
+          const oppositeFlag =
+            WALL_DIRECTION_TO_FLAG[getOppositeDirection(wall.side)];
+          if (oppositeFlag) {
+            // Calculate exterior tile position based on wall direction
+            const exteriorTile = this.getExteriorTileForWall(wall);
+            if (exteriorTile) {
+              collision.addFlags(exteriorTile.x, exteriorTile.z, oppositeFlag);
+              exteriorWallCount++;
+            }
+          }
         }
       } else {
         skippedCount++;
@@ -1008,9 +1030,33 @@ export class BuildingCollisionService {
 
     // Always log wall registration for debugging navigation issues
     console.log(
-      `[BuildingCollision] ${building.buildingId}: Registered ${registeredCount} wall flags in CollisionMatrix ` +
+      `[BuildingCollision] ${building.buildingId}: Registered ${registeredCount} interior + ${exteriorWallCount} exterior wall flags in CollisionMatrix ` +
         `(skipped ${skippedCount} with openings, total wallSegments: ${groundFloor.wallSegments.length})`,
     );
+  }
+
+  /**
+   * Get the exterior tile position for a wall segment.
+   * The exterior tile is the tile OUTSIDE the building, adjacent to the wall.
+   */
+  private getExteriorTileForWall(
+    wall: WallSegment,
+  ): { x: number; z: number } | null {
+    // Calculate the exterior tile based on wall direction
+    // Wall direction indicates which edge of the tile the wall is on
+    // The exterior tile is one step in that direction
+    switch (wall.side) {
+      case "north":
+        return { x: wall.tileX, z: wall.tileZ - 1 };
+      case "south":
+        return { x: wall.tileX, z: wall.tileZ + 1 };
+      case "east":
+        return { x: wall.tileX + 1, z: wall.tileZ };
+      case "west":
+        return { x: wall.tileX - 1, z: wall.tileZ };
+      default:
+        return null;
+    }
   }
 
   /**
@@ -1030,7 +1076,22 @@ export class BuildingCollisionService {
       if (!wall.hasOpening) {
         const flag = WALL_DIRECTION_TO_FLAG[wall.side];
         if (flag) {
+          // Remove interior wall flag
           collision.removeFlags(wall.tileX, wall.tileZ, flag);
+
+          // Also remove the exterior wall flag
+          const oppositeFlag =
+            WALL_DIRECTION_TO_FLAG[getOppositeDirection(wall.side)];
+          if (oppositeFlag) {
+            const exteriorTile = this.getExteriorTileForWall(wall);
+            if (exteriorTile) {
+              collision.removeFlags(
+                exteriorTile.x,
+                exteriorTile.z,
+                oppositeFlag,
+              );
+            }
+          }
         }
       }
     }
@@ -1257,6 +1318,85 @@ export class BuildingCollisionService {
     if (!destFloorData) return null;
 
     return {
+      destinationFloor,
+      elevation: destFloorData.elevation,
+    };
+  }
+
+  /**
+   * Get the destination tile for stair navigation.
+   * When clicking on stairs, this returns the tile at the OTHER end of the stairs
+   * so the player walks across them (from bottom to top landing, or vice versa).
+   *
+   * @param tileX - World tile X coordinate of clicked stair tile
+   * @param tileZ - World tile Z coordinate of clicked stair tile
+   * @param currentFloor - Player's current floor index
+   * @returns Destination tile info (tile coords + elevation), or null if not a stair
+   */
+  getStairLandingTile(
+    tileX: number,
+    tileZ: number,
+    currentFloor: number,
+  ): {
+    tileX: number;
+    tileZ: number;
+    destinationFloor: number;
+    elevation: number;
+  } | null {
+    const result = this.queryCollision(tileX, tileZ, currentFloor);
+    if (!result.isInsideBuilding || !result.stairTile) {
+      return null;
+    }
+
+    const clickedStair = result.stairTile;
+    const building = this.buildings.get(result.buildingId!);
+    if (!building) return null;
+
+    // Determine which floor has the destination stair tiles
+    // If clicked on bottom (isLanding=false), destination is the landing on toFloor
+    // If clicked on landing (isLanding=true), destination is the bottom on toFloor
+    const destinationFloor = clickedStair.toFloor;
+    const destFloorData = building.floors.find(
+      (f) => f.floorIndex === destinationFloor,
+    );
+    if (!destFloorData) return null;
+
+    // Find the corresponding stair tiles on the destination floor
+    // They will have the OPPOSITE isLanding value and connect the same two floors
+    const destinationStairTiles = destFloorData.stairTiles.filter((stair) => {
+      // Must have opposite landing status
+      if (stair.isLanding === clickedStair.isLanding) return false;
+      // Must connect the same two floors (from/to are swapped for landing vs bottom)
+      const clickedFloors = [clickedStair.fromFloor, clickedStair.toFloor].sort(
+        (a, b) => a - b,
+      );
+      const stairFloors = [stair.fromFloor, stair.toFloor].sort(
+        (a, b) => a - b,
+      );
+      return (
+        clickedFloors[0] === stairFloors[0] &&
+        clickedFloors[1] === stairFloors[1]
+      );
+    });
+
+    if (destinationStairTiles.length === 0) {
+      return null;
+    }
+
+    // Calculate the center of the destination stair area
+    // Stair tiles form a 4x4 grid; find the average position
+    let sumX = 0;
+    let sumZ = 0;
+    for (const tile of destinationStairTiles) {
+      sumX += tile.tileX;
+      sumZ += tile.tileZ;
+    }
+    const centerTileX = Math.round(sumX / destinationStairTiles.length);
+    const centerTileZ = Math.round(sumZ / destinationStairTiles.length);
+
+    return {
+      tileX: centerTileX,
+      tileZ: centerTileZ,
       destinationFloor,
       elevation: destFloorData.elevation,
     };
@@ -1548,6 +1688,35 @@ export class BuildingCollisionService {
     if (!stepTile) {
       // Destination is not a step tile - not blocked by steps
       return false;
+    }
+
+    // CRITICAL: Allow ANY approach direction to door exterior tiles.
+    // Door exterior tiles are where players enter buildings, and they need
+    // to be reachable from any direction for pathfinding to work correctly.
+    // Without this, players approaching from the side of a building would be blocked.
+    const building = this.buildings.get(stepTile.buildingId);
+    if (building) {
+      const groundFloor = building.floors.find((f) => f.floorIndex === 0);
+      if (groundFloor) {
+        const doorWalls =
+          BuildingCollisionService.getDoorWallSegments(groundFloor);
+        for (const wall of doorWalls) {
+          const doorTiles = BuildingCollisionService.getDoorExteriorAndInterior(
+            wall.tileX,
+            wall.tileZ,
+            wall.side,
+          );
+          if (doorTiles.exteriorX === toX && doorTiles.exteriorZ === toZ) {
+            // This is a door exterior tile - allow any approach direction
+            if (this._debugLogging) {
+              console.log(
+                `[isStepBlocked] ALLOWED: door exterior tile (${toX},${toZ}) for ${stepTile.buildingId}`,
+              );
+            }
+            return false;
+          }
+        }
+      }
     }
 
     // Calculate movement direction
@@ -2370,6 +2539,71 @@ export class BuildingCollisionService {
    */
   getBuilding(buildingId: string): BuildingCollisionData | undefined {
     return this.buildings.get(buildingId);
+  }
+
+  /**
+   * Check if a world position is close to any building's bounding box.
+   * Used for roof hiding when camera approaches buildings.
+   *
+   * @param worldX - World X coordinate
+   * @param worldZ - World Z coordinate
+   * @param margin - Distance margin in tiles (default 2)
+   * @returns Building ID if position is near a building, null otherwise
+   */
+  isPositionNearBuilding(
+    worldX: number,
+    worldZ: number,
+    margin: number = 2,
+  ): string | null {
+    const tileX = Math.floor(worldX);
+    const tileZ = Math.floor(worldZ);
+
+    for (const [buildingId, building] of this.buildings) {
+      const { minTileX, maxTileX, minTileZ, maxTileZ } = building.boundingBox;
+      // Check if position is within bounding box + margin
+      if (
+        tileX >= minTileX - margin &&
+        tileX <= maxTileX + margin &&
+        tileZ >= minTileZ - margin &&
+        tileZ <= maxTileZ + margin
+      ) {
+        return buildingId;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Get all buildings within a certain distance of a world position.
+   * Used for determining which building roofs to hide.
+   *
+   * @param worldX - World X coordinate
+   * @param worldZ - World Z coordinate
+   * @param margin - Distance margin in tiles (default 3)
+   * @returns Array of building IDs near the position
+   */
+  getBuildingsNearPosition(
+    worldX: number,
+    worldZ: number,
+    margin: number = 3,
+  ): string[] {
+    const tileX = Math.floor(worldX);
+    const tileZ = Math.floor(worldZ);
+    const nearbyBuildings: string[] = [];
+
+    for (const [buildingId, building] of this.buildings) {
+      const { minTileX, maxTileX, minTileZ, maxTileZ } = building.boundingBox;
+      // Check if position is within bounding box + margin
+      if (
+        tileX >= minTileX - margin &&
+        tileX <= maxTileX + margin &&
+        tileZ >= minTileZ - margin &&
+        tileZ <= maxTileZ + margin
+      ) {
+        nearbyBuildings.push(buildingId);
+      }
+    }
+    return nearbyBuildings;
   }
 
   // ============================================================================

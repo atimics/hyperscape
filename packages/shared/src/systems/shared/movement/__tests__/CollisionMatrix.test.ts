@@ -362,6 +362,31 @@ describe("CollisionMatrix", () => {
       matrix.setFlags(5, 6, CollisionFlag.WALL_WEST);
       expect(matrix.isBlocked(5, 5, 6, 6)).toBe(true);
     });
+
+    it("blocks diagonal when exterior wall faces outward (building corner case)", () => {
+      // Building walls register OPPOSITE flags on exterior tiles
+      // If interior corner at (6,6) has WALL_NORTH and WALL_WEST,
+      // exterior tile (6,5) has WALL_SOUTH (opposite of NORTH)
+      // exterior tile (5,6) has WALL_EAST (opposite of WEST)
+      //
+      // Moving southeast (5,5) -> (6,6): should be blocked by exterior walls
+      matrix.setFlags(6, 5, CollisionFlag.WALL_SOUTH); // exterior wall facing south
+      expect(matrix.isBlocked(5, 5, 6, 6)).toBe(true);
+    });
+
+    it("blocks diagonal when exterior wall on vertical adjacent faces outward", () => {
+      // Same as above but for vertical intermediate
+      matrix.setFlags(5, 6, CollisionFlag.WALL_EAST); // exterior wall facing east
+      expect(matrix.isBlocked(5, 5, 6, 6)).toBe(true);
+    });
+
+    it("blocks diagonal when destination has walls on both entry edges (corner tile)", () => {
+      // Building corner tile has walls on two cardinal edges
+      // E.g., northwest corner has WALL_NORTH and WALL_WEST
+      // Entering diagonally from SW should be blocked
+      matrix.setFlags(6, 6, CollisionFlag.WALL_NORTH | CollisionFlag.WALL_WEST);
+      expect(matrix.isBlocked(5, 5, 6, 6)).toBe(true);
+    });
   });
 
   describe("cross-zone boundaries", () => {

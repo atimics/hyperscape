@@ -44,7 +44,14 @@ export function patchTextureLoader() {
           url,
           error,
         );
-        throw new Error(`Failed to load texture from blob URL: ${url}`);
+        cleanup();
+        if (onError) {
+          onError(
+            error instanceof Event
+              ? error
+              : new ErrorEvent("error", { error, message: String(error) }),
+          );
+        }
       };
 
       // Set up event handlers

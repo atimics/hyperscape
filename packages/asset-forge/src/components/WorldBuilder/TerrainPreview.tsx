@@ -53,7 +53,15 @@ export interface TerrainPreviewConfig {
   showGrid: boolean;
   showTowns: boolean;
   showVegetation: boolean;
+  showGrass: boolean;
   wireframe: boolean;
+
+  // Time of day (0-24, affects lighting)
+  timeOfDay: number;
+
+  // Grass settings
+  grassDensity: number;
+  grassHeight: number;
 }
 
 const DEFAULT_CONFIG: TerrainPreviewConfig = {
@@ -84,7 +92,15 @@ const DEFAULT_CONFIG: TerrainPreviewConfig = {
   showGrid: false,
   showTowns: true,
   showVegetation: false,
+  showGrass: false,
   wireframe: false,
+
+  // Time of day (0-24, 12 = noon)
+  timeOfDay: 12,
+
+  // Grass settings
+  grassDensity: 5,
+  grassHeight: 0.4,
 };
 
 interface TerrainPreviewProps {
@@ -109,6 +125,77 @@ const TOWN_SIZE_COLORS: Record<string, number> = {
   hamlet: 0xffff00,
 };
 
+/**
+ * Calculate lighting based on time of day (0-24 hours)
+ * Returns { sunIntensity, ambientIntensity, sunColor, skyColor }
+ */
+function getTimeOfDayLighting(timeOfDay: number): {
+  sunIntensity: number;
+  ambientIntensity: number;
+  sunColor: THREE.Color;
+  skyColor: THREE.Color;
+  sunPosition: THREE.Vector3;
+} {
+  // Normalize time to 0-1 where 0=midnight, 0.5=noon
+  const normalizedTime = timeOfDay / 24;
+
+  // Sun angle (sunrise at 6, noon at 12, sunset at 18)
+  const sunAngle = (normalizedTime - 0.25) * Math.PI * 2;
+  const sunHeight = Math.sin(sunAngle);
+  const sunHorizontal = Math.cos(sunAngle);
+
+  // Day intensity (0 at night, 1 at noon)
+  const dayIntensity = Math.max(0, sunHeight);
+
+  // Lighting intensities
+  const sunIntensity = dayIntensity * 1.2;
+  const ambientIntensity = 0.2 + dayIntensity * 0.3;
+
+  // Sun color (warm at sunrise/sunset, white at noon)
+  const horizonFactor = 1 - Math.abs(sunHeight);
+  const sunColor = new THREE.Color().setRGB(
+    1.0,
+    0.9 + horizonFactor * 0.1 * (sunHeight > 0 ? -0.3 : 0),
+    0.8 + horizonFactor * (sunHeight > 0 ? -0.4 : 0),
+  );
+
+  // Sky color based on time
+  let skyColor: THREE.Color;
+  if (dayIntensity > 0.1) {
+    // Day - blue sky
+    skyColor = new THREE.Color().setHSL(0.58, 0.6, 0.5 + dayIntensity * 0.3);
+  } else {
+    // Night - dark blue
+    skyColor = new THREE.Color(0x0a0a20);
+  }
+
+  // Sun position
+  const sunPosition = new THREE.Vector3(
+    sunHorizontal * 200,
+    Math.max(sunHeight * 200, 10),
+    100,
+  );
+
+  return { sunIntensity, ambientIntensity, sunColor, skyColor, sunPosition };
+}
+
+/**
+ * Create simple grass blade geometry
+ */
+function createGrassGeometry(): THREE.BufferGeometry {
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array([
+    -0.02, 0, 0, 0.02, 0, 0, -0.01, 0.5, 0, 0.01, 0.5, 0, 0, 1, 0,
+  ]);
+  const indices = new Uint16Array([0, 1, 2, 1, 3, 2, 2, 3, 4]);
+
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.computeVertexNormals();
+
+  return geometry;
+}
+
 /** Dispose a Three.js mesh and its resources */
 function disposeMesh(mesh: THREE.Mesh | null, scene: THREE.Scene): void {
   if (!mesh) return;
@@ -132,6 +219,9 @@ export const TerrainPreview: React.FC<TerrainPreviewProps> = ({
   const waterMeshRef = useRef<THREE.Mesh | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
   const townMarkersRef = useRef<THREE.Group | null>(null);
+  const grassMeshRef = useRef<THREE.InstancedMesh | null>(null);
+  const directionalLightRef = useRef<THREE.DirectionalLight | null>(null);
+  const ambientLightRef = useRef<THREE.AmbientLight | null>(null);
   const animationIdRef = useRef<number>(0);
 
   const [isGenerating, setIsGenerating] = useState(false);
@@ -168,10 +258,12 @@ export const TerrainPreview: React.FC<TerrainPreviewProps> = ({
     // Lighting (add before renderer is ready)
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
     scene.add(ambientLight);
+    ambientLightRef.current = ambientLight;
 
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
     directionalLight.position.set(100, 200, 100);
     scene.add(directionalLight);
+    directionalLightRef.current = directionalLight;
 
     // Async WebGPU initialization
     const initRenderer = async () => {
@@ -466,6 +558,71 @@ export const TerrainPreview: React.FC<TerrainPreviewProps> = ({
       }
     }
 
+    // Generate grass
+    if (config.showGrass) {
+      // Dispose old grass
+      if (grassMeshRef.current) {
+        scene.remove(grassMeshRef.current);
+        grassMeshRef.current.geometry.dispose();
+        if (grassMeshRef.current.material instanceof THREE.Material) {
+          grassMeshRef.current.material.dispose();
+        }
+      }
+
+      const grassGeometry = createGrassGeometry();
+      const grassMaterial = new MeshStandardNodeMaterial();
+      grassMaterial.color = new THREE.Color(0x4d8c26); // Match terrain grass green
+      grassMaterial.side = THREE.DoubleSide;
+
+      // Calculate grass count based on density and world size
+      const grassPerSqMeter = config.grassDensity;
+      const grassArea = worldSizeMeters * worldSizeMeters;
+      const grassCount = Math.min(
+        Math.floor(grassArea * grassPerSqMeter * 0.01),
+        100000,
+      );
+
+      const grassMesh = new THREE.InstancedMesh(
+        grassGeometry,
+        grassMaterial,
+        grassCount,
+      );
+      const dummy = new THREE.Object3D();
+
+      // Seeded random for consistent placement
+      let seed = config.seed;
+      const random = () => {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        return seed / 0x7fffffff;
+      };
+
+      let placed = 0;
+      for (let i = 0; i < grassCount * 2 && placed < grassCount; i++) {
+        const x = (random() - 0.5) * worldSizeMeters;
+        const z = (random() - 0.5) * worldSizeMeters;
+        const height = generator.getHeightAt(x, z);
+
+        // Only place grass above water and below snow line
+        if (
+          height > config.waterThreshold + 0.5 &&
+          height < config.maxHeight * 0.8
+        ) {
+          dummy.position.set(x, height, z);
+          dummy.rotation.y = random() * Math.PI * 2;
+          const scale = config.grassHeight * (0.7 + random() * 0.6);
+          dummy.scale.set(scale, scale, scale);
+          dummy.updateMatrix();
+          grassMesh.setMatrixAt(placed, dummy.matrix);
+          placed++;
+        }
+      }
+
+      grassMesh.count = placed;
+      grassMesh.instanceMatrix.needsUpdate = true;
+      scene.add(grassMesh);
+      grassMeshRef.current = grassMesh;
+    }
+
     // Update camera to fit terrain
     if (cameraRef.current && controlsRef.current) {
       const distance = worldSizeMeters * 0.8;
@@ -486,6 +643,25 @@ export const TerrainPreview: React.FC<TerrainPreviewProps> = ({
     const timeoutId = setTimeout(generateTerrain, 100);
     return () => clearTimeout(timeoutId);
   }, [generateTerrain]);
+
+  // Update lighting when time of day changes (without regenerating terrain)
+  useEffect(() => {
+    const lighting = getTimeOfDayLighting(config.timeOfDay);
+
+    if (directionalLightRef.current) {
+      directionalLightRef.current.intensity = lighting.sunIntensity;
+      directionalLightRef.current.color.copy(lighting.sunColor);
+      directionalLightRef.current.position.copy(lighting.sunPosition);
+    }
+
+    if (ambientLightRef.current) {
+      ambientLightRef.current.intensity = lighting.ambientIntensity;
+    }
+
+    if (sceneRef.current) {
+      sceneRef.current.background = lighting.skyColor;
+    }
+  }, [config.timeOfDay]);
 
   return (
     <div className={`relative w-full h-full ${className}`}>

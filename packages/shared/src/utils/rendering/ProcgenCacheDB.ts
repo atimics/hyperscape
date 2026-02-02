@@ -58,6 +58,8 @@ export interface SerializedRockVariant {
   averageColor: { r: number; g: number; b: number };
   vertexCount: number;
   triangleCount: number;
+  /** Preset name for material recreation (LOD0 uses triplanar, LOD1+ uses vertex colors) */
+  presetName?: string;
 }
 
 /**

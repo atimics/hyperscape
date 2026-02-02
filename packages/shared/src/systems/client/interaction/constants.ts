@@ -166,6 +166,28 @@ export const DEBUG_INTERACTIONS =
     true;
 
 /**
+ * Path visualization constants for "Show path here" feature
+ */
+export const PATH_VISUALIZATION = {
+  /** Height above terrain to render path line (meters) */
+  HEIGHT_OFFSET: 0.15,
+  /** Line width in pixels (note: may be clamped by GPU) */
+  LINE_WIDTH: 3,
+  /** Opacity for complete/partial paths */
+  OPACITY_NORMAL: 0.9,
+  /** Opacity for blocked/unreachable paths */
+  OPACITY_BLOCKED: 0.5,
+  /** Duration before auto-clearing path visualization (ms) */
+  AUTO_CLEAR_MS: 5000,
+  /** Color for complete paths (green) */
+  COLOR_COMPLETE: 0x00ff00,
+  /** Color for partial paths (orange) */
+  COLOR_PARTIAL: 0xffaa00,
+  /** Color for blocked/unreachable paths (red) */
+  COLOR_BLOCKED: 0xff0000,
+} as const;
+
+/**
  * Network message type constants
  *
  * Centralizes all network message strings to prevent typos and enable

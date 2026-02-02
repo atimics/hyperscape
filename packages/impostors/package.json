@@ -19,13 +19,14 @@
   ],
   "scripts": {
     "dev": "vite",
-    "build": "tsc --project tsconfig.build.json && vite build --config vite.lib.config.ts",
+    "build": "rm -rf dist && tsc --project tsconfig.build.json && vite build --config vite.lib.config.ts",
     "build:demo": "tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:browser": "vitest --browser.enabled --browser.name=chromium --browser.provider=playwright"
+    "test:browser": "vitest --browser.enabled --browser.name=chromium --browser.provider=playwright",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "keywords": [
     "three.js",

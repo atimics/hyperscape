@@ -78,7 +78,8 @@ export const IMPOSTOR_CONFIG = {
   /** Cache version (increment to invalidate old caches) */
   // v2: Fixed T-pose issue - now properly captures idle animation pose
   // v3: Added bakeMode support (normal/depth atlas baking)
-  CACHE_VERSION: 3,
+  // v4: Fixed normal atlas view-space to world-space transformation
+  CACHE_VERSION: 4,
 } as const;
 
 /**
@@ -869,7 +870,7 @@ export class ImpostorManager {
    */
   private async textureToBase64(
     texture: THREE.Texture,
-    renderTarget?: THREE.RenderTarget | THREE.WebGLRenderTarget | null,
+    renderTarget?: THREE.RenderTarget | null,
   ): Promise<string | null> {
     if (!this.renderer) return null;
 
@@ -879,7 +880,7 @@ export class ImpostorManager {
         const { width, height } = renderTarget;
         let pixels: Uint8Array | null = null;
 
-        // Try async method first (works on both WebGL and WebGPU)
+        // Use async method for WebGPU
         const rendererWithAsync = this.renderer as CompatibleRenderer & {
           readRenderTargetPixelsAsync?: (
             renderTarget: THREE.RenderTarget,
@@ -922,17 +923,10 @@ export class ImpostorManager {
           }
         }
 
-        // Fallback to sync method (WebGL only)
-        if (!pixels && this.renderer.readRenderTargetPixels) {
-          pixels = new Uint8Array(width * height * 4);
-          // Cast to WebGLRenderTarget for sync pixel reading (works at runtime)
-          this.renderer.readRenderTargetPixels(
-            renderTarget as THREE.WebGLRenderTarget,
-            0,
-            0,
-            width,
-            height,
-            pixels,
+        // WebGPU doesn't have sync readRenderTargetPixels - async is required
+        if (!pixels) {
+          console.warn(
+            "[ImpostorManager] Could not read render target pixels - async method failed",
           );
         }
 
@@ -946,7 +940,7 @@ export class ImpostorManager {
 
           const imageData = ctx.createImageData(width, height);
 
-          // Flip Y axis (WebGL/WebGPU renders upside down)
+          // Flip Y axis (WebGPU renders upside down)
           for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
               const srcIdx = ((height - y - 1) * width + x) * 4;
@@ -1002,16 +996,19 @@ export class ImpostorManager {
     data: SerializedImpostor,
   ): Promise<ImpostorBakeResult | null> {
     try {
-      // Load atlas texture
-      const atlasTexture = await this.base64ToTexture(data.atlasData);
+      // Load atlas texture (albedo = sRGB for proper color display)
+      const atlasTexture = await this.base64ToTexture(data.atlasData, false);
       if (!atlasTexture) return null;
 
+      // CRITICAL: Normal and depth textures must use LINEAR color space
+      // They contain raw data values (directions, distances), not colors.
+      // Using sRGB would apply incorrect gamma decoding and break lighting.
       const normalAtlasTexture = data.normalData
-        ? await this.base64ToTexture(data.normalData)
+        ? await this.base64ToTexture(data.normalData, true) // Linear for normals!
         : undefined;
 
       const depthAtlasTexture = data.depthData
-        ? await this.base64ToTexture(data.depthData)
+        ? await this.base64ToTexture(data.depthData, true) // Linear for depth!
         : undefined;
 
       // Reconstruct bounding sphere and box
@@ -1058,7 +1055,7 @@ export class ImpostorManager {
 
       const result: ImpostorBakeResult = {
         atlasTexture,
-        renderTarget: null as unknown as THREE.WebGLRenderTarget, // Not needed from cache
+        renderTarget: null as unknown as THREE.RenderTarget, // Not needed from cache
         normalAtlasTexture: normalAtlasTexture ?? undefined,
         normalRenderTarget: undefined,
         depthAtlasTexture: depthAtlasTexture ?? undefined,
@@ -1080,14 +1077,24 @@ export class ImpostorManager {
 
   /**
    * Convert base64 string to Three.js texture
+   * @param base64 - Base64 encoded image data
+   * @param isLinear - If true, use LinearSRGBColorSpace (for normals, depth, PBR data)
    */
-  private base64ToTexture(base64: string): Promise<THREE.Texture | null> {
+  private base64ToTexture(
+    base64: string,
+    isLinear = false,
+  ): Promise<THREE.Texture | null> {
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
         const texture = new THREE.Texture(img);
         texture.needsUpdate = true;
-        texture.colorSpace = THREE.SRGBColorSpace;
+        // CRITICAL: Normal/depth/PBR textures must use linear color space
+        // to prevent incorrect gamma decoding of raw data values.
+        // Only albedo textures should use sRGB.
+        texture.colorSpace = isLinear
+          ? THREE.LinearSRGBColorSpace
+          : THREE.SRGBColorSpace;
         resolve(texture);
       };
       img.onerror = () => {

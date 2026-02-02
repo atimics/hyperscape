@@ -59,18 +59,222 @@ import THREE, {
   float,
   smoothstep,
   positionWorld,
+  normalWorld,
   step,
   max,
+  min,
   clamp,
   sqrt,
   mod,
   floor,
+  fract,
   abs,
   viewportCoordinate,
+  uv,
+  vec2,
+  vec3,
+  vec4,
+  sin,
+  cos,
+  dot,
+  mix,
+  attribute,
+  select,
+  dFdx,
+  dFdy,
 } from "../../../extras/three/three";
-import { MeshBasicNodeMaterial } from "three/webgpu";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { SystemBase } from "../infrastructure/SystemBase";
+
+// ============================================================================
+// GEOMETRY UTILITIES
+// ============================================================================
+
+/**
+ * Convert all geometries in array to non-indexed for consistent merging.
+ * Three.js mergeGeometries requires all geometries to either have indices or not.
+ */
+function toNonIndexed(
+  geometries: THREE.BufferGeometry[],
+): THREE.BufferGeometry[] {
+  return geometries.map((geo) => {
+    if (geo.index) {
+      const nonIndexed = geo.toNonIndexed();
+      geo.dispose();
+      return nonIndexed;
+    }
+    return geo;
+  });
+}
+
+/**
+ * Compute flat normals for non-indexed geometry.
+ * Each triangle gets a face normal computed from the cross product of its edges.
+ * This is necessary for architectural geometry that needs hard edges.
+ *
+ * IMPORTANT: This function is critical for geometry that's missing normals.
+ * Using zero normals (0,0,0) causes surfaces to appear completely black
+ * because dot(N, L) = 0 for any light direction L.
+ */
+function computeFlatNormalsForGeometry(geo: THREE.BufferGeometry): void {
+  const posAttr = geo.getAttribute("position");
+  if (!posAttr) return;
+
+  const vertexCount = posAttr.count;
+  if (vertexCount === 0 || vertexCount % 3 !== 0) {
+    // Empty or invalid geometry - create default up-facing normals
+    const normalArray = new Float32Array(vertexCount * 3);
+    for (let i = 0; i < vertexCount; i++) {
+      normalArray[i * 3] = 0;
+      normalArray[i * 3 + 1] = 1; // Up
+      normalArray[i * 3 + 2] = 0;
+    }
+    geo.setAttribute("normal", new THREE.BufferAttribute(normalArray, 3));
+    return;
+  }
+
+  const normalArray = new Float32Array(vertexCount * 3);
+  const positions = posAttr.array as Float32Array;
+
+  // Temporary vectors for calculation
+  const p0 = new THREE.Vector3();
+  const p1 = new THREE.Vector3();
+  const p2 = new THREE.Vector3();
+  const edge1 = new THREE.Vector3();
+  const edge2 = new THREE.Vector3();
+  const faceNormal = new THREE.Vector3();
+
+  // Process each triangle
+  const triangleCount = vertexCount / 3;
+  for (let t = 0; t < triangleCount; t++) {
+    const i0 = t * 3;
+    const i1 = t * 3 + 1;
+    const i2 = t * 3 + 2;
+
+    // Get vertex positions
+    p0.set(positions[i0 * 3], positions[i0 * 3 + 1], positions[i0 * 3 + 2]);
+    p1.set(positions[i1 * 3], positions[i1 * 3 + 1], positions[i1 * 3 + 2]);
+    p2.set(positions[i2 * 3], positions[i2 * 3 + 1], positions[i2 * 3 + 2]);
+
+    // Compute edge vectors
+    edge1.subVectors(p1, p0);
+    edge2.subVectors(p2, p0);
+
+    // Compute face normal from cross product (CCW winding = outward normal)
+    faceNormal.crossVectors(edge1, edge2);
+
+    // Handle degenerate triangles
+    const lengthSq = faceNormal.lengthSq();
+    if (lengthSq > 1e-12) {
+      faceNormal.divideScalar(Math.sqrt(lengthSq));
+    } else {
+      // Degenerate triangle - use default up normal
+      faceNormal.set(0, 1, 0);
+    }
+
+    // Store the same normal for all 3 vertices of this triangle
+    for (let vi = 0; vi < 3; vi++) {
+      const idx = (t * 3 + vi) * 3;
+      normalArray[idx] = faceNormal.x;
+      normalArray[idx + 1] = faceNormal.y;
+      normalArray[idx + 2] = faceNormal.z;
+    }
+  }
+
+  geo.setAttribute("normal", new THREE.BufferAttribute(normalArray, 3));
+}
+
+/**
+ * Normalize attributes across all geometries so they can be merged.
+ * Three.js mergeGeometries requires all geometries to have the same attributes.
+ *
+ * IMPORTANT: For normals, we compute them properly rather than using zeros.
+ * Zero normals cause surfaces to appear black because dot(N, L) = 0.
+ */
+function normalizeGeometryAttributes(geometries: THREE.BufferGeometry[]): void {
+  if (geometries.length <= 1) return;
+
+  // Collect all unique attribute names and their item sizes
+  const attributeInfo = new Map<string, number>();
+  for (const geo of geometries) {
+    const attrs = geo.attributes;
+    for (const name in attrs) {
+      const attr = attrs[name] as THREE.BufferAttribute;
+      if (!attributeInfo.has(name)) {
+        attributeInfo.set(name, attr.itemSize);
+      }
+    }
+  }
+
+  // Add missing attributes to each geometry
+  for (const geo of geometries) {
+    const posAttr = geo.getAttribute("position") as THREE.BufferAttribute;
+    if (!posAttr) continue;
+    const vertexCount = posAttr.count;
+
+    for (const [name, itemSize] of attributeInfo) {
+      if (!geo.hasAttribute(name)) {
+        if (name === "normal") {
+          // CRITICAL: Compute normals properly instead of using zeros!
+          // Zero normals (0,0,0) cause black surfaces because dot(N, L) = 0
+          computeFlatNormalsForGeometry(geo);
+        } else if (name === "color") {
+          // For vertex colors, default to WHITE (1,1,1) not black
+          // This ensures surfaces receive full PBR lighting
+          const colorArray = new Float32Array(vertexCount * itemSize);
+          for (let i = 0; i < colorArray.length; i++) {
+            colorArray[i] = 1.0; // White
+          }
+          geo.setAttribute(
+            name,
+            new THREE.BufferAttribute(colorArray, itemSize),
+          );
+        } else {
+          // For other attributes (uv, uv2, etc.), zeros are acceptable
+          const array = new Float32Array(vertexCount * itemSize);
+          const attr = new THREE.BufferAttribute(array, itemSize);
+          geo.setAttribute(name, attr);
+        }
+      }
+    }
+  }
+}
+
+// ============================================================================
+// ASYNC UTILITIES - Non-blocking main thread helpers
+// ============================================================================
+
+/**
+ * Yield to browser event loop using requestIdleCallback for better scheduling.
+ * Falls back to setTimeout if requestIdleCallback not available.
+ * @param timeout - Maximum time to wait for idle callback (ms)
+ */
+function yieldToMainThread(timeout = 50): Promise<IdleDeadline | void> {
+  return new Promise((resolve) => {
+    if (typeof requestIdleCallback !== "undefined") {
+      requestIdleCallback((deadline) => resolve(deadline), { timeout });
+    } else {
+      setTimeout(() => resolve(), 0);
+    }
+  });
+}
+
+/**
+ * Check if we should yield based on elapsed time
+ * @param startTime - Performance.now() timestamp when work started
+ * @param budgetMs - Maximum milliseconds before yielding (default 8ms for 60fps)
+ */
+function shouldYieldNow(startTime: number, budgetMs = 8): boolean {
+  return performance.now() - startTime > budgetMs;
+}
+
+/**
+ * Check if idle deadline has time remaining
+ */
+function hasTimeRemaining(deadline: IdleDeadline | void): boolean {
+  if (!deadline) return true; // setTimeout fallback
+  return deadline.timeRemaining() > 0;
+}
 import type { World } from "../../../types";
 import type {
   ProceduralTown,
@@ -85,9 +289,16 @@ import {
   FLOOR_HEIGHT,
   FOUNDATION_HEIGHT,
   snapToBuildingGrid,
+  computeTangentsForNonIndexed,
 } from "@hyperscape/procgen/building";
 import { getLODDistances, type LODDistancesWithSq } from "./GPUVegetation";
-import { ImpostorManager, BakePriority, ImpostorBakeMode } from "../rendering";
+import {
+  ImpostorManager,
+  BakePriority,
+  ImpostorBakeMode,
+  DynamicBuildingImpostorAtlas,
+  type AtlasBuildingData,
+} from "../rendering";
 import {
   createTSLImpostorMaterial,
   isTSLImpostorMaterial,
@@ -137,7 +348,645 @@ export const BUILDING_OCCLUSION_CONFIG = {
 
   /** Distance from camera where geometry is fully dissolved (meters) - at near clip */
   NEAR_FADE_END: 0.05,
+
+  // ========== DISTANCE DISSOLVE (Retro Bayer dither fade-in/out) ==========
+  // Buildings dissolve in/out based on distance using 4x4 Bayer dithering
+  // Creates a retro/old-school fade effect like classic games instead of hard pop-in
+  //
+  // NOTE: These values should align with LOD_DISTANCES["building"].fadeDistance (200m)
+  // The dissolve should complete BEFORE the LOD system culls the object
+
+  /** Distance from camera where buildings start to fade OUT (meters) - fully opaque inside this */
+  DISTANCE_FADE_START: 150.0,
+
+  /** Distance from camera where buildings are fully dissolved (meters) - should be <= LOD fadeDistance */
+  DISTANCE_FADE_END: 195.0,
 } as const;
+
+// ============================================================================
+// PROCEDURAL PATTERN FUNCTIONS (TSL)
+// ============================================================================
+
+/**
+ * Hash function for pseudo-random values
+ */
+const tslHash = Fn(([p]: [ReturnType<typeof vec2>]) => {
+  return fract(sin(dot(p, vec2(127.1, 311.7))).mul(43758.5453123));
+});
+
+/**
+ * 2D noise function
+ */
+const tslNoise2D = Fn(([p]: [ReturnType<typeof vec2>]) => {
+  const i = floor(p);
+  const f = fract(p);
+  const smoothF = f.mul(f).mul(float(3.0).sub(f.mul(2.0)));
+
+  const a = tslHash(i);
+  const b = tslHash(i.add(vec2(1.0, 0.0)));
+  const c = tslHash(i.add(vec2(0.0, 1.0)));
+  const d = tslHash(i.add(vec2(1.0, 1.0)));
+
+  return mix(mix(a, b, smoothF.x), mix(c, d, smoothF.x), smoothF.y);
+});
+
+/**
+ * Calculate procedural LOD factor based on screen-space UV derivatives.
+ * Returns 0.0 when pattern should be fully visible, 1.0 when should fade to solid.
+ *
+ * This is the key to procedural "mip-mapping" - when UVs change too fast across
+ * pixels, the pattern frequency exceeds Nyquist and causes aliasing. We detect
+ * this and fade to the average color instead.
+ */
+const calcProceduralLOD = Fn(([uvIn]: [ReturnType<typeof vec2>]) => {
+  // Calculate how fast UVs change per pixel (filter width)
+  const dUVdx = vec2(dFdx(uvIn.x), dFdx(uvIn.y));
+  const dUVdy = vec2(dFdy(uvIn.x), dFdy(uvIn.y));
+
+  // Maximum UV change per pixel (approximates mip level)
+  const maxDeriv = max(
+    max(abs(dUVdx.x), abs(dUVdx.y)),
+    max(abs(dUVdy.x), abs(dUVdy.y)),
+  );
+
+  // When derivatives are large, patterns alias. Fade starts around 0.25 (4 pixels per pattern repeat)
+  // and fully fades at 0.5 (2 pixels per repeat - Nyquist limit)
+  return smoothstep(float(0.15), float(0.4), maxDeriv);
+});
+
+/**
+ * Anti-aliased step function using screen-space derivatives
+ * This prevents the "screen door" / bayer dithering effect at distance
+ * by using smooth transitions based on how fast the value changes on screen
+ */
+const aaStep = Fn(
+  ([edge, x]: [ReturnType<typeof float>, ReturnType<typeof float>]) => {
+    // Calculate filter width from screen-space derivatives
+    // fwidth(x) = abs(dFdx(x)) + abs(dFdy(x))
+    const fw = abs(dFdx(x)).add(abs(dFdy(x)));
+    // Scale filter width more aggressively to prevent aliasing
+    const filterWidth = max(fw.mul(1.5), float(0.001));
+    // Use smoothstep for anti-aliased transition
+    return smoothstep(edge.sub(filterWidth), edge.add(filterWidth), x);
+  },
+);
+
+/**
+ * Anti-aliased step for comparing if x is less than edge
+ * Returns 1 when x < edge, 0 when x > edge, with smooth transition
+ */
+const aaStepLt = Fn(
+  ([edge, x]: [ReturnType<typeof float>, ReturnType<typeof float>]) => {
+    const fw = abs(dFdx(x)).add(abs(dFdy(x)));
+    const filterWidth = max(fw.mul(1.5), float(0.001));
+    // Inverted: 1 when x < edge
+    return float(1.0).sub(
+      smoothstep(edge.sub(filterWidth), edge.add(filterWidth), x),
+    );
+  },
+);
+
+/**
+ * Brick pattern - returns (isBrick, brickIdX, brickIdY, lodFade)
+ * Uses anti-aliased step functions to prevent screen-door effect at distance.
+ * lodFade indicates how much to blend toward average color (0=full detail, 1=solid)
+ */
+const brickPattern = Fn(([uvIn]: [ReturnType<typeof vec2>]) => {
+  const brickWidth = float(0.25);
+  const brickHeight = float(0.065);
+  const mortarWidth = float(0.01);
+
+  // Calculate LOD fade factor - at distance, fade to average brick color
+  const lodFade = calcProceduralLOD(uvIn.div(vec2(brickWidth, brickHeight)));
+
+  const scaled = uvIn.div(vec2(brickWidth, brickHeight));
+  const row = floor(scaled.y);
+  const rowOffset = mod(row, float(2.0)).mul(0.5);
+  const offsetUV = vec2(scaled.x.add(rowOffset), scaled.y);
+
+  const brickId = floor(offsetUV);
+  const localUV = fract(offsetUV);
+
+  const mortarU = mortarWidth.div(brickWidth);
+  const mortarV = mortarWidth.div(brickHeight);
+
+  // Anti-aliased mortar detection using screen-space derivatives
+  // Left mortar edge (x < mortarU)
+  const inMortarLeft = aaStepLt(mortarU, localUV.x);
+  // Right mortar edge (x > 1 - mortarU)
+  const inMortarRight = aaStep(float(1.0).sub(mortarU), localUV.x);
+  // Bottom mortar edge (y < mortarV)
+  const inMortarBottom = aaStepLt(mortarV, localUV.y);
+  // Top mortar edge (y > 1 - mortarV)
+  const inMortarTop = aaStep(float(1.0).sub(mortarV), localUV.y);
+
+  const inMortarX = clamp(inMortarLeft.add(inMortarRight), 0.0, 1.0);
+  const inMortarY = clamp(inMortarBottom.add(inMortarTop), 0.0, 1.0);
+  const inMortar = clamp(inMortarX.add(inMortarY), 0.0, 1.0);
+
+  // Blend toward average brick coverage at distance (bricks are ~90% of surface)
+  const isBrickBase = float(1.0).sub(inMortar);
+  const avgBrickCoverage = float(0.9); // Average visible brick vs mortar
+  const isBrick = mix(isBrickBase, avgBrickCoverage, lodFade);
+
+  return vec4(isBrick, brickId.x, brickId.y, lodFade);
+});
+
+/**
+ * Stone ashlar pattern - returns (isStone, stoneIdX, stoneIdY, bevelAndLod)
+ * Uses anti-aliased step functions to prevent screen-door effect at distance
+ * bevelAndLod encodes both bevel (lower bits) and lodFade (combined with isStone)
+ */
+const ashlarPattern = Fn(([uvIn]: [ReturnType<typeof vec2>]) => {
+  const blockWidth = float(0.6);
+  const blockHeight = float(0.3);
+  const mortarWidth = float(0.015);
+
+  // Calculate LOD fade factor
+  const lodFade = calcProceduralLOD(uvIn.div(vec2(blockWidth, blockHeight)));
+
+  const scaled = uvIn.div(vec2(blockWidth, blockHeight));
+  const row = floor(scaled.y);
+  const rowOffset = mod(row, float(2.0)).mul(0.5);
+  const offsetUV = vec2(scaled.x.add(rowOffset), scaled.y);
+
+  const blockId = floor(offsetUV);
+  const localUV = fract(offsetUV);
+
+  const mortarU = mortarWidth.div(blockWidth);
+  const mortarV = mortarWidth.div(blockHeight);
+
+  // Bevel at edges - also fades at distance
+  const edgeDistX = min(localUV.x, float(1.0).sub(localUV.x));
+  const edgeDistY = min(localUV.y, float(1.0).sub(localUV.y));
+  const bevelBase = smoothstep(0.0, 0.05, min(edgeDistX, edgeDistY));
+  const bevel = mix(bevelBase, float(0.95), lodFade); // Fade bevel to flat at distance
+
+  // Anti-aliased mortar detection
+  const inMortarLeft = aaStepLt(mortarU, localUV.x);
+  const inMortarRight = aaStep(float(1.0).sub(mortarU), localUV.x);
+  const inMortarBottom = aaStepLt(mortarV, localUV.y);
+  const inMortarTop = aaStep(float(1.0).sub(mortarV), localUV.y);
+
+  const inMortarX = clamp(inMortarLeft.add(inMortarRight), 0.0, 1.0);
+  const inMortarY = clamp(inMortarBottom.add(inMortarTop), 0.0, 1.0);
+  const inMortar = clamp(inMortarX.add(inMortarY), 0.0, 1.0);
+
+  // Blend toward average stone coverage at distance
+  const isStoneBase = float(1.0).sub(inMortar);
+  const avgStoneCoverage = float(0.92);
+  const isStone = mix(isStoneBase, avgStoneCoverage, lodFade);
+
+  return vec4(isStone, blockId.x, blockId.y, bevel);
+});
+
+/**
+ * Stucco/plaster pattern - returns (noise, lodFade, 0, 0)
+ * Creates a smooth plaster surface with subtle texture variation
+ * Reduces detail noise at distance to prevent aliasing
+ */
+const stuccoPattern = Fn(([uvIn]: [ReturnType<typeof vec2>]) => {
+  // Calculate LOD fade factor based on fine detail frequency
+  const lodFade = calcProceduralLOD(uvIn.mul(8.0));
+
+  // Large-scale subtle variation (wall patches, weathering) - always visible
+  const patchNoise = tslNoise2D(uvIn.mul(0.5)).mul(0.5).add(0.5);
+
+  // Medium-scale surface texture - fades at distance
+  const surfaceNoise = tslNoise2D(uvIn.mul(8.0)).mul(0.5).add(0.5);
+  const fadedSurfaceNoise = mix(surfaceNoise, float(0.5), lodFade);
+
+  // Fine detail noise - fades out quickly at distance
+  const detailNoise = tslNoise2D(uvIn.mul(30.0)).mul(0.5).add(0.5);
+  const fadedDetailNoise = mix(
+    detailNoise,
+    float(0.5),
+    min(lodFade.mul(2.0), float(1.0)),
+  );
+
+  // Combine for natural plaster look (detail fades at distance)
+  const combined = patchNoise
+    .mul(0.3)
+    .add(fadedSurfaceNoise.mul(0.5))
+    .add(fadedDetailNoise.mul(0.2));
+
+  return vec4(combined, lodFade, 0.0, 0.0);
+});
+
+/**
+ * Timber frame pattern - returns (isTimber, timberIdX, timberIdY, lodFade)
+ * Creates Tudor-style half-timbered walls with diagonal bracing
+ * Uses anti-aliased step functions to prevent screen-door effect at distance
+ */
+const timberFramePattern = Fn(([uvIn]: [ReturnType<typeof vec2>]) => {
+  const frameThickness = float(0.08); // Timber beam width
+  const cellWidth = float(1.0); // Distance between vertical beams
+  const cellHeight = float(1.5); // Distance between horizontal beams
+
+  // Calculate LOD fade factor
+  const lodFade = calcProceduralLOD(uvIn.div(vec2(cellWidth, cellHeight)));
+
+  // Scale to cell grid
+  const cellUV = uvIn.div(vec2(cellWidth, cellHeight));
+  const cellId = floor(cellUV);
+  const localUV = fract(cellUV);
+
+  const frameU = frameThickness.div(cellWidth);
+  const frameV = frameThickness.div(cellHeight);
+
+  // Anti-aliased vertical beams
+  const inVerticalLeft = aaStepLt(frameU, localUV.x);
+  const inVerticalRight = aaStep(float(1.0).sub(frameU), localUV.x);
+  const inVertical = clamp(inVerticalLeft.add(inVerticalRight), 0.0, 1.0);
+
+  // Anti-aliased horizontal beams
+  const inHorizontalBottom = aaStepLt(frameV, localUV.y);
+  const inHorizontalTop = aaStep(float(1.0).sub(frameV), localUV.y);
+  const inHorizontal = clamp(inHorizontalBottom.add(inHorizontalTop), 0.0, 1.0);
+
+  // Diagonal braces (alternating direction per cell)
+  const cellParity = mod(cellId.x.add(cellId.y), float(2.0));
+  const diagDist = abs(
+    select(
+      cellParity.greaterThan(0.5),
+      localUV.x.sub(localUV.y), // \ direction
+      localUV.x.add(localUV.y).sub(1.0), // / direction
+    ),
+  );
+  const diagThickness = frameThickness.mul(0.7).div(min(cellWidth, cellHeight));
+  // Anti-aliased diagonal check
+  const inDiagonal = aaStepLt(diagThickness, diagDist);
+  const inDiagonalInv = float(1.0).sub(inDiagonal); // Invert since we want inside the beam
+
+  // Combine all timber elements
+  const isTimberBase = clamp(
+    inVertical.add(inHorizontal).add(inDiagonalInv),
+    0.0,
+    1.0,
+  );
+
+  // At distance, blend toward average timber coverage (~25% timber, ~75% stucco)
+  const avgTimberCoverage = float(0.25);
+  const isTimber = mix(isTimberBase, avgTimberCoverage, lodFade);
+
+  return vec4(isTimber, cellId.x, cellId.y, lodFade);
+});
+
+/**
+ * Horizontal wood siding pattern - returns (isPlank, plankId, grainOffset, lodFade)
+ * For rustic wood-sided buildings (different from interior floor planks)
+ * Uses anti-aliased step functions to prevent screen-door effect at distance
+ */
+const woodSidingPattern = Fn(([uvIn]: [ReturnType<typeof vec2>]) => {
+  const plankHeight = float(0.12); // Height of each horizontal board
+  const gapWidth = float(0.004); // Gap between boards
+
+  // Calculate LOD fade factor
+  const lodFade = calcProceduralLOD(vec2(uvIn.x, uvIn.y.div(plankHeight)));
+
+  const scaled = uvIn.y.div(plankHeight);
+  const plankId = floor(scaled);
+  const localV = fract(scaled);
+
+  // Random horizontal offset per plank (board ends)
+  const plankOffset = tslHash(vec2(plankId, 0.0)).mul(0.5);
+  const offsetU = fract(uvIn.x.add(plankOffset));
+
+  // Anti-aliased gap between planks
+  const gapV = gapWidth.div(plankHeight);
+  const inGap = aaStepLt(gapV, localV);
+
+  // Blend toward average coverage at distance
+  const isPlankBase = float(1.0).sub(inGap);
+  const avgPlankCoverage = float(0.97);
+  const isPlank = mix(isPlankBase, avgPlankCoverage, lodFade);
+
+  return vec4(isPlank, plankId, offsetU, lodFade);
+});
+
+/**
+ * Wood plank pattern - returns (isPlank, plankId, grainOffset, lodFade)
+ * Uses anti-aliased step functions to prevent screen-door effect at distance
+ */
+const woodPlankPattern = Fn(([uvIn]: [ReturnType<typeof vec2>]) => {
+  const plankWidth = float(0.15);
+  const plankHeight = float(2.0);
+  const gapWidth = float(0.005);
+
+  // Calculate LOD fade factor
+  const lodFade = calcProceduralLOD(
+    vec2(uvIn.x.div(plankHeight), uvIn.y.div(plankWidth)),
+  );
+
+  const scaled = vec2(uvIn.x.div(plankHeight), uvIn.y.div(plankWidth));
+  const plankId = floor(scaled.y);
+  const localUV = vec2(fract(scaled.x), fract(scaled.y));
+
+  // Random offset per plank
+  const plankOffset = tslHash(vec2(plankId, 0.0)).mul(0.3);
+  const offsetU = fract(localUV.x.add(plankOffset));
+
+  // Anti-aliased gap between planks
+  const gapV = gapWidth.div(plankWidth);
+  const inGapBottom = aaStepLt(gapV, localUV.y);
+  const inGapTop = aaStep(float(1.0).sub(gapV), localUV.y);
+  const inGap = clamp(inGapBottom.add(inGapTop), 0.0, 1.0);
+
+  // Blend toward average at distance
+  const isPlankBase = float(1.0).sub(inGap);
+  const avgPlankCoverage = float(0.97);
+  const isPlank = mix(isPlankBase, avgPlankCoverage, lodFade);
+
+  return vec4(isPlank, plankId, offsetU, lodFade);
+});
+
+/**
+ * Shingle pattern for roofs - returns (isShingle, shingleIdX, shingleIdY, thicknessAndLod)
+ * Uses anti-aliased step functions to prevent screen-door effect at distance
+ */
+const shinglePattern = Fn(([uvIn]: [ReturnType<typeof vec2>]) => {
+  const shingleWidth = float(0.2);
+  const shingleHeight = float(0.15);
+  const overlap = float(0.3);
+
+  // Calculate LOD fade factor
+  const lodFade = calcProceduralLOD(
+    vec2(
+      uvIn.x.div(shingleWidth),
+      uvIn.y.div(shingleHeight.mul(float(1.0).sub(overlap))),
+    ),
+  );
+
+  const scaled = vec2(
+    uvIn.x.div(shingleWidth),
+    uvIn.y.div(shingleHeight.mul(float(1.0).sub(overlap))),
+  );
+  const row = floor(scaled.y);
+  const rowOffset = mod(row, float(2.0)).mul(0.5);
+  const offsetUV = vec2(scaled.x.add(rowOffset), scaled.y);
+
+  const shingleId = floor(offsetUV);
+  const localUV = fract(offsetUV);
+
+  // Rounded bottom with anti-aliased edge
+  const bottomCurve = sin(localUV.x.mul(3.14159)).mul(0.1);
+  const bottomEdge = bottomCurve.add(0.05);
+  const isShingleBase = aaStep(bottomEdge, localUV.y);
+
+  // Blend toward solid at distance
+  const avgShingleCoverage = float(0.92);
+  const isShingle = mix(isShingleBase, avgShingleCoverage, lodFade);
+
+  // Thickness variation also fades at distance
+  const thicknessVar = tslHash(shingleId).mul(0.1);
+  const thickness = float(0.95).add(mix(thicknessVar, float(0.05), lodFade));
+
+  return vec4(isShingle, shingleId.x, shingleId.y, thickness);
+});
+
+// ============================================================================
+// PROCEDURAL NORMAL PERTURBATION FUNCTIONS (TSL)
+// ============================================================================
+
+/**
+ * Compute normal perturbation for brick pattern.
+ * Creates inset bricks with beveled edges and mortar grooves.
+ * @returns Tangent-space normal perturbation (x, y, z)
+ */
+const _brickNormalPerturbation = Fn(
+  ([uvIn, textureScale]: [
+    ReturnType<typeof vec2>,
+    ReturnType<typeof float>,
+  ]) => {
+    const scaledUV = uvIn.div(textureScale);
+    const brickWidth = float(0.25);
+    const brickHeight = float(0.065);
+    const mortarWidth = float(0.01);
+    const bevelWidth = float(0.015); // Width of the beveled edge
+    const bevelDepth = float(0.4); // Strength of the bevel normal
+
+    const scaled = scaledUV.div(vec2(brickWidth, brickHeight));
+    const row = floor(scaled.y);
+    const rowOffset = mod(row, float(2.0)).mul(0.5);
+    const offsetUV = vec2(scaled.x.add(rowOffset), scaled.y);
+
+    const brickId = floor(offsetUV);
+    const localUV = fract(offsetUV);
+
+    const mortarU = mortarWidth.div(brickWidth);
+    const mortarV = mortarWidth.div(brickHeight);
+    const bevelU = bevelWidth.div(brickWidth);
+    const bevelV = bevelWidth.div(brickHeight);
+
+    // Distance from edges (0 at edge, 1 in center)
+    const distFromLeft = localUV.x;
+    const distFromRight = float(1.0).sub(localUV.x);
+    const distFromBottom = localUV.y;
+    const distFromTop = float(1.0).sub(localUV.y);
+
+    // Bevel gradients - smoothstep for soft transition
+    const bevelLeft = smoothstep(mortarU, mortarU.add(bevelU), distFromLeft);
+    const bevelRight = smoothstep(mortarU, mortarU.add(bevelU), distFromRight);
+    const bevelBottom = smoothstep(
+      mortarV,
+      mortarV.add(bevelV),
+      distFromBottom,
+    );
+    const bevelTop = smoothstep(mortarV, mortarV.add(bevelV), distFromTop);
+
+    // Normal X: negative on left edge, positive on right edge
+    const normalX = bevelLeft
+      .sub(float(1.0))
+      .mul(bevelDepth)
+      .add(float(1.0).sub(bevelRight).mul(bevelDepth));
+
+    // Normal Y: negative on bottom edge, positive on top edge
+    const normalY = bevelBottom
+      .sub(float(1.0))
+      .mul(bevelDepth)
+      .add(float(1.0).sub(bevelTop).mul(bevelDepth));
+
+    // Add subtle surface variation per brick
+    const brickNoise = tslHash(brickId).mul(2.0).sub(1.0).mul(0.05);
+    const surfaceNoiseX = tslNoise2D(scaledUV.mul(50.0))
+      .mul(2.0)
+      .sub(1.0)
+      .mul(0.03);
+    const surfaceNoiseY = tslNoise2D(scaledUV.mul(50.0).add(vec2(100.0, 0.0)))
+      .mul(2.0)
+      .sub(1.0)
+      .mul(0.03);
+
+    // Combine perturbations
+    const perturbX = normalX.add(surfaceNoiseX).add(brickNoise);
+    const perturbY = normalY.add(surfaceNoiseY);
+
+    // Z component keeps normal mostly facing outward
+    const perturbZ = sqrt(
+      max(
+        float(0.0),
+        float(1.0).sub(perturbX.mul(perturbX)).sub(perturbY.mul(perturbY)),
+      ),
+    );
+
+    return vec3(perturbX, perturbY, perturbZ);
+  },
+);
+
+/**
+ * Compute normal perturbation for shingle pattern.
+ * Creates overlapping shingle edges with depth variation.
+ * @returns Tangent-space normal perturbation (x, y, z)
+ */
+const _shingleNormalPerturbation = Fn(
+  ([uvIn, textureScale]: [
+    ReturnType<typeof vec2>,
+    ReturnType<typeof float>,
+  ]) => {
+    const scaledUV = uvIn.div(textureScale);
+    const shingleWidth = float(0.2);
+    const shingleHeight = float(0.15);
+    const overlap = float(0.3);
+    const edgeDepth = float(0.5); // Strength of edge normal
+
+    const scaled = vec2(
+      scaledUV.x.div(shingleWidth),
+      scaledUV.y.div(shingleHeight.mul(float(1.0).sub(overlap))),
+    );
+    const row = floor(scaled.y);
+    const rowOffset = mod(row, float(2.0)).mul(0.5);
+    const offsetUV = vec2(scaled.x.add(rowOffset), scaled.y);
+
+    const shingleId = floor(offsetUV);
+    const localUV = fract(offsetUV);
+
+    // Rounded bottom creates the main normal variation
+    const bottomCurve = sin(localUV.x.mul(3.14159)).mul(0.1);
+    const bottomEdge = bottomCurve.add(0.05);
+
+    // Distance from bottom edge
+    const distFromBottom = localUV.y.sub(bottomEdge);
+    const edgeFalloff = smoothstep(0.0, 0.15, distFromBottom);
+
+    // Normal Y points up at the overlapping edge
+    const normalY = float(1.0).sub(edgeFalloff).mul(edgeDepth);
+
+    // X normal from the curved bottom - derivative of sin curve is cos
+    const curveDerivative = cos(localUV.x.mul(3.14159)).mul(0.1);
+    const normalX = curveDerivative
+      .mul(float(1.0).sub(edgeFalloff))
+      .mul(edgeDepth)
+      .mul(0.5);
+
+    // Add per-shingle variation
+    const shingleNoise = tslHash(shingleId);
+    const warpX = shingleNoise.mul(2.0).sub(1.0).mul(0.08);
+    const warpY = tslHash(shingleId.add(vec2(1.0, 0.0)))
+      .mul(2.0)
+      .sub(1.0)
+      .mul(0.08);
+
+    // Surface grain texture
+    const grainNoise = tslNoise2D(scaledUV.mul(80.0))
+      .mul(2.0)
+      .sub(1.0)
+      .mul(0.04);
+
+    const perturbX = normalX.add(warpX).add(grainNoise);
+    const perturbY = normalY.add(warpY);
+    const perturbZ = sqrt(
+      max(
+        float(0.0),
+        float(1.0).sub(perturbX.mul(perturbX)).sub(perturbY.mul(perturbY)),
+      ),
+    );
+
+    return vec3(perturbX, perturbY, perturbZ);
+  },
+);
+
+/**
+ * Compute normal perturbation for wood plank pattern.
+ * Creates wood grain direction and gaps between planks.
+ * @returns Tangent-space normal perturbation (x, y, z)
+ */
+const _woodNormalPerturbation = Fn(
+  ([uvIn, textureScale]: [
+    ReturnType<typeof vec2>,
+    ReturnType<typeof float>,
+  ]) => {
+    const scaledUV = uvIn.div(textureScale);
+    const plankWidth = float(0.15);
+    const plankHeight = float(2.0);
+    const gapWidth = float(0.005);
+    const gapDepth = float(0.6); // Strength of gap edge normal
+    const grainDepth = float(0.15); // Strength of wood grain
+
+    const scaled = vec2(
+      scaledUV.x.div(plankHeight),
+      scaledUV.y.div(plankWidth),
+    );
+    const plankId = floor(scaled.y);
+    const localUV = vec2(fract(scaled.x), fract(scaled.y));
+
+    // Gap between planks creates edge normals
+    const gapV = gapWidth.div(plankWidth);
+    const distFromGapBottom = localUV.y;
+    const distFromGapTop = float(1.0).sub(localUV.y);
+
+    // Bevel at gap edges
+    const gapBevelBottom = smoothstep(0.0, gapV.mul(3.0), distFromGapBottom);
+    const gapBevelTop = smoothstep(0.0, gapV.mul(3.0), distFromGapTop);
+
+    // Y normal from gap edges
+    const gapNormalY = float(1.0)
+      .sub(gapBevelBottom)
+      .mul(gapDepth)
+      .sub(float(1.0).sub(gapBevelTop).mul(gapDepth));
+
+    // Wood grain runs along the plank (X direction)
+    const plankOffset = tslHash(vec2(plankId, 0.0)).mul(0.3);
+    const grainU = fract(localUV.x.add(plankOffset));
+
+    // Multi-frequency wood grain for realism
+    const grain1 = tslNoise2D(vec2(grainU.mul(5.0), plankId.mul(0.5)));
+    const grain2 = tslNoise2D(vec2(grainU.mul(20.0), plankId));
+    const grain3 = tslNoise2D(vec2(grainU.mul(50.0), plankId.mul(2.0)));
+    const combinedGrain = grain1
+      .mul(0.5)
+      .add(grain2.mul(0.3))
+      .add(grain3.mul(0.2));
+
+    // Grain creates subtle Y normal variation
+    const grainNormalY = combinedGrain.mul(2.0).sub(1.0).mul(grainDepth);
+
+    // Slight X variation from grain
+    const grainNormalX = tslNoise2D(vec2(grainU.mul(30.0).add(50.0), plankId))
+      .mul(2.0)
+      .sub(1.0)
+      .mul(grainDepth)
+      .mul(0.3);
+
+    // Per-plank height variation (some planks slightly raised)
+    const plankHeight2 = tslHash(vec2(plankId, 1.0)).mul(0.05);
+
+    const perturbX = grainNormalX;
+    const perturbY = gapNormalY.add(grainNormalY).add(plankHeight2);
+    const perturbZ = sqrt(
+      max(
+        float(0.0),
+        float(1.0).sub(perturbX.mul(perturbX)).sub(perturbY.mul(perturbY)),
+      ),
+    );
+
+    return vec3(perturbX, perturbY, perturbZ);
+  },
+);
+
+// Procedural building colors (classic red brick)
+const BUILDING_BASE_COLOR = new THREE.Color("#C45C45"); // Bright terracotta red
+const BUILDING_SECONDARY_COLOR = new THREE.Color("#A84832"); // Darker red-brown
+const BUILDING_MORTAR_COLOR = new THREE.Color("#E8DDD0"); // Light cream mortar
 
 // ============================================================================
 // BUILDING OCCLUSION MATERIAL
@@ -149,6 +998,12 @@ export const BUILDING_OCCLUSION_CONFIG = {
 export type BuildingOcclusionUniforms = {
   playerPos: { value: THREE.Vector3 };
   cameraPos: { value: THREE.Vector3 };
+  // Lighting uniforms
+  sunDirection: { value: THREE.Vector3 };
+  sunColor: { value: THREE.Color };
+  sunIntensity: { value: number };
+  ambientColor: { value: THREE.Color };
+  ambientIntensity: { value: number };
 };
 
 /**
@@ -159,8 +1014,8 @@ export type BuildingOcclusionMaterial = MeshStandardNodeMaterial & {
 };
 
 /**
- * Creates a building material with dithered occlusion dissolve.
- * Uses TSL (Three Shading Language) for GPU-accelerated occlusion.
+ * Creates a building material with procedural textures and dithered occlusion dissolve.
+ * Uses TSL (Three Shading Language) for GPU-accelerated patterns and occlusion.
  *
  * The shader creates a cone-shaped dissolve from camera to player,
  * using a dithered/stippled pattern like classic RuneScape.
@@ -170,9 +1025,16 @@ export type BuildingOcclusionMaterial = MeshStandardNodeMaterial & {
 function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
   const material = new MeshStandardNodeMaterial();
 
-  // Create uniforms
+  // Create uniforms - Occlusion
   const uPlayerPos = uniform(new THREE.Vector3(0, 0, 0));
   const uCameraPos = uniform(new THREE.Vector3(0, 0, 0));
+
+  // Create uniforms - Lighting (for explicit sun/ambient calculation)
+  const uSunDirection = uniform(new THREE.Vector3(0.5, 0.8, 0.3));
+  const uSunColor = uniform(new THREE.Color(1.0, 0.98, 0.92));
+  const uSunIntensity = uniform(1.5);
+  const uAmbientColor = uniform(new THREE.Color(0.4, 0.45, 0.5));
+  const uAmbientIntensity = uniform(0.4);
 
   // Config as shader constants - Player occlusion cone
   const occlusionCameraRadius = float(BUILDING_OCCLUSION_CONFIG.CAMERA_RADIUS);
@@ -191,12 +1053,16 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
   const nearFadeStart = float(BUILDING_OCCLUSION_CONFIG.NEAR_FADE_START);
   const nearFadeEnd = float(BUILDING_OCCLUSION_CONFIG.NEAR_FADE_END);
 
-  // Create alphaTest node for dithered occlusion + near-camera dissolve
+  // Config as shader constants - Distance dissolve (retro Bayer dither fade-in/out)
+  const distFadeStart = float(BUILDING_OCCLUSION_CONFIG.DISTANCE_FADE_START);
+  const distFadeEnd = float(BUILDING_OCCLUSION_CONFIG.DISTANCE_FADE_END);
+
+  // Create alphaTest node for dithered occlusion + near-camera dissolve + distance dissolve
   material.alphaTestNode = Fn(() => {
     const worldPos = positionWorld;
 
     // ========== CAMERA-TO-FRAGMENT DISTANCE ==========
-    // Used for both near-camera dissolve and player occlusion
+    // Used for near-camera dissolve, distance dissolve, and player occlusion
     const cfX = sub(worldPos.x, uCameraPos.x);
     const cfY = sub(worldPos.y, uCameraPos.y);
     const cfZ = sub(worldPos.z, uCameraPos.z);
@@ -210,6 +1076,12 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
       float(1.0),
       smoothstep(nearFadeEnd, nearFadeStart, camDist),
     );
+
+    // ========== DISTANCE DISSOLVE (Retro Bayer dither fade-in/out) ==========
+    // Buildings dissolve out as they get far from camera using dithered pattern
+    // This creates a retro aesthetic similar to old-school games
+    // smoothstep returns 0→1 as distance goes from start→end
+    const distanceFade = smoothstep(distFadeStart, distFadeEnd, camDist);
 
     // ========== PLAYER OCCLUSION CONE ==========
     // Camera-to-player vector
@@ -275,8 +1147,11 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
     );
 
     // ========== COMBINE FADE EFFECTS ==========
-    // Take maximum of near-camera fade and player occlusion fade
-    const combinedFade = max(nearCameraFade, occlusionFade);
+    // Take maximum of all fade effects:
+    // - nearCameraFade: dissolve when camera clips through geometry
+    // - distanceFade: dissolve buildings at distance (retro Bayer dither)
+    // - occlusionFade: dissolve when player is behind walls
+    const combinedFade = max(max(nearCameraFade, distanceFade), occlusionFade);
 
     // ========== SCREEN-SPACE 4x4 BAYER DITHERING (RuneScape 3 style) ==========
     // 4x4 Bayer matrix: [ 0, 8, 2,10; 12, 4,14, 6; 3,11, 1, 9; 15, 7,13, 5]/16
@@ -317,8 +1192,509 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
     return threshold;
   })();
 
+  // ========== PROCEDURAL COLOR NODE ==========
+  // Generates procedural textures based on wall material type (from UV2) and surface normal
+  // Material IDs: 0.0=brick, 0.2=stone, 0.4=timber, 0.6=stucco, 0.8=wood
+
+  // Brick colors (classic red/terracotta)
+  const uBrickBase = uniform(BUILDING_BASE_COLOR);
+  const uBrickSecondary = uniform(BUILDING_SECONDARY_COLOR);
+  const uBrickMortar = uniform(BUILDING_MORTAR_COLOR);
+
+  // Stone colors (gray ashlar blocks)
+  const uStoneBase = uniform(new THREE.Color("#9B9B9B")); // Light gray stone
+  const uStoneSecondary = uniform(new THREE.Color("#787878")); // Darker gray
+  const uStoneMortar = uniform(new THREE.Color("#C8C8C8")); // Light mortar
+
+  // Timber frame colors
+  const uTimberBeam = uniform(new THREE.Color("#4A3728")); // Dark brown timber
+  const uTimberStucco = uniform(new THREE.Color("#F5E6D3")); // Cream stucco infill
+  const uTimberStuccoSecondary = uniform(new THREE.Color("#E8D9C4")); // Slightly darker
+
+  // Plain stucco colors (cottage style)
+  const uStuccoBase = uniform(new THREE.Color("#F0E6DC")); // Warm cream
+  const uStuccoSecondary = uniform(new THREE.Color("#E5D9CC")); // Slightly darker
+
+  // Wood siding colors (rustic buildings)
+  const uWoodBase = uniform(new THREE.Color("#8B6914")); // Golden brown wood
+  const uWoodSecondary = uniform(new THREE.Color("#6B4423")); // Darker brown
+
+  // Roof and floor colors (shared across all materials)
+  const uRoofColor = uniform(new THREE.Color("#4A3728")); // Dark wood for roofs
+  const uRoofSecondary = uniform(new THREE.Color("#3C2A1E"));
+  const uFloorColor = uniform(new THREE.Color("#8B7355")); // Wood for floors
+  const uFloorSecondary = uniform(new THREE.Color("#6B4423"));
+
+  const uVariation = uniform(0.15);
+  const uTextureScale = uniform(1.0);
+
+  material.colorNode = Fn(() => {
+    // Get UV from mesh, scaled for tiling
+    const meshUV = uv();
+    const scaledUV = meshUV.div(uTextureScale);
+
+    // Get material ID from UV2 (if available, default to brick=0)
+    // Material IDs: 0.0=brick, 0.2=stone, 0.4=timber, 0.6=stucco, 0.8=wood
+    const uv2Attr = attribute("uv2", "vec2");
+    const materialId = uv2Attr.x;
+
+    // Get world normal for surface type detection
+    const worldNormal = normalWorld;
+    const normalY = worldNormal.y;
+
+    // Surface type detection based on normal:
+    // - Roof surfaces: normal.y > 0.3 and < 0.95 (angled up but not floor)
+    // - Floor surfaces: normal.y > 0.95 (mostly flat horizontal)
+    // - Wall surfaces: everything else
+    const isRoof = step(float(0.3), normalY).mul(step(normalY, float(0.95)));
+    const isFloor = step(float(0.95), normalY);
+
+    // === BRICK PATTERN (materialId ~= 0.0) ===
+    const brickResult = brickPattern(scaledUV);
+    const isBrick = brickResult.x;
+    const brickId = brickResult.yz;
+    const brickLodFade = brickResult.w; // LOD fade from pattern
+    const brickNoise = tslHash(brickId);
+    // Fade variation at distance - use average color instead of per-brick variation
+    const brickVarFaded = mix(
+      brickNoise.mul(uVariation),
+      float(0.5).mul(uVariation),
+      brickLodFade,
+    );
+    const brickColor = mix(uBrickBase, uBrickSecondary, brickVarFaded);
+    // At distance, blend toward average brick/mortar mix
+    const avgBrickMortarColor = mix(
+      uBrickMortar,
+      mix(uBrickBase, uBrickSecondary, float(0.5)),
+      float(0.9),
+    );
+    const brickSurfaceBase = mix(uBrickMortar, brickColor, isBrick);
+    const brickSurface = mix(
+      brickSurfaceBase,
+      avgBrickMortarColor,
+      brickLodFade.mul(0.5),
+    );
+
+    // === STONE ASHLAR PATTERN (materialId ~= 0.2) ===
+    const stoneResult = ashlarPattern(scaledUV);
+    const isStone = stoneResult.x;
+    const stoneId = stoneResult.yz;
+    const stoneBevel = stoneResult.w;
+    // Compute stone LOD from derivatives
+    const stoneLodFade = calcProceduralLOD(scaledUV.mul(1.67)); // ~1/0.6 blockWidth
+    const stoneNoise = tslHash(stoneId);
+    const stoneVarFaded = mix(
+      stoneNoise.mul(uVariation),
+      float(0.5).mul(uVariation),
+      stoneLodFade,
+    );
+    const stoneColor = mix(uStoneBase, uStoneSecondary, stoneVarFaded);
+    const beveledStone = stoneColor.mul(
+      mix(float(0.85), float(1.0), stoneBevel),
+    );
+    const avgStoneMortarColor = mix(
+      uStoneMortar,
+      mix(uStoneBase, uStoneSecondary, float(0.5)),
+      float(0.92),
+    );
+    const stoneSurfaceBase = mix(uStoneMortar, beveledStone, isStone);
+    const stoneSurface = mix(
+      stoneSurfaceBase,
+      avgStoneMortarColor,
+      stoneLodFade.mul(0.5),
+    );
+
+    // === TIMBER FRAME PATTERN (materialId ~= 0.4) ===
+    const timberResult = timberFramePattern(scaledUV);
+    const isTimber = timberResult.x;
+    const timberCellId = timberResult.yz;
+    const timberLodFade = timberResult.w;
+    // Stucco infill noise - reduce at distance
+    const stuccoNoiseBase = tslNoise2D(scaledUV.mul(15.0)).mul(0.5).add(0.5);
+    const stuccoNoiseFaded = mix(stuccoNoiseBase, float(0.5), timberLodFade);
+    const stuccoInfill = mix(
+      uTimberStucco,
+      uTimberStuccoSecondary,
+      stuccoNoiseFaded.mul(0.2),
+    );
+    // Timber beams have wood grain variation
+    const timberGrain = tslHash(timberCellId);
+    const timberGrainFaded = mix(timberGrain, float(0.5), timberLodFade);
+    const timberBeamColor = uTimberBeam.mul(
+      mix(float(0.9), float(1.1), timberGrainFaded),
+    );
+    // At distance, blend to average timber/stucco color
+    const avgTimberColor = mix(
+      mix(uTimberStucco, uTimberStuccoSecondary, float(0.5)),
+      uTimberBeam,
+      float(0.25),
+    );
+    const timberSurfaceBase = mix(stuccoInfill, timberBeamColor, isTimber);
+    const timberSurface = mix(
+      timberSurfaceBase,
+      avgTimberColor,
+      timberLodFade.mul(0.5),
+    );
+
+    // === PLAIN STUCCO PATTERN (materialId ~= 0.6) ===
+    const stuccoResult = stuccoPattern(scaledUV);
+    const stuccoVariation = stuccoResult.x;
+    const stuccoLodFade = stuccoResult.y;
+    // Stucco variation already handles LOD internally
+    const plainStuccoSurface = mix(
+      uStuccoBase,
+      uStuccoSecondary,
+      stuccoVariation.mul(0.3),
+    );
+
+    // === WOOD SIDING PATTERN (materialId ~= 0.8) ===
+    const sidingResult = woodSidingPattern(scaledUV);
+    const isSiding = sidingResult.x;
+    const sidingPlankId = sidingResult.y;
+    const sidingGrainOffset = sidingResult.z;
+    const sidingLodFade = sidingResult.w;
+    const sidingNoise = tslHash(vec2(sidingPlankId, 0.0));
+    const sidingNoiseFaded = mix(sidingNoise, float(0.5), sidingLodFade);
+    const baseSiding = mix(
+      uWoodBase,
+      uWoodSecondary,
+      sidingNoiseFaded.mul(uVariation),
+    );
+    // Grain noise - fade at distance
+    const sidingGrainBase = tslNoise2D(
+      vec2(sidingGrainOffset.mul(15.0), sidingPlankId),
+    );
+    const sidingGrainFaded = mix(sidingGrainBase, float(0.0), sidingLodFade);
+    const grainedSiding = mix(
+      baseSiding,
+      baseSiding.mul(0.85),
+      sidingGrainFaded.mul(0.25),
+    );
+    const avgSidingColor = mix(uWoodBase, uWoodSecondary, float(0.5));
+    const woodSidingSurfaceBase = mix(
+      uWoodSecondary.mul(0.5),
+      grainedSiding,
+      isSiding,
+    );
+    const woodSidingSurface = mix(
+      woodSidingSurfaceBase,
+      avgSidingColor,
+      sidingLodFade.mul(0.5),
+    );
+
+    // === SHINGLE PATTERN (for roofs - all material types) ===
+    const shingleResult = shinglePattern(scaledUV);
+    const isShingle = shingleResult.x;
+    const shingleId = shingleResult.yz;
+    const shingleThickness = shingleResult.w;
+    // Compute shingle LOD
+    const shingleLodFade = calcProceduralLOD(scaledUV.mul(5.0)); // ~1/0.2 shingleWidth
+    const shingleNoise = tslHash(shingleId);
+    const shingleNoiseFaded = mix(shingleNoise, float(0.5), shingleLodFade);
+    const shingleColor = mix(
+      uRoofColor,
+      uRoofSecondary,
+      shingleNoiseFaded.mul(uVariation),
+    );
+    const shadedShingle = shingleColor.mul(shingleThickness);
+    const avgShingleColor = mix(uRoofColor, uRoofSecondary, float(0.5)).mul(
+      0.97,
+    );
+    const shingleSurfaceBase = mix(
+      uRoofColor.mul(0.3),
+      shadedShingle,
+      isShingle,
+    );
+    const shingleSurface = mix(
+      shingleSurfaceBase,
+      avgShingleColor,
+      shingleLodFade.mul(0.5),
+    );
+
+    // === WOOD PLANK PATTERN (for floors - all material types) ===
+    const woodResult = woodPlankPattern(scaledUV);
+    const isPlank = woodResult.x;
+    const plankId = woodResult.y;
+    const grainOffset = woodResult.z;
+    const plankLodFade = woodResult.w;
+    const plankNoise = tslHash(vec2(plankId, 0.0));
+    const plankNoiseFaded = mix(plankNoise, float(0.5), plankLodFade);
+    const baseWood = mix(
+      uFloorColor,
+      uFloorSecondary,
+      plankNoiseFaded.mul(uVariation),
+    );
+    // Grain noise - fade at distance
+    const grainNoiseBase = tslNoise2D(vec2(grainOffset.mul(20.0), plankId));
+    const grainNoise = mix(grainNoiseBase, float(0.0), plankLodFade);
+    const grainedWood = mix(baseWood, baseWood.mul(0.85), grainNoise.mul(0.3));
+    const avgFloorColor = mix(uFloorColor, uFloorSecondary, float(0.5));
+    const woodFloorSurfaceBase = mix(
+      uFloorSecondary.mul(0.5),
+      grainedWood,
+      isPlank,
+    );
+    const woodFloorSurface = mix(
+      woodFloorSurfaceBase,
+      avgFloorColor,
+      plankLodFade.mul(0.5),
+    );
+
+    // Select wall pattern based on material ID (UV2.x)
+    // Material IDs: 0.0=brick, 0.2=stone, 0.4=timber, 0.6=stucco, 0.8=wood
+    // Uses ranges centered around each ID with 0.05 epsilon for safety
+    const wallSurface = vec3(0.0, 0.0, 0.0).toVar();
+
+    // Default to brick (materialId < 0.1)
+    wallSurface.assign(brickSurface);
+
+    // Stone: 0.1 <= materialId < 0.3 (ID=0.2)
+    wallSurface.assign(
+      select(
+        step(float(0.1), materialId)
+          .mul(float(1.0).sub(step(float(0.3), materialId)))
+          .greaterThan(0.5),
+        stoneSurface,
+        wallSurface,
+      ),
+    );
+
+    // Timber: 0.3 <= materialId < 0.5 (ID=0.4)
+    wallSurface.assign(
+      select(
+        step(float(0.3), materialId)
+          .mul(float(1.0).sub(step(float(0.5), materialId)))
+          .greaterThan(0.5),
+        timberSurface,
+        wallSurface,
+      ),
+    );
+
+    // Stucco: 0.5 <= materialId < 0.7 (ID=0.6)
+    wallSurface.assign(
+      select(
+        step(float(0.5), materialId)
+          .mul(float(1.0).sub(step(float(0.7), materialId)))
+          .greaterThan(0.5),
+        plainStuccoSurface,
+        wallSurface,
+      ),
+    );
+
+    // Wood siding: materialId >= 0.7 (ID=0.8)
+    wallSurface.assign(
+      select(
+        step(float(0.7), materialId).greaterThan(0.5),
+        woodSidingSurface,
+        wallSurface,
+      ),
+    );
+
+    // Final surface color: priority floor > roof > wall
+    const surfaceColor = vec3(0.0, 0.0, 0.0).toVar();
+    surfaceColor.assign(wallSurface);
+    surfaceColor.assign(
+      select(isRoof.greaterThan(0.5), shingleSurface, surfaceColor),
+    );
+    surfaceColor.assign(
+      select(isFloor.greaterThan(0.5), woodFloorSurface, surfaceColor),
+    );
+
+    // Apply vertex colors for interior lighting (if present)
+    // Vertex colors encode baked interior lighting (from room center lights)
+    // - Interior-facing surfaces: vertex color < 1.0 (darkened by baked lighting)
+    // - Exterior-facing surfaces: vertex color = 1.0 (white, normal PBR lighting)
+    // - Roofs: may not have vertex colors at all (excluded from baking)
+    //
+    // NOTE: Roofs are excluded from interior lighting baking, so they won't have
+    // the "color" attribute. In that case, attribute() returns zeros which would
+    // make roofs black. We detect this by checking if the vertex color sum is
+    // near zero (invalid) and fall back to white (1,1,1).
+    const rawVertexColor = attribute("color", "vec3");
+
+    // Check if vertex colors are valid (sum > 0.1 means they exist and are non-black)
+    // If vertex colors don't exist or are black (sum ~0), use white instead
+    const vertexColorSum = rawVertexColor.x
+      .add(rawVertexColor.y)
+      .add(rawVertexColor.z);
+    const hasValidVertexColors = step(float(0.1), vertexColorSum);
+    const vertexColor = mix(
+      vec3(1.0, 1.0, 1.0),
+      rawVertexColor,
+      hasValidVertexColors,
+    );
+
+    // Apply vertex color tint for interior lighting
+    // Exterior surfaces should have white vertex colors, so they're unaffected
+    const finalColor = surfaceColor.mul(vertexColor);
+
+    return finalColor;
+  })();
+
+  // ========== NORMAL HANDLING ==========
+  // Let MeshStandardNodeMaterial use the default normal from geometry
+  // Do NOT override normalNode - this ensures proper PBR lighting from directional lights
+  // material.normalNode = normalWorld; // REMOVED - was interfering with lighting
+
+  // ========== PROCEDURAL ROUGHNESS NODE ==========
+  // Varies roughness based on wall material type (from UV2) and surface normal
+  material.roughnessNode = Fn(() => {
+    const meshUV = uv();
+    const scaledUV = meshUV.div(uTextureScale);
+
+    // Get material ID from UV2
+    const uv2Attr = attribute("uv2", "vec2");
+    const materialId = uv2Attr.x;
+
+    // Get world normal for surface type detection
+    const worldNormal = normalWorld;
+    const normalY = worldNormal.y;
+
+    // Surface type detection (same as colorNode)
+    const isRoof = step(float(0.3), normalY).mul(step(normalY, float(0.95)));
+    const isFloor = step(float(0.95), normalY);
+
+    // === BRICK ROUGHNESS (materialId ~= 0.0) ===
+    const brickResult = brickPattern(scaledUV);
+    const isBrick = brickResult.x;
+    const brickId = brickResult.yz;
+    const brickRoughVar = tslHash(brickId).mul(0.15);
+    const brickRoughness = float(0.75).add(brickRoughVar); // 0.75-0.90
+    const brickMortarRoughness = float(0.95);
+    const brickWallRoughness = mix(
+      brickMortarRoughness,
+      brickRoughness,
+      isBrick,
+    );
+
+    // === STONE ROUGHNESS (materialId ~= 0.2) ===
+    const stoneResult = ashlarPattern(scaledUV);
+    const isStone = stoneResult.x;
+    const stoneId = stoneResult.yz;
+    const stoneBevel = stoneResult.w;
+    const stoneRoughVar = tslHash(stoneId).mul(0.12);
+    const stoneRoughness = float(0.68).add(stoneRoughVar); // 0.68-0.80 (smoother than brick)
+    const stoneMortarRoughness = float(0.92);
+    const stoneWallRoughness = mix(
+      stoneMortarRoughness,
+      stoneRoughness.mul(stoneBevel),
+      isStone,
+    );
+
+    // === TIMBER ROUGHNESS (materialId ~= 0.4) ===
+    const timberResult = timberFramePattern(scaledUV);
+    const isTimber = timberResult.x;
+    const timberRoughness = float(0.82); // Wood beams are fairly rough
+    const timberStuccoNoise = tslNoise2D(scaledUV.mul(10.0)).mul(0.5).add(0.5);
+    const timberStuccoRoughness = float(0.88).add(timberStuccoNoise.mul(0.08)); // 0.88-0.96
+    const timberWallRoughness = mix(
+      timberStuccoRoughness,
+      timberRoughness,
+      isTimber,
+    );
+
+    // === STUCCO ROUGHNESS (materialId ~= 0.6) ===
+    const stuccoNoise = tslNoise2D(scaledUV.mul(12.0)).mul(0.5).add(0.5);
+    const stuccoWallRoughness = float(0.85).add(stuccoNoise.mul(0.1)); // 0.85-0.95
+
+    // === WOOD SIDING ROUGHNESS (materialId ~= 0.8) ===
+    const sidingResult = woodSidingPattern(scaledUV);
+    const isSiding = sidingResult.x;
+    const sidingPlankId = sidingResult.y;
+    const sidingRoughVar = tslHash(vec2(sidingPlankId, 3.0)).mul(0.1);
+    const sidingRoughness = float(0.68).add(sidingRoughVar); // 0.68-0.78 (smoother finished wood)
+    const sidingGapRoughness = float(0.85);
+    const woodSidingWallRoughness = mix(
+      sidingGapRoughness,
+      sidingRoughness,
+      isSiding,
+    );
+
+    // Select wall roughness based on material ID
+    // Material IDs: 0.0=brick, 0.2=stone, 0.4=timber, 0.6=stucco, 0.8=wood
+    const wallRoughness = float(0.85).toVar();
+    wallRoughness.assign(brickWallRoughness); // Default: brick
+
+    // Stone: 0.1 <= materialId < 0.3
+    wallRoughness.assign(
+      select(
+        step(float(0.1), materialId)
+          .mul(float(1.0).sub(step(float(0.3), materialId)))
+          .greaterThan(0.5),
+        stoneWallRoughness,
+        wallRoughness,
+      ),
+    );
+    // Timber: 0.3 <= materialId < 0.5
+    wallRoughness.assign(
+      select(
+        step(float(0.3), materialId)
+          .mul(float(1.0).sub(step(float(0.5), materialId)))
+          .greaterThan(0.5),
+        timberWallRoughness,
+        wallRoughness,
+      ),
+    );
+    // Stucco: 0.5 <= materialId < 0.7
+    wallRoughness.assign(
+      select(
+        step(float(0.5), materialId)
+          .mul(float(1.0).sub(step(float(0.7), materialId)))
+          .greaterThan(0.5),
+        stuccoWallRoughness,
+        wallRoughness,
+      ),
+    );
+    // Wood siding: materialId >= 0.7
+    wallRoughness.assign(
+      select(
+        step(float(0.7), materialId).greaterThan(0.5),
+        woodSidingWallRoughness,
+        wallRoughness,
+      ),
+    );
+
+    // === SHINGLE ROUGHNESS (for roofs - all material types) ===
+    const shingleResult = shinglePattern(scaledUV);
+    const isShingle = shingleResult.x;
+    const shingleId = shingleResult.yz;
+    const shingleThickness = shingleResult.w;
+    const shingleWear = tslHash(shingleId.add(vec2(5.0, 0.0))).mul(0.2);
+    const shingleRoughness = float(0.8)
+      .add(shingleWear)
+      .sub(shingleThickness.mul(0.1));
+    const shingleGapRoughness = float(0.95);
+    const roofRoughness = mix(shingleGapRoughness, shingleRoughness, isShingle);
+
+    // === WOOD ROUGHNESS (for floors - all material types) ===
+    const woodResult = woodPlankPattern(scaledUV);
+    const isPlank = woodResult.x;
+    const plankId = woodResult.y;
+    const grainOffset = woodResult.z;
+    const grainRough = tslNoise2D(vec2(grainOffset.mul(30.0), plankId)).mul(
+      0.15,
+    );
+    const plankBaseRough = float(0.7).add(tslHash(vec2(plankId, 2.0)).mul(0.1));
+    const floorWoodRoughness = plankBaseRough.add(grainRough);
+    const floorGapRoughness = float(0.9);
+    const floorRoughness = mix(floorGapRoughness, floorWoodRoughness, isPlank);
+
+    // Select final roughness: priority floor > roof > wall
+    const roughness = float(0.85).toVar();
+    roughness.assign(wallRoughness);
+    roughness.assign(select(isRoof.greaterThan(0.5), roofRoughness, roughness));
+    roughness.assign(
+      select(isFloor.greaterThan(0.5), floorRoughness, roughness),
+    );
+
+    return clamp(roughness, 0.3, 1.0);
+  })();
+
   // Material settings
-  material.vertexColors = true;
+  // Note: We read vertex colors explicitly in colorNode via attribute("color", "vec3")
+  // Do NOT set vertexColors=true as it would double-multiply vertex colors
+  material.vertexColors = false;
+  // Base roughness/metalness (roughnessNode overrides roughness)
   material.roughness = 0.85;
   material.metalness = 0.05;
   material.transparent = false;
@@ -332,6 +1708,12 @@ function createBuildingOcclusionMaterial(): BuildingOcclusionMaterial {
   occlusionMaterial.occlusionUniforms = {
     playerPos: uPlayerPos,
     cameraPos: uCameraPos,
+    // Lighting uniforms for sun/ambient
+    sunDirection: uSunDirection,
+    sunColor: uSunColor,
+    sunIntensity: uSunIntensity,
+    ambientColor: uAmbientColor,
+    ambientIntensity: uAmbientIntensity,
   };
 
   return occlusionMaterial;
@@ -425,26 +1807,6 @@ interface BatchedTownMesh {
 }
 
 /**
- * Town impostor atlas data
- */
-interface TownImpostorAtlas {
-  /** Combined atlas texture for all buildings in town */
-  atlasTexture: THREE.Texture;
-  /** Instanced mesh for all building impostors */
-  instancedMesh: THREE.InstancedMesh;
-  /** Map from building ID to instance index */
-  buildingToInstanceMap: Map<string, number>;
-  /** Per-building UV offsets in atlas */
-  uvOffsets: Map<
-    string,
-    { u: number; v: number; width: number; height: number }
-  >;
-  /** Grid size for octahedral sampling */
-  gridSizeX: number;
-  gridSizeY: number;
-}
-
-/**
  * Town visibility data for efficient culling
  */
 interface TownData {
@@ -455,8 +1817,6 @@ interface TownData {
   visible: boolean;
   /** Batched mesh for this town (body + roof combined) */
   batchedMesh?: BatchedTownMesh;
-  /** Town-level impostor atlas */
-  impostorAtlas?: TownImpostorAtlas;
   /** Whether collision has been fully created for this town */
   collisionCreated: boolean;
   /** Whether collision creation is in progress */
@@ -487,17 +1847,29 @@ interface TownData {
  *    - Defers PhysX body creation until player approaches town
  *    - Collision created incrementally over frames (chunkedCollisionPerFrame)
  *
- * 3. **Town Impostor Atlas** (IMPLEMENTED - enableImpostorAtlas)
- *    - Batches all building impostors into single instanced mesh
- *    - Uses InstancedMesh for impostor billboards
+ * 3. **Dynamic Impostor Atlas** (IMPLEMENTED - enableDynamicAtlas)
+ *    - Slot-based dynamic atlas (max 16 buildings at once)
+ *    - Buildings scored by distance + frustum visibility
+ *    - LRU eviction with hysteresis to prevent thrashing
+ *    - Single draw call for all building impostors
+ *    - Proper texture blitting and octahedral sampling
  */
+/**
+ * IMPOSTOR DISABLE FLAG
+ * When true, buildings use dissolve fade-out at distance instead of impostor billboards.
+ * The 3D meshes stay visible and fade out via GPU dithered dissolve.
+ * This provides visual consistency with vegetation and tree rendering.
+ */
+const DISABLE_IMPOSTORS = true;
+
 const BUILDING_PERF_CONFIG = {
   /** Enable static batching (merge all buildings in a town into single mesh) */
   enableStaticBatching: true,
-  /** Enable town-level impostor atlas (batch all impostors into single instanced mesh)
-   * DISABLED: Atlas implementation is incomplete - doesn't blit individual textures.
-   * Individual impostor meshes (via ImpostorManager) work correctly and are used instead. */
-  enableImpostorAtlas: false,
+  /** Enable dynamic impostor atlas (slot-based, max 16 buildings, single draw call)
+   * Uses DynamicBuildingImpostorAtlas for efficient rendering of distant buildings.
+   * When disabled, falls back to individual impostor meshes per building.
+   * NOTE: Ignored when DISABLE_IMPOSTORS is true. */
+  enableDynamicAtlas: true,
   /** Enable lazy collision (create PhysX bodies only when player approaches) */
   enableLazyCollision: true,
   /** Distance at which to trigger collision creation */
@@ -594,11 +1966,11 @@ export class BuildingRenderingSystem extends SystemBase {
   // ROOF AUTO-HIDE FEATURE
   // ============================================
 
-  /** Setting: Whether to auto-hide roofs when player is inside a building */
+  /** Setting: Whether to auto-hide roofs when player is inside/near a building */
   private _autoHideRoofsEnabled = true;
 
-  /** Setting: Whether roofs are always hidden (default true for better visibility) */
-  private _roofsAlwaysHidden = true;
+  /** Setting: Whether roofs are always hidden (default false - use proximity hiding) */
+  private _roofsAlwaysHidden = false;
 
   /**
    * Current floor the local player is on.
@@ -616,6 +1988,9 @@ export class BuildingRenderingSystem extends SystemBase {
 
   /** Storage key for roof auto-hide setting */
   private static readonly ROOF_SETTING_KEY = "hyperscape:autoHideRoofs";
+
+  /** Dynamic impostor atlas (slot-based, max 16 buildings) */
+  private dynamicAtlas: DynamicBuildingImpostorAtlas | null = null;
 
   constructor(world: World) {
     super(world, {
@@ -755,10 +2130,60 @@ export class BuildingRenderingSystem extends SystemBase {
     // Update material uniforms
     this.batchedMaterial.occlusionUniforms.playerPos.value.copy(playerPos);
     this.batchedMaterial.occlusionUniforms.cameraPos.value.copy(cameraPos);
+
+    // Sync lighting from Environment system
+    this.syncBuildingLighting();
   }
 
   /**
-   * Update roof visibility based on player position inside buildings.
+   * Sync building material lighting with the Environment system's sun light.
+   * Updates sun direction, color, and intensity uniforms.
+   */
+  private syncBuildingLighting(): void {
+    // Get environment system
+    const env = this.world.getSystem("environment") as {
+      sunLight?: THREE.DirectionalLight;
+      lightDirection?: THREE.Vector3;
+      hemisphereLight?: THREE.HemisphereLight;
+      ambientLight?: THREE.AmbientLight;
+    } | null;
+
+    if (!env) return;
+
+    const uniforms = this.batchedMaterial.occlusionUniforms;
+
+    // Update sun direction (negate because lightDirection points FROM light TO target)
+    if (env.lightDirection) {
+      uniforms.sunDirection.value.copy(env.lightDirection).negate();
+    }
+
+    // Update sun color and intensity
+    if (env.sunLight) {
+      uniforms.sunColor.value.copy(env.sunLight.color);
+      uniforms.sunIntensity.value = env.sunLight.intensity;
+    }
+
+    // Update ambient from hemisphere light or ambient light
+    if (env.hemisphereLight) {
+      uniforms.ambientColor.value.copy(env.hemisphereLight.color);
+      uniforms.ambientIntensity.value = env.hemisphereLight.intensity;
+    } else if (env.ambientLight) {
+      uniforms.ambientColor.value.copy(env.ambientLight.color);
+      uniforms.ambientIntensity.value = env.ambientLight.intensity;
+    }
+  }
+
+  /**
+   * Update roof visibility based on player position inside buildings
+   * OR camera proximity to buildings.
+   *
+   * Roofs are hidden when:
+   * 1. Player character is inside a building (standing on building floor tiles)
+   * 2. Camera is close to a building (within proximity distance)
+   *
+   * This provides good visibility when entering buildings or when
+   * the camera is positioned near building geometry.
+   *
    * Called from update() when auto-hide is enabled.
    */
   private updateRoofVisibility(cameraPos: THREE.Vector3): void {
@@ -774,46 +2199,40 @@ export class BuildingRenderingSystem extends SystemBase {
 
     if (!this._autoHideRoofsEnabled) return;
 
-    // Get the local player's position (camera is above player)
-    // Estimate player position from camera
-    const playerX = cameraPos.x;
-    const playerZ = cameraPos.z;
+    // Get the local player's actual position
+    const player = this.world.getPlayer?.();
+    const playerX = player?.position?.x ?? cameraPos.x;
+    const playerZ = player?.position?.z ?? cameraPos.z;
 
-    // Check if player is inside any building
-    // Convert to tile coordinates (1 tile = 1 meter)
-    const tileX = Math.floor(playerX);
-    const tileZ = Math.floor(playerZ);
-
-    // Get town system to check building collision
-    const townSystem = this.world.getSystem("towns") as {
-      getCollisionService?: () => {
-        getBuildingAtTile: (x: number, z: number) => string | null;
-      };
-    } | null;
-
-    const collisionService = townSystem?.getCollisionService?.();
-    if (!collisionService) {
-      // No collision service - can't determine if inside building
-      return;
-    }
-
-    // Check if player is inside a building
-    const insideBuildingId = collisionService.getBuildingAtTile(tileX, tileZ);
+    // Distance threshold for hiding roofs when camera/player is near (in world units)
+    const proximityThreshold = 15; // Hide roof when within 15 meters of building center
+    const proximityThresholdSq = proximityThreshold * proximityThreshold;
 
     // Update roof visibility for each town
     for (const [, town] of this.townData) {
       if (!town.batchedMesh?.roofMesh) continue;
 
-      // Check if player is inside any building in this town
+      // Check if camera or player is close to any building in this town
       let shouldHideRoof = false;
 
-      if (insideBuildingId) {
-        // Check if this building is in this town
-        for (const building of town.buildings) {
-          if (building.buildingId === insideBuildingId) {
-            shouldHideRoof = true;
-            break;
-          }
+      for (const building of town.buildings) {
+        // Calculate distance from camera to building position
+        const dx = cameraPos.x - building.position.x;
+        const dz = cameraPos.z - building.position.z;
+        const cameraDist = dx * dx + dz * dz;
+
+        // Calculate distance from player to building position
+        const pdx = playerX - building.position.x;
+        const pdz = playerZ - building.position.z;
+        const playerDist = pdx * pdx + pdz * pdz;
+
+        // Hide roof if camera OR player is close to this building
+        if (
+          cameraDist < proximityThresholdSq ||
+          playerDist < proximityThresholdSq
+        ) {
+          shouldHideRoof = true;
+          break;
         }
       }
 
@@ -983,6 +2402,16 @@ export class BuildingRenderingSystem extends SystemBase {
     this.scene.add(this.buildingsGroup);
     this.scene.add(this.impostorsGroup);
 
+    // Initialize dynamic impostor atlas (slot-based, max 16 buildings)
+    // Skip when DISABLE_IMPOSTORS is true - buildings use dissolve fade instead
+    if (!DISABLE_IMPOSTORS && BUILDING_PERF_CONFIG.enableDynamicAtlas) {
+      this.dynamicAtlas = new DynamicBuildingImpostorAtlas(this.world);
+      this.impostorsGroup.add(this.dynamicAtlas.getMesh());
+      this.logger.info(
+        "[BuildingRenderingSystem] Dynamic impostor atlas initialized (16 slots)",
+      );
+    }
+
     // Get towns from TownSystem
     const townSystem = this.world.getSystem("towns") as {
       getTowns?: () => ProceduralTown[];
@@ -1025,6 +2454,7 @@ export class BuildingRenderingSystem extends SystemBase {
       const floorGeometries: THREE.BufferGeometry[] = [];
       const wallGeometries: THREE.BufferGeometry[] = [];
       const roofGeometries: THREE.BufferGeometry[] = [];
+      const glassGeometries: THREE.BufferGeometry[] = [];
       const triangleToBuildingMap = new Map<number, string>();
       let currentTriangleOffset = 0;
 
@@ -1161,9 +2591,14 @@ export class BuildingRenderingSystem extends SystemBase {
             }
           }
 
+          // NOTE: Building grass exclusion is now handled by GrassExclusionGrid which queries
+          // BuildingCollisionService.isTileInBuildingAnyFloor() for pixel-perfect footprint matching.
+          // This supports L-shaped, T-shaped, and other irregular building footprints correctly.
+          // The old rectangular blocker system has been removed as it didn't match irregular footprints.
+
           // Extract geometries for static batching
           if (BUILDING_PERF_CONFIG.enableStaticBatching) {
-            const { floorGeo, wallGeo, roofGeo } =
+            const { floorGeo, wallGeo, roofGeo, glassGeo } =
               this.extractBuildingGeometries(mesh);
 
             // Floor geometry (walkable surfaces)
@@ -1190,6 +2625,10 @@ export class BuildingRenderingSystem extends SystemBase {
             // Roof geometry
             if (roofGeo) {
               roofGeometries.push(roofGeo);
+            }
+            // Glass geometry (transparent)
+            if (glassGeo) {
+              glassGeometries.push(glassGeo);
             }
 
             // Hide individual mesh when batching (use batched mesh instead)
@@ -1245,14 +2684,31 @@ export class BuildingRenderingSystem extends SystemBase {
         BUILDING_PERF_CONFIG.enableStaticBatching &&
         (floorGeometries.length > 0 || wallGeometries.length > 0)
       ) {
+        // Geometry merging is CPU-intensive - yield before to ensure UI is responsive
+        await yieldToMainThread(50);
+
+        const mergeStartTime = performance.now();
         batchedMesh = this.createBatchedTownMesh(
           floorGeometries,
           wallGeometries,
           roofGeometries,
+          glassGeometries,
           triangleToBuildingMap,
           townGroup,
         );
-        totalDrawCalls += 3; // floors + walls + roof = 3 draw calls per town
+
+        const mergeTime = performance.now() - mergeStartTime;
+        if (mergeTime > BUILDING_PERF_CONFIG.frameBudgetMs) {
+          this.logger.info(
+            `[BuildingRendering] Town ${town.id} geometry merge took ${mergeTime.toFixed(1)}ms`,
+          );
+        }
+
+        // Yield after merge to let browser catch up
+        await yieldToMainThread(16);
+
+        // floors + walls + roof + glass = 4 draw calls per town (if glass exists)
+        totalDrawCalls += glassGeometries.length > 0 ? 4 : 3;
       } else {
         totalDrawCalls += townBuildings.length * 3; // Individual meshes
       }
@@ -1345,7 +2801,11 @@ export class BuildingRenderingSystem extends SystemBase {
 
   /**
    * Process pending impostor bakes in batches.
-   * Bakes are done asynchronously to avoid blocking.
+   *
+   * **PERFORMANCE OPTIMIZATION:**
+   * Uses requestIdleCallback for proper yielding to the browser.
+   * Processes bakes during browser idle time to avoid blocking rendering/input.
+   * Respects frame budget and yields when deadline is exhausted.
    */
   private async processImpostorBakeQueue(): Promise<void> {
     const manager = ImpostorManager.getInstance(this.world);
@@ -1357,228 +2817,59 @@ export class BuildingRenderingSystem extends SystemBase {
       return;
     }
 
-    // Process bakes in batches
-    const batchSize = 5;
+    const totalToBake = this._pendingImpostorBakes.length;
+    let bakedCount = 0;
+    const startTime = performance.now();
+
+    this.logger.info(
+      `[BuildingRendering] Starting impostor baking: ${totalToBake} buildings`,
+    );
+
+    // Process bakes using requestIdleCallback for proper scheduling
     while (this._pendingImpostorBakes.length > 0) {
-      const batch = this._pendingImpostorBakes.splice(0, batchSize);
+      // Get idle deadline for frame budget
+      const deadline = await yieldToMainThread(100);
 
-      await Promise.all(
-        batch.map(async (buildingData) => {
-          try {
-            await this.bakeImpostorForBuilding(buildingData);
-          } catch (err) {
-            this.logger.warn(
-              `Failed to bake impostor for ${buildingData.buildingType}: ${err}`,
-            );
-          }
-        }),
-      );
+      // Process as many as we can within the idle budget
+      const batchStartTime = performance.now();
+      const maxBatchTime = BUILDING_PERF_CONFIG.frameBudgetMs;
 
-      // Yield to prevent blocking
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
+      while (
+        this._pendingImpostorBakes.length > 0 &&
+        hasTimeRemaining(deadline) &&
+        !shouldYieldNow(batchStartTime, maxBatchTime)
+      ) {
+        const buildingData = this._pendingImpostorBakes.shift();
+        if (!buildingData) break;
 
-    this.logger.info("Building impostor baking complete");
-
-    // Create impostor atlas for each town if enabled
-    if (BUILDING_PERF_CONFIG.enableImpostorAtlas) {
-      this.createTownImpostorAtlases();
-    }
-  }
-
-  /**
-   * Create impostor atlases for all towns.
-   * Batches individual building impostors into instanced meshes per town.
-   */
-  private createTownImpostorAtlases(): void {
-    for (const [townId, town] of this.townData) {
-      // Skip if atlas already created or no buildings with impostors
-      if (town.impostorAtlas) continue;
-
-      const buildingsWithImpostors = town.buildings.filter(
-        (b) => b.impostorBakeResult,
-      );
-      if (buildingsWithImpostors.length === 0) continue;
-
-      const atlas = this.createTownImpostorAtlas(
-        townId,
-        town,
-        buildingsWithImpostors,
-      );
-      if (atlas) {
-        town.impostorAtlas = atlas;
-
-        // Hide individual impostor meshes - use atlas instead
-        for (const building of buildingsWithImpostors) {
-          if (building.impostorMesh) {
-            building.impostorMesh.visible = false;
-            building.impostorMesh.removeFromParent();
-          }
+        try {
+          await this.bakeImpostorForBuilding(buildingData);
+          bakedCount++;
+        } catch (err) {
+          this.logger.warn(
+            `Failed to bake impostor for ${buildingData.buildingType}: ${err}`,
+          );
         }
-
-        this.logger.info(
-          `Created impostor atlas for town ${townId}: ${buildingsWithImpostors.length} buildings`,
-        );
       }
     }
-  }
 
-  /**
-   * Create an impostor atlas for a single town.
-   * Uses InstancedMesh for efficient rendering of all building impostors.
-   */
-  private createTownImpostorAtlas(
-    townId: string,
-    town: TownData,
-    buildings: BuildingData[],
-  ): TownImpostorAtlas | null {
-    if (buildings.length === 0) return null;
-
-    // Use the first building's bake result as a template for grid size
-    const templateResult = buildings[0].impostorBakeResult;
-    if (!templateResult) return null;
-
-    const { gridSizeX, gridSizeY } = templateResult;
-
-    // Calculate atlas layout (pack all building impostors into grid)
-    const atlasSize = BUILDING_PERF_CONFIG.impostorAtlasSize;
-    const perBuildingSize = BUILDING_PERF_CONFIG.perBuildingImpostorSize;
-    const buildingsPerRow = Math.floor(atlasSize / perBuildingSize);
-
-    // Create render target for atlas
-    const atlasTexture = new THREE.WebGLRenderTarget(atlasSize, atlasSize, {
-      format: THREE.RGBAFormat,
-      type: THREE.UnsignedByteType,
-      minFilter: THREE.LinearMipmapLinearFilter,
-      magFilter: THREE.LinearFilter,
-      generateMipmaps: true,
-    });
-
-    // Calculate UV offsets for each building in the atlas
-    const uvOffsets = new Map<
-      string,
-      { u: number; v: number; width: number; height: number }
-    >();
-    const buildingToInstanceMap = new Map<string, number>();
-
-    for (let i = 0; i < buildings.length; i++) {
-      const building = buildings[i];
-      const col = i % buildingsPerRow;
-      const row = Math.floor(i / buildingsPerRow);
-
-      const u = (col * perBuildingSize) / atlasSize;
-      const v = (row * perBuildingSize) / atlasSize;
-      const width = perBuildingSize / atlasSize;
-      const height = perBuildingSize / atlasSize;
-
-      uvOffsets.set(building.buildingId, { u, v, width, height });
-      buildingToInstanceMap.set(building.buildingId, i);
-    }
-
-    // Create shared impostor material for atlas
-    // Note: This uses a simplified material since we can't use the @hyperscape/impostor
-    // material directly with atlas (it expects individual textures)
-    // Use MeshBasicNodeMaterial for WebGPU compatibility
-    const atlasMaterial = new MeshBasicNodeMaterial();
-    atlasMaterial.map = atlasTexture.texture;
-    atlasMaterial.transparent = true;
-    atlasMaterial.alphaTest = 0.1;
-    atlasMaterial.side = THREE.DoubleSide;
-    this.world.setupMaterial(atlasMaterial);
-
-    // Create billboard geometry (unit plane)
-    const geometry = new THREE.PlaneGeometry(1, 1);
-
-    // Create instanced mesh for all building impostors
-    const instancedMesh = new THREE.InstancedMesh(
-      geometry,
-      atlasMaterial,
-      buildings.length,
+    const totalTime = performance.now() - startTime;
+    this.logger.info(
+      `[BuildingRendering] Impostor baking complete: ${bakedCount}/${totalToBake} ` +
+        `in ${totalTime.toFixed(1)}ms (${(totalTime / Math.max(bakedCount, 1)).toFixed(1)}ms avg)`,
     );
-    instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    instancedMesh.frustumCulled = false;
-    instancedMesh.count = buildings.length;
-    instancedMesh.name = `TownImpostorAtlas_${townId}`;
-    instancedMesh.visible = false; // Hidden by default, shown when LOD switches
-
-    // Set initial transforms for each instance
-    // NOTE: Double the size because impostor baker renders object at ~50% of atlas cell
-    for (let i = 0; i < buildings.length; i++) {
-      const building = buildings[i];
-      const width = Math.max(building.dimensions.x, building.dimensions.z) * 2;
-      const height = building.dimensions.y * 2;
-
-      this._tempScale.set(width, height, 1);
-      this._tempQuat.identity();
-      this._tempVec.copy(building.position);
-      this._tempVec.y += height * 0.25; // Quarter height since we doubled
-
-      this._tempMatrix.compose(this._tempVec, this._tempQuat, this._tempScale);
-      instancedMesh.setMatrixAt(i, this._tempMatrix);
-    }
-    instancedMesh.instanceMatrix.needsUpdate = true;
-
-    // Add to impostors group
-    this.impostorsGroup.add(instancedMesh);
-
-    return {
-      atlasTexture: atlasTexture.texture,
-      instancedMesh,
-      buildingToInstanceMap,
-      uvOffsets,
-      gridSizeX,
-      gridSizeY,
-    };
-  }
-
-  /**
-   * Update impostor atlas billboards to face camera.
-   */
-  private updateTownImpostorAtlas(
-    atlas: TownImpostorAtlas,
-    buildings: BuildingData[],
-    cameraPos: THREE.Vector3,
-  ): void {
-    for (const building of buildings) {
-      const instanceIndex = atlas.buildingToInstanceMap.get(
-        building.buildingId,
-      );
-      if (instanceIndex === undefined) continue;
-
-      // Calculate angle to camera (Y-axis billboard rotation)
-      const dx = cameraPos.x - building.position.x;
-      const dz = cameraPos.z - building.position.z;
-      const angle = Math.atan2(dx, dz);
-
-      // Get dimensions (doubled for impostor sizing)
-      const width = Math.max(building.dimensions.x, building.dimensions.z) * 2;
-      const height = building.dimensions.y * 2;
-
-      // Update transform
-      this._tempQuat.setFromAxisAngle(this._tempVec.set(0, 1, 0), angle);
-      this._tempScale.set(width, height, 1);
-      this._tempVec.copy(building.position);
-      this._tempVec.y += height * 0.25; // Quarter height since we doubled
-
-      this._tempMatrix.compose(this._tempVec, this._tempQuat, this._tempScale);
-      atlas.instancedMesh.setMatrixAt(instanceIndex, this._tempMatrix);
-    }
-
-    atlas.instancedMesh.instanceMatrix.needsUpdate = true;
-
-    // Sync lighting with scene (atlas material is shared across all buildings)
-    const material = atlas.instancedMesh.material as TSLImpostorMaterial;
-    if (isTSLImpostorMaterial(material) && material.updateLighting) {
-      this.syncImpostorLighting(material);
-    }
   }
 
   /**
    * Bake an impostor for a single building.
+   * NOTE: When DISABLE_IMPOSTORS is true, this function returns immediately.
    */
   private async bakeImpostorForBuilding(
     buildingData: BuildingData,
   ): Promise<void> {
+    // Skip impostor baking when disabled - buildings fade out via GPU dissolve shader
+    if (DISABLE_IMPOSTORS) return;
+
     const manager = ImpostorManager.getInstance(this.world);
 
     // Create unique model ID for caching (v2 = with normal atlas)
@@ -1666,22 +2957,26 @@ export class BuildingRenderingSystem extends SystemBase {
 
   /**
    * Extract geometries from a building mesh for batching.
-   * Applies world transforms and separates floors/walls/roof geometries.
+   * Applies world transforms and separates floors/walls/roof/glass geometries.
    *
    * Separation is based on mesh names from BuildingGenerator:
    * - "floors" → walkable surfaces (for click-to-move raycast)
    * - "walls" → non-walkable (excluded from click raycast, gets occlusion shader)
    * - "roof" → roof pieces (can be hidden when inside building)
+   * - "windowFrames", "doorFrames", "shutters" → merged with walls
+   * - "windowGlass" → separate transparent geometry
    */
   private extractBuildingGeometries(mesh: THREE.Mesh | THREE.Group): {
     floorGeo: THREE.BufferGeometry | null;
     wallGeo: THREE.BufferGeometry | null;
     roofGeo: THREE.BufferGeometry | null;
+    glassGeo: THREE.BufferGeometry | null;
     triangleCount: number;
   } {
     const floorGeometries: THREE.BufferGeometry[] = [];
     const wallGeometries: THREE.BufferGeometry[] = [];
     const roofGeometries: THREE.BufferGeometry[] = [];
+    const glassGeometries: THREE.BufferGeometry[] = [];
     let triangleCount = 0;
 
     mesh.traverse((child) => {
@@ -1702,8 +2997,16 @@ export class BuildingRenderingSystem extends SystemBase {
           roofGeometries.push(geo);
         } else if (name.includes("floor")) {
           floorGeometries.push(geo);
-        } else if (name.includes("wall") || name === "body") {
-          // "walls" or legacy "body" mesh → walls
+        } else if (name === "windowglass" || name.includes("glass")) {
+          // Window glass → separate transparent geometry
+          glassGeometries.push(geo);
+        } else if (
+          name.includes("wall") ||
+          name.includes("frame") ||
+          name.includes("shutter") ||
+          name === "body"
+        ) {
+          // "walls", "windowFrames", "doorFrames", "shutters", or legacy "body" → walls
           wallGeometries.push(geo);
         } else {
           // Default to walls for any unrecognized meshes
@@ -1713,42 +3016,67 @@ export class BuildingRenderingSystem extends SystemBase {
     });
 
     // Merge floor geometries (walkable)
+    // Convert to non-indexed for consistent merging
     let floorGeo: THREE.BufferGeometry | null = null;
     if (floorGeometries.length > 0) {
-      floorGeo =
-        floorGeometries.length === 1
-          ? floorGeometries[0]
-          : mergeGeometries(floorGeometries, false);
-      if (floorGeometries.length > 1) {
-        for (const geo of floorGeometries) geo.dispose();
+      if (floorGeometries.length === 1) {
+        floorGeo = floorGeometries[0].index
+          ? floorGeometries[0].toNonIndexed()
+          : floorGeometries[0];
+      } else {
+        const nonIndexedFloors = toNonIndexed(floorGeometries);
+        normalizeGeometryAttributes(nonIndexedFloors);
+        floorGeo = mergeGeometries(nonIndexedFloors, false);
+        for (const geo of nonIndexedFloors) geo.dispose();
       }
     }
 
     // Merge wall geometries (non-walkable)
     let wallGeo: THREE.BufferGeometry | null = null;
     if (wallGeometries.length > 0) {
-      wallGeo =
-        wallGeometries.length === 1
-          ? wallGeometries[0]
-          : mergeGeometries(wallGeometries, false);
-      if (wallGeometries.length > 1) {
-        for (const geo of wallGeometries) geo.dispose();
+      if (wallGeometries.length === 1) {
+        wallGeo = wallGeometries[0].index
+          ? wallGeometries[0].toNonIndexed()
+          : wallGeometries[0];
+      } else {
+        const nonIndexedWalls = toNonIndexed(wallGeometries);
+        normalizeGeometryAttributes(nonIndexedWalls);
+        wallGeo = mergeGeometries(nonIndexedWalls, false);
+        for (const geo of nonIndexedWalls) geo.dispose();
       }
     }
 
     // Merge roof geometries
     let roofGeo: THREE.BufferGeometry | null = null;
     if (roofGeometries.length > 0) {
-      roofGeo =
-        roofGeometries.length === 1
-          ? roofGeometries[0]
-          : mergeGeometries(roofGeometries, false);
-      if (roofGeometries.length > 1) {
-        for (const geo of roofGeometries) geo.dispose();
+      if (roofGeometries.length === 1) {
+        roofGeo = roofGeometries[0].index
+          ? roofGeometries[0].toNonIndexed()
+          : roofGeometries[0];
+      } else {
+        const nonIndexedRoofs = toNonIndexed(roofGeometries);
+        normalizeGeometryAttributes(nonIndexedRoofs);
+        roofGeo = mergeGeometries(nonIndexedRoofs, false);
+        for (const geo of nonIndexedRoofs) geo.dispose();
       }
     }
 
-    return { floorGeo, wallGeo, roofGeo, triangleCount };
+    // Merge glass geometries (transparent)
+    let glassGeo: THREE.BufferGeometry | null = null;
+    if (glassGeometries.length > 0) {
+      if (glassGeometries.length === 1) {
+        glassGeo = glassGeometries[0].index
+          ? glassGeometries[0].toNonIndexed()
+          : glassGeometries[0];
+      } else {
+        const nonIndexedGlass = toNonIndexed(glassGeometries);
+        normalizeGeometryAttributes(nonIndexedGlass);
+        glassGeo = mergeGeometries(nonIndexedGlass, false);
+        for (const geo of nonIndexedGlass) geo.dispose();
+      }
+    }
+
+    return { floorGeo, wallGeo, roofGeo, glassGeo, triangleCount };
   }
 
   /**
@@ -1757,23 +3085,34 @@ export class BuildingRenderingSystem extends SystemBase {
    * - floorMesh: walkable surfaces (Layer 2 - for click-to-move raycast)
    * - wallMesh: non-walkable (Layer 1 - gets occlusion shader)
    * - roofMesh: roof pieces (can be hidden when inside)
+   *
+   * **PERFORMANCE OPTIMIZATION:**
+   * Geometry merging is CPU-intensive. For large geometry arrays,
+   * consider using the async version `createBatchedTownMeshAsync`.
    */
   private createBatchedTownMesh(
     floorGeometries: THREE.BufferGeometry[],
     wallGeometries: THREE.BufferGeometry[],
     roofGeometries: THREE.BufferGeometry[],
+    glassGeometries: THREE.BufferGeometry[],
     triangleToBuildingMap: Map<number, string>,
     townGroup: THREE.Group,
   ): BatchedTownMesh {
     // === FLOOR MESH (walkable - raycastable for click-to-move) ===
     let floorMesh: THREE.Mesh;
     if (floorGeometries.length > 0) {
-      const mergedFloorGeo =
-        floorGeometries.length === 1
-          ? floorGeometries[0]
-          : mergeGeometries(floorGeometries, false);
+      // Convert to non-indexed for consistent merging
+      const nonIndexedFloors = toNonIndexed(floorGeometries);
+      normalizeGeometryAttributes(nonIndexedFloors);
+      let mergedFloorGeo =
+        nonIndexedFloors.length === 1
+          ? nonIndexedFloors[0]
+          : mergeGeometries(nonIndexedFloors, false);
 
       if (mergedFloorGeo) {
+        // Compute tangents from UVs for proper normal mapping
+        mergedFloorGeo = computeTangentsForNonIndexed(mergedFloorGeo);
+
         // Floors use a simple material (no occlusion needed - they're walkable)
         const floorMaterial = new MeshStandardNodeMaterial({
           vertexColors: true,
@@ -1829,12 +3168,18 @@ export class BuildingRenderingSystem extends SystemBase {
     // === WALL MESH (non-walkable - gets occlusion shader) ===
     let wallMesh: THREE.Mesh;
     if (wallGeometries.length > 0) {
-      const mergedWallGeo =
-        wallGeometries.length === 1
-          ? wallGeometries[0]
-          : mergeGeometries(wallGeometries, false);
+      // Convert to non-indexed for consistent merging
+      const nonIndexedWalls = toNonIndexed(wallGeometries);
+      normalizeGeometryAttributes(nonIndexedWalls);
+      let mergedWallGeo =
+        nonIndexedWalls.length === 1
+          ? nonIndexedWalls[0]
+          : mergeGeometries(nonIndexedWalls, false);
 
       if (mergedWallGeo) {
+        // Compute tangents from UVs for proper normal mapping
+        mergedWallGeo = computeTangentsForNonIndexed(mergedWallGeo);
+
         // Walls use the occlusion material (see-through effect)
         wallMesh = new THREE.Mesh(mergedWallGeo, this.batchedMaterial);
         wallMesh.name = "BatchedBuildingWalls";
@@ -1863,12 +3208,18 @@ export class BuildingRenderingSystem extends SystemBase {
     // === ROOF MESH (can be hidden when inside building) ===
     let roofMesh: THREE.Mesh;
     if (roofGeometries.length > 0) {
-      const mergedRoofGeo =
-        roofGeometries.length === 1
-          ? roofGeometries[0]
-          : mergeGeometries(roofGeometries, false);
+      // Convert to non-indexed for consistent merging
+      const nonIndexedRoofs = toNonIndexed(roofGeometries);
+      normalizeGeometryAttributes(nonIndexedRoofs);
+      let mergedRoofGeo =
+        nonIndexedRoofs.length === 1
+          ? nonIndexedRoofs[0]
+          : mergeGeometries(nonIndexedRoofs, false);
 
       if (mergedRoofGeo) {
+        // Compute tangents from UVs for proper normal mapping
+        mergedRoofGeo = computeTangentsForNonIndexed(mergedRoofGeo);
+
         // Roofs use the occlusion material too
         roofMesh = new THREE.Mesh(mergedRoofGeo, this.batchedMaterial);
         roofMesh.name = "BatchedBuildingRoof";
@@ -1894,6 +3245,45 @@ export class BuildingRenderingSystem extends SystemBase {
       );
     }
 
+    // === GLASS MESH (window panes - transparent) ===
+    if (glassGeometries.length > 0) {
+      // Convert to non-indexed for consistent merging
+      const nonIndexedGlass = toNonIndexed(glassGeometries);
+      normalizeGeometryAttributes(nonIndexedGlass);
+      let mergedGlassGeo =
+        nonIndexedGlass.length === 1
+          ? nonIndexedGlass[0]
+          : mergeGeometries(nonIndexedGlass, false);
+
+      if (mergedGlassGeo) {
+        // Compute tangents from UVs for proper normal mapping
+        mergedGlassGeo = computeTangentsForNonIndexed(mergedGlassGeo);
+
+        // Glass uses a transparent material
+        const glassMaterial = new MeshStandardNodeMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.3,
+          roughness: 0.1,
+          metalness: 0.0,
+        });
+        const glassMesh = new THREE.Mesh(mergedGlassGeo, glassMaterial);
+        glassMesh.name = "BatchedBuildingGlass";
+        glassMesh.castShadow = false; // Glass doesn't cast shadows
+        glassMesh.receiveShadow = false;
+        // Layer 1 (main camera only)
+        glassMesh.layers.set(1);
+        glassMesh.userData = {
+          type: "batched-building-glass",
+          walkable: false,
+          transparent: true,
+        };
+        // Render after opaque objects
+        glassMesh.renderOrder = 1;
+        townGroup.add(glassMesh);
+      }
+    }
+
     // Dispose individual geometries (they're now merged)
     if (floorGeometries.length > 1) {
       for (const geo of floorGeometries) geo.dispose();
@@ -1903,6 +3293,9 @@ export class BuildingRenderingSystem extends SystemBase {
     }
     if (roofGeometries.length > 1) {
       for (const geo of roofGeometries) geo.dispose();
+    }
+    if (glassGeometries.length > 1) {
+      for (const geo of glassGeometries) geo.dispose();
     }
 
     const totalVertices =
@@ -2400,14 +3793,10 @@ export class BuildingRenderingSystem extends SystemBase {
             town.batchedMesh.wallMesh.visible = false;
             town.batchedMesh.roofMesh.visible = false;
           }
-          // Hide impostor atlas or individual impostors
-          if (town.impostorAtlas) {
-            town.impostorAtlas.instancedMesh.visible = false;
-          } else {
-            for (const building of town.buildings) {
-              if (building.impostorMesh) {
-                building.impostorMesh.visible = false;
-              }
+          // Hide individual impostors (dynamic atlas handles centrally)
+          for (const building of town.buildings) {
+            if (building.impostorMesh) {
+              building.impostorMesh.visible = false;
             }
           }
         }
@@ -2430,8 +3819,12 @@ export class BuildingRenderingSystem extends SystemBase {
           townDistSq - town.radius * town.radius,
         );
 
-        // Use impostors when town is far enough
-        const useImpostors = effectiveDistSq > imposterDistSq;
+        // Use impostors when town is far enough, OR always for reflection camera (performance)
+        // When DISABLE_IMPOSTORS is true, skip impostor stage - use dissolve fade instead
+        const useImpostors =
+          !DISABLE_IMPOSTORS &&
+          (this.world.isRenderingReflection ||
+            effectiveDistSq > imposterDistSq);
         const isCulled = effectiveDistSq > fadeDistSq;
 
         if (isCulled) {
@@ -2439,35 +3832,34 @@ export class BuildingRenderingSystem extends SystemBase {
           town.batchedMesh.floorMesh.visible = false;
           town.batchedMesh.wallMesh.visible = false;
           town.batchedMesh.roofMesh.visible = false;
-          // Hide impostor atlas or individual impostors
-          if (town.impostorAtlas) {
-            town.impostorAtlas.instancedMesh.visible = false;
-          } else {
+          // Hide individual impostors (dynamic atlas handles centrally)
+          for (const building of town.buildings) {
+            if (building.impostorMesh) {
+              building.impostorMesh.visible = false;
+            }
+            building.lodLevel = 3;
+          }
+        } else if (useImpostors) {
+          // Hide batched mesh, show impostors
+          town.batchedMesh.floorMesh.visible = false;
+          town.batchedMesh.wallMesh.visible = false;
+          town.batchedMesh.roofMesh.visible = false;
+
+          // Mark buildings as impostor LOD
+          for (const building of town.buildings) {
+            building.lodLevel = 2;
+          }
+
+          // Dynamic atlas handles impostors centrally - hide individual meshes
+          if (BUILDING_PERF_CONFIG.enableDynamicAtlas && this.dynamicAtlas) {
+            // Hide individual impostor meshes (dynamic atlas will render them)
             for (const building of town.buildings) {
               if (building.impostorMesh) {
                 building.impostorMesh.visible = false;
               }
             }
-          }
-          for (const building of town.buildings) {
-            building.lodLevel = 3;
-          }
-        } else if (useImpostors) {
-          // Hide batched mesh, show impostors (atlas or individual)
-          town.batchedMesh.floorMesh.visible = false;
-          town.batchedMesh.wallMesh.visible = false;
-          town.batchedMesh.roofMesh.visible = false;
-
-          if (town.impostorAtlas) {
-            // Use impostor atlas (single instanced mesh)
-            town.impostorAtlas.instancedMesh.visible = true;
-            this.updateTownImpostorAtlas(
-              town.impostorAtlas,
-              town.buildings,
-              cameraPos,
-            );
           } else {
-            // Use individual impostor meshes
+            // Fallback: Use individual impostor meshes
             for (const building of town.buildings) {
               if (building.impostorMesh) {
                 building.impostorMesh.visible = true;
@@ -2475,11 +3867,9 @@ export class BuildingRenderingSystem extends SystemBase {
               }
             }
           }
-          for (const building of town.buildings) {
-            building.lodLevel = 2;
-          }
         } else {
           // Show batched mesh, hide impostors
+          // When DISABLE_IMPOSTORS is true, batched mesh stays visible and fades via GPU shader
           town.batchedMesh.floorMesh.visible = true;
           town.batchedMesh.wallMesh.visible = true;
           town.batchedMesh.roofMesh.visible = true;
@@ -2490,17 +3880,11 @@ export class BuildingRenderingSystem extends SystemBase {
           town.batchedMesh.wallMesh.castShadow = enableShadows;
           town.batchedMesh.roofMesh.castShadow = enableShadows;
 
-          // Hide impostor atlas or individual impostors
-          if (town.impostorAtlas) {
-            town.impostorAtlas.instancedMesh.visible = false;
-          } else {
-            for (const building of town.buildings) {
-              if (building.impostorMesh) {
-                building.impostorMesh.visible = false;
-              }
-            }
-          }
+          // Hide individual impostors (dynamic atlas handles centrally)
           for (const building of town.buildings) {
+            if (building.impostorMesh) {
+              building.impostorMesh.visible = false;
+            }
             building.lodLevel = enableShadows ? 0 : 1;
           }
         }
@@ -2528,6 +3912,34 @@ export class BuildingRenderingSystem extends SystemBase {
     // Note: All updates in _deferredBuildingUpdates share the same cameraPos reference
     // which is valid since they're all processed in the same frame
     this.processDeferredBuildingUpdates();
+
+    // ============================================
+    // DYNAMIC IMPOSTOR ATLAS UPDATE
+    // ============================================
+    // Update the dynamic atlas with all buildings in impostor range (lodLevel === 2)
+    if (BUILDING_PERF_CONFIG.enableDynamicAtlas && this.dynamicAtlas) {
+      // Collect all buildings in impostor range
+      const impostorBuildings: AtlasBuildingData[] = [];
+      for (const town of this.townData.values()) {
+        for (const building of town.buildings) {
+          if (building.lodLevel === 2 && building.impostorBakeResult) {
+            impostorBuildings.push({
+              buildingId: building.buildingId,
+              position: building.position,
+              dimensions: building.dimensions,
+              impostorBakeResult: building.impostorBakeResult,
+              lodLevel: building.lodLevel,
+            });
+          }
+        }
+      }
+
+      // Update atlas (handles slot assignment, blitting, and rendering)
+      this.dynamicAtlas.update(impostorBuildings, cameraPos, camera);
+
+      // Sync lighting with scene
+      this.syncDynamicAtlasLighting();
+    }
 
     // ============================================
     // INCREMENTAL COLLISION PROCESSING
@@ -2575,10 +3987,22 @@ export class BuildingRenderingSystem extends SystemBase {
         .lengthSq();
 
       // Determine target LOD
+      // Force impostor mode when rendering for reflection camera (performance)
+      // When DISABLE_IMPOSTORS is true, skip impostor stage - use dissolve fade instead
       let targetLOD: 0 | 1 | 2 | 3;
       if (buildingDistSq > fadeDistSq) {
         targetLOD = 3; // Culled
-      } else if (buildingDistSq > imposterDistSq && building.impostorMesh) {
+      } else if (DISABLE_IMPOSTORS) {
+        // IMPOSTORS DISABLED: Stay on best available 3D LOD, let GPU shader dissolve fade
+        if (buildingDistSq > lod1DistSq) {
+          targetLOD = 1; // Medium (no shadows)
+        } else {
+          targetLOD = 0; // Full detail
+        }
+      } else if (
+        (this.world.isRenderingReflection || buildingDistSq > imposterDistSq) &&
+        building.impostorMesh
+      ) {
         targetLOD = 2; // Impostor
       } else if (buildingDistSq > lod1DistSq) {
         targetLOD = 1; // Medium (no shadows)
@@ -2699,11 +4123,13 @@ export class BuildingRenderingSystem extends SystemBase {
 
   /**
    * Update impostor billboard orientation and octahedral view cell.
+   * NOTE: When DISABLE_IMPOSTORS is true, this function returns immediately.
    */
   private updateImpostorView(
     building: BuildingData,
     cameraPos: THREE.Vector3,
   ): void {
+    if (DISABLE_IMPOSTORS) return; // Impostors disabled - using dissolve fade instead
     const impostorMesh = building.impostorMesh;
     if (!impostorMesh) return;
 
@@ -2799,6 +4225,56 @@ export class BuildingRenderingSystem extends SystemBase {
     }
   }
 
+  /**
+   * Sync dynamic atlas lighting with scene's sun light.
+   */
+  private syncDynamicAtlasLighting(): void {
+    if (!this.dynamicAtlas) return;
+
+    // Get environment system for sun light
+    const env = this.world.getSystem("environment") as {
+      sunLight?: THREE.DirectionalLight;
+      lightDirection?: THREE.Vector3;
+      hemisphereLight?: THREE.HemisphereLight;
+    } | null;
+
+    if (env?.sunLight) {
+      const sun = env.sunLight;
+
+      // Light direction is negated (light goes FROM direction TO target)
+      if (env.lightDirection) {
+        this._lightDir.copy(env.lightDirection).negate();
+      } else {
+        this._lightDir.set(0.5, 0.8, 0.3);
+      }
+
+      // Scale by sun intensity
+      this._lightColor.set(
+        sun.color.r * sun.intensity,
+        sun.color.g * sun.intensity,
+        sun.color.b * sun.intensity,
+      );
+
+      // Get ambient from hemisphere light or use defaults
+      if (env.hemisphereLight) {
+        const hemi = env.hemisphereLight;
+        this._ambientColor.set(
+          hemi.color.r * hemi.intensity * 0.5,
+          hemi.color.g * hemi.intensity * 0.5,
+          hemi.color.b * hemi.intensity * 0.5,
+        );
+      } else {
+        this._ambientColor.set(0.5, 0.55, 0.65);
+      }
+
+      this.dynamicAtlas.updateLighting(
+        this._lightDir,
+        this._lightColor,
+        this._ambientColor,
+      );
+    }
+  }
+
   // ============================================================================
   // DEBUG UTILITIES
   // ============================================================================
@@ -2817,18 +4293,23 @@ export class BuildingRenderingSystem extends SystemBase {
       culled: number;
     };
     townsWithAtlas: number;
+    dynamicAtlas: {
+      enabled: boolean;
+      slotsUsed: number;
+      totalSlots: number;
+      visibleCount: number;
+    } | null;
     pendingImpostorBakes: number;
     lodConfig: LODDistancesWithSq;
     batchingEnabled: boolean;
   } {
     let totalBuildings = 0;
     let buildingsWithImpostors = 0;
-    let townsWithAtlas = 0;
+    const townsWithAtlas = 0; // Deprecated: town-level atlas removed, using dynamic atlas instead
     const buildingsByLOD = { lod0: 0, lod1: 0, lod2: 0, culled: 0 };
 
     for (const town of this.townData.values()) {
       totalBuildings += town.buildings.length;
-      if (town.impostorAtlas) townsWithAtlas++;
 
       for (const building of town.buildings) {
         if (building.impostorMesh || building.impostorBakeResult) {
@@ -2841,12 +4322,31 @@ export class BuildingRenderingSystem extends SystemBase {
       }
     }
 
+    // Get dynamic atlas stats
+    let dynamicAtlasStats: {
+      enabled: boolean;
+      slotsUsed: number;
+      totalSlots: number;
+      visibleCount: number;
+    } | null = null;
+
+    if (this.dynamicAtlas) {
+      const atlasStats = this.dynamicAtlas.getStats();
+      dynamicAtlasStats = {
+        enabled: true,
+        slotsUsed: atlasStats.slotsUsed,
+        totalSlots: atlasStats.totalSlots,
+        visibleCount: atlasStats.visibleCount,
+      };
+    }
+
     return {
       totalTowns: this.townData.size,
       totalBuildings,
       buildingsWithImpostors,
       buildingsByLOD,
       townsWithAtlas,
+      dynamicAtlas: dynamicAtlasStats,
       pendingImpostorBakes: this._pendingImpostorBakes.length,
       lodConfig: this.lodConfig,
       batchingEnabled: BUILDING_PERF_CONFIG.enableStaticBatching,
@@ -2875,6 +4375,13 @@ export class BuildingRenderingSystem extends SystemBase {
     console.log(`  Impostor: ${this.lodConfig.imposterDistance}m`);
     console.log(`  Fade: ${this.lodConfig.fadeDistance}m`);
     console.log(`Batching: ${stats.batchingEnabled ? "enabled" : "disabled"}`);
+    if (stats.dynamicAtlas) {
+      console.log(`Dynamic Atlas:`);
+      console.log(
+        `  Slots Used: ${stats.dynamicAtlas.slotsUsed}/${stats.dynamicAtlas.totalSlots}`,
+      );
+      console.log(`  Visible: ${stats.dynamicAtlas.visibleCount}`);
+    }
     console.log("================================");
   }
 
@@ -2919,14 +4426,6 @@ export class BuildingRenderingSystem extends SystemBase {
         town.batchedMesh.triangleToBuildingMap.clear();
       }
 
-      // Dispose impostor atlas if present
-      if (town.impostorAtlas) {
-        town.impostorAtlas.atlasTexture.dispose();
-        town.impostorAtlas.instancedMesh.geometry.dispose();
-        (town.impostorAtlas.instancedMesh.material as THREE.Material).dispose();
-        town.impostorAtlas.instancedMesh.dispose();
-      }
-
       for (const building of town.buildings) {
         // Remove impostor mesh
         if (building.impostorMesh) {
@@ -2957,11 +4456,20 @@ export class BuildingRenderingSystem extends SystemBase {
 
         // Remove PhysX collision bodies
         this.removeBuildingCollision(building);
+
+        // NOTE: Grass exclusion is now handled by GrassExclusionGrid querying BuildingCollisionService
+        // When buildings are removed, the collision service cleanup handles this automatically
       }
     }
 
     // Dispose shared batched material
     this.batchedMaterial.dispose();
+
+    // Dispose dynamic impostor atlas
+    if (this.dynamicAtlas) {
+      this.dynamicAtlas.dispose();
+      this.dynamicAtlas = null;
+    }
 
     this.townMeshes.clear();
     this.townData.clear();

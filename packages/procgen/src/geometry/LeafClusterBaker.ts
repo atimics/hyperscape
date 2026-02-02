@@ -21,9 +21,12 @@ import type { LeafData, TreeParams } from "../types.js";
 import type { LeafCluster, LeafClusterResult } from "./LeafClusterGenerator.js";
 import {
   generateInstancedLeaves,
-  createInstancedLeafMaterial,
   type ProceduralLeafShape,
 } from "./LeafGeometry.js";
+import {
+  createInstancedLeafMaterialTSL,
+  type TSLLeafShape,
+} from "./LeafMaterialTSL.js";
 
 // ============================================================================
 // TYPES
@@ -103,7 +106,7 @@ export interface ClusterBakeOptions {
 // ============================================================================
 
 const DEFAULT_OPTIONS: Required<ClusterBakeOptions> = {
-  textureSize: 64,
+  textureSize: 256, // Increased from 64 for better quality
   bakeNormals: true,
   bakeDepth: false,
   backgroundColor: 0x000000,
@@ -112,7 +115,7 @@ const DEFAULT_OPTIONS: Required<ClusterBakeOptions> = {
   leafColor: new THREE.Color(0x3d7a3d),
   antiAlias: true,
   useAtlas: true,
-  maxAtlasSize: 2048,
+  maxAtlasSize: 4096, // Increased from 2048 for more clusters
 };
 
 // ============================================================================
@@ -383,13 +386,14 @@ export class LeafClusterBaker {
       position: leaf.position.clone().sub(cluster.center),
     }));
 
-    // Generate instanced leaf mesh
+    // Generate instanced leaf mesh with TSL material (WebGPU compatible)
     const result = generateInstancedLeaves(localLeaves, params, params.gScale, {
-      material: createInstancedLeafMaterial({
+      material: createInstancedLeafMaterialTSL({
         color: opts.leafColor,
-        leafShape: opts.leafShape,
+        leafShape: opts.leafShape as TSLLeafShape,
         alphaTest: 0.5,
       }),
+      useTSL: true,
     });
 
     return result.mesh;
@@ -459,106 +463,11 @@ export class LeafClusterBaker {
 }
 
 // ============================================================================
-// CLUSTER ATLAS MATERIAL
-// ============================================================================
-
-/**
- * Create a material for rendering cluster atlas billboards.
- *
- * @param atlas - Baked cluster atlas
- * @param options - Material options
- * @returns Shader material for cluster rendering
- */
-export function createClusterAtlasMaterial(
-  atlas: ClusterAtlas,
-  options: {
-    alphaTest?: number;
-    enableWind?: boolean;
-    windStrength?: number;
-  } = {},
-): THREE.ShaderMaterial {
-  const { alphaTest = 0.5, enableWind = false, windStrength = 0.1 } = options;
-
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      uColorAtlas: { value: atlas.colorAtlas },
-      uNormalAtlas: { value: atlas.normalAtlas },
-      uAlphaTest: { value: alphaTest },
-      uTime: { value: 0 },
-      uWindStrength: { value: windStrength },
-      uGridCols: { value: atlas.gridCols },
-      uGridRows: { value: atlas.gridRows },
-    },
-    vertexShader: /* glsl */ `
-      attribute vec4 instanceUV; // x,y = atlas offset; z,w = cell size
-      attribute float instanceClusterId;
-      
-      varying vec2 vUv;
-      varying vec3 vNormal;
-      varying vec3 vWorldPosition;
-      
-      uniform float uTime;
-      uniform float uWindStrength;
-      
-      void main() {
-        // Apply instance transform
-        vec4 worldPosition = instanceMatrix * vec4(position, 1.0);
-        vWorldPosition = worldPosition.xyz;
-        
-        // Billboard rotation handled by CPU (lookAt camera)
-        
-        // Wind sway (optional)
-        ${
-          enableWind
-            ? `
-        float windPhase = instanceClusterId * 0.1;
-        float windAmount = uWindStrength * position.y * 0.5;
-        worldPosition.x += sin(uTime * 2.0 + windPhase) * windAmount;
-        worldPosition.z += cos(uTime * 1.5 + windPhase * 0.7) * windAmount * 0.5;
-        `
-            : ""
-        }
-        
-        // Map UV to atlas cell
-        vUv = instanceUV.xy + uv * instanceUV.zw;
-        vNormal = normalMatrix * normal;
-        
-        gl_Position = projectionMatrix * viewMatrix * worldPosition;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      uniform sampler2D uColorAtlas;
-      uniform sampler2D uNormalAtlas;
-      uniform float uAlphaTest;
-      
-      varying vec2 vUv;
-      varying vec3 vNormal;
-      varying vec3 vWorldPosition;
-      
-      void main() {
-        vec4 texColor = texture2D(uColorAtlas, vUv);
-        
-        // Alpha test
-        if (texColor.a < uAlphaTest) discard;
-        
-        // Simple diffuse lighting
-        vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
-        float diff = max(dot(normalize(vNormal), lightDir), 0.0);
-        float ambient = 0.4;
-        float light = ambient + diff * 0.6;
-        
-        gl_FragColor = vec4(texColor.rgb * light, texColor.a);
-      }
-    `,
-    side: THREE.DoubleSide,
-    transparent: true,
-    depthWrite: true,
-    alphaTest,
-  });
-}
-
-// ============================================================================
 // EXPORTS
 // ============================================================================
+
+// NOTE: createClusterAtlasMaterial removed - GLSL ShaderMaterial not WebGPU compatible
+// For runtime cluster rendering, use GlobalLeafClusterInstancer in ProcgenTreeInstancer.ts
+// which uses TSL (Three Shading Language) materials
 
 export { LeafClusterBaker as default };

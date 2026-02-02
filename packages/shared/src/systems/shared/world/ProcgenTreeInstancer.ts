@@ -24,7 +24,6 @@ import THREE, {
   float,
   vec2,
   vec3,
-  vec4,
   add,
   sub,
   mul,
@@ -37,23 +36,23 @@ import THREE, {
   smoothstep,
   mix,
   atan,
-  mod,
-  max,
-  min,
-  step,
   abs,
+  max,
+  dot,
+  normalize,
   positionLocal,
   positionWorld,
+  normalWorld,
+  cameraPosition,
   screenUV,
   viewportSize,
   uv,
   attribute,
   instanceIndex,
   MeshStandardNodeMaterial,
+  MeshBasicNodeMaterial,
   Discard,
   If,
-  INFINITY,
-  EPSILON,
 } from "../../../extras/three/three";
 import type { World } from "../../../core/World";
 import {
@@ -63,6 +62,9 @@ import {
 } from "../rendering/ImpostorManager";
 import {
   createTSLImpostorMaterial,
+  buildOctahedronMesh,
+  lerpOctahedronGeometry,
+  OctahedronType,
   type TSLImpostorMaterial,
 } from "@hyperscape/impostor";
 import type { Wind } from "./Wind";
@@ -96,12 +98,25 @@ export interface TreeLODConfig {
   cull: number; // Distance where trees are culled
 }
 
-// Default mobile-optimized LOD distances
+// LOD distances - simplified pipeline:
+// Trees stay at LOD0 (full trunk + leaves) until cull distance
+// Both trunk and leaves dissolve together
+// No LOD transitions - just full quality that fades in/out
 const DEFAULT_LOD_CONFIG: TreeLODConfig = {
-  lod1: 25,
-  lod2: 50,
-  impostor: 100,
-  cull: 150,
+  lod1: 110, // LOD1 starts at cull distance (never reached)
+  lod2: 110, // LOD2 starts at cull distance (never reached)
+  impostor: 110, // Not used (impostors disabled)
+  cull: 110, // Trees fully culled at 110m
+};
+
+// Distance-based fade zone - trees dissolve in/out over this distance
+// Trees are invisible at cull distance, fully visible at (cull - FADE_ZONE_DISTANCE)
+const FADE_ZONE_DISTANCE = 10; // 10 meters of fade
+
+// Computed fade zone boundaries (updated by setTreeLODConfig)
+const FADE_ZONE_SQ = {
+  start: (DEFAULT_LOD_CONFIG.cull - FADE_ZONE_DISTANCE) ** 2, // 100m squared
+  end: DEFAULT_LOD_CONFIG.cull ** 2, // 110m squared
 };
 
 // Current LOD configuration (mutable)
@@ -120,7 +135,14 @@ export function setTreeLODConfig(config: Partial<TreeLODConfig>): void {
   LOD_DIST_SQ.lod2 = LOD_CONFIG.lod2 ** 2;
   LOD_DIST_SQ.impostor = LOD_CONFIG.impostor ** 2;
   LOD_DIST_SQ.cull = LOD_CONFIG.cull ** 2;
-  console.log(`[TreeInstancer] LOD config updated:`, LOD_CONFIG);
+  // Update fade zone boundaries
+  FADE_ZONE_SQ.start = (LOD_CONFIG.cull - FADE_ZONE_DISTANCE) ** 2;
+  FADE_ZONE_SQ.end = LOD_CONFIG.cull ** 2;
+  console.log(
+    `[TreeInstancer] LOD config updated:`,
+    LOD_CONFIG,
+    `Fade zone: ${LOD_CONFIG.cull - FADE_ZONE_DISTANCE}m - ${LOD_CONFIG.cull}m`,
+  );
 }
 
 /**
@@ -150,12 +172,54 @@ const WIND = {
 };
 
 /**
+ * IMPOSTOR DISABLE FLAG
+ * When true, trees use dissolve fade-out at distance instead of impostor billboards.
+ * The 3D meshes (LOD0/LOD1/LOD2) stay visible and fade out via GPU dithered dissolve.
+ * This provides visual consistency with vegetation rendering.
+ */
+const DISABLE_IMPOSTORS = true;
+
+/**
+ * ENABLE INDIVIDUAL LEAVES (LOD0)
+ * When true, LOD0 shows computational instanced leaves via GlobalLeafInstancer.
+ * These are high-detail individual leaf quads with wind animation.
+ */
+const ENABLE_LOD0_LEAVES = true;
+
+/**
+ * ENABLE CLUSTER CARDS (LOD1)
+ * When true, LOD1 shows procedural billboard clusters via GlobalLeafClusterInstancer.
+ * When false, LOD1 shows only trunk/branch geometry (leaves via traditional cards in LOD2).
+ *
+ * NOTE: The procedural clusters use complex 12-leaf silhouette shader.
+ * For cleaner SpeedTree-style LODs, set this to false and rely on LOD2 card trees.
+ */
+const ENABLE_LOD1_CLUSTERS = false;
+
+/**
+ * ENABLE LOD2 CLUSTERS
+ * When true, LOD2 uses sparse clusters (20% density).
+ * When false, LOD2 uses only the traditional card tree (trunk + cross-billboard crown).
+ */
+const ENABLE_LOD2_CLUSTERS = false;
+
+/**
+ * SKIP LOD2 MESH ENTIRELY
+ * When true, LOD2 mesh registration is skipped - trees only use LOD0 and LOD1.
+ * This prevents any card tree / billboard rendering for distant trees.
+ * Trees will use LOD1 until cull distance, then dissolve fade.
+ */
+const SKIP_LOD2_MESH = true;
+
+/**
  * Leaf cluster density per LOD level.
  * Using clusters everywhere for mobile performance:
  * - LOD0: Full density (100%) - close-up view
  * - LOD1: Half density (50%) - medium distance
  * - LOD2: Sparse density (20%) - far distance
  * - LOD3+: No clusters (impostors have baked leaves)
+ *
+ * NOTE: Ignored when DISABLE_CLUSTERS is true.
  */
 export interface ClusterDensityConfig {
   lod0: number; // 0-1 (1.0 = 100%)
@@ -205,6 +269,7 @@ interface TreeInstance {
   hasGlobalLeaves: boolean; // Has individual leaves (LOD0 only)
   clusterLOD: number; // Current cluster LOD level (-1 = no clusters, 1-2 = clusters)
   clusterDensity: number; // Current cluster density (0-1)
+  distanceFade: number; // Distance-based fade (0 = culled, 1 = fully visible)
 }
 
 interface MeshData {
@@ -255,6 +320,8 @@ interface LeafNodeMaterial extends THREE.MeshStandardNodeMaterial {
     windStrength: ReturnType<typeof uniform<number>>;
     windDirection: ReturnType<typeof uniform<THREE.Vector3>>;
     baseColor: ReturnType<typeof uniform<THREE.Color>>;
+    sunDirection: ReturnType<typeof uniform<THREE.Vector3>>;
+    dayNightMix: ReturnType<typeof uniform<number>>;
   };
 }
 
@@ -385,6 +452,9 @@ class GlobalLeafInstancer {
     const uWindStrength = uniform(1);
     const uWindDirection = uniform(new THREE.Vector3(1, 0, 0));
     const uBaseColor = uniform(new THREE.Color(0x3d7a3d));
+    // Lighting uniforms for day/night cycle
+    const uSunDirection = uniform(new THREE.Vector3(0.5, 1.0, 0.3).normalize());
+    const uDayNightMix = uniform(1.0); // 1.0 = full day, 0.0 = night
 
     // Get per-instance attributes
     const instanceColor = attribute("instanceColor", "vec3");
@@ -434,15 +504,21 @@ class GlobalLeafInstancer {
     material.positionNode = positionNode;
 
     // Color node: provides diffuse color for PBR lighting (returns vec3)
+    // Uses instance color directly - each leaf gets its tree's color from the instance attribute
     material.colorNode = Fn(() => {
-      // Base color: use instance color if set (r > 0.01), otherwise uniform base color
-      // mix() needs float for third param, so convert boolean comparison to float
-      const hasColorFloat = smoothstep(0.0, 0.02, instanceColor.x);
-      const baseColor = mix(uBaseColor, instanceColor, hasColorFloat);
+      // Get the instance color length to check if it's valid (non-black)
+      const colorLen = add(
+        add(instanceColor.x, instanceColor.y),
+        instanceColor.z,
+      );
+
+      // If instance color is set (sum > 0.03), use it. Otherwise use base color uniform.
+      const useInstanceColor = smoothstep(0.03, 0.1, colorLen);
+      const baseColor = mix(uBaseColor, instanceColor, useInstanceColor);
 
       // Add subtle variation based on UV for more natural look
       const uvCoord = uv();
-      const variation = mul(sub(uvCoord.y, 0.5), 0.1); // Slightly darker at bottom
+      const variation = mul(sub(uvCoord.y, 0.5), 0.08); // Slightly darker at bottom
       const variedColor = add(baseColor, vec3(variation, variation, variation));
 
       return variedColor; // vec3 for colorNode
@@ -453,13 +529,55 @@ class GlobalLeafInstancer {
       // Get UV coordinates for leaf shape
       const uvCoord = uv();
 
-      // Leaf shape: ellipse cutout
+      // Proper leaf silhouette instead of simple ellipse blob
+      // Centered coordinates
       const px = sub(uvCoord.x, 0.5);
-      const py = sub(uvCoord.y, 0.4);
-      const a = float(0.35);
-      const b = float(0.5);
-      const d = add(div(mul(px, px), mul(a, a)), div(mul(py, py), mul(b, b)));
-      const shapeAlpha = sub(1.0, smoothstep(0.85, 1.0, d));
+      const py = sub(uvCoord.y, 0.35); // Offset down so stem is at bottom
+
+      // Leaf body - elongated shape that tapers toward tip
+      // Width varies along length: widest near middle, tapers to point at top
+      const normalizedY = add(mul(py, 1.3), 0.5); // 0 at bottom, ~1 at top
+
+      // Parabolic width profile - max width at about 40% up the leaf
+      const widthProfile = mul(
+        smoothstep(0.0, 0.4, normalizedY),
+        sub(1.0, smoothstep(0.4, 1.0, normalizedY)),
+      );
+      const baseTaper = add(0.3, mul(widthProfile, 0.7));
+
+      // Additional tip taper for pointed leaf end
+      const tipTaper = smoothstep(0.65, 0.95, normalizedY);
+      const effectiveWidth = mul(baseTaper, sub(1.0, mul(tipTaper, 0.7)));
+
+      // Subtle serrated edge using instance variation
+      const instIdx = float(instanceIndex);
+      const serrationSeed = fract(mul(instIdx, 0.0137));
+      const serrationFreq = add(4.0, mul(serrationSeed, 3.0));
+      const serrationAmp = mul(0.08, mul(effectiveWidth, sub(1.0, tipTaper)));
+      const serration = mul(
+        sin(mul(normalizedY, mul(serrationFreq, 6.28))),
+        serrationAmp,
+      );
+
+      // Calculate if point is inside leaf
+      const maxHalfWidth = add(mul(effectiveWidth, 0.38), serration);
+      const insideWidth = sub(
+        1.0,
+        smoothstep(mul(maxHalfWidth, 0.85), maxHalfWidth, abs(px)),
+      );
+
+      // Mask out areas outside leaf length
+      const lengthMask = mul(
+        smoothstep(-0.15, 0.05, normalizedY),
+        smoothstep(1.05, 0.85, normalizedY),
+      );
+
+      // Central vein darkening (subtle)
+      const veinWidth = mul(0.03, sub(1.0, tipTaper));
+      const veinMask = sub(1.0, mul(smoothstep(veinWidth, 0.0, abs(px)), 0.15));
+
+      // Combine for final leaf shape
+      const shapeAlpha = mul(mul(insideWidth, lengthMask), veinMask);
 
       // Dither-based fade for LOD transitions
       const screenCoord = mul(screenUV, viewportSize);
@@ -476,19 +594,60 @@ class GlobalLeafInstancer {
       return mul(shapeAlpha, fadeAlpha);
     })();
 
+    // Emissive node: Subsurface scattering for backlit leaves
+    // Simulates light passing through leaves when backlit by the sun
+    const emissiveNode = Fn(() => {
+      // Get base leaf color for subsurface tint
+      const colorLen = add(
+        add(instanceColor.x, instanceColor.y),
+        instanceColor.z,
+      );
+      const useInstanceColor = smoothstep(0.03, 0.1, colorLen);
+      const leafColor = mix(uBaseColor, instanceColor, useInstanceColor);
+
+      // View direction (from fragment to camera)
+      const worldPos = positionWorld;
+      const viewDir = normalize(sub(cameraPosition, worldPos));
+
+      // World normal
+      const worldNorm = normalWorld;
+
+      // Check if backlit: light coming through the leaf from behind
+      const NdotSun = dot(worldNorm, uSunDirection);
+      const VdotSun = dot(viewDir, uSunDirection);
+
+      // Backlit when normal faces away from sun but we're looking toward sun
+      const backlitAmount = max(
+        float(0.0),
+        mul(mul(NdotSun, float(-1.0)), max(float(0.0), VdotSun)),
+      );
+
+      // Subsurface scattering intensity - warmer, brighter color
+      const subsurfaceColor = mul(leafColor, vec3(1.3, 1.1, 0.7)); // Warm yellow-green tint
+      const sssIntensity = mul(mul(backlitAmount, float(0.35)), uDayNightMix);
+
+      return mul(subsurfaceColor, sssIntensity);
+    })();
+
+    material.emissiveNode = emissiveNode;
+
     material.side = THREE.DoubleSide;
-    material.transparent = true; // Required for opacity node
+    material.transparent = false; // Use alpha test, not blending
     material.alphaTest = 0.5; // Cutout threshold
     material.depthWrite = true;
-    material.roughness = 0.8;
+    material.roughness = 0.75; // Matte leaf surface
     material.metalness = 0.0;
+    material.envMapIntensity = 0.2; // Reduce environment reflection
+    material.color = new THREE.Color(0x3d7a3d); // Base green color
 
-    // Store uniforms for updates - these ARE used by positionNode
+    // Store uniforms for updates
     (material as LeafNodeMaterial).leafUniforms = {
       time: uTime,
       windStrength: uWindStrength,
       windDirection: uWindDirection,
       baseColor: uBaseColor,
+      sunDirection: uSunDirection,
+      dayNightMix: uDayNightMix,
     };
 
     return material as LeafNodeMaterial;
@@ -606,6 +765,16 @@ class GlobalLeafInstancer {
       this.mesh.count = this.count;
       this.dirty = false;
     }
+  }
+
+  /**
+   * Update lighting parameters for day/night cycle.
+   * @param sunDir - Direction TO the sun (normalized)
+   * @param dayMix - Day/night mix factor (0 = night, 1 = day)
+   */
+  updateLighting(sunDir: THREE.Vector3, dayMix: number): void {
+    this.material.leafUniforms.sunDirection.value.copy(sunDir);
+    this.material.leafUniforms.dayNightMix.value = dayMix;
   }
 
   getStats(): { count: number; capacity: number; drawCalls: number } {
@@ -823,7 +992,8 @@ class GlobalLeafClusterInstancer {
     const instanceFade = attribute("instanceFade", "float");
     const instanceDensity = attribute("instanceDensity", "float");
     const instanceTreeCenter = attribute("instanceTreeCenter", "vec3");
-    const instanceCellId = attribute("instanceCellId", "float");
+    // instanceCellId available via attribute but not used currently
+    // const instanceCellId = attribute("instanceCellId", "float");
 
     // TSL hash function for variation
     const hash = Fn(([n]: [ReturnType<typeof float>]) => {
@@ -854,17 +1024,16 @@ class GlobalLeafClusterInstancer {
       return mix(mixAB, mixCD, fSmooth.y);
     });
 
-    // TSL FBM (fractal Brownian motion) function - simplified for performance
-    const fbm = Fn(([p]: [ReturnType<typeof vec2>]) => {
-      // 2 octaves for performance (GLSL version had 4)
-      const octave1 = mul(noise2D(p), 0.5);
-      const octave2 = mul(noise2D(mul(p, 2.0)), 0.25);
-      return add(octave1, octave2);
-    });
+    // TSL FBM (fractal Brownian motion) function - available for advanced noise effects
+    // Currently using simpler noise2D for performance
+    // const fbm = Fn(([p]: [ReturnType<typeof vec2>]) => {
+    //   const octave1 = mul(noise2D(p), 0.5);
+    //   const octave2 = mul(noise2D(mul(p, 2.0)), 0.25);
+    //   return add(octave1, octave2);
+    // });
 
-    // Position node with wind animation
-    // NOTE: Frustum and view-dependent culling temporarily disabled for debugging
-    // TODO: Re-enable once basic cluster rendering is confirmed working
+    // Position node with BILLBOARD rotation and wind animation
+    // Clusters should always face the camera for proper visibility
     const positionNode = Fn(() => {
       const pos = positionLocal;
 
@@ -872,16 +1041,34 @@ class GlobalLeafClusterInstancer {
       const idx = float(instanceIndex);
       const windPhase = mul(hash(idx), 6.28318);
 
-      // === CULLING DISABLED FOR DEBUGGING ===
-      // All clusters are visible - no frustum or view-dependent culling
-      const finalVisibility = float(1.0);
+      // ========== BILLBOARD ROTATION ==========
+      // Make the cluster card face the camera by rotating the quad
+      // We need to rotate the local position to face the camera
+      // The quad is in XY plane, we need to rotate it around Y axis to face camera
 
-      // Height factor for wind (0 at bottom, 1 at top)
+      // Get world position from instance matrix (approximated from tree center attribute)
+      const worldCenter = instanceTreeCenter;
+
+      // Calculate direction from cluster to camera (in XZ plane for Y-axis billboard)
+      const toCamera = sub(uCameraPosition, worldCenter);
+      const toCameraXZ = vec2(toCamera.x, toCamera.z);
+      // distXZ available for distance-based effects if needed
+      // const distXZ = sqrt(add(mul(toCameraXZ.x, toCameraXZ.x), mul(toCameraXZ.y, toCameraXZ.y)));
+
+      // Angle to rotate around Y axis (atan2 of camera direction)
+      // When camera is at +Z, angle = 0; at +X, angle = -PI/2
+      const billboardAngle = atan(toCameraXZ.x, toCameraXZ.y);
+
+      // Rotate local position around Y axis
+      const cosAngle = cos(billboardAngle);
+      const sinAngle = sin(billboardAngle);
+      const rotatedX = sub(mul(pos.x, cosAngle), mul(pos.z, sinAngle));
+      const rotatedZ = add(mul(pos.x, sinAngle), mul(pos.z, cosAngle));
+
+      // ========== WIND ANIMATION ==========
+      // Height factor for wind (0 at bottom, 1 at top of cluster)
       const heightFactor = pos.y;
-      const windAmount = mul(
-        mul(mul(uWindStrength, heightFactor), finalVisibility),
-        0.2,
-      );
+      const windAmount = mul(mul(uWindStrength, heightFactor), 0.15);
 
       // Multi-frequency wind for natural look
       const wave1 = sin(add(mul(uTime, 2.0), windPhase));
@@ -889,27 +1076,20 @@ class GlobalLeafClusterInstancer {
       const wave3 = mul(sin(add(mul(uTime, 3.1), mul(windPhase, 1.3))), 0.25);
       const combined = mul(add(add(wave1, wave2), wave3), windAmount);
 
-      // Wind displacement
+      // Wind displacement applied after billboard rotation
       const windX = mul(combined, uWindDirection.x);
       const windZ = mul(combined, uWindDirection.z);
       const windY = mul(
         mul(sin(add(mul(uTime, 4.0), mul(windPhase, 2.0))), windAmount),
-        0.1,
+        0.08,
       );
 
-      // Wind position with optional culling
-      const windPos = vec3(
-        add(pos.x, windX),
+      // Final position: rotated billboard + wind
+      return vec3(
+        add(rotatedX, windX),
         add(pos.y, windY),
-        add(pos.z, windZ),
+        add(rotatedZ, windZ),
       );
-
-      // INFINITY offset culling (disabled for debugging - all clusters visible)
-      // When re-enabled: culled clusters get offset to infinity for early GPU clipping
-      const isCulled = step(finalVisibility, 0.01); // 1 if culled, 0 if visible
-      const offscreenOffset = mul(vec3(INFINITY, INFINITY, INFINITY), isCulled);
-
-      return add(windPos, offscreenOffset);
     })();
 
     material.positionNode = positionNode;
@@ -927,65 +1107,299 @@ class GlobalLeafClusterInstancer {
 
     material.colorNode = colorNode;
 
-    // Opacity node with procedural leaf cluster pattern and LOD fade
+    // ========== PROCEDURAL LEAF SILHOUETTE FUNCTIONS ==========
+    // Creates believable leaf shapes with proper silhouettes, not round blobs
+
+    // Single leaf silhouette - creates an actual leaf shape with pointed tip and lobed edges
+    const leafSilhouette = Fn(
+      ([p, leafAngle, leafScale, seed]: [
+        ReturnType<typeof vec2>,
+        ReturnType<typeof float>,
+        ReturnType<typeof float>,
+        ReturnType<typeof float>,
+      ]) => {
+        // Rotate point to leaf orientation
+        const cosA = cos(leafAngle);
+        const sinA = sin(leafAngle);
+        const rotX = sub(mul(p.x, cosA), mul(p.y, sinA));
+        const rotY = add(mul(p.x, sinA), mul(p.y, cosA));
+
+        // Scale to leaf size
+        const lx = div(rotX, leafScale);
+        const ly = div(rotY, leafScale);
+
+        // Leaf body - elongated ellipse that tapers toward tip
+        // Width varies along length: widest in middle, tapers to point
+        const normalizedY = add(mul(ly, 0.5), 0.5); // 0 at bottom, 1 at top
+        const widthMod = mul(mul(normalizedY, sub(1.0, normalizedY)), 4.0); // Parabola: max at 0.5
+
+        // Additional taper toward tip
+        const tipTaper = smoothstep(0.7, 1.0, normalizedY);
+        const effectiveWidth = mul(widthMod, sub(1.0, mul(tipTaper, 0.6)));
+
+        // Leaf edge with serrations based on seed
+        const serrationFreq = add(5.0, mul(fract(mul(seed, 7.3)), 4.0));
+        const serrationAmp = mul(0.15, sub(1.0, tipTaper)); // No serration at tip
+        const serration = mul(
+          sin(mul(normalizedY, mul(serrationFreq, 6.28))),
+          serrationAmp,
+        );
+
+        // Calculate if point is inside leaf
+        const maxWidth = add(mul(effectiveWidth, 0.35), serration);
+        const leafShape = sub(
+          1.0,
+          smoothstep(mul(maxWidth, 0.8), maxWidth, abs(lx)),
+        );
+
+        // Mask out areas outside leaf length
+        const lengthMask = mul(
+          smoothstep(-0.05, 0.1, normalizedY),
+          smoothstep(1.05, 0.9, normalizedY),
+        );
+
+        return mul(leafShape, lengthMask);
+      },
+    );
+
+    // Opacity node with AAA-quality leaf cluster pattern
     const opacityNode = Fn(() => {
       const uvCoord = uv();
       const idx = float(instanceIndex);
       const instanceSeed = fract(mul(idx, 0.1));
 
-      // Center UV for circular calculations
+      // Center UV for calculations (-1 to 1 range)
       const centered = sub(mul(uvCoord, 2.0), vec2(1.0, 1.0));
+
+      // Distance from center for overall cluster boundary
       const dist = sqrt(
         add(mul(centered.x, centered.x), mul(centered.y, centered.y)),
       );
 
-      // Base elliptical shape
-      const ellipse = sub(1.0, smoothstep(0.4, 0.95, dist));
+      // Soft cluster boundary - leaves can extend slightly beyond
+      const clusterMask = sub(1.0, smoothstep(0.7, 1.1, dist));
 
-      // Organic noise for leaf-like edges
-      const noiseUV = add(mul(uvCoord, 8.0), mul(instanceSeed, 10.0));
-      const leafNoise = fbm(noiseUV);
+      // Generate multiple leaf silhouettes scattered across the cluster
+      // Use deterministic positioning based on instance seed
+      // 12 leaves for good density coverage
 
-      // Simplified leaf pattern (1 leaf instead of 5 for performance)
-      const offsetX = mul(sin(mul(instanceSeed, 13.0)), 0.3);
-      const offsetY = mul(cos(mul(instanceSeed, 17.0)), 0.3);
-      const leafDist = sqrt(
-        add(
-          mul(sub(centered.x, offsetX), sub(centered.x, offsetX)),
-          mul(sub(centered.y, offsetY), sub(centered.y, offsetY)),
+      // Helper to create a leaf with seed-based positioning
+      // Leaves are positioned in a roughly circular pattern with variation
+
+      // Leaf 1 - center
+      const seed1 = instanceSeed;
+      const leaf1Pos = vec2(
+        mul(sin(mul(seed1, 17.3)), 0.1),
+        mul(cos(mul(seed1, 23.7)), 0.1),
+      );
+      const leaf1 = mul(
+        leafSilhouette(
+          sub(centered, leaf1Pos),
+          mul(seed1, 6.28),
+          add(0.38, mul(fract(mul(seed1, 3.7)), 0.12)),
+          seed1,
         ),
+        0.95,
       );
-      const leafPattern = mul(
-        sub(1.0, smoothstep(0.1, 0.4, leafDist)),
-        add(
-          0.5,
-          mul(
-            sin(
-              mul(
-                atan(sub(centered.y, offsetY), sub(centered.x, offsetX)),
-                3.0,
-              ),
-            ),
-            0.5,
-          ),
+
+      // Leaf 2 - upper right
+      const seed2 = fract(add(instanceSeed, 0.083));
+      const leaf2Pos = vec2(
+        add(0.25, mul(sin(mul(seed2, 19.1)), 0.1)),
+        add(0.3, mul(cos(mul(seed2, 29.3)), 0.1)),
+      );
+      const leaf2 = mul(
+        leafSilhouette(
+          sub(centered, leaf2Pos),
+          mul(seed2, 6.28),
+          add(0.32, mul(fract(mul(seed2, 5.3)), 0.1)),
+          seed2,
         ),
+        0.9,
       );
 
-      // Combine patterns
-      const baseAlpha = add(
-        mul(ellipse, add(0.6, mul(leafNoise, 0.4))),
-        mul(leafPattern, 0.4),
+      // Leaf 3 - upper left
+      const seed3 = fract(add(instanceSeed, 0.166));
+      const leaf3Pos = vec2(
+        sub(mul(sin(mul(seed3, 13.7)), 0.1), 0.28),
+        add(0.25, mul(cos(mul(seed3, 31.1)), 0.1)),
+      );
+      const leaf3 = mul(
+        leafSilhouette(
+          sub(centered, leaf3Pos),
+          mul(seed3, 6.28),
+          add(0.3, mul(fract(mul(seed3, 7.1)), 0.1)),
+          seed3,
+        ),
+        0.88,
       );
 
-      // Edge variation
-      const edgeNoise = noise2D(add(mul(uvCoord, 12.0), instanceSeed));
-      let alpha = mul(baseAlpha, add(0.8, mul(edgeNoise, 0.4)));
+      // Leaf 4 - right
+      const seed4 = fract(add(instanceSeed, 0.25));
+      const leaf4Pos = vec2(
+        add(0.35, mul(sin(mul(seed4, 21.3)), 0.1)),
+        mul(cos(mul(seed4, 17.9)), 0.15),
+      );
+      const leaf4 = mul(
+        leafSilhouette(
+          sub(centered, leaf4Pos),
+          mul(seed4, 6.28),
+          add(0.28, mul(fract(mul(seed4, 11.3)), 0.1)),
+          seed4,
+        ),
+        0.85,
+      );
 
-      // Modulate by cluster density
-      alpha = mul(alpha, add(0.5, mul(instanceDensity, 0.5)));
+      // Leaf 5 - left
+      const seed5 = fract(add(instanceSeed, 0.333));
+      const leaf5Pos = vec2(
+        sub(mul(sin(mul(seed5, 27.7)), 0.1), 0.38),
+        mul(cos(mul(seed5, 11.3)), 0.12),
+      );
+      const leaf5 = mul(
+        leafSilhouette(
+          sub(centered, leaf5Pos),
+          mul(seed5, 6.28),
+          add(0.26, mul(fract(mul(seed5, 13.7)), 0.1)),
+          seed5,
+        ),
+        0.82,
+      );
 
-      // Apply LOD fade - use If/Discard for alpha test
-      const finalAlpha = mul(alpha, instanceFade);
+      // Leaf 6 - lower right
+      const seed6 = fract(add(instanceSeed, 0.416));
+      const leaf6Pos = vec2(
+        add(0.22, mul(sin(mul(seed6, 33.1)), 0.1)),
+        sub(mul(cos(mul(seed6, 19.7)), 0.1), 0.25),
+      );
+      const leaf6 = mul(
+        leafSilhouette(
+          sub(centered, leaf6Pos),
+          mul(seed6, 6.28),
+          add(0.25, mul(fract(mul(seed6, 17.3)), 0.08)),
+          seed6,
+        ),
+        0.8,
+      );
+
+      // Leaf 7 - lower left
+      const seed7 = fract(add(instanceSeed, 0.5));
+      const leaf7Pos = vec2(
+        sub(mul(sin(mul(seed7, 23.9)), 0.1), 0.2),
+        sub(mul(cos(mul(seed7, 37.1)), 0.1), 0.28),
+      );
+      const leaf7 = mul(
+        leafSilhouette(
+          sub(centered, leaf7Pos),
+          mul(seed7, 6.28),
+          add(0.24, mul(fract(mul(seed7, 19.1)), 0.08)),
+          seed7,
+        ),
+        0.78,
+      );
+
+      // Leaf 8 - top
+      const seed8 = fract(add(instanceSeed, 0.583));
+      const leaf8Pos = vec2(
+        mul(sin(mul(seed8, 29.3)), 0.12),
+        add(0.4, mul(cos(mul(seed8, 41.7)), 0.08)),
+      );
+      const leaf8 = mul(
+        leafSilhouette(
+          sub(centered, leaf8Pos),
+          mul(seed8, 6.28),
+          add(0.22, mul(fract(mul(seed8, 23.3)), 0.08)),
+          seed8,
+        ),
+        0.75,
+      );
+
+      // Leaf 9 - bottom
+      const seed9 = fract(add(instanceSeed, 0.666));
+      const leaf9Pos = vec2(
+        mul(sin(mul(seed9, 31.7)), 0.15),
+        sub(mul(cos(mul(seed9, 43.9)), 0.08), 0.35),
+      );
+      const leaf9 = mul(
+        leafSilhouette(
+          sub(centered, leaf9Pos),
+          mul(seed9, 6.28),
+          add(0.2, mul(fract(mul(seed9, 29.7)), 0.08)),
+          seed9,
+        ),
+        0.72,
+      );
+
+      // Leaf 10 - fill upper
+      const seed10 = fract(add(instanceSeed, 0.75));
+      const leaf10Pos = vec2(
+        mul(sin(mul(seed10, 37.3)), 0.2),
+        add(0.18, mul(cos(mul(seed10, 47.1)), 0.15)),
+      );
+      const leaf10 = mul(
+        leafSilhouette(
+          sub(centered, leaf10Pos),
+          mul(seed10, 6.28),
+          add(0.2, mul(fract(mul(seed10, 31.1)), 0.06)),
+          seed10,
+        ),
+        0.7,
+      );
+
+      // Leaf 11 - fill lower
+      const seed11 = fract(add(instanceSeed, 0.833));
+      const leaf11Pos = vec2(
+        mul(sin(mul(seed11, 41.9)), 0.22),
+        sub(mul(cos(mul(seed11, 53.3)), 0.12), 0.15),
+      );
+      const leaf11 = mul(
+        leafSilhouette(
+          sub(centered, leaf11Pos),
+          mul(seed11, 6.28),
+          add(0.18, mul(fract(mul(seed11, 37.7)), 0.06)),
+          seed11,
+        ),
+        0.68,
+      );
+
+      // Leaf 12 - edge fill
+      const seed12 = fract(add(instanceSeed, 0.916));
+      const leaf12Pos = vec2(
+        mul(sin(mul(seed12, 47.1)), 0.32),
+        mul(cos(mul(seed12, 59.9)), 0.28),
+      );
+      const leaf12 = mul(
+        leafSilhouette(
+          sub(centered, leaf12Pos),
+          mul(seed12, 6.28),
+          add(0.16, mul(fract(mul(seed12, 43.3)), 0.06)),
+          seed12,
+        ),
+        0.65,
+      );
+
+      // Combine all 12 leaves using chained max operations
+      const leaves1_4 = max(max(max(leaf1, leaf2), leaf3), leaf4);
+      const leaves5_8 = max(max(max(leaf5, leaf6), leaf7), leaf8);
+      const leaves9_12 = max(max(max(leaf9, leaf10), leaf11), leaf12);
+      const leafAccum = max(max(leaves1_4, leaves5_8), leaves9_12);
+
+      // Add subtle noise for organic variation
+      const noiseScale = add(6.0, mul(fract(mul(instanceSeed, 41.7)), 4.0));
+      const noiseVal = noise2D(mul(uvCoord, noiseScale));
+      const organicVariation = add(0.85, mul(noiseVal, 0.3));
+
+      // Combine leaves with cluster mask and organic variation
+      const baseAlpha = mul(mul(leafAccum, clusterMask), organicVariation);
+
+      // Modulate by cluster density (denser clusters are more opaque)
+      const densityModulated = mul(
+        baseAlpha,
+        add(0.6, mul(instanceDensity, 0.4)),
+      );
+
+      // Apply LOD fade
+      const finalAlpha = mul(densityModulated, instanceFade);
 
       return finalAlpha;
     })();
@@ -1075,15 +1489,16 @@ class GlobalLeafClusterInstancer {
 
     // Target cluster count based on tree size and leaf count
     // Larger trees with more leaves need more clusters for visual fidelity
+    // Increased density: ~15 leaves per cluster for better visual quality
     const leafCount = positions.length;
     const treeSize = Math.max(treeDims.height, treeDims.canopyR * 2);
     const baseClusterCount = Math.max(
-      20,
-      Math.min(80, Math.ceil(leafCount / 25)),
+      30, // Minimum 30 clusters
+      Math.min(150, Math.ceil(leafCount / 15)), // More clusters (was /25)
     );
-    const sizeMultiplier = Math.max(1, treeSize / 5); // Larger trees get more clusters
+    const sizeMultiplier = Math.max(1, treeSize / 4); // More aggressive scaling for larger trees
     const targetClusters = Math.min(
-      100,
+      200, // Increased max from 100 to 200
       Math.ceil(baseClusterCount * sizeMultiplier),
     );
 
@@ -1114,8 +1529,8 @@ class GlobalLeafClusterInstancer {
     const leafCounts: number[] = [];
     const rawDensities: number[] = [];
 
-    const minLeavesPerCluster = 3;
-    const maxLeavesPerCluster = 50;
+    const minLeavesPerCluster = 2; // Allow smaller clusters
+    const maxLeavesPerCluster = 30; // Reduced from 50 for more, smaller clusters
 
     for (const [, indices] of cellMap) {
       if (indices.length < minLeavesPerCluster) continue;
@@ -1234,13 +1649,13 @@ class GlobalLeafClusterInstancer {
     );
     const density = indices.length / volume;
 
-    // Size with padding for visual coverage
-    const padding = 1.3;
+    // Size with padding for visual coverage (reduced for tighter clusters)
+    const padding = 1.15;
     const width = Math.max(
-      0.5,
+      0.3, // Reduced minimum from 0.5
       Math.max(clusterSize.x, clusterSize.z) * padding,
     );
-    const height = Math.max(0.5, clusterSize.y * padding);
+    const height = Math.max(0.3, clusterSize.y * padding);
 
     centers.push(center);
     sizes.push({ width, height });
@@ -1785,11 +2200,34 @@ export class ProcgenTreeInstancer {
   // Debug impostor meshes - separate from regular impostors, always visible
   private debugImpostors = new Map<string, ImpostorMeshData>();
   private debugImpostorCreated = new Set<string>(); // Track which presets have debug impostors
-  // Store bake results for runtime debug impostor creation
+  // Store bake results for runtime debug impostor creation (includes all atlas textures)
   private impostorBakeResults = new Map<
     string,
-    { atlasTexture: THREE.Texture; gridSizeX: number; gridSizeY: number }
+    {
+      atlasTexture: THREE.Texture;
+      normalAtlasTexture: THREE.Texture | undefined;
+      depthAtlasTexture: THREE.Texture | undefined;
+      gridSizeX: number;
+      gridSizeY: number;
+    }
   >();
+
+  // Debug atlas display - shows color/normal/depth atlases above trees
+  private debugAtlasPlanes = new Map<
+    string,
+    {
+      colorMesh: THREE.InstancedMesh;
+      normalMesh: THREE.InstancedMesh | null;
+      depthMesh: THREE.InstancedMesh | null;
+      idxToId: Map<number, string>;
+      nextIdx: number;
+      count: number;
+      dirty: boolean;
+      width: number;
+      height: number;
+    }
+  >();
+  private debugAtlasCreated = new Set<string>();
 
   private dummy = new THREE.Object3D();
   private zeroMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
@@ -1809,6 +2247,13 @@ export class ProcgenTreeInstancer {
   private _lightColor = new THREE.Vector3(1, 1, 1);
   private _ambientColor = new THREE.Vector3(0.7, 0.8, 1.0);
 
+  // View sampling for octahedral impostors
+  private octMesh: ReturnType<typeof buildOctahedronMesh> | null = null;
+  private raycaster = new THREE.Raycaster();
+  private _faceIndices = new THREE.Vector3();
+  private _faceWeights = new THREE.Vector3(1, 0, 0);
+  private _viewDir = new THREE.Vector3();
+
   private constructor(world: World) {
     this.world = world;
     this.scene = world.stage?.scene as THREE.Scene;
@@ -1821,6 +2266,18 @@ export class ProcgenTreeInstancer {
       // Also initialize cluster instancer for LOD2 optimization
       this.globalClusters = new GlobalLeafClusterInstancer(this.scene);
     }
+
+    // Initialize octahedron mesh for view sampling (16x8 hemisphere grid)
+    this.octMesh = buildOctahedronMesh(
+      OctahedronType.HEMI,
+      16,
+      8,
+      [0, 0, 0],
+      true,
+    );
+    lerpOctahedronGeometry(this.octMesh, 1.0);
+    this.octMesh.filledMesh.geometry.computeBoundingSphere();
+    this.octMesh.filledMesh.geometry.computeBoundingBox();
   }
 
   static getInstance(world: World): ProcgenTreeInstancer {
@@ -1859,7 +2316,8 @@ export class ProcgenTreeInstancer {
       const m1 = this.createMeshData(lod1, name, "lod1", d);
       if (m1) data.set("lod1", m1);
     }
-    if (lod2) {
+    // Skip LOD2 when SKIP_LOD2_MESH is true - prevents card tree/billboard rendering
+    if (lod2 && !SKIP_LOD2_MESH) {
       const m2 = this.createMeshData(lod2, name, "lod2", d);
       if (m2) data.set("lod2", m2);
     }
@@ -1867,10 +2325,13 @@ export class ProcgenTreeInstancer {
     this.meshes.set(name, data);
 
     // Start impostor bake in background - trees will use LOD fallback until ready
-    this.pendingImpostors.add(name);
-    this.bakeImpostor(name, lod0).finally(() => {
-      this.pendingImpostors.delete(name);
-    });
+    // Skip when DISABLE_IMPOSTORS is true - trees fade out via GPU dissolve shader
+    if (!DISABLE_IMPOSTORS) {
+      this.pendingImpostors.add(name);
+      this.bakeImpostor(name, lod0).finally(() => {
+        this.pendingImpostors.delete(name);
+      });
+    }
 
     console.log(
       `[TreeInstancer] ${name}: LOD0=${data.has("lod0")} LOD1=${data.has("lod1")} LOD2=${data.has("lod2")} h=${d.height.toFixed(1)}m`,
@@ -1889,6 +2350,9 @@ export class ProcgenTreeInstancer {
   }
 
   private async bakeImpostor(name: string, src: THREE.Group): Promise<void> {
+    // Skip impostor baking when disabled - trees fade out via GPU dissolve shader
+    if (DISABLE_IMPOSTORS) return;
+
     const mgr = ImpostorManager.getInstance(this.world);
     if (!mgr.initBaker()) return;
 
@@ -1909,9 +2373,11 @@ export class ProcgenTreeInstancer {
 
     if (!result.atlasTexture) return;
 
-    // Store bake result for debug impostor creation
+    // Store bake result for debug impostor/atlas creation (all textures)
     this.impostorBakeResults.set(name, {
       atlasTexture: result.atlasTexture,
+      normalAtlasTexture: result.normalAtlasTexture,
+      depthAtlasTexture: result.depthAtlasTexture,
       gridSizeX: result.gridSizeX,
       gridSizeY: result.gridSizeY,
     });
@@ -1927,6 +2393,24 @@ export class ProcgenTreeInstancer {
     const h = maxDim;
 
     const geo = new THREE.PlaneGeometry(1, 1);
+
+    // Diagnostic: check if atlas texture has content
+    const tex = result.atlasTexture;
+    const hasImage = !!tex?.image;
+    const imgWidth = tex?.image?.width ?? 0;
+    const imgHeight = tex?.image?.height ?? 0;
+    console.log(
+      `[TreeInstancer] Creating impostor material for ${name}: ` +
+        `hasImage=${hasImage}, size=${imgWidth}x${imgHeight}, ` +
+        `hasNormals=${!!result.normalAtlasTexture}, hasDepth=${!!result.depthAtlasTexture}`,
+    );
+
+    if (!hasImage || imgWidth === 0) {
+      console.error(
+        `[TreeInstancer] WARNING: Atlas texture for ${name} has no image data!`,
+      );
+    }
+
     // Pass normal + depth atlas textures for AAA quality
     const mat = createTSLImpostorMaterial({
       atlasTexture: result.atlasTexture,
@@ -1960,9 +2444,22 @@ export class ProcgenTreeInstancer {
       height: h,
     });
 
-    // If debug mode is enabled, also create a debug impostor
+    // If debug mode is enabled, also create debug displays
     if (ProcgenTreeInstancer.DEBUG_IMPOSTORS) {
       this.createDebugImpostor(name, result, w, h);
+      // Create atlas display showing color/normal/depth textures
+      this.createDebugAtlasDisplay(
+        name,
+        {
+          atlasTexture: result.atlasTexture,
+          normalAtlasTexture: result.normalAtlasTexture,
+          depthAtlasTexture: result.depthAtlasTexture,
+          gridSizeX: result.gridSizeX,
+          gridSizeY: result.gridSizeY,
+        },
+        w,
+        h,
+      );
     }
   }
 
@@ -2053,6 +2550,15 @@ export class ProcgenTreeInstancer {
    * Creates debug impostors for any presets that have regular impostors but no debug version.
    */
   private updateDebugImpostors(): void {
+    // IMPOSTORS COMPLETELY DISABLED - hide all debug impostors and return
+    if (DISABLE_IMPOSTORS) {
+      for (const data of this.debugImpostors.values()) {
+        data.mesh.visible = false;
+        data.mesh.count = 0;
+      }
+      return;
+    }
+
     if (!ProcgenTreeInstancer.DEBUG_IMPOSTORS) {
       // Hide debug impostors when disabled
       for (const data of this.debugImpostors.values()) {
@@ -2102,6 +2608,243 @@ export class ProcgenTreeInstancer {
         data.dirty = false;
       }
     }
+
+    // Also update debug atlas display if enabled
+    this.updateDebugAtlasDisplay();
+  }
+
+  /**
+   * Create debug atlas display planes showing color/normal/depth atlases 5m above trees.
+   * Shows the raw atlas textures as flat planes for visual debugging.
+   */
+  private createDebugAtlasDisplay(
+    name: string,
+    bakeResult: {
+      atlasTexture: THREE.Texture;
+      normalAtlasTexture: THREE.Texture | undefined;
+      depthAtlasTexture: THREE.Texture | undefined;
+      gridSizeX: number;
+      gridSizeY: number;
+    },
+    _width: number,
+    _height: number,
+  ): void {
+    if (this.debugAtlasCreated.has(name)) return;
+    this.debugAtlasCreated.add(name);
+
+    const atlasWidth = 2; // Display size for each atlas plane
+    const atlasHeight =
+      atlasWidth * (bakeResult.gridSizeY / bakeResult.gridSizeX);
+    // spacing available for layout if multiple atlases displayed
+    // const spacing = 0.2;
+
+    // Helper to create a simple textured plane material
+    const createAtlasMaterial = (
+      tex: THREE.Texture,
+      label: string,
+    ): MeshBasicNodeMaterial => {
+      const mat = new MeshBasicNodeMaterial();
+      // Ensure texture is marked for GPU upload (render target textures may need this)
+      tex.needsUpdate = true;
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      mat.map = tex;
+      mat.transparent = true;
+      mat.side = THREE.DoubleSide;
+      mat.name = `Atlas_${name}_${label}`;
+      return mat;
+    };
+
+    const geo = new THREE.PlaneGeometry(1, 1);
+
+    // Color atlas (always present)
+    const colorMat = createAtlasMaterial(bakeResult.atlasTexture, "color");
+    const colorMesh = new THREE.InstancedMesh(geo, colorMat, MAX_INSTANCES);
+    colorMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    colorMesh.count = 0;
+    colorMesh.frustumCulled = false;
+    colorMesh.layers.set(1);
+    colorMesh.name = `Tree_${name}_atlas_color`;
+    this.scene?.add(colorMesh);
+
+    // Normal atlas (if available)
+    let normalMesh: THREE.InstancedMesh | null = null;
+    if (bakeResult.normalAtlasTexture) {
+      const normalMat = createAtlasMaterial(
+        bakeResult.normalAtlasTexture,
+        "normal",
+      );
+      normalMesh = new THREE.InstancedMesh(
+        geo.clone(),
+        normalMat,
+        MAX_INSTANCES,
+      );
+      normalMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      normalMesh.count = 0;
+      normalMesh.frustumCulled = false;
+      normalMesh.layers.set(1);
+      normalMesh.name = `Tree_${name}_atlas_normal`;
+      this.scene?.add(normalMesh);
+    }
+
+    // Depth atlas (if available)
+    let depthMesh: THREE.InstancedMesh | null = null;
+    if (bakeResult.depthAtlasTexture) {
+      const depthMat = createAtlasMaterial(
+        bakeResult.depthAtlasTexture,
+        "depth",
+      );
+      depthMesh = new THREE.InstancedMesh(geo.clone(), depthMat, MAX_INSTANCES);
+      depthMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      depthMesh.count = 0;
+      depthMesh.frustumCulled = false;
+      depthMesh.layers.set(1);
+      depthMesh.name = `Tree_${name}_atlas_depth`;
+      this.scene?.add(depthMesh);
+    }
+
+    this.debugAtlasPlanes.set(name, {
+      colorMesh,
+      normalMesh,
+      depthMesh,
+      idxToId: new Map(),
+      nextIdx: 0,
+      count: 0,
+      dirty: false,
+      width: atlasWidth,
+      height: atlasHeight,
+    });
+
+    console.log(
+      `[TreeInstancer] Created debug atlas display for ${name}: ` +
+        `color=yes, normal=${!!normalMesh}, depth=${!!depthMesh}, ` +
+        `size=${atlasWidth.toFixed(1)}x${atlasHeight.toFixed(1)}`,
+    );
+  }
+
+  /**
+   * Add a tree instance to the debug atlas display (5m above tree, shows 3 atlases side by side).
+   */
+  private addToDebugAtlasDisplay(preset: string, inst: TreeInstance): void {
+    const data = this.debugAtlasPlanes.get(preset);
+    if (!data) return;
+
+    const idx = data.nextIdx++;
+    if (data.nextIdx >= MAX_INSTANCES) data.nextIdx = 0;
+
+    const spacing = 0.3;
+    const totalWidth = data.width * 3 + spacing * 2;
+    const baseX = -totalWidth / 2 + data.width / 2;
+
+    // Position 5m above the tree center
+    const baseY = inst.position.y + 5;
+
+    // Color atlas (left)
+    this.dummy.position.set(inst.position.x + baseX, baseY, inst.position.z);
+    this.dummy.rotation.set(0, 0, 0);
+    this.dummy.scale.set(data.width, data.height, 1);
+    this.dummy.updateMatrix();
+    data.colorMesh.setMatrixAt(idx, this.dummy.matrix);
+
+    // Normal atlas (center)
+    if (data.normalMesh) {
+      this.dummy.position.set(
+        inst.position.x + baseX + data.width + spacing,
+        baseY,
+        inst.position.z,
+      );
+      this.dummy.updateMatrix();
+      data.normalMesh.setMatrixAt(idx, this.dummy.matrix);
+    }
+
+    // Depth atlas (right)
+    if (data.depthMesh) {
+      this.dummy.position.set(
+        inst.position.x + baseX + (data.width + spacing) * 2,
+        baseY,
+        inst.position.z,
+      );
+      this.dummy.updateMatrix();
+      data.depthMesh.setMatrixAt(idx, this.dummy.matrix);
+    }
+
+    data.idxToId.set(idx, inst.id);
+    data.count = Math.max(data.count, idx + 1);
+    data.colorMesh.count = data.count;
+    if (data.normalMesh) data.normalMesh.count = data.count;
+    if (data.depthMesh) data.depthMesh.count = data.count;
+    data.dirty = true;
+  }
+
+  /**
+   * Update debug atlas display when DEBUG_IMPOSTORS flag is toggled on.
+   */
+  private updateDebugAtlasDisplay(): void {
+    // IMPOSTORS COMPLETELY DISABLED - hide all debug atlas planes and return
+    if (DISABLE_IMPOSTORS) {
+      for (const data of this.debugAtlasPlanes.values()) {
+        data.colorMesh.visible = false;
+        data.colorMesh.count = 0;
+        if (data.normalMesh) {
+          data.normalMesh.visible = false;
+          data.normalMesh.count = 0;
+        }
+        if (data.depthMesh) {
+          data.depthMesh.visible = false;
+          data.depthMesh.count = 0;
+        }
+      }
+      return;
+    }
+
+    if (!ProcgenTreeInstancer.DEBUG_IMPOSTORS) {
+      // Hide debug atlas planes when disabled
+      for (const data of this.debugAtlasPlanes.values()) {
+        data.colorMesh.visible = false;
+        if (data.normalMesh) data.normalMesh.visible = false;
+        if (data.depthMesh) data.depthMesh.visible = false;
+      }
+      return;
+    }
+
+    // Show debug atlas planes when enabled
+    for (const data of this.debugAtlasPlanes.values()) {
+      data.colorMesh.visible = true;
+      if (data.normalMesh) data.normalMesh.visible = true;
+      if (data.depthMesh) data.depthMesh.visible = true;
+    }
+
+    // Check if we need to create debug atlas planes for any new presets
+    for (const [preset, impData] of this.impostors.entries()) {
+      if (!this.debugAtlasCreated.has(preset)) {
+        const bakeResult = this.impostorBakeResults.get(preset);
+        if (!bakeResult) continue;
+
+        this.createDebugAtlasDisplay(
+          preset,
+          bakeResult,
+          impData.width,
+          impData.height,
+        );
+
+        // Add all existing instances
+        for (const { preset: p, inst } of this.instances.values()) {
+          if (p === preset) {
+            this.addToDebugAtlasDisplay(preset, inst);
+          }
+        }
+      }
+    }
+
+    // Update dirty matrices
+    for (const data of this.debugAtlasPlanes.values()) {
+      if (data.dirty) {
+        data.colorMesh.instanceMatrix.needsUpdate = true;
+        if (data.normalMesh) data.normalMesh.instanceMatrix.needsUpdate = true;
+        if (data.depthMesh) data.depthMesh.instanceMatrix.needsUpdate = true;
+        data.dirty = false;
+      }
+    }
   }
 
   private createMeshData(
@@ -2141,6 +2884,8 @@ export class ProcgenTreeInstancer {
             ? instancedChild.material[0]
             : instancedChild.material;
           if (mat) {
+            let colorSource = "none";
+
             // Duck type check for ShaderMaterial with uColor uniform (procgen leaves)
             const shaderMat = mat as THREE.ShaderMaterial & {
               uniforms?: Record<string, { value: unknown }>;
@@ -2159,6 +2904,7 @@ export class ProcgenTreeInstancer {
                   (uColor as THREE.Color).g,
                   (uColor as THREE.Color).b,
                 );
+                colorSource = "ShaderMaterial.uniforms.uColor";
               }
             } else if (
               mat instanceof MeshStandardNodeMaterial &&
@@ -2168,6 +2914,7 @@ export class ProcgenTreeInstancer {
               const leafMat = mat as LeafNodeMaterial;
               if (leafMat.leafUniforms?.baseColor?.value) {
                 leafColor = leafMat.leafUniforms.baseColor.value.clone();
+                colorSource = "leafUniforms.baseColor";
               }
             } else if ("color" in mat) {
               // Standard material with color property
@@ -2178,8 +2925,14 @@ export class ProcgenTreeInstancer {
                   colorMat.color.g,
                   colorMat.color.b,
                 );
+                colorSource = "mat.color";
               }
             }
+
+            // Debug log leaf color extraction
+            console.log(
+              `[TreeInstancer] ${name} leaf color: rgb(${leafColor.r.toFixed(2)}, ${leafColor.g.toFixed(2)}, ${leafColor.b.toFixed(2)}) from ${colorSource}, mat.type=${mat.type}`,
+            );
           }
         }
         return;
@@ -2303,25 +3056,31 @@ export class ProcgenTreeInstancer {
       hasGlobalLeaves: false,
       clusterLOD: -1,
       clusterDensity: 0,
+      distanceFade: 1, // Start fully visible, will be updated by LOD system
     };
 
     this.instances.set(id, { preset, inst });
     this.updateLOD(preset, inst);
 
-    // If debug mode is enabled, also add to debug impostor
-    if (
-      ProcgenTreeInstancer.DEBUG_IMPOSTORS &&
-      this.debugImpostors.has(preset)
-    ) {
-      this.addToDebugImpostor(preset, inst);
+    // NOTE: Grass exclusion is handled by ProceduralGrass.collectAndRefreshExclusionTexture()
+    // which reads all tree positions at once. No per-tree registration needed.
+
+    // If debug mode is enabled, also add to debug displays
+    if (ProcgenTreeInstancer.DEBUG_IMPOSTORS) {
+      if (this.debugImpostors.has(preset)) {
+        this.addToDebugImpostor(preset, inst);
+      }
+      if (this.debugAtlasPlanes.has(preset)) {
+        this.addToDebugAtlasDisplay(preset, inst);
+      }
     }
 
     return true;
   }
 
-  // NOTE: Individual leaf handling removed - all LODs now use clusters for performance
-  // The GlobalLeafInstancer is kept for potential future use but not active
-  // See GlobalLeafClusterInstancer for current leaf rendering
+  // NOTE: Individual leaves are now active and shown at ALL LOD levels
+  // They fade together with the trunk mesh at cull distance
+  // Clusters are disabled (ENABLE_LOD1_CLUSTERS = false, ENABLE_LOD2_CLUSTERS = false)
 
   /**
    * Add leaf clusters for a tree with specified density.
@@ -2407,6 +3166,9 @@ export class ProcgenTreeInstancer {
     this.removeTreeLeavesFromGlobal(tracked.inst);
     this.removeTreeClustersFromGlobal(tracked.inst);
 
+    // NOTE: Grass exclusion is handled via texture regeneration when needed.
+    // Call ProceduralGrass.collectAndRefreshExclusionTexture() after major changes.
+
     this.transitions.delete(id);
     for (let lod = 0; lod < 4; lod++)
       this.removeFromLOD(preset, tracked.inst, lod);
@@ -2435,20 +3197,51 @@ export class ProcgenTreeInstancer {
     const distSq = dx * dx + dz * dz;
     const cur = inst.currentLOD;
     const meshMap = this.meshes.get(preset);
-    const hasImpostor = this.impostors.has(preset);
+    const hasImpostor = !DISABLE_IMPOSTORS && this.impostors.has(preset);
+
+    // Calculate distance-based fade for dissolve effect
+    // Trees dissolve in/out over the fade zone (100m to 110m)
+    let distanceFade = 1.0;
+    if (distSq >= FADE_ZONE_SQ.end) {
+      distanceFade = 0.0; // Beyond cull distance - invisible
+    } else if (distSq > FADE_ZONE_SQ.start) {
+      // In fade zone - interpolate based on distance
+      // fade = 1 at start, 0 at end
+      const t =
+        (distSq - FADE_ZONE_SQ.start) / (FADE_ZONE_SQ.end - FADE_ZONE_SQ.start);
+      distanceFade = 1.0 - t; // Linear fade, smooth would be: 1.0 - (t * t * (3 - 2 * t));
+    }
+
+    // Store current fade on instance for continuous updates
+    inst.distanceFade = distanceFade;
 
     // Check what LODs are available for this preset
     const hasLOD0 = meshMap?.has("lod0") ?? false;
     const hasLOD1 = meshMap?.has("lod1") ?? false;
     const hasLOD2 = meshMap?.has("lod2") ?? false;
 
+    // Force impostor mode when rendering for reflection camera (performance)
+    // Only when impostors are enabled
+    const forceImpostor =
+      !DISABLE_IMPOSTORS && this.world.isRenderingReflection && hasImpostor;
+
     // Determine target LOD with hysteresis, considering availability
+    // When DISABLE_IMPOSTORS is true, stay on best available 3D LOD and let GPU dissolve fade
     let target: number;
     if (distSq >= LOD_DIST_SQ.cull) {
       target = 4; // Culled
+    } else if (DISABLE_IMPOSTORS) {
+      // IMPOSTORS DISABLED: Stay on best available 3D LOD, let GPU shader dissolve fade
+      if (distSq >= LOD_DIST_SQ.lod2 - (cur === 2 ? HYSTERESIS_SQ : 0)) {
+        target = hasLOD2 ? 2 : hasLOD1 ? 1 : 0;
+      } else if (distSq >= LOD_DIST_SQ.lod1 - (cur === 1 ? HYSTERESIS_SQ : 0)) {
+        target = hasLOD1 ? 1 : 0;
+      } else {
+        target = 0;
+      }
     } else if (
-      distSq >=
-      LOD_DIST_SQ.impostor - (cur === 3 ? HYSTERESIS_SQ : 0)
+      forceImpostor ||
+      distSq >= LOD_DIST_SQ.impostor - (cur === 3 ? HYSTERESIS_SQ : 0)
     ) {
       // Impostor distance: use impostor if available, else fallback
       target = hasImpostor ? 3 : hasLOD2 ? 2 : hasLOD1 ? 1 : 0;
@@ -2465,31 +3258,34 @@ export class ProcgenTreeInstancer {
     if (target === cur) return;
 
     // Handle foliage visibility:
-    // LOD0: Individual leaves (high detail via GlobalLeafInstancer)
-    // LOD1/LOD2: Clusters (optimized via GlobalLeafClusterInstancer)
-    // LOD3+: Neither (impostors have baked leaves)
+    // Leaves stay visible at ALL LOD levels (0, 1, 2) and fade with the trunk
+    // Only removed when tree is culled (LOD4)
+    // This ensures trunk and leaves dissolve together at the same distance
 
-    const wantsIndividualLeaves = target === 0;
-    const wantsClusters = target === 1 || target === 2;
     const hadIndividualLeaves = inst.hasGlobalLeaves;
     const hadClusters = inst.clusterLOD >= 0;
 
-    // Individual leaves transitions (LOD0 only)
+    // Individual leaves transitions - stay visible until culled
+    // Leaves shown at LOD0, LOD1, LOD2 (target < 4) - removed only when culled
+    const wantsIndividualLeaves = ENABLE_LOD0_LEAVES && target < 4;
     if (wantsIndividualLeaves && !hadIndividualLeaves) {
-      // Entering LOD0 - add individual leaves
+      // Tree becoming visible - add individual instanced leaves
       this.addTreeLeavesToGlobal(preset, inst);
     } else if (!wantsIndividualLeaves && hadIndividualLeaves) {
-      // Leaving LOD0 - remove individual leaves
+      // Tree being culled - remove individual leaves
       this.removeTreeLeavesFromGlobal(inst);
     }
 
-    // Cluster transitions (LOD1 and LOD2 only)
-    const targetDensity =
-      target === 1
-        ? CLUSTER_DENSITY.lod1
-        : target === 2
-          ? CLUSTER_DENSITY.lod2
-          : 0;
+    // Cluster transitions (LOD1 and optionally LOD2)
+    const wantsLOD1Clusters = ENABLE_LOD1_CLUSTERS && target === 1;
+    const wantsLOD2Clusters = ENABLE_LOD2_CLUSTERS && target === 2;
+    const wantsClusters = wantsLOD1Clusters || wantsLOD2Clusters;
+
+    const targetDensity = wantsLOD1Clusters
+      ? CLUSTER_DENSITY.lod1
+      : wantsLOD2Clusters
+        ? CLUSTER_DENSITY.lod2
+        : 0;
 
     if (wantsClusters) {
       if (!hadClusters) {
@@ -2527,8 +3323,49 @@ export class ProcgenTreeInstancer {
     } else {
       this.removeFromLOD(preset, inst, cur);
       this.addToLOD(preset, inst, target);
+
+      // Apply distance-based fade for non-crossfade transitions
+      // This makes trees dissolve in/out based on distance
+      if (target >= 0 && target <= 2) {
+        this.setFade(preset, inst, target, distanceFade);
+      }
     }
     inst.currentLOD = target;
+  }
+
+  /**
+   * Update distance-based fades for all visible trees.
+   * Called every frame to ensure smooth dissolve effects.
+   */
+  private updateDistanceFades(): void {
+    for (const tracked of this.instances.values()) {
+      const { preset, inst } = tracked;
+
+      // Skip trees that are culled or in transition
+      if (inst.currentLOD < 0 || inst.currentLOD >= 4 || inst.transition)
+        continue;
+
+      // Calculate distance-based fade
+      const dx = inst.position.x - this.camPos.x;
+      const dz = inst.position.z - this.camPos.z;
+      const distSq = dx * dx + dz * dz;
+
+      let distanceFade = 1.0;
+      if (distSq >= FADE_ZONE_SQ.end) {
+        distanceFade = 0.0;
+      } else if (distSq > FADE_ZONE_SQ.start) {
+        const t =
+          (distSq - FADE_ZONE_SQ.start) /
+          (FADE_ZONE_SQ.end - FADE_ZONE_SQ.start);
+        distanceFade = 1.0 - t;
+      }
+
+      // Only update if fade changed significantly (avoid constant GPU uploads)
+      if (Math.abs(distanceFade - inst.distanceFade) > 0.02) {
+        inst.distanceFade = distanceFade;
+        this.setFade(preset, inst, inst.currentLOD, distanceFade);
+      }
+    }
   }
 
   private setFade(
@@ -2550,8 +3387,9 @@ export class ProcgenTreeInstancer {
       }
     }
 
-    // Handle individual leaf fades (LOD0 only)
-    if (lod === 0 && this.globalLeaves && inst.hasGlobalLeaves) {
+    // Handle individual leaf fades - apply at ALL LODs when tree has leaves
+    // This ensures leaves fade together with the trunk
+    if (this.globalLeaves && inst.hasGlobalLeaves) {
       this.globalLeaves.setTreeFade(inst.id, fade);
     }
 
@@ -2579,8 +3417,12 @@ export class ProcgenTreeInstancer {
       const d = meshMap?.get("lod2");
       if (d) inst.lodIndices[2] = this.showInMesh(d, inst);
     } else if (lod === 3) {
-      const d = this.impostors.get(preset);
-      if (d) inst.lodIndices[3] = this.showImpostor(d, inst);
+      // IMPOSTORS DISABLED - this code path should never execute
+      // but guard it anyway to prevent any black quad rendering
+      if (!DISABLE_IMPOSTORS) {
+        const d = this.impostors.get(preset);
+        if (d) inst.lodIndices[3] = this.showImpostor(d, inst);
+      }
     }
     // LOD 4 = culled, nothing to add
   }
@@ -2636,6 +3478,9 @@ export class ProcgenTreeInstancer {
   }
 
   private showImpostor(data: ImpostorMeshData, inst: TreeInstance): number {
+    // IMPOSTORS DISABLED - return -1 to prevent any rendering
+    if (DISABLE_IMPOSTORS) return -1;
+
     const idx = data.nextIdx++;
     if (data.nextIdx >= MAX_INSTANCES) data.nextIdx = 0;
 
@@ -2664,6 +3509,7 @@ export class ProcgenTreeInstancer {
 
     this.updateWind(dt);
     this.updateTransitions();
+    this.updateDistanceFades(); // Distance-based dissolve every frame
 
     if (this.lodEnabled && this.time - this.lastLodUpdate >= LOD_UPDATE_MS) {
       this.lastLodUpdate = this.time;
@@ -2692,18 +3538,32 @@ export class ProcgenTreeInstancer {
         }
       }
     }
-    for (const d of this.impostors.values()) {
-      if (d.dirty) {
-        d.mesh.instanceMatrix.needsUpdate = true;
-        d.dirty = false;
+    // IMPOSTORS DISABLED - hide any existing impostor meshes and skip updates
+    if (DISABLE_IMPOSTORS) {
+      for (const d of this.impostors.values()) {
+        d.mesh.visible = false;
+        d.mesh.count = 0;
+      }
+    } else {
+      for (const d of this.impostors.values()) {
+        if (d.dirty) {
+          d.mesh.instanceMatrix.needsUpdate = true;
+          d.dirty = false;
+        }
       }
     }
 
     // Update debug impostors (when DEBUG_IMPOSTORS flag is enabled)
     this.updateDebugImpostors();
 
+    // Update impostor view sampling based on camera direction
+    this.updateViewSampling();
+
     // Sync impostor lighting with scene sun light
     this.syncImpostorLighting();
+
+    // Sync tree leaf lighting with scene lights (day/night cycle)
+    this.syncTreeLighting();
 
     // Update global leaves
     if (this.globalLeaves) {
@@ -2771,8 +3631,10 @@ export class ProcgenTreeInstancer {
   /**
    * Sync impostor lighting with scene's sun light.
    * Throttled to once per frame (~16ms) to avoid redundant updates.
+   * NOTE: When DISABLE_IMPOSTORS is true, this function returns immediately.
    */
   private syncImpostorLighting(): void {
+    if (DISABLE_IMPOSTORS) return; // Impostors disabled - using dissolve fade instead
     const now = performance.now();
     // Only update lighting once per frame (~16ms)
     if (now - this._lastLightUpdate < 16) return;
@@ -2795,7 +3657,8 @@ export class ProcgenTreeInstancer {
     }
     this._lightColor.set(sun.color.r, sun.color.g, sun.color.b);
 
-    // Update all impostor materials
+    // Update all impostor materials - skip when disabled
+    if (DISABLE_IMPOSTORS) return;
     for (const data of this.impostors.values()) {
       const material = data.material as TSLImpostorMaterial;
       if (material.updateLighting) {
@@ -2815,6 +3678,93 @@ export class ProcgenTreeInstancer {
             intensity: 0.15,
           },
         });
+      }
+    }
+  }
+
+  /**
+   * Sync tree leaf lighting with scene lights (day/night cycle).
+   * Updates the globalLeaves material to match current sun direction and day intensity.
+   */
+  private syncTreeLighting(): void {
+    if (!this.globalLeaves) return;
+
+    // Get environment system for sun light and sky system for day/night
+    const env = this.world.getSystem("environment") as {
+      sunLight?: THREE.DirectionalLight;
+      lightDirection?: THREE.Vector3;
+      skySystem?: {
+        sunDirection?: THREE.Vector3;
+        dayIntensity?: number;
+      };
+    } | null;
+
+    if (!env) return;
+
+    // Get sun direction (direction TO the sun for SSS calculation)
+    let sunDir = this._lightDir;
+    if (env.lightDirection) {
+      // lightDirection points FROM the light, so negate it to get direction TO sun
+      sunDir.copy(env.lightDirection).negate();
+    } else {
+      sunDir.set(0.5, 0.8, 0.3).normalize();
+    }
+
+    // Get day/night mix from environment (derived from sun intensity)
+    // When sun is up (day), intensity is high; when moon is up (night), intensity is low
+    let dayMix = 1.0;
+    if (env.sunLight) {
+      // Sun intensity ranges from ~0.6-1.8 during day, ~0.3-0.6 during night (moonlight)
+      // Normalize to 0-1 range for day/night mix
+      const intensity = env.sunLight.intensity;
+      dayMix = Math.max(0, Math.min(1, (intensity - 0.3) / 1.5));
+    }
+
+    // Update global leaves lighting
+    this.globalLeaves.updateLighting(sunDir, dayMix);
+  }
+
+  /**
+   * Update view sampling for octahedral impostors.
+   * Computes which faces of the octahedron atlas to sample based on camera direction.
+   *
+   * The octahedron mesh represents view directions - we raycast from outside
+   * the octahedron (opposite camera direction) towards the center to find
+   * which face corresponds to the current view angle.
+   *
+   * NOTE: When DISABLE_IMPOSTORS is true, this function returns immediately.
+   */
+  private updateViewSampling(): void {
+    if (DISABLE_IMPOSTORS) return; // Impostors disabled - using dissolve fade instead
+    if (!this.octMesh) return;
+
+    // Guard: skip if camera position is zero/uninitialized (would cause NaN)
+    const camLenSq =
+      this.camPos.x * this.camPos.x +
+      this.camPos.y * this.camPos.y +
+      this.camPos.z * this.camPos.z;
+    if (camLenSq < 0.001) return;
+
+    // Compute view direction: from origin TO camera (negative of camera-to-origin)
+    // This matches AtlasedRockPlantImpostorManager's approach
+    this._viewDir.set(0, 0, 0).sub(this.camPos).normalize();
+
+    // Raycast: start outside octahedron in the view direction, shoot towards center
+    // Origin is at -viewDir * 2 (behind octahedron relative to camera)
+    // Direction is +viewDir (towards camera/center)
+    this.raycaster.ray.origin.copy(this._viewDir).multiplyScalar(2);
+    this.raycaster.ray.direction.copy(this._viewDir).negate();
+
+    const hits = this.raycaster.intersectObject(this.octMesh.filledMesh, false);
+    if (hits.length > 0 && hits[0].face && hits[0].barycoord) {
+      const { face, barycoord } = hits[0];
+      this._faceIndices.set(face.a, face.b, face.c);
+      this._faceWeights.copy(barycoord);
+
+      // Update all impostor materials with new view direction
+      for (const data of this.impostors.values()) {
+        const material = data.material as TSLImpostorMaterial;
+        material.updateView(this._faceIndices, this._faceWeights);
       }
     }
   }

@@ -12,10 +12,9 @@ import React, {
   useMemo,
 } from "react";
 import { useThemeStore } from "@/ui";
-import { Entity, THREE, createRenderer } from "@hyperscape/shared";
+import { Entity, THREE } from "@hyperscape/shared";
 import type { UniversalRenderer } from "@hyperscape/shared";
 import type { ClientWorld } from "../../types";
-import { ThreeResourceManager } from "../../lib/ThreeResourceManager";
 
 // === PRE-ALLOCATED VECTORS FOR HOT PATHS ===
 // These vectors are reused in RAF loops and intervals to avoid GC pressure
@@ -200,6 +199,7 @@ export function Minimap({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<UniversalRenderer | null>(null);
+  const renderTargetRef = useRef<THREE.WebGLRenderTarget | null>(null);
   const cameraRef = useRef<THREE.OrthographicCamera | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const [entityPips, setEntityPips] = useState<EntityPip[]>([]);
@@ -317,13 +317,13 @@ export function Minimap({
     opacity: number;
   } | null>(null);
 
-  // Initialize minimap renderer and camera
+  // Initialize minimap camera and use world's renderer
   useEffect(() => {
     const canvas = canvasRef.current;
     const overlayCanvas = overlayCanvasRef.current;
     if (!canvas || !overlayCanvas) return;
 
-    // console.log('[Minimap] Initializing renderer...');
+    // console.log('[Minimap] Initializing...');
 
     // Create orthographic camera for overhead view - much higher up
     const camera = new THREE.OrthographicCamera(
@@ -360,41 +360,42 @@ export function Minimap({
 
     cameraRef.current = camera;
 
-    // Track if component is still mounted for async renderer creation
-    let mounted = true;
+    // Use the world's existing renderer instead of creating a new WebGPU context
+    // This avoids "Failed to create WebGPU Context Provider" errors
+    type WorldWithGraphics = typeof world & {
+      stage: {
+        graphics?: {
+          renderer?: UniversalRenderer;
+        };
+      };
+    };
+    const worldRenderer = (world as WorldWithGraphics).stage.graphics?.renderer;
 
-    // Only create renderer if it doesn't exist
-    if (!rendererRef.current || !rendererInitializedRef.current) {
-      createRenderer({
-        canvas,
-        alpha: true,
-        antialias: false,
-      })
-        .then((renderer) => {
-          if (!mounted) {
-            if ("dispose" in renderer)
-              (renderer as { dispose: () => void }).dispose();
-            return;
-          }
+    if (worldRenderer) {
+      rendererRef.current = worldRenderer;
+      rendererInitializedRef.current = true;
 
-          renderer.setSize(width, height);
-
-          rendererRef.current = renderer;
-          rendererInitializedRef.current = true;
-          // console.log('[Minimap] Renderer initialized successfully');
-        })
-        .catch((error) => {
-          console.warn("[Minimap] Failed to create renderer:", error);
-          rendererRef.current = null;
-          rendererInitializedRef.current = false;
+      // Create a render target for off-screen rendering
+      // We'll render the minimap view to this target, then copy to the canvas
+      if (
+        !renderTargetRef.current ||
+        renderTargetRef.current.width !== width ||
+        renderTargetRef.current.height !== height
+      ) {
+        if (renderTargetRef.current) {
+          renderTargetRef.current.dispose();
+        }
+        renderTargetRef.current = new THREE.WebGLRenderTarget(width, height, {
+          minFilter: THREE.LinearFilter,
+          magFilter: THREE.LinearFilter,
+          format: THREE.RGBAFormat,
         });
-    } else {
-      // console.log('[Minimap] Reusing existing renderer');
-      // Update renderer size when reusing
-      if (rendererRef.current) {
-        rendererRef.current.setSize(width, height);
       }
-      // console.log('[Minimap] Renderer size updated');
+      // console.log('[Minimap] Using world renderer with render target');
+    } else {
+      // World renderer not available yet - will retry on next effect run
+      rendererRef.current = null;
+      rendererInitializedRef.current = false;
     }
 
     // Ensure both canvases have the correct backing size
@@ -404,19 +405,16 @@ export function Minimap({
     overlayCanvas.height = height;
 
     return () => {
-      // Set mounted to false to prevent renderer initialization after unmount
-      mounted = false;
-      // Don't dispose renderer on unmount - we want to reuse it
-      // Only pause rendering when hidden, don't dispose
-      if (rendererRef.current && rendererInitializedRef.current && !isVisible) {
-        // console.log('[Minimap] Pausing renderer (component hidden)');
-        // Pause rendering when hidden
-        if ("setAnimationLoop" in rendererRef.current) {
-          rendererRef.current.setAnimationLoop(null);
-        }
+      // Don't dispose the world's renderer - we're just borrowing it
+      // Only clean up the render target
+      if (renderTargetRef.current) {
+        renderTargetRef.current.dispose();
+        renderTargetRef.current = null;
       }
+      rendererRef.current = null;
+      rendererInitializedRef.current = false;
     };
-    // Note: extent intentionally omitted - changes handled via extentRef in render loop (lines 582-590)
+    // Note: extent intentionally omitted - changes handled via extentRef in render loop
   }, [width, height, world]);
 
   // Use the actual world scene instead of creating a separate one
@@ -429,34 +427,21 @@ export function Minimap({
     // No cleanup needed - we're using the world's scene
   }, [world]);
 
-  // Handle visibility changes to pause/resume rendering
-  useEffect(() => {
-    if (!rendererRef.current) return;
+  // Visibility is handled by the render loop checking isVisible
+  // We don't need to pause/resume the world's renderer since it's shared
 
-    if (isVisible) {
-      // console.log('[Minimap] Resuming renderer (component visible)');
-      // Resume rendering when visible
-      if ("setAnimationLoop" in rendererRef.current) {
-        rendererRef.current.setAnimationLoop(null);
-      }
-    } else {
-      // console.log('[Minimap] Pausing renderer (component hidden)');
-      // Pause rendering when hidden
-      if ("setAnimationLoop" in rendererRef.current) {
-        rendererRef.current.setAnimationLoop(null);
-      }
-    }
-  }, [isVisible]);
-
-  // Cleanup renderer, camera, and scene reference when component is actually unmounted
+  // Cleanup camera, render target, and scene reference when component is actually unmounted
   useEffect(() => {
     return () => {
-      // Dispose renderer
-      if (rendererRef.current && rendererInitializedRef.current) {
-        // console.log('[Minimap] Disposing renderer on component unmount');
-        ThreeResourceManager.disposeRenderer(rendererRef.current);
-        rendererRef.current = null;
-        rendererInitializedRef.current = false;
+      // Don't dispose the world's renderer - we're just borrowing it
+      // Just clear our reference
+      rendererRef.current = null;
+      rendererInitializedRef.current = false;
+
+      // Dispose render target (we own this)
+      if (renderTargetRef.current) {
+        renderTargetRef.current.dispose();
+        renderTargetRef.current = null;
       }
 
       // Clear camera reference and userData
@@ -883,7 +868,16 @@ export function Minimap({
       // --- Render 3D scene (throttled for performance) ---
       // Only render 3D every N frames to reduce GPU load
       const shouldRender3D = frameCount % RENDER_EVERY_N_FRAMES === 0;
-      if (shouldRender3D && rendererRef.current && sceneRef.current && cam) {
+      const renderTarget = renderTargetRef.current;
+      const minimapCanvas = canvasRef.current;
+      if (
+        shouldRender3D &&
+        rendererRef.current &&
+        sceneRef.current &&
+        cam &&
+        renderTarget &&
+        minimapCanvas
+      ) {
         // PERFORMANCE: Disable fog for minimap rendering (top-down view doesn't need it)
         const savedFog = sceneRef.current.fog;
         sceneRef.current.fog = null;
@@ -915,7 +909,96 @@ export function Minimap({
           // If terrain system isn't ready yet, fog will remain - that's okay
         }
 
-        rendererRef.current.render(sceneRef.current, cam);
+        // Render to off-screen render target (uses world's renderer, no new WebGPU context)
+        const renderer = rendererRef.current;
+        renderer.setRenderTarget(renderTarget);
+        renderer.render(sceneRef.current, cam);
+        renderer.setRenderTarget(null); // Reset to default (main canvas)
+
+        // Copy render target to minimap canvas using readback
+        // This avoids needing a separate WebGPU context for the minimap
+        const minimapCtx = minimapCanvas.getContext("2d");
+        if (minimapCtx) {
+          // Type for renderer with async/sync pixel read
+          type RendererWithPixelRead = typeof renderer & {
+            readRenderTargetPixelsAsync?: (
+              target: THREE.WebGLRenderTarget,
+              x: number,
+              y: number,
+              width: number,
+              height: number,
+            ) => Promise<Uint8Array>;
+            readRenderTargetPixels?: (
+              target: THREE.WebGLRenderTarget,
+              x: number,
+              y: number,
+              width: number,
+              height: number,
+              buffer: Uint8Array,
+            ) => void;
+          };
+          const asyncRenderer = renderer as RendererWithPixelRead;
+
+          // Use async readback for WebGPU (faster and doesn't block)
+          if (asyncRenderer.readRenderTargetPixelsAsync) {
+            asyncRenderer
+              .readRenderTargetPixelsAsync(
+                renderTarget,
+                0,
+                0,
+                renderTarget.width,
+                renderTarget.height,
+              )
+              .then((pixelBuffer) => {
+                if (!minimapCanvas || !minimapCtx) return;
+                // Create ImageData and draw to canvas (flip Y since origin is bottom-left)
+                const imageData = minimapCtx.createImageData(
+                  renderTarget.width,
+                  renderTarget.height,
+                );
+                for (let y = 0; y < renderTarget.height; y++) {
+                  const srcRow =
+                    (renderTarget.height - 1 - y) * renderTarget.width * 4;
+                  const dstRow = y * renderTarget.width * 4;
+                  for (let x = 0; x < renderTarget.width * 4; x++) {
+                    imageData.data[dstRow + x] = pixelBuffer[srcRow + x];
+                  }
+                }
+                minimapCtx.putImageData(imageData, 0, 0);
+              })
+              .catch(() => {
+                // Ignore readback errors - minimap will just show stale frame
+              });
+          } else if (asyncRenderer.readRenderTargetPixels) {
+            // Fallback to sync read for WebGL
+            const pixelBuffer = new Uint8Array(
+              renderTarget.width * renderTarget.height * 4,
+            );
+            asyncRenderer.readRenderTargetPixels(
+              renderTarget,
+              0,
+              0,
+              renderTarget.width,
+              renderTarget.height,
+              pixelBuffer,
+            );
+
+            // Create ImageData and draw to canvas (flip Y since origin is bottom-left)
+            const imageData = minimapCtx.createImageData(
+              renderTarget.width,
+              renderTarget.height,
+            );
+            for (let y = 0; y < renderTarget.height; y++) {
+              const srcRow =
+                (renderTarget.height - 1 - y) * renderTarget.width * 4;
+              const dstRow = y * renderTarget.width * 4;
+              for (let x = 0; x < renderTarget.width * 4; x++) {
+                imageData.data[dstRow + x] = pixelBuffer[srcRow + x];
+              }
+            }
+            minimapCtx.putImageData(imageData, 0, 0);
+          }
+        }
 
         // Cache the projection-view matrix used for this render
         // This keeps pip positions synced with the throttled 3D background

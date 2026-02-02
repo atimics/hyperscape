@@ -4,7 +4,25 @@
  */
 
 import * as THREE from "three";
+import { MeshStandardNodeMaterial } from "three/webgpu";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+
+/**
+ * Convert all geometries in array to non-indexed for consistent merging.
+ * Three.js mergeGeometries requires all geometries to either have indices or not.
+ */
+function toNonIndexed(
+  geometries: THREE.BufferGeometry[],
+): THREE.BufferGeometry[] {
+  return geometries.map((geo) => {
+    if (geo.index) {
+      const nonIndexed = geo.toNonIndexed();
+      geo.dispose();
+      return nonIndexed;
+    }
+    return geo;
+  });
+}
 
 import type {
   BuildingRecipe,
@@ -19,7 +37,10 @@ import type {
   PropPlacements,
   GeneratedBuilding,
   BuildingGeneratorOptions,
+  WallMaterialType,
 } from "./types";
+
+import { WALL_MATERIAL_IDS } from "./types";
 
 import {
   CELL_SIZE,
@@ -30,13 +51,17 @@ import {
   FLOOR_HEIGHT,
   FOUNDATION_HEIGHT,
   FOUNDATION_OVERHANG,
+  FLOOR_ZFIGHT_OFFSET,
   TERRAIN_DEPTH,
   ENTRANCE_STEP_HEIGHT,
   ENTRANCE_STEP_DEPTH,
   ENTRANCE_STEP_COUNT,
   TERRAIN_STEP_COUNT,
   RAILING_HEIGHT,
-  RAILING_THICKNESS,
+  RAILING_POST_SIZE,
+  RAILING_RAIL_HEIGHT,
+  RAILING_RAIL_DEPTH,
+  RAILING_POST_SPACING,
   DOOR_WIDTH,
   DOOR_HEIGHT,
   ARCH_WIDTH,
@@ -52,21 +77,49 @@ import {
   ANVIL_SIZE,
   palette,
   getSideVector,
+  INTERIOR_INSET,
 } from "./constants";
 
 import { getRecipe } from "./recipes";
 import { createRng } from "./rng";
 import {
   applyVertexColors,
+  applyWallAttributes,
+  applyFloorAttributes,
+  applyRoofAttributes,
+  applyGeometryAttributes,
   removeInternalFaces,
   getCellCenter,
   greedyMesh2D,
   createMergedFloorGeometry,
+  calculateEdgeInsetsForRect,
   getCachedBox,
   createLOD1Geometry,
   createLOD2Geometry,
   geometryCache,
+  createInteriorFloorGeometry,
+  createInteriorCeilingGeometry,
+  createFloorPlane,
 } from "./geometry";
+import { UV_SCALE_PRESETS } from "./uvUtils";
+import {
+  createWindowGeometry,
+  getWindowStyleForBuildingType,
+} from "./WindowGeometry";
+import type { WindowStyle, WindowConfig } from "./WindowGeometry";
+import {
+  createDoorFrameGeometry,
+  getDoorFrameStyleForBuildingType,
+  getArchDoorConfig,
+} from "./DoorTrimGeometry";
+import type { DoorFrameConfig } from "./DoorTrimGeometry";
+import type { BuildingGeometryArrays } from "./types";
+import {
+  generateInteriorLights,
+  bakeVertexLighting,
+  bakeInteriorVertexLighting,
+  DEFAULT_LIGHTING_CONFIG,
+} from "./InteriorLighting";
 
 // Re-export for convenience
 export { BUILDING_RECIPES, getRecipe } from "./recipes";
@@ -79,14 +132,37 @@ export * from "./constants";
  * Creates procedural buildings from recipes
  */
 export class BuildingGenerator {
-  private uberMaterial: THREE.MeshStandardMaterial;
+  private uberMaterial: MeshStandardNodeMaterial;
+  /** Current wall material ID being used during building (set per-building) */
+  private currentWallMaterialId: number = 0.0;
 
   constructor() {
-    this.uberMaterial = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.85,
-      metalness: 0.05,
-    });
+    // WebGPU-compatible material with vertex colors
+    this.uberMaterial = new MeshStandardNodeMaterial();
+    this.uberMaterial.vertexColors = true;
+    this.uberMaterial.roughness = 0.85;
+    this.uberMaterial.metalness = 0.05;
+  }
+
+  /**
+   * Validate footprint and return dimensions
+   * @throws Error if footprint is empty or malformed
+   */
+  private getFootprintDimensions(
+    footprint: boolean[][],
+    context: string,
+  ): { rows: number; cols: number } {
+    const rows = footprint.length;
+    if (rows === 0) {
+      throw new Error(`[BuildingGenerator] Empty footprint in ${context}`);
+    }
+    const cols = footprint[0].length;
+    if (cols === 0) {
+      throw new Error(
+        `[BuildingGenerator] Footprint has empty first row in ${context}`,
+      );
+    }
+    return { rows, cols };
   }
 
   /**
@@ -106,19 +182,24 @@ export class BuildingGenerator {
     const rng = createRng(seed);
     const includeRoof = options.includeRoof !== false;
     const useGreedyMeshing = options.useGreedyMeshing !== false; // Default: true
+    const enableInteriorLighting = options.enableInteriorLighting !== false; // Default: true
+    const interiorLightIntensity = options.interiorLightIntensity ?? 1.0;
 
     // Use cached layout if provided, otherwise generate new one
     // This optimization allows BuildingRenderingSystem to reuse layouts
     // already computed by TownSystem, avoiding duplicate computation
     const layout = options.cachedLayout || this.generateLayout(recipe, rng);
-    const { building, stats } = this.buildBuilding(
-      layout,
-      recipe,
-      typeKey,
-      rng,
-      includeRoof,
-      useGreedyMeshing,
-    );
+    const { building, stats, geometryArrays, propPlacements } =
+      this.buildBuilding(
+        layout,
+        recipe,
+        typeKey,
+        rng,
+        includeRoof,
+        useGreedyMeshing,
+        enableInteriorLighting,
+        interiorLightIntensity,
+      );
 
     const result: GeneratedBuilding = {
       mesh: building,
@@ -126,6 +207,8 @@ export class BuildingGenerator {
       stats,
       recipe,
       typeKey,
+      geometryArrays,
+      propPlacements,
     };
 
     // Generate LOD meshes if requested
@@ -298,6 +381,15 @@ export class BuildingGenerator {
     }
 
     if (stairs && floors > 1) {
+      // With floors > 1, floor plans 0 and 1 must exist
+      const groundFloor = floorPlans[0];
+      const firstFloor = floorPlans[1];
+      if (!groundFloor || !firstFloor) {
+        throw new Error(
+          `[BuildingGenerator] Expected floor plans 0 and 1 with ${floors} floors`,
+        );
+      }
+
       const anchorId = this.cellId(stairs.col, stairs.row, baseFootprint.width);
       const landingId = this.cellId(
         stairs.landing.col,
@@ -305,25 +397,21 @@ export class BuildingGenerator {
         baseFootprint.width,
       );
       const openingKey = this.edgeKey(anchorId, landingId);
-      floorPlans[0]?.internalOpenings.set(openingKey, "arch");
-      floorPlans[1]?.internalOpenings.set(openingKey, "arch");
+      groundFloor.internalOpenings.set(openingKey, "arch");
+      firstFloor.internalOpenings.set(openingKey, "arch");
 
-      if (floorPlans[0]) {
-        this.ensureStairExit(
-          floorPlans[0],
-          { col: stairs.col, row: stairs.row },
-          { col: stairs.landing.col, row: stairs.landing.row },
-          baseFootprint.width,
-        );
-      }
-      if (floorPlans[1]) {
-        this.ensureStairExit(
-          floorPlans[1],
-          { col: stairs.landing.col, row: stairs.landing.row },
-          { col: stairs.col, row: stairs.row },
-          baseFootprint.width,
-        );
-      }
+      this.ensureStairExit(
+        groundFloor,
+        { col: stairs.col, row: stairs.row },
+        { col: stairs.landing.col, row: stairs.landing.row },
+        baseFootprint.width,
+      );
+      this.ensureStairExit(
+        firstFloor,
+        { col: stairs.landing.col, row: stairs.landing.row },
+        { col: stairs.col, row: stairs.row },
+        baseFootprint.width,
+      );
     }
 
     // Validate generated layout
@@ -373,11 +461,32 @@ export class BuildingGenerator {
     rng: RNG,
     includeRoof: boolean,
     useGreedyMeshing: boolean = true,
-  ): { building: THREE.Mesh | THREE.Group; stats: BuildingStats } {
+    enableInteriorLighting: boolean = true,
+    interiorLightIntensity: number = 1.0,
+  ): {
+    building: THREE.Mesh | THREE.Group;
+    stats: BuildingStats;
+    geometryArrays: BuildingGeometryArrays;
+    propPlacements: PropPlacements;
+  } {
+    // Set wall material ID for this building based on recipe
+    const wallMaterial: WallMaterialType = recipe.wallMaterial || "brick";
+    this.currentWallMaterialId = WALL_MATERIAL_IDS[wallMaterial];
+
     // Separate geometry arrays for floors (walkable), walls (non-walkable), and roof
     const floorGeometries: THREE.BufferGeometry[] = []; // Walkable surfaces
     const wallGeometries: THREE.BufferGeometry[] = []; // Non-walkable (walls, ceilings, props)
     const roofGeometries: THREE.BufferGeometry[] = [];
+
+    // New geometry arrays for windows and doors
+    const windowFrameGeometries: THREE.BufferGeometry[] = [];
+    const windowGlassGeometries: THREE.BufferGeometry[] = [];
+    const doorFrameGeometries: THREE.BufferGeometry[] = [];
+    const shutterGeometries: THREE.BufferGeometry[] = [];
+
+    // Determine window and door styles based on building type
+    const windowStyle = getWindowStyleForBuildingType(typeKey);
+    const doorStyle = getDoorFrameStyleForBuildingType(typeKey, true);
 
     const stats: BuildingStats = {
       wallSegments: 0,
@@ -403,6 +512,9 @@ export class BuildingGenerator {
         recipe,
         rng,
       );
+    }
+    if (typeKey === "smithy") {
+      propPlacements.forge = this.reserveForgePlacement(layout, rng);
     }
 
     // Add foundation first (sits at ground level) - non-walkable
@@ -435,6 +547,13 @@ export class BuildingGenerator {
         layout.floorPlans[floor],
         floor,
         stats,
+        windowFrameGeometries,
+        windowGlassGeometries,
+        doorFrameGeometries,
+        shutterGeometries,
+        typeKey,
+        windowStyle,
+        doorStyle,
       );
 
       // Add ceiling tiles for floors that have another floor above
@@ -535,7 +654,162 @@ export class BuildingGenerator {
       }
     }
 
-    return { building: buildingGroup, stats };
+    // Create window frame mesh
+    if (windowFrameGeometries.length > 0) {
+      const nonIndexedFrames = toNonIndexed(windowFrameGeometries);
+      const mergedWindowFrames = mergeGeometries(nonIndexedFrames, false);
+      if (mergedWindowFrames) {
+        for (const geometry of nonIndexedFrames) geometry.dispose();
+        const windowFrameMesh = new THREE.Mesh(
+          mergedWindowFrames,
+          this.uberMaterial,
+        );
+        windowFrameMesh.name = "windowFrames";
+        windowFrameMesh.userData = { walkable: false };
+        buildingGroup.add(windowFrameMesh);
+      }
+    }
+
+    // Create window glass mesh (transparent)
+    if (windowGlassGeometries.length > 0) {
+      const nonIndexedGlass = toNonIndexed(windowGlassGeometries);
+      const mergedGlass = mergeGeometries(nonIndexedGlass, false);
+      if (mergedGlass) {
+        for (const geometry of nonIndexedGlass) geometry.dispose();
+        // WebGPU-compatible glass material
+        const glassMaterial = new MeshStandardNodeMaterial();
+        glassMaterial.vertexColors = true;
+        glassMaterial.transparent = true;
+        glassMaterial.opacity = 0.3;
+        glassMaterial.roughness = 0.1;
+        glassMaterial.metalness = 0.0;
+        const glassMesh = new THREE.Mesh(mergedGlass, glassMaterial);
+        glassMesh.name = "windowGlass";
+        glassMesh.userData = { walkable: false, transparent: true };
+        buildingGroup.add(glassMesh);
+      }
+    }
+
+    // Create door frame mesh
+    if (doorFrameGeometries.length > 0) {
+      const nonIndexedDoors = toNonIndexed(doorFrameGeometries);
+      const mergedDoorFrames = mergeGeometries(nonIndexedDoors, false);
+      if (mergedDoorFrames) {
+        for (const geometry of nonIndexedDoors) geometry.dispose();
+        const doorFrameMesh = new THREE.Mesh(
+          mergedDoorFrames,
+          this.uberMaterial,
+        );
+        doorFrameMesh.name = "doorFrames";
+        doorFrameMesh.userData = { walkable: false };
+        buildingGroup.add(doorFrameMesh);
+      }
+    }
+
+    // Create shutter mesh
+    if (shutterGeometries.length > 0) {
+      const nonIndexedShutters = toNonIndexed(shutterGeometries);
+      const mergedShutters = mergeGeometries(nonIndexedShutters, false);
+      if (mergedShutters) {
+        for (const geometry of nonIndexedShutters) geometry.dispose();
+        const shutterMesh = new THREE.Mesh(mergedShutters, this.uberMaterial);
+        shutterMesh.name = "shutters";
+        shutterMesh.userData = { walkable: false };
+        buildingGroup.add(shutterMesh);
+      }
+    }
+
+    // Build geometry arrays for multi-material rendering support
+    const geometryArrays: BuildingGeometryArrays = {
+      walls: wallGeometries,
+      floors: floorGeometries,
+      roofs: roofGeometries,
+      windowFrames: windowFrameGeometries,
+      windowGlass: windowGlassGeometries,
+      doorFrames: doorFrameGeometries,
+      shutters: shutterGeometries,
+    };
+
+    // Bake interior lighting into vertex colors if enabled
+    // This illuminates interior-facing surfaces (floors, ceilings, interior walls)
+    // with light from ceiling-mounted light fixtures (one per room at top center)
+    //
+    // IMPORTANT: Building geometry is always generated centered at origin (0,0,0).
+    // The baked lighting is in local space. When placing buildings in the world,
+    // move the entire group - the baked lighting will remain correct.
+    if (enableInteriorLighting) {
+      // Building is always generated at origin - lights are computed in local space
+      const localOrigin = new THREE.Vector3(0, 0, 0);
+
+      // Generate room center lights (one light at ceiling center of each room)
+      const interiorLights = generateInteriorLights(layout, localOrigin, {
+        ...DEFAULT_LIGHTING_CONFIG,
+        baseIntensity:
+          DEFAULT_LIGHTING_CONFIG.baseIntensity * interiorLightIntensity,
+        useRoomCenterLights: true, // Use simplified room center lights
+      });
+
+      if (interiorLights.length > 0) {
+        // Calculate building bounds in local space (centered at origin)
+        const halfWidth = (layout.width * CELL_SIZE) / 2;
+        const halfDepth = (layout.depth * CELL_SIZE) / 2;
+        const totalHeight = layout.floors * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
+
+        const buildingBoundsLocal = {
+          minX: -halfWidth,
+          maxX: halfWidth,
+          minY: 0,
+          maxY: totalHeight,
+          minZ: -halfDepth,
+          maxZ: halfDepth,
+        };
+
+        // Bake lighting into geometry
+        // - Walls: interior-aware baking (only interior-facing surfaces get darkened)
+        // - Floors: full baking (all surfaces are interior)
+        // - Roofs/Glass/Shutters: just add white vertex colors (exterior, normal PBR lighting)
+        buildingGroup.traverse((child) => {
+          if (child instanceof THREE.Mesh && child.geometry) {
+            const name = child.name.toLowerCase();
+            const geo = child.geometry;
+
+            if (name.includes("wall")) {
+              // Walls: interior-aware baking (exterior faces stay white)
+              bakeInteriorVertexLighting(
+                geo,
+                interiorLights,
+                buildingBoundsLocal,
+              );
+            } else if (
+              name.includes("glass") ||
+              name.includes("roof") ||
+              name.includes("shutter")
+            ) {
+              // Roofs/Glass/Shutters: initialize vertex colors to WHITE
+              // These are exterior surfaces that should receive normal PBR lighting
+              if (!geo.getAttribute("color")) {
+                const positions = geo.getAttribute("position");
+                if (positions) {
+                  const colorArray = new Float32Array(positions.count * 3);
+                  for (let i = 0; i < colorArray.length; i++) {
+                    colorArray[i] = 1.0; // White = full PBR lighting
+                  }
+                  geo.setAttribute(
+                    "color",
+                    new THREE.BufferAttribute(colorArray, 3),
+                  );
+                }
+              }
+            } else {
+              // Floors and other interior surfaces: full baking
+              bakeVertexLighting(geo, interiorLights);
+            }
+          }
+        });
+      }
+    }
+
+    return { building: buildingGroup, stats, geometryArrays, propPlacements };
   }
 
   /**
@@ -612,6 +886,28 @@ export class BuildingGenerator {
       grid.push(line);
     }
     return grid;
+  }
+
+  /**
+   * Get fallback side order for door placement when front side has no edges.
+   * Tries opposite side first, then adjacent sides.
+   *
+   * @param frontSide - The primary/front side of the building
+   * @returns Array of sides to try in order of preference
+   */
+  private getFallbackSideOrder(frontSide: string): string[] {
+    switch (frontSide) {
+      case "south":
+        return ["north", "east", "west"]; // Opposite first, then sides
+      case "north":
+        return ["south", "east", "west"];
+      case "east":
+        return ["west", "north", "south"];
+      case "west":
+        return ["east", "north", "south"];
+      default:
+        return ["north", "south", "east", "west"];
+    }
   }
 
   private isCellOccupied(grid: boolean[][], col: number, row: number): boolean {
@@ -871,8 +1167,10 @@ export class BuildingGenerator {
     _recipe: BuildingRecipe,
     _rng: RNG,
   ): { rooms: Room[]; roomMap: number[][] } {
-    const depth = footprint.length;
-    const width = footprint[0]?.length || 0;
+    const { rows: depth, cols: width } = this.getFootprintDimensions(
+      footprint,
+      "generateRoomsForFootprint",
+    );
     const roomMap: number[][] = footprint.map((row) => row.map(() => -1));
     const rooms: Room[] = [];
 
@@ -939,8 +1237,10 @@ export class BuildingGenerator {
     roomMap: number[][],
   ): Map<string, Cell[]> {
     const adjacency = new Map<string, Cell[]>();
-    const depth = footprint.length;
-    const width = footprint[0]?.length || 0;
+    const { rows: depth, cols: width } = this.getFootprintDimensions(
+      footprint,
+      "collectRoomAdjacencies",
+    );
 
     for (let row = 0; row < depth; row += 1) {
       for (let col = 0; col < width; col += 1) {
@@ -1044,7 +1344,12 @@ export class BuildingGenerator {
         }
       }
     }
-    return rooms[0]?.id || 0;
+    if (rooms.length === 0) {
+      throw new Error(
+        "[BuildingGenerator] No rooms found for entrance room detection",
+      );
+    }
+    return rooms[0].id;
   }
 
   private generateExternalOpenings(
@@ -1123,6 +1428,49 @@ export class BuildingGenerator {
       entrancesPlaced++;
     }
 
+    // CRITICAL FALLBACK: Every building MUST have at least one door
+    // If no doors were placed on the front side (due to footprint shape, carvings, etc.),
+    // try other sides in order of preference: opposite side, then adjacent sides
+    if (entrancesPlaced === 0 && entranceCount > 0) {
+      const sidePreference = this.getFallbackSideOrder(frontSide);
+
+      for (const fallbackSide of sidePreference) {
+        if (entrancesPlaced >= entranceCount) break;
+
+        const sideEdges = externalEdges.filter((e) => e.side === fallbackSide);
+        const shuffledSideEdges = rng.shuffle(sideEdges);
+
+        for (const edge of shuffledSideEdges) {
+          if (entrancesPlaced >= entranceCount) break;
+
+          const roomSideKey = `${edge.roomId}-${edge.side}`;
+          const existingDoors = doorsPerRoomSide.get(roomSideKey) || 0;
+
+          if (existingDoors >= 1) continue;
+
+          const key = `${edge.col},${edge.row},${edge.side}`;
+          const openingType = rng.chance(recipe.entranceArchChance)
+            ? "arch"
+            : "door";
+          openings.set(key, openingType);
+          doorsPerRoomSide.set(roomSideKey, existingDoors + 1);
+          entrancesPlaced++;
+        }
+      }
+
+      // Last resort: if STILL no doors (all rooms have doors on all sides somehow),
+      // force a door on any available external edge
+      if (entrancesPlaced === 0 && externalEdges.length > 0) {
+        const anyEdge = externalEdges[0];
+        const key = `${anyEdge.col},${anyEdge.row},${anyEdge.side}`;
+        const openingType = rng.chance(recipe.entranceArchChance)
+          ? "arch"
+          : "door";
+        openings.set(key, openingType);
+        entrancesPlaced++;
+      }
+    }
+
     // Place windows
     for (const edge of externalEdges) {
       const key = `${edge.col},${edge.row},${edge.side}`;
@@ -1150,8 +1498,10 @@ export class BuildingGenerator {
   ): void {
     // Find all edges where upper floor cell is adjacent to a terrace (lower floor only)
     const patioEdges: Array<{ col: number; row: number; side: string }> = [];
-    const depth = upperFootprint.length;
-    const width = upperFootprint[0]?.length || 0;
+    const { rows: depth, cols: width } = this.getFootprintDimensions(
+      upperFootprint,
+      "generatePatioOpenings",
+    );
 
     for (let row = 0; row < depth; row += 1) {
       for (let col = 0; col < width; col += 1) {
@@ -1224,8 +1574,10 @@ export class BuildingGenerator {
       placement: StairPlacement;
       score: number;
     }> = [];
-    const depth = lowerFootprint.length;
-    const width = lowerFootprint[0]?.length || 0;
+    const { rows: depth, cols: width } = this.getFootprintDimensions(
+      lowerFootprint,
+      "findStairLocation",
+    );
 
     for (let row = 0; row < depth; row += 1) {
       for (let col = 0; col < width; col += 1) {
@@ -1670,7 +2022,9 @@ export class BuildingGenerator {
           FOUNDATION_HEIGHT / 2,
           z + offsetZ,
         );
-        applyVertexColors(foundationGeo, palette.foundation);
+        applyGeometryAttributes(foundationGeo, palette.foundation, "generic", {
+          uvScale: UV_SCALE_PRESETS.stoneMedium,
+        });
         geometries.push(foundationGeo);
 
         // Below-ground terrain base (extends into terrain for uneven ground)
@@ -1681,7 +2035,9 @@ export class BuildingGenerator {
           sizeZ,
         );
         terrainBaseGeo.translate(x + offsetX, -TERRAIN_DEPTH / 2, z + offsetZ);
-        applyVertexColors(terrainBaseGeo, palette.foundation);
+        applyGeometryAttributes(terrainBaseGeo, palette.foundation, "generic", {
+          uvScale: UV_SCALE_PRESETS.stoneMedium,
+        });
         geometries.push(terrainBaseGeo);
       }
     }
@@ -1696,8 +2052,10 @@ export class BuildingGenerator {
     layout: BuildingLayout,
   ): void {
     const plan = layout.floorPlans[0];
-    const rows = plan.footprint.length;
-    const cols = plan.footprint[0]?.length ?? 0;
+    const { rows, cols } = this.getFootprintDimensions(
+      plan.footprint,
+      "addFoundationOptimized",
+    );
 
     // Separate interior vs edge cells
     const interiorGrid: boolean[][] = Array.from({ length: rows }, () =>
@@ -1736,7 +2094,9 @@ export class BuildingGenerator {
         layout.depth,
         0,
       );
-      applyVertexColors(foundationGeo, palette.foundation);
+      applyGeometryAttributes(foundationGeo, palette.foundation, "generic", {
+        uvScale: UV_SCALE_PRESETS.stoneMedium,
+      });
       geometries.push(foundationGeo);
 
       // Below-ground terrain base
@@ -1749,7 +2109,9 @@ export class BuildingGenerator {
         layout.depth,
         0,
       );
-      applyVertexColors(terrainGeo, palette.foundation);
+      applyGeometryAttributes(terrainGeo, palette.foundation, "generic", {
+        uvScale: UV_SCALE_PRESETS.stoneMedium,
+      });
       geometries.push(terrainGeo);
     }
 
@@ -1792,12 +2154,16 @@ export class BuildingGenerator {
 
       const foundationGeo = getCachedBox(sizeX, FOUNDATION_HEIGHT, sizeZ);
       foundationGeo.translate(x + offsetX, FOUNDATION_HEIGHT / 2, z + offsetZ);
-      applyVertexColors(foundationGeo, palette.foundation);
+      applyGeometryAttributes(foundationGeo, palette.foundation, "generic", {
+        uvScale: UV_SCALE_PRESETS.stoneMedium,
+      });
       geometries.push(foundationGeo);
 
       const terrainGeo = getCachedBox(sizeX, TERRAIN_DEPTH, sizeZ);
       terrainGeo.translate(x + offsetX, -TERRAIN_DEPTH / 2, z + offsetZ);
-      applyVertexColors(terrainGeo, palette.foundation);
+      applyGeometryAttributes(terrainGeo, palette.foundation, "generic", {
+        uvScale: UV_SCALE_PRESETS.stoneMedium,
+      });
       geometries.push(terrainGeo);
     }
   }
@@ -1858,7 +2224,9 @@ export class BuildingGenerator {
           isVertical ? stepWidth : ENTRANCE_STEP_DEPTH,
         );
         geometry.translate(stepX, stepY + ENTRANCE_STEP_HEIGHT / 2, stepZ);
-        applyVertexColors(geometry, palette.foundation);
+        applyGeometryAttributes(geometry, palette.foundation, "generic", {
+          uvScale: UV_SCALE_PRESETS.stoneMedium,
+        });
         geometries.push(geometry);
       }
 
@@ -1892,7 +2260,9 @@ export class BuildingGenerator {
         // Position so top of step is at stepTopY (center = top - height/2)
         const stepCenterY = stepTopY - stepHeight / 2;
         geometry.translate(stepX, stepCenterY, stepZ);
-        applyVertexColors(geometry, palette.foundation);
+        applyGeometryAttributes(geometry, palette.foundation, "generic", {
+          uvScale: UV_SCALE_PRESETS.stoneMedium,
+        });
         geometries.push(geometry);
       }
     }
@@ -1983,7 +2353,9 @@ export class BuildingGenerator {
 
       // Use floor color for the ramp (will be mostly hidden under steps anyway)
       // The ramp is thin and positioned under the visual steps
-      applyVertexColors(rampGeo, palette.floor);
+      applyGeometryAttributes(rampGeo, palette.floor, "generic", {
+        uvScale: UV_SCALE_PRESETS.floorTile,
+      });
 
       geometries.push(rampGeo);
     }
@@ -1996,16 +2368,16 @@ export class BuildingGenerator {
     stats: BuildingStats,
   ): void {
     const plan = layout.floorPlans[floor];
-    const y = floor * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
-    // Inset floor at external walls to fit inside wall thickness
-    const floorInset = WALL_THICKNESS / 2;
+    // Floor surface sits slightly above the structural base (foundation for ground floor,
+    // ceiling for upper floors) to prevent z-fighting between coplanar surfaces
+    const floorBaseY = floor * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
+    const y = floorBaseY + FLOOR_ZFIGHT_OFFSET;
 
     for (let row = 0; row < plan.footprint.length; row += 1) {
       for (let col = 0; col < plan.footprint[row].length; col += 1) {
         if (!plan.footprint[row][col]) continue;
 
         // Skip stair cell on upper floors (it's an opening to lower floor)
-        // Landing cell gets a floor tile since it's a flat landing area
         if (layout.stairs && floor > 0) {
           const isStairCell =
             col === layout.stairs.col && row === layout.stairs.row;
@@ -2034,30 +2406,34 @@ export class BuildingGenerator {
 
         // Only inset at external walls where wall geometry exists
         if (hasWest) {
-          xSize -= floorInset;
-          xOffset += floorInset / 2;
+          xSize -= INTERIOR_INSET;
+          xOffset += INTERIOR_INSET / 2;
         }
         if (hasEast) {
-          xSize -= floorInset;
-          xOffset -= floorInset / 2;
+          xSize -= INTERIOR_INSET;
+          xOffset -= INTERIOR_INSET / 2;
         }
         if (hasNorth) {
-          zSize -= floorInset;
-          zOffset += floorInset / 2;
+          zSize -= INTERIOR_INSET;
+          zOffset += INTERIOR_INSET / 2;
         }
         if (hasSouth) {
-          zSize -= floorInset;
-          zOffset -= floorInset / 2;
+          zSize -= INTERIOR_INSET;
+          zOffset -= INTERIOR_INSET / 2;
         }
 
-        // Ensure minimum size (should never be needed but safety check)
+        // Ensure minimum size
         xSize = Math.max(xSize, CELL_SIZE * 0.5);
         zSize = Math.max(zSize, CELL_SIZE * 0.5);
 
-        // Create floor tile - top surface is at y
-        const geometry = new THREE.BoxGeometry(xSize, FLOOR_THICKNESS, zSize);
-        geometry.translate(x + xOffset, y - FLOOR_THICKNESS / 2, z + zOffset);
-        applyVertexColors(geometry, palette.floor);
+        // Create floor tile - use flat plane (top face only, no side faces)
+        const geometry = createFloorPlane(xSize, zSize);
+        geometry.translate(x + xOffset, y, z + zOffset);
+        applyFloorAttributes(
+          geometry,
+          palette.floor,
+          UV_SCALE_PRESETS.floorTile,
+        );
         geometries.push(geometry);
         stats.floorTiles += 1;
       }
@@ -2065,9 +2441,11 @@ export class BuildingGenerator {
   }
 
   /**
-   * Add ceiling tiles between floors
+   * Add ceiling tiles between floors (non-optimized path)
    * Only adds ceiling where BOTH current floor AND floor above exist at this cell
-   * This prevents collision with terrace roofs
+   *
+   * Uses flat plane geometry (bottom face only) to eliminate side faces that
+   * would z-fight with walls.
    */
   private addCeilingTiles(
     geometries: THREE.BufferGeometry[],
@@ -2079,8 +2457,8 @@ export class BuildingGenerator {
     const abovePlan = layout.floorPlans[floor + 1];
     if (!abovePlan) return;
 
-    const y = (floor + 1) * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
-    const ceilingInset = WALL_THICKNESS / 2;
+    // Ceiling hangs just below where the floor above starts
+    const y = (floor + 1) * FLOOR_HEIGHT + FOUNDATION_HEIGHT - 0.01;
 
     for (let row = 0; row < currentPlan.footprint.length; row += 1) {
       for (let col = 0; col < currentPlan.footprint[row].length; col += 1) {
@@ -2089,7 +2467,6 @@ export class BuildingGenerator {
         if (!this.isCellOccupied(abovePlan.footprint, col, row)) continue;
 
         // Skip stair cell - it's the opening for stairs from below
-        // Landing cell gets ceiling since it's a flat landing area
         if (layout.stairs) {
           const isStairCell =
             col === layout.stairs.col && row === layout.stairs.row;
@@ -2104,7 +2481,7 @@ export class BuildingGenerator {
           layout.depth,
         );
 
-        // Calculate insets based on external walls
+        // Calculate insets based on external walls on EITHER floor
         let xSize = CELL_SIZE;
         let zSize = CELL_SIZE;
         let xOffset = 0;
@@ -2155,25 +2532,31 @@ export class BuildingGenerator {
 
         // Inset ceiling to fit within walls (use the more restrictive of the two floors)
         if (hasWest || upperHasWest) {
-          xSize -= ceilingInset;
-          xOffset += ceilingInset / 2;
+          xSize -= INTERIOR_INSET;
+          xOffset += INTERIOR_INSET / 2;
         }
         if (hasEast || upperHasEast) {
-          xSize -= ceilingInset;
-          xOffset -= ceilingInset / 2;
+          xSize -= INTERIOR_INSET;
+          xOffset -= INTERIOR_INSET / 2;
         }
         if (hasNorth || upperHasNorth) {
-          zSize -= ceilingInset;
-          zOffset += ceilingInset / 2;
+          zSize -= INTERIOR_INSET;
+          zOffset += INTERIOR_INSET / 2;
         }
         if (hasSouth || upperHasSouth) {
-          zSize -= ceilingInset;
-          zOffset -= ceilingInset / 2;
+          zSize -= INTERIOR_INSET;
+          zOffset -= INTERIOR_INSET / 2;
         }
 
-        const geometry = new THREE.BoxGeometry(xSize, FLOOR_THICKNESS, zSize);
-        geometry.translate(x + xOffset, y - FLOOR_THICKNESS / 2, z + zOffset);
-        applyVertexColors(geometry, palette.floor);
+        // Use flat plane (bottom face only, no side faces)
+        const geometry = new THREE.PlaneGeometry(xSize, zSize);
+        geometry.rotateX(Math.PI / 2); // Face downward (-Y)
+        geometry.translate(x + xOffset, y, z + zOffset);
+        applyFloorAttributes(
+          geometry,
+          palette.ceiling,
+          UV_SCALE_PRESETS.floorTile,
+        );
         geometries.push(geometry);
       }
     }
@@ -2181,8 +2564,12 @@ export class BuildingGenerator {
 
   /**
    * Add floor tiles using greedy meshing optimization.
-   * Groups interior tiles into larger quads to reduce triangle count.
-   * Edge tiles are still handled individually for proper insets.
+   *
+   * IMPORTANT: Uses flat plane geometry (top face only) to eliminate side faces.
+   * Interior floors are inset from exterior walls by INTERIOR_INSET to prevent
+   * z-fighting and ensure clean geometry that doesn't collide with walls.
+   *
+   * Groups cells into larger rectangles via greedy meshing to reduce triangle count.
    */
   private addFloorTilesOptimized(
     geometries: THREE.BufferGeometry[],
@@ -2191,107 +2578,69 @@ export class BuildingGenerator {
     stats: BuildingStats,
   ): void {
     const plan = layout.floorPlans[floor];
-    const y = floor * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
-    const floorInset = WALL_THICKNESS / 2;
+    // Floor surface sits slightly above the structural base (foundation for ground floor,
+    // ceiling for upper floors) to prevent z-fighting between coplanar surfaces
+    const floorBaseY = floor * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
+    const y = floorBaseY + FLOOR_ZFIGHT_OFFSET;
 
-    // Build grid of interior cells (no external walls on any side)
-    const rows = plan.footprint.length;
-    const cols = plan.footprint[0]?.length ?? 0;
-    const interiorGrid: boolean[][] = Array.from({ length: rows }, () =>
+    const { rows, cols } = this.getFootprintDimensions(
+      plan.footprint,
+      "addFloorOptimized",
+    );
+
+    // Build grid of ALL floor cells for this floor
+    const floorGrid: boolean[][] = Array.from({ length: rows }, () =>
       Array.from({ length: cols }, () => false),
     );
-    const edgeCells: Array<{ col: number; row: number }> = [];
 
     for (let row = 0; row < rows; row++) {
       for (let col = 0; col < cols; col++) {
         if (!plan.footprint[row][col]) continue;
 
-        // Skip stair cell on upper floors
+        // Skip stair cell on upper floors (open hole for stairs)
         if (layout.stairs && floor > 0) {
           if (col === layout.stairs.col && row === layout.stairs.row) continue;
         }
 
-        // Check for external walls
-        const hasNorth = !this.isCellOccupied(plan.footprint, col, row - 1);
-        const hasSouth = !this.isCellOccupied(plan.footprint, col, row + 1);
-        const hasEast = !this.isCellOccupied(plan.footprint, col + 1, row);
-        const hasWest = !this.isCellOccupied(plan.footprint, col - 1, row);
-
-        if (hasNorth || hasSouth || hasEast || hasWest) {
-          // Edge cell - needs individual handling for insets
-          edgeCells.push({ col, row });
-        } else {
-          // Interior cell - can be merged
-          interiorGrid[row][col] = true;
-        }
+        floorGrid[row][col] = true;
       }
     }
 
-    // Greedy mesh interior cells
-    const rects = greedyMesh2D(interiorGrid);
+    // Greedy mesh all floor cells together
+    const rects = greedyMesh2D(floorGrid);
 
     for (const rect of rects) {
-      const geometry = createMergedFloorGeometry(
+      // Calculate per-edge insets based on exterior walls
+      const edgeInsets = calculateEdgeInsetsForRect(
+        rect,
+        plan.footprint,
+        INTERIOR_INSET,
+      );
+
+      // Use flat plane geometry (top face only, no side faces)
+      const geometry = createInteriorFloorGeometry(
         rect,
         CELL_SIZE,
-        FLOOR_THICKNESS,
-        y - FLOOR_THICKNESS / 2,
+        y,
         layout.width,
         layout.depth,
-        0, // No inset for interior tiles
+        edgeInsets,
       );
-      applyVertexColors(geometry, palette.floor);
+      applyFloorAttributes(geometry, palette.floor, UV_SCALE_PRESETS.floorTile);
       geometries.push(geometry);
       stats.floorTiles += rect.width * rect.height;
-    }
-
-    // Handle edge cells individually (with insets)
-    for (const { col, row } of edgeCells) {
-      const { x, z } = getCellCenter(
-        col,
-        row,
-        CELL_SIZE,
-        layout.width,
-        layout.depth,
-      );
-
-      const hasNorth = !this.isCellOccupied(plan.footprint, col, row - 1);
-      const hasSouth = !this.isCellOccupied(plan.footprint, col, row + 1);
-      const hasEast = !this.isCellOccupied(plan.footprint, col + 1, row);
-      const hasWest = !this.isCellOccupied(plan.footprint, col - 1, row);
-
-      let xSize = CELL_SIZE;
-      let zSize = CELL_SIZE;
-      let xOffset = 0;
-      let zOffset = 0;
-
-      if (hasWest) {
-        xSize -= floorInset;
-        xOffset += floorInset / 2;
-      }
-      if (hasEast) {
-        xSize -= floorInset;
-        xOffset -= floorInset / 2;
-      }
-      if (hasNorth) {
-        zSize -= floorInset;
-        zOffset += floorInset / 2;
-      }
-      if (hasSouth) {
-        zSize -= floorInset;
-        zOffset -= floorInset / 2;
-      }
-
-      const geometry = getCachedBox(xSize, FLOOR_THICKNESS, zSize);
-      geometry.translate(x + xOffset, y - FLOOR_THICKNESS / 2, z + zOffset);
-      applyVertexColors(geometry, palette.floor);
-      geometries.push(geometry);
-      stats.floorTiles += 1;
     }
   }
 
   /**
    * Add ceiling tiles using greedy meshing optimization.
+   *
+   * IMPORTANT: Uses flat plane geometry (bottom face only) to eliminate side faces.
+   * Interior ceilings are inset from exterior walls by INTERIOR_INSET to prevent
+   * z-fighting and ensure clean geometry that doesn't collide with walls.
+   *
+   * Ceiling tiles are only added where BOTH current floor AND floor above exist,
+   * and are inset from any walls on either floor.
    */
   private addCeilingTilesOptimized(
     geometries: THREE.BufferGeometry[],
@@ -2303,11 +2652,16 @@ export class BuildingGenerator {
     const abovePlan = layout.floorPlans[floor + 1];
     if (!abovePlan) return;
 
-    const y = (floor + 1) * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
-    const rows = currentPlan.footprint.length;
-    const cols = currentPlan.footprint[0]?.length ?? 0;
+    // Ceiling hangs at the bottom of the floor above
+    // Position just below where the floor above starts to prevent z-fighting
+    const y = (floor + 1) * FLOOR_HEIGHT + FOUNDATION_HEIGHT - 0.01;
 
-    // Build grid of cells that need ceilings
+    const { rows, cols } = this.getFootprintDimensions(
+      currentPlan.footprint,
+      "addIntermediateCeilingsOptimized",
+    );
+
+    // Build grid of cells that need ceilings (intersection of current and above footprints)
     const ceilingGrid: boolean[][] = Array.from({ length: rows }, () =>
       Array.from({ length: cols }, () => false),
     );
@@ -2317,7 +2671,7 @@ export class BuildingGenerator {
         if (!currentPlan.footprint[row][col]) continue;
         if (!this.isCellOccupied(abovePlan.footprint, col, row)) continue;
 
-        // Skip stair cell
+        // Skip stair cell (open hole for stairs)
         if (layout.stairs) {
           if (col === layout.stairs.col && row === layout.stairs.row) continue;
         }
@@ -2330,16 +2684,42 @@ export class BuildingGenerator {
     const rects = greedyMesh2D(ceilingGrid);
 
     for (const rect of rects) {
-      const geometry = createMergedFloorGeometry(
+      // Calculate per-edge insets based on BOTH current and above footprints
+      // An edge needs inset if it's external to EITHER floor (has wall on either)
+      const currentEdgeInsets = calculateEdgeInsetsForRect(
+        rect,
+        currentPlan.footprint,
+        INTERIOR_INSET,
+      );
+      const aboveEdgeInsets = calculateEdgeInsetsForRect(
+        rect,
+        abovePlan.footprint,
+        INTERIOR_INSET,
+      );
+
+      // Use the more restrictive inset (larger value) for each edge
+      // This ensures ceiling is inset from walls on either floor
+      const edgeInsets = {
+        west: Math.max(currentEdgeInsets.west, aboveEdgeInsets.west),
+        east: Math.max(currentEdgeInsets.east, aboveEdgeInsets.east),
+        north: Math.max(currentEdgeInsets.north, aboveEdgeInsets.north),
+        south: Math.max(currentEdgeInsets.south, aboveEdgeInsets.south),
+      };
+
+      // Use flat plane geometry (bottom face only, no side faces)
+      const geometry = createInteriorCeilingGeometry(
         rect,
         CELL_SIZE,
-        FLOOR_THICKNESS,
-        y - FLOOR_THICKNESS / 2,
+        y,
         layout.width,
         layout.depth,
-        WALL_THICKNESS / 2, // Inset from walls
+        edgeInsets,
       );
-      applyVertexColors(geometry, palette.floor);
+      applyFloorAttributes(
+        geometry,
+        palette.ceiling,
+        UV_SCALE_PRESETS.floorTile,
+      );
       geometries.push(geometry);
     }
   }
@@ -2476,7 +2856,7 @@ export class BuildingGenerator {
         const color = adjacentToUpper ? palette.patio : palette.roof;
         const geometry = new THREE.BoxGeometry(xSize, FLOOR_THICKNESS, zSize);
         geometry.translate(x + xOffset, y - FLOOR_THICKNESS / 2, z + zOffset);
-        applyVertexColors(geometry, color);
+        applyRoofAttributes(geometry, color, UV_SCALE_PRESETS.shingle);
         geometries.push(geometry);
         stats.roofPieces += 1;
       }
@@ -2484,8 +2864,11 @@ export class BuildingGenerator {
   }
 
   /**
-   * Add railings around terrace edges
-   * These go on cells where there's floor below, no floor above, and adjacent to drop-off
+   * Add railings around terrace edges with posts and horizontal rails.
+   * Creates a proper wood railing with:
+   * - Vertical posts at corners and intervals
+   * - Top rail connecting posts
+   * - Middle rail for safety
    */
   private addTerraceRailings(
     geometries: THREE.BufferGeometry[],
@@ -2499,158 +2882,25 @@ export class BuildingGenerator {
     // Railing starts at the wall top (not terrace floor) to avoid gap
     const wallTopY =
       (floor + 1) * FLOOR_HEIGHT + FOUNDATION_HEIGHT - FLOOR_THICKNESS;
-    const totalRailingHeight = RAILING_HEIGHT + FLOOR_THICKNESS;
+    const postHeight = RAILING_HEIGHT + FLOOR_THICKNESS;
     const halfCell = CELL_SIZE / 2;
 
-    // First pass: collect all terrace corner positions (where two external terrace edges meet)
-    // A terrace corner is where a terrace cell has external edges on two perpendicular sides
-    const terraceCorners = new Set<string>();
+    // Heights for top rail and middle rail
+    const topRailY = wallTopY + postHeight - RAILING_RAIL_HEIGHT / 2;
+    const middleRailY = wallTopY + postHeight * 0.5;
 
-    for (let row = 0; row < currentPlan.footprint.length; row += 1) {
-      for (let col = 0; col < currentPlan.footprint[row].length; col += 1) {
-        if (!currentPlan.footprint[row][col]) continue;
-        if (this.isCellOccupied(abovePlan.footprint, col, row)) continue;
-
-        // Check for external terrace edges (no current neighbor AND no upper neighbor)
-        const needsNorth =
-          !this.isCellOccupied(currentPlan.footprint, col, row - 1) &&
-          !this.isCellOccupied(abovePlan.footprint, col, row - 1);
-        const needsSouth =
-          !this.isCellOccupied(currentPlan.footprint, col, row + 1) &&
-          !this.isCellOccupied(abovePlan.footprint, col, row + 1);
-        const needsEast =
-          !this.isCellOccupied(currentPlan.footprint, col + 1, row) &&
-          !this.isCellOccupied(abovePlan.footprint, col + 1, row);
-        const needsWest =
-          !this.isCellOccupied(currentPlan.footprint, col - 1, row) &&
-          !this.isCellOccupied(abovePlan.footprint, col - 1, row);
-
-        // Record terrace corners
-        if (needsNorth && needsWest)
-          terraceCorners.add(`${col - 0.5},${row - 0.5}`);
-        if (needsNorth && needsEast)
-          terraceCorners.add(`${col + 0.5},${row - 0.5}`);
-        if (needsSouth && needsWest)
-          terraceCorners.add(`${col - 0.5},${row + 0.5}`);
-        if (needsSouth && needsEast)
-          terraceCorners.add(`${col + 0.5},${row + 0.5}`);
-      }
+    // Track all post positions and edges for rail generation
+    interface RailingEdge {
+      startX: number;
+      startZ: number;
+      endX: number;
+      endZ: number;
+      isVertical: boolean; // Along Z axis (not X)
     }
+    const edges: RailingEdge[] = [];
+    const postPositions = new Set<string>();
 
-    // Second pass: generate railings with proper lengths accounting for corners
-    for (let row = 0; row < currentPlan.footprint.length; row += 1) {
-      for (let col = 0; col < currentPlan.footprint[row].length; col += 1) {
-        if (!currentPlan.footprint[row][col]) continue;
-        if (this.isCellOccupied(abovePlan.footprint, col, row)) continue;
-
-        const { x, z } = getCellCenter(
-          col,
-          row,
-          CELL_SIZE,
-          layout.width,
-          layout.depth,
-        );
-
-        // Check for terrace corners at each railing endpoint
-        const hasCornerNW = terraceCorners.has(`${col - 0.5},${row - 0.5}`);
-        const hasCornerNE = terraceCorners.has(`${col + 0.5},${row - 0.5}`);
-        const hasCornerSW = terraceCorners.has(`${col - 0.5},${row + 0.5}`);
-        const hasCornerSE = terraceCorners.has(`${col + 0.5},${row + 0.5}`);
-
-        const sides = [
-          {
-            dc: 0,
-            dr: -1,
-            side: "north",
-            hasStart: hasCornerNW,
-            hasEnd: hasCornerNE,
-            isVertical: false,
-          },
-          {
-            dc: 0,
-            dr: 1,
-            side: "south",
-            hasStart: hasCornerSW,
-            hasEnd: hasCornerSE,
-            isVertical: false,
-          },
-          {
-            dc: 1,
-            dr: 0,
-            side: "east",
-            hasStart: hasCornerNE,
-            hasEnd: hasCornerSE,
-            isVertical: true,
-          },
-          {
-            dc: -1,
-            dr: 0,
-            side: "west",
-            hasStart: hasCornerNW,
-            hasEnd: hasCornerSW,
-            isVertical: true,
-          },
-        ];
-
-        for (const { dc, dr, side, hasStart, hasEnd, isVertical } of sides) {
-          const nc = col + dc;
-          const nr = row + dr;
-
-          const hasCurrentFloorNeighbor = this.isCellOccupied(
-            currentPlan.footprint,
-            nc,
-            nr,
-          );
-          const hasUpperFloorNeighbor = this.isCellOccupied(
-            abovePlan.footprint,
-            nc,
-            nr,
-          );
-
-          if (!hasCurrentFloorNeighbor && !hasUpperFloorNeighbor) {
-            // Calculate railing length accounting for corners
-            let railingLength = CELL_SIZE;
-            let offset = 0;
-
-            if (hasStart) {
-              railingLength -= RAILING_THICKNESS;
-              offset += RAILING_THICKNESS / 2;
-            }
-            if (hasEnd) {
-              railingLength -= RAILING_THICKNESS;
-              offset -= RAILING_THICKNESS / 2;
-            }
-
-            // Position at cell edge with offset for corner adjustment
-            const ox = isVertical
-              ? side === "west"
-                ? -halfCell
-                : halfCell
-              : offset;
-            const oz = !isVertical
-              ? side === "north"
-                ? -halfCell
-                : halfCell
-              : offset;
-
-            const geometry = new THREE.BoxGeometry(
-              isVertical ? RAILING_THICKNESS : railingLength,
-              totalRailingHeight,
-              isVertical ? railingLength : RAILING_THICKNESS,
-            );
-            geometry.translate(
-              x + ox,
-              wallTopY + totalRailingHeight / 2,
-              z + oz,
-            );
-            applyVertexColors(geometry, palette.trim);
-            geometries.push(geometry);
-          }
-        }
-      }
-    }
-
-    // Third pass: add corner posts at terrace corners
+    // First pass: collect all edges that need railings
     for (let row = 0; row < currentPlan.footprint.length; row += 1) {
       for (let col = 0; col < currentPlan.footprint[row].length; col += 1) {
         if (!currentPlan.footprint[row][col]) continue;
@@ -2678,43 +2928,136 @@ export class BuildingGenerator {
           !this.isCellOccupied(currentPlan.footprint, col - 1, row) &&
           !this.isCellOccupied(abovePlan.footprint, col - 1, row);
 
-        // Add corner posts where two terrace edges meet
-        const cornerPositions = [
-          {
-            hasCorner: needsNorth && needsWest,
-            x: x - halfCell,
-            z: z - halfCell,
-          },
-          {
-            hasCorner: needsNorth && needsEast,
-            x: x + halfCell,
-            z: z - halfCell,
-          },
-          {
-            hasCorner: needsSouth && needsWest,
-            x: x - halfCell,
-            z: z + halfCell,
-          },
-          {
-            hasCorner: needsSouth && needsEast,
-            x: x + halfCell,
-            z: z + halfCell,
-          },
-        ];
+        // Add edges
+        if (needsNorth) {
+          edges.push({
+            startX: x - halfCell,
+            startZ: z - halfCell,
+            endX: x + halfCell,
+            endZ: z - halfCell,
+            isVertical: false,
+          });
+        }
+        if (needsSouth) {
+          edges.push({
+            startX: x - halfCell,
+            startZ: z + halfCell,
+            endX: x + halfCell,
+            endZ: z + halfCell,
+            isVertical: false,
+          });
+        }
+        if (needsEast) {
+          edges.push({
+            startX: x + halfCell,
+            startZ: z - halfCell,
+            endX: x + halfCell,
+            endZ: z + halfCell,
+            isVertical: true,
+          });
+        }
+        if (needsWest) {
+          edges.push({
+            startX: x - halfCell,
+            startZ: z - halfCell,
+            endX: x - halfCell,
+            endZ: z + halfCell,
+            isVertical: true,
+          });
+        }
 
-        for (const { hasCorner, x: cx, z: cz } of cornerPositions) {
-          if (hasCorner) {
-            const cornerGeo = new THREE.BoxGeometry(
-              RAILING_THICKNESS,
-              totalRailingHeight,
-              RAILING_THICKNESS,
-            );
-            cornerGeo.translate(cx, wallTopY + totalRailingHeight / 2, cz);
-            applyVertexColors(cornerGeo, palette.trim);
-            geometries.push(cornerGeo);
-          }
+        // Add corner posts where two edges meet
+        if (needsNorth && needsWest)
+          postPositions.add(`${x - halfCell},${z - halfCell}`);
+        if (needsNorth && needsEast)
+          postPositions.add(`${x + halfCell},${z - halfCell}`);
+        if (needsSouth && needsWest)
+          postPositions.add(`${x - halfCell},${z + halfCell}`);
+        if (needsSouth && needsEast)
+          postPositions.add(`${x + halfCell},${z + halfCell}`);
+      }
+    }
+
+    // Second pass: generate posts along edges at intervals
+    for (const edge of edges) {
+      const edgeLength = edge.isVertical
+        ? Math.abs(edge.endZ - edge.startZ)
+        : Math.abs(edge.endX - edge.startX);
+
+      // Calculate number of intermediate posts needed
+      const numSegments = Math.ceil(edgeLength / RAILING_POST_SPACING);
+
+      // Add posts at start, intervals, and end
+      for (let i = 0; i <= numSegments; i++) {
+        const t = i / numSegments;
+        const px = edge.startX + (edge.endX - edge.startX) * t;
+        const pz = edge.startZ + (edge.endZ - edge.startZ) * t;
+        const key = `${px.toFixed(3)},${pz.toFixed(3)}`;
+
+        if (!postPositions.has(key)) {
+          postPositions.add(key);
         }
       }
+    }
+
+    // Third pass: create all posts
+    for (const posKey of postPositions) {
+      const [px, pz] = posKey.split(",").map(Number);
+
+      const postGeo = new THREE.BoxGeometry(
+        RAILING_POST_SIZE,
+        postHeight,
+        RAILING_POST_SIZE,
+      );
+      postGeo.translate(px, wallTopY + postHeight / 2, pz);
+      applyGeometryAttributes(postGeo, palette.trim, "generic", {
+        uvScale: UV_SCALE_PRESETS.woodPlank,
+      });
+      geometries.push(postGeo);
+    }
+
+    // Fourth pass: create horizontal rails between posts
+    // Process each edge and create rails that span from post to post
+    const processedEdges = new Set<string>();
+
+    for (const edge of edges) {
+      const edgeKey = `${edge.startX},${edge.startZ}-${edge.endX},${edge.endZ}`;
+      if (processedEdges.has(edgeKey)) continue;
+      processedEdges.add(edgeKey);
+
+      const railLength = edge.isVertical
+        ? Math.abs(edge.endZ - edge.startZ)
+        : Math.abs(edge.endX - edge.startX);
+
+      // Skip very short edges
+      if (railLength < 0.1) continue;
+
+      const railCenterX = (edge.startX + edge.endX) / 2;
+      const railCenterZ = (edge.startZ + edge.endZ) / 2;
+
+      // Top rail
+      const topRailGeo = new THREE.BoxGeometry(
+        edge.isVertical ? RAILING_RAIL_DEPTH : railLength,
+        RAILING_RAIL_HEIGHT,
+        edge.isVertical ? railLength : RAILING_RAIL_DEPTH,
+      );
+      topRailGeo.translate(railCenterX, topRailY, railCenterZ);
+      applyGeometryAttributes(topRailGeo, palette.trim, "generic", {
+        uvScale: UV_SCALE_PRESETS.woodPlank,
+      });
+      geometries.push(topRailGeo);
+
+      // Middle rail
+      const midRailGeo = new THREE.BoxGeometry(
+        edge.isVertical ? RAILING_RAIL_DEPTH : railLength,
+        RAILING_RAIL_HEIGHT,
+        edge.isVertical ? railLength : RAILING_RAIL_DEPTH,
+      );
+      midRailGeo.translate(railCenterX, middleRailY, railCenterZ);
+      applyGeometryAttributes(midRailGeo, palette.trim, "generic", {
+        uvScale: UV_SCALE_PRESETS.woodPlank,
+      });
+      geometries.push(midRailGeo);
     }
   }
 
@@ -2854,7 +3197,10 @@ export class BuildingGenerator {
               isVertical ? length : WALL_THICKNESS,
             );
             geometry.translate(x + ox, y - FLOOR_THICKNESS, z + oz);
-            applyVertexColors(geometry, palette.trim); // Skirts use trim color
+            // Skirts use trim color with wood UV scale
+            applyGeometryAttributes(geometry, palette.trim, "generic", {
+              uvScale: UV_SCALE_PRESETS.woodPlank,
+            });
             geometries.push(geometry);
           }
         }
@@ -2868,6 +3214,13 @@ export class BuildingGenerator {
     plan: FloorPlan,
     floor: number,
     stats: BuildingStats,
+    windowFrameGeometries: THREE.BufferGeometry[],
+    windowGlassGeometries: THREE.BufferGeometry[],
+    doorFrameGeometries: THREE.BufferGeometry[],
+    shutterGeometries: THREE.BufferGeometry[],
+    buildingType: string,
+    windowStyle: WindowStyle,
+    doorStyle: import("./DoorTrimGeometry").DoorFrameStyle,
   ): void {
     const y = floor * FLOOR_HEIGHT + FOUNDATION_HEIGHT;
     // For non-top floors, extend walls up to meet the floor above (eliminates gap)
@@ -3054,6 +3407,13 @@ export class BuildingGenerator {
                 isVertical,
                 effectiveWallHeight,
                 true, // isExternal = true
+                windowFrameGeometries,
+                windowGlassGeometries,
+                doorFrameGeometries,
+                shutterGeometries,
+                buildingType,
+                windowStyle,
+                doorStyle,
               );
             }
           } else {
@@ -3083,6 +3443,13 @@ export class BuildingGenerator {
                 isVertical,
                 effectiveWallHeight,
                 false, // isExternal = false (internal wall)
+                windowFrameGeometries,
+                windowGlassGeometries,
+                doorFrameGeometries,
+                shutterGeometries,
+                buildingType,
+                windowStyle,
+                doorStyle,
               );
             }
           }
@@ -3098,7 +3465,11 @@ export class BuildingGenerator {
         WALL_THICKNESS,
       );
       geometry.translate(pos.x, y + pos.height / 2, pos.z);
-      applyVertexColors(geometry, palette.wallCorner);
+      // Corner posts use wall UV scale for consistency
+      applyGeometryAttributes(geometry, palette.wallCorner, "generic", {
+        uvScale: UV_SCALE_PRESETS.brick,
+        materialId: this.currentWallMaterialId,
+      });
       geometries.push(geometry);
     }
   }
@@ -3115,18 +3486,27 @@ export class BuildingGenerator {
     isVertical: boolean,
     wallHeight: number = WALL_HEIGHT,
     isExternal: boolean = true,
+    windowFrameGeometries?: THREE.BufferGeometry[],
+    windowGlassGeometries?: THREE.BufferGeometry[],
+    doorFrameGeometries?: THREE.BufferGeometry[],
+    shutterGeometries?: THREE.BufferGeometry[],
+    _buildingType?: string,
+    windowStyle?: WindowStyle,
+    doorStyle?: import("./DoorTrimGeometry").DoorFrameStyle,
   ): void {
     const wallLength = isVertical ? depth : width;
     const wallThickness = isVertical ? width : depth;
 
     // Use outer wall color for external walls, inner wall color for internal
     const wallColor = isExternal ? palette.wallOuter : palette.wallInner;
+    const uvScale = UV_SCALE_PRESETS.brick;
+    const matId = this.currentWallMaterialId;
 
     if (!opening) {
       // Solid wall
       const geometry = new THREE.BoxGeometry(width, wallHeight, depth);
       geometry.translate(x, y + wallHeight / 2, z);
-      applyVertexColors(geometry, wallColor);
+      applyWallAttributes(geometry, wallColor, isVertical, uvScale, matId);
       geometries.push(geometry);
       stats.wallSegments += 1;
       return;
@@ -3154,7 +3534,7 @@ export class BuildingGenerator {
         y + wallHeight / 2,
         z + (isVertical ? -offset : 0),
       );
-      applyVertexColors(geo, wallColor);
+      applyWallAttributes(geo, wallColor, isVertical, uvScale, matId);
       geometries.push(geo);
     }
 
@@ -3169,7 +3549,7 @@ export class BuildingGenerator {
         y + wallHeight / 2,
         z + (isVertical ? offset : 0),
       );
-      applyVertexColors(geo, wallColor);
+      applyWallAttributes(geo, wallColor, isVertical, uvScale, matId);
       geometries.push(geo);
     }
 
@@ -3180,7 +3560,7 @@ export class BuildingGenerator {
         ? new THREE.BoxGeometry(wallThickness, topHeight, openingWidth)
         : new THREE.BoxGeometry(openingWidth, topHeight, wallThickness);
       geo.translate(x, y + openingBottom + openingHeight + topHeight / 2, z);
-      applyVertexColors(geo, wallColor);
+      applyWallAttributes(geo, wallColor, isVertical, uvScale, matId);
       geometries.push(geo);
     }
 
@@ -3190,8 +3570,118 @@ export class BuildingGenerator {
         ? new THREE.BoxGeometry(wallThickness, openingBottom, openingWidth)
         : new THREE.BoxGeometry(openingWidth, openingBottom, wallThickness);
       geo.translate(x, y + openingBottom / 2, z);
-      applyVertexColors(geo, wallColor);
+      applyWallAttributes(geo, wallColor, isVertical, uvScale, matId);
       geometries.push(geo);
+    }
+
+    // === Generate window geometry for window openings ===
+    if (
+      opening === "window" &&
+      windowFrameGeometries &&
+      windowGlassGeometries &&
+      isExternal
+    ) {
+      const windowConfig: WindowConfig = {
+        width: openingWidth,
+        height: openingHeight,
+        frameThickness: 0.04,
+        frameDepth: wallThickness * 0.8,
+        style: windowStyle || "crossbar-2x2",
+        isVertical,
+      };
+
+      const windowResult = createWindowGeometry(windowConfig);
+
+      // Calculate window center position
+      const windowCenterY = y + openingBottom + openingHeight / 2;
+
+      // Translate and add frame geometry
+      if (windowResult.frame) {
+        windowResult.frame.translate(x, windowCenterY, z);
+        windowFrameGeometries.push(windowResult.frame);
+      }
+
+      // Translate and add glass panes
+      for (const pane of windowResult.panes) {
+        pane.translate(x, windowCenterY, z);
+        windowGlassGeometries.push(pane);
+      }
+
+      // Translate and add mullions
+      if (windowResult.mullions) {
+        windowResult.mullions.translate(x, windowCenterY, z);
+        windowFrameGeometries.push(windowResult.mullions);
+      }
+
+      // Translate and add sill
+      if (windowResult.sill) {
+        windowResult.sill.translate(x, y + openingBottom, z);
+        windowFrameGeometries.push(windowResult.sill);
+      }
+
+      // Translate and add shutters
+      if (shutterGeometries) {
+        for (const shutter of windowResult.shutters) {
+          shutter.translate(x, windowCenterY, z);
+          shutterGeometries.push(shutter);
+        }
+      }
+    }
+
+    // === Generate door frame geometry for door/arch openings ===
+    if (
+      (opening === "door" || opening === "arch") &&
+      doorFrameGeometries &&
+      isExternal
+    ) {
+      const isArched = opening === "arch";
+      const doorConfig: DoorFrameConfig = isArched
+        ? getArchDoorConfig(isVertical)
+        : {
+            width: openingWidth,
+            height: openingHeight,
+            frameWidth: 0.08,
+            frameDepth: wallThickness * 0.6,
+            style: doorStyle || "simple",
+            isVertical,
+            isArched: false,
+            includeThreshold: true,
+          };
+
+      const doorResult = createDoorFrameGeometry(doorConfig);
+
+      // Door frame is positioned at floor level of the opening
+      const doorY = y;
+
+      // Translate and add frame geometry
+      if (doorResult.frame) {
+        doorResult.frame.translate(x, doorY, z);
+        doorFrameGeometries.push(doorResult.frame);
+      }
+
+      // Translate and add threshold
+      if (doorResult.threshold) {
+        doorResult.threshold.translate(x, doorY, z);
+        doorFrameGeometries.push(doorResult.threshold);
+      }
+
+      // Translate and add lintel
+      if (doorResult.lintel) {
+        doorResult.lintel.translate(x, doorY, z);
+        doorFrameGeometries.push(doorResult.lintel);
+      }
+
+      // Translate and add architrave
+      if (doorResult.architrave) {
+        doorResult.architrave.translate(x, doorY, z);
+        doorFrameGeometries.push(doorResult.architrave);
+      }
+
+      // Translate and add arch trim
+      if (doorResult.archTrim) {
+        doorResult.archTrim.translate(x, doorY, z);
+        doorFrameGeometries.push(doorResult.archTrim);
+      }
     }
 
     // Update stats
@@ -3266,7 +3756,9 @@ export class BuildingGenerator {
         Math.abs(dirX) > 0.5 ? stepWidth : stepDepth,
       );
       geometry.translate(stepX, baseY + fullStepHeight / 2, stepZ);
-      applyVertexColors(geometry, palette.stairs);
+      applyGeometryAttributes(geometry, palette.stairs, "generic", {
+        uvScale: UV_SCALE_PRESETS.woodPlank,
+      });
       geometries.push(geometry);
       stats.stairSteps += 1;
     }
@@ -3297,7 +3789,10 @@ export class BuildingGenerator {
       stringerCenterY,
       stringerCenterZ + leftOffsetZ,
     );
-    applyVertexColors(leftStringerGeo, palette.trim); // Stringers use trim color
+    // Stringers use trim color with wood UV scale
+    applyGeometryAttributes(leftStringerGeo, palette.trim, "generic", {
+      uvScale: UV_SCALE_PRESETS.woodPlank,
+    });
     geometries.push(leftStringerGeo);
 
     // Right stringer
@@ -3311,7 +3806,10 @@ export class BuildingGenerator {
       stringerCenterY,
       stringerCenterZ + rightOffsetZ,
     );
-    applyVertexColors(rightStringerGeo, palette.trim); // Stringers use trim color
+    // Stringers use trim color with wood UV scale
+    applyGeometryAttributes(rightStringerGeo, palette.trim, "generic", {
+      uvScale: UV_SCALE_PRESETS.woodPlank,
+    });
     geometries.push(rightStringerGeo);
   }
 
@@ -3406,7 +3904,9 @@ export class BuildingGenerator {
     rampGeo.translate(rampCenterX, rampCenterY, rampCenterZ);
 
     // Use floor color (ramp is thin and hidden under visual steps)
-    applyVertexColors(rampGeo, palette.floor);
+    applyGeometryAttributes(rampGeo, palette.floor, "generic", {
+      uvScale: UV_SCALE_PRESETS.floorTile,
+    });
 
     geometries.push(rampGeo);
   }
@@ -3477,7 +3977,7 @@ export class BuildingGenerator {
           y + ROOF_THICKNESS / 2,
           z + roofOffsetZ,
         );
-        applyVertexColors(geometry, palette.roof);
+        applyRoofAttributes(geometry, palette.roof, UV_SCALE_PRESETS.shingle);
         geometries.push(geometry);
         stats.roofPieces += 1;
       }
@@ -4088,6 +4588,24 @@ export class BuildingGenerator {
     return this.findNpcPlacement(layout, rng);
   }
 
+  /**
+   * Reserve a forge placement for smithy buildings.
+   * The blacksmith NPC will stand near the forge.
+   */
+  private reserveForgePlacement(
+    layout: BuildingLayout,
+    rng: RNG,
+  ): { col: number; row: number } | null {
+    const groundFloor = layout.floorPlans[0];
+    if (!groundFloor || groundFloor.rooms.length === 0) return null;
+
+    const room = groundFloor.rooms[0];
+    const cell = rng.pick(room.cells);
+    if (!cell) return null;
+
+    return { col: cell.col, row: cell.row };
+  }
+
   private addBuildingProps(
     geometries: THREE.BufferGeometry[],
     layout: BuildingLayout,
@@ -4127,22 +4645,16 @@ export class BuildingGenerator {
       );
     }
 
-    if (typeKey === "smithy") {
-      const groundFloor = layout.floorPlans[0];
-      if (groundFloor && groundFloor.rooms.length > 0) {
-        const room = groundFloor.rooms[0];
-        const cell = rng.pick(room.cells);
-        if (cell) {
-          const { x, z } = getCellCenter(
-            cell.col,
-            cell.row,
-            CELL_SIZE,
-            layout.width,
-            layout.depth,
-          );
-          this.addForgeProps(geometries, x, FOUNDATION_HEIGHT, z, stats);
-        }
-      }
+    if (typeKey === "smithy" && propPlacements.forge) {
+      const { col, row } = propPlacements.forge;
+      const { x, z } = getCellCenter(
+        col,
+        row,
+        CELL_SIZE,
+        layout.width,
+        layout.depth,
+      );
+      this.addForgeProps(geometries, x, FOUNDATION_HEIGHT, z, stats);
     }
   }
 
@@ -4251,7 +4763,10 @@ export class BuildingGenerator {
       isNS ? COUNTER_DEPTH : counterLength,
     );
     geometry.translate(x + offsetX, y + COUNTER_HEIGHT / 2, z + offsetZ);
-    applyVertexColors(geometry, color);
+    // Counter uses wood plank UVs
+    applyGeometryAttributes(geometry, color, "generic", {
+      uvScale: UV_SCALE_PRESETS.woodPlank,
+    });
     geometries.push(geometry);
     stats.props += 1;
   }
@@ -4271,7 +4786,12 @@ export class BuildingGenerator {
 
     const geometry = new THREE.BoxGeometry(NPC_WIDTH, NPC_HEIGHT, NPC_WIDTH);
     geometry.translate(x + offsetX, y + NPC_HEIGHT / 2, z + offsetZ);
-    applyVertexColors(geometry, color, 0, 0, 1);
+    // NPC placeholder cubes use flat color (no texture variation)
+    applyGeometryAttributes(geometry, color, "generic", {
+      uvScale: 1.0,
+      noiseAmp: 0,
+      minShade: 1,
+    });
     geometries.push(geometry);
     stats.props += 1;
   }
@@ -4286,7 +4806,10 @@ export class BuildingGenerator {
     // Forge
     const forgeGeo = new THREE.BoxGeometry(FORGE_SIZE, FORGE_SIZE, FORGE_SIZE);
     forgeGeo.translate(x - CELL_SIZE / 4, y + FORGE_SIZE / 2, z);
-    applyVertexColors(forgeGeo, palette.forge);
+    // Forge uses brick UVs
+    applyGeometryAttributes(forgeGeo, palette.forge, "generic", {
+      uvScale: UV_SCALE_PRESETS.brick,
+    });
     geometries.push(forgeGeo);
     stats.props += 1;
 
@@ -4297,7 +4820,10 @@ export class BuildingGenerator {
       ANVIL_SIZE * 1.5,
     );
     anvilGeo.translate(x + CELL_SIZE / 4, y + (ANVIL_SIZE * 0.6) / 2, z);
-    applyVertexColors(anvilGeo, palette.anvil);
+    // Anvil uses generic UVs for metal texture
+    applyGeometryAttributes(anvilGeo, palette.anvil, "generic", {
+      uvScale: 0.5,
+    });
     geometries.push(anvilGeo);
     stats.props += 1;
   }

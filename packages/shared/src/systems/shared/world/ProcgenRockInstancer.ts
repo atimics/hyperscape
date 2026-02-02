@@ -9,13 +9,13 @@
  * - LOD0 (0-50m): Full detail rock mesh
  * - LOD1 (50-100m): Simplified rock mesh
  * - LOD2 (100-150m): Cross-billboard cards
- * - Impostor (150-250m): Octahedral billboard
+ * - Impostor (150-250m): Per-preset octahedral billboard with TSL material
  * - Culled (250m+): Not rendered
  *
  * Features:
  * - Cross-fade LOD transitions with screen-space dithering
  * - Per-preset instanced meshes for batched rendering
- * - Automatic impostor generation via ImpostorManager
+ * - Per-preset impostor materials using TSLImpostorMaterial (same as trees)
  */
 
 import THREE from "../../../extras/three/three";
@@ -27,7 +27,11 @@ import {
 } from "../rendering/ImpostorManager";
 import {
   createTSLImpostorMaterial,
+  buildOctahedronMesh,
+  lerpOctahedronGeometry,
+  OctahedronType,
   type TSLImpostorMaterial,
+  type ImpostorBakeResult,
 } from "@hyperscape/impostor";
 import { getRockVariant, ensureRockVariantsLoaded } from "./ProcgenRockCache";
 
@@ -35,19 +39,26 @@ import { getRockVariant, ensureRockVariantsLoaded } from "./ProcgenRockCache";
 // CONFIGURATION
 // ============================================================================
 
+/**
+ * Disable impostors and LOD2 cards for rocks.
+ * Rocks use only LOD0 + LOD1 with dissolve fade to cull.
+ */
+const DISABLE_IMPOSTORS = true;
+const DISABLE_LOD2_CARDS = true;
+
 const MAX_INSTANCES_PER_PRESET = 500;
 const LOD_FADE_MS = 250;
 const LOD_UPDATE_MS = 100;
 const LOD_UPDATES_PER_FRAME = 30;
-const IMPOSTOR_SIZE = 512;
 const HYSTERESIS_SQ = 16; // 4m buffer
 
-const LOD_DIST = { lod1: 50, lod2: 100, impostor: 150, cull: 250 };
+// LOD distances - with cards/impostors disabled, rocks fade from LOD1 directly to cull
+const LOD_DIST = { lod1: 50, lod2: 100, impostor: 150, cull: 150 };
 const LOD_DIST_SQ = {
   lod1: LOD_DIST.lod1 ** 2,
   lod2: LOD_DIST.lod2 ** 2,
   impostor: LOD_DIST.impostor ** 2,
-  cull: LOD_DIST.cull ** 2,
+  cull: LOD_DIST.cull ** 2, // Cull at 150m (no impostor stage)
 };
 
 // ============================================================================
@@ -62,6 +73,7 @@ interface RockInstance {
   scale: number;
   currentLOD: number; // 0-4: lod0, lod1, lod2, impostor, culled
   lodIndices: [number, number, number, number]; // [lod0, lod1, lod2, impostor] mesh indices
+  hasImpostor: boolean; // Whether this preset has a working impostor
   transition: { from: number; to: number; start: number } | null;
   radius: number;
 }
@@ -78,12 +90,13 @@ interface MeshData {
   dirty: boolean;
 }
 
+/** Impostor mesh data - uses TSLImpostorMaterial for proper lighting */
 interface ImpostorMeshData {
   geometry: THREE.BufferGeometry;
   material: TSLImpostorMaterial;
   mesh: THREE.InstancedMesh;
   idxToId: Map<number, string>;
-  freeIndices: number[]; // Recycled indices available for reuse
+  freeIndices: number[];
   nextIdx: number;
   count: number;
   dirty: boolean;
@@ -104,6 +117,14 @@ type LODKey = "lod0" | "lod1" | "lod2";
 
 /** LOD key lookup array to avoid repeated array allocations */
 const LOD_KEYS: readonly LODKey[] = ["lod0", "lod1", "lod2"] as const;
+
+/** Impostor configuration - matches tree instancer for consistency */
+const IMPOSTOR_CONFIG = {
+  ATLAS_SIZE: 512,
+  GRID_SIZE_X: 12,
+  GRID_SIZE_Y: 6,
+  MAX_INSTANCES: 500,
+} as const;
 
 // ============================================================================
 // ROCK INSTANCER CLASS
@@ -128,18 +149,43 @@ export class ProcgenRockInstancer {
   private tempPosition = new THREE.Vector3();
   private tempQuat = new THREE.Quaternion();
   private tempScale = new THREE.Vector3();
+  private zeroMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
+  private lookMatrix = new THREE.Matrix4();
+
+  // View sampling for impostors (octahedral mapping)
+  private raycaster = new THREE.Raycaster();
+  private raycastMesh: THREE.Mesh | null = null;
+  private _faceIndices = new THREE.Vector3(0, 0, 0);
+  private _faceWeights = new THREE.Vector3(0.33, 0.33, 0.34);
 
   // Lighting sync for impostors
   private _lastLightUpdate = 0;
-  private _lightDir = new THREE.Vector3(0.5, 0.8, 0.3);
-  private _lightColor = new THREE.Vector3(1, 1, 1);
-  private _ambientColor = new THREE.Vector3(0.7, 0.8, 1.0);
+  private _ambientColor = new THREE.Vector3(0.6, 0.65, 0.7);
+  private _lightingLoggedOnce = false;
 
   private constructor(world: World) {
     this.world = world;
     this.scene = world.stage?.scene as THREE.Scene;
     this.camera = world.camera;
     this.impostorManager = ImpostorManager.getInstance(world);
+
+    // Only initialize impostor-related systems if impostors are enabled
+    if (!DISABLE_IMPOSTORS) {
+      this.impostorManager.initBaker();
+
+      // Initialize octahedron mesh for view sampling
+      const octMeshData = buildOctahedronMesh(
+        OctahedronType.HEMI,
+        IMPOSTOR_CONFIG.GRID_SIZE_X,
+        IMPOSTOR_CONFIG.GRID_SIZE_Y,
+        [0, 0, 0],
+        true,
+      );
+      lerpOctahedronGeometry(octMeshData, 1.0);
+      octMeshData.filledMesh.geometry.computeBoundingSphere();
+      octMeshData.filledMesh.geometry.computeBoundingBox();
+      this.raycastMesh = octMeshData.filledMesh;
+    }
   }
 
   /**
@@ -185,16 +231,20 @@ export class ProcgenRockInstancer {
       rotation,
       scale,
       currentLOD: 4, // Start culled
-      lodIndices: [-1, -1, -1, -1],
+      lodIndices: [-1, -1, -1, -1], // LOD0, LOD1, LOD2, Impostor
+      hasImpostor: presetData.impostor !== null,
       transition: null,
       radius,
     };
 
     this.instances.set(id, instance);
 
+    // NOTE: Grass exclusion is handled by ProceduralGrass.collectAndRefreshExclusionTexture()
+    // which reads all rock positions at once. No per-rock registration needed.
+
     // Determine initial LOD based on distance
     const distSq = this.camera.position.distanceToSquared(position);
-    const targetLOD = this.getLODForDistance(distSq);
+    const targetLOD = this.getLODForDistance(distSq, instance.hasImpostor);
 
     // Immediately show at target LOD (no transition for initial add)
     await this.setInstanceLOD(instance, targetLOD, false);
@@ -211,11 +261,14 @@ export class ProcgenRockInstancer {
     const instance = this.instances.get(id);
     if (!instance) return false;
 
-    // Remove from all LOD meshes
+    // Remove from all LOD meshes (including impostor)
     this.removeFromLODMesh(instance, 0);
     this.removeFromLODMesh(instance, 1);
     this.removeFromLODMesh(instance, 2);
     this.removeFromImpostorMesh(instance);
+
+    // NOTE: Grass exclusion is handled via texture regeneration when needed.
+    // Call ProceduralGrass.collectAndRefreshExclusionTexture() after major changes.
 
     this.instances.delete(id);
 
@@ -278,13 +331,96 @@ export class ProcgenRockInstancer {
     // Update dirty meshes
     this.commitDirtyMeshes();
 
-    // Sync impostor lighting with scene sun light
-    this.syncImpostorLighting();
+    // Skip impostor updates when disabled
+    if (!DISABLE_IMPOSTORS) {
+      // Update view sampling for impostors (octahedral mapping)
+      this.updateViewSampling();
+
+      // Update impostor billboarding
+      this.updateImpostorBillboarding();
+
+      // Sync impostor lighting with scene sun light
+      this.syncImpostorLighting();
+    }
+  }
+
+  /**
+   * Update view sampling for octahedral impostor mapping.
+   * Raycasts against an octahedron to determine which atlas cells to blend.
+   */
+  private updateViewSampling(): void {
+    if (!this.raycastMesh) return;
+
+    const viewDir = this.tempPosition
+      .set(0, 0, 0)
+      .sub(this.camera.position)
+      .normalize();
+    this.raycaster.ray.origin.copy(viewDir).multiplyScalar(2);
+    this.raycaster.ray.direction.copy(viewDir).negate();
+
+    const hits = this.raycaster.intersectObject(this.raycastMesh, false);
+    if (hits.length > 0 && hits[0].face && hits[0].barycoord) {
+      const { face, barycoord } = hits[0];
+      this._faceIndices.set(face.a, face.b, face.c);
+      this._faceWeights.copy(barycoord);
+
+      // Update all impostor materials with new view direction
+      for (const preset of this.presetMeshes.values()) {
+        if (preset.impostor) {
+          preset.impostor.material.updateView(
+            this._faceIndices,
+            this._faceWeights,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Update impostor billboarding to face camera.
+   */
+  private updateImpostorBillboarding(): void {
+    // Calculate billboard quaternion once
+    this.lookMatrix.lookAt(
+      this.camera.position,
+      this.tempPosition.set(0, 0, 0),
+      THREE.Object3D.DEFAULT_UP,
+    );
+    this.tempQuat.setFromRotationMatrix(this.lookMatrix);
+
+    for (const preset of this.presetMeshes.values()) {
+      if (!preset.impostor) continue;
+      const impostorData = preset.impostor;
+      let dirty = false;
+
+      for (const [idx, instanceId] of impostorData.idxToId) {
+        const instance = this.instances.get(instanceId);
+        if (!instance || instance.lodIndices[3] !== idx) continue;
+
+        impostorData.mesh.getMatrixAt(idx, this.tempMatrix);
+        this.tempMatrix.decompose(
+          this.tempPosition,
+          new THREE.Quaternion(),
+          this.tempScale,
+        );
+        this.tempMatrix.compose(
+          this.tempPosition,
+          this.tempQuat,
+          this.tempScale,
+        );
+        impostorData.mesh.setMatrixAt(idx, this.tempMatrix);
+        dirty = true;
+      }
+
+      if (dirty) {
+        impostorData.mesh.instanceMatrix.needsUpdate = true;
+      }
+    }
   }
 
   /**
    * Sync impostor lighting with scene's sun light.
-   * Throttled to once per frame (~16ms) to avoid redundant updates.
+   * Same approach as ProcgenTreeInstancer for consistency.
    */
   private syncImpostorLighting(): void {
     const now = performance.now();
@@ -292,45 +428,61 @@ export class ProcgenRockInstancer {
     if (now - this._lastLightUpdate < 16) return;
     this._lastLightUpdate = now;
 
-    // Get environment system for sun light
+    // Get environment system for sun light and hemisphere light
     const env = this.world.getSystem("environment") as {
       sunLight?: THREE.DirectionalLight;
       lightDirection?: THREE.Vector3;
+      hemisphereLight?: THREE.HemisphereLight;
     } | null;
 
     if (!env?.sunLight) return;
 
     const sun = env.sunLight;
     // Light direction is negated (light goes FROM direction TO target)
+    const lightDir = new THREE.Vector3(0.5, 0.8, 0.3);
     if (env.lightDirection) {
-      this._lightDir.copy(env.lightDirection).negate();
-    } else {
-      this._lightDir.set(0.5, 0.8, 0.3);
+      lightDir.copy(env.lightDirection).negate();
     }
-    this._lightColor.set(sun.color.r, sun.color.g, sun.color.b);
 
-    // Update all impostor materials
-    for (const presetData of this.presetMeshes.values()) {
-      if (presetData.impostor) {
-        const material = presetData.impostor.material as TSLImpostorMaterial;
-        if (material.updateLighting) {
-          material.updateLighting({
-            ambientColor: this._ambientColor,
-            ambientIntensity: 0.35,
-            directionalLights: [
-              {
-                direction: this._lightDir,
-                color: this._lightColor,
-                intensity: sun.intensity,
-              },
-            ],
-            specular: {
-              f0: 0.04, // Rocks are slightly shiny
-              shininess: 32,
-              intensity: 0.25,
+    // Get ambient from hemisphere light
+    if (env.hemisphereLight) {
+      const hemi = env.hemisphereLight;
+      const hemiIntensity = Math.min(hemi.intensity, 1.0) * 0.5;
+      this._ambientColor.set(
+        hemi.color.r * hemiIntensity,
+        hemi.color.g * hemiIntensity,
+        hemi.color.b * hemiIntensity,
+      );
+    }
+
+    // Diagnostic: log once when lighting is connected
+    if (!this._lightingLoggedOnce) {
+      console.log(
+        `[ProcgenRockInstancer] Lighting connected: ` +
+          `dir=(${lightDir.x.toFixed(2)}, ${lightDir.y.toFixed(2)}, ${lightDir.z.toFixed(2)}), ` +
+          `ambient=(${this._ambientColor.x.toFixed(2)}, ${this._ambientColor.y.toFixed(2)}, ${this._ambientColor.z.toFixed(2)})`,
+      );
+      this._lightingLoggedOnce = true;
+    }
+
+    // Update all per-preset impostor materials
+    for (const preset of this.presetMeshes.values()) {
+      if (preset.impostor?.material.updateLighting) {
+        preset.impostor.material.updateLighting({
+          ambientColor: new THREE.Vector3(
+            this._ambientColor.x,
+            this._ambientColor.y,
+            this._ambientColor.z,
+          ),
+          ambientIntensity: 0.4,
+          directionalLights: [
+            {
+              direction: lightDir,
+              color: new THREE.Vector3(sun.color.r, sun.color.g, sun.color.b),
+              intensity: Math.min(sun.intensity, 1.5),
             },
-          });
-        }
+          ],
+        });
       }
     }
   }
@@ -376,8 +528,8 @@ export class ProcgenRockInstancer {
       );
     }
 
-    // Create LOD2 instanced mesh (from the card group)
-    if (variant.lod2Group) {
+    // Create LOD2 instanced mesh (from the card group) - skip if disabled
+    if (!DISABLE_LOD2_CARDS && variant.lod2Group) {
       const cardMesh = variant.lod2Group.children[0] as THREE.Mesh;
       if (cardMesh) {
         presetData.lod2 = this.createLODMesh(
@@ -388,10 +540,98 @@ export class ProcgenRockInstancer {
       }
     }
 
-    // Bake impostor
-    await this.bakeImpostor(presetName, variant.mesh, presetData);
+    // Create per-preset impostor - skip if disabled
+    if (!DISABLE_IMPOSTORS) {
+      try {
+        await this.createImpostorMesh(presetName, variant.mesh, presetData);
+      } catch (err) {
+        console.warn(
+          `[ProcgenRockInstancer] Failed to create impostor for ${presetName}:`,
+          err,
+        );
+      }
+    }
 
     this.presetMeshes.set(presetName, presetData);
+  }
+
+  /**
+   * Create per-preset impostor mesh using TSLImpostorMaterial.
+   * This uses the same proven approach as ProcgenTreeInstancer.
+   *
+   * NOTE: When DISABLE_IMPOSTORS is true, this function returns immediately.
+   */
+  private async createImpostorMesh(
+    presetName: string,
+    sourceMesh: THREE.Mesh,
+    presetData: PresetMeshes,
+  ): Promise<void> {
+    if (DISABLE_IMPOSTORS) return; // Impostors disabled - using dissolve fade instead
+
+    const { ATLAS_SIZE, GRID_SIZE_X, GRID_SIZE_Y, MAX_INSTANCES } =
+      IMPOSTOR_CONFIG;
+
+    // Bake impostor using ImpostorManager (same as trees use)
+    const result = await this.impostorManager.getOrCreate(
+      `rock_${presetName}_v1`,
+      sourceMesh,
+      {
+        atlasSize: ATLAS_SIZE,
+        hemisphere: true,
+        priority: BakePriority.NORMAL,
+        gridSizeX: GRID_SIZE_X,
+        gridSizeY: GRID_SIZE_Y,
+        bakeMode: ImpostorBakeMode.STANDARD, // albedo + normals for lighting
+      },
+    );
+
+    // Raycast mesh is now initialized in constructor
+
+    // Calculate billboard dimensions from bounding box
+    const box = new THREE.Box3().setFromObject(sourceMesh);
+    const size = box.getSize(new THREE.Vector3());
+    const w = Math.max(size.x, size.z);
+    const h = size.y;
+
+    // Create TSL impostor material (same as trees use - proven to work)
+    const mat = createTSLImpostorMaterial({
+      atlasTexture: result.atlasTexture,
+      normalAtlasTexture: result.normalAtlasTexture, // Enable dynamic lighting
+      depthAtlasTexture: result.depthAtlasTexture, // Enable depth-based blending (if available)
+      gridSizeX: result.gridSizeX,
+      gridSizeY: result.gridSizeY,
+      transparent: true,
+      depthWrite: true,
+      enableAAA: true,
+    });
+    this.world.setupMaterial?.(mat);
+
+    const geo = new THREE.PlaneGeometry(1, 1);
+    const mesh = new THREE.InstancedMesh(geo, mat, MAX_INSTANCES);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.count = 0;
+    mesh.frustumCulled = false;
+    mesh.layers.set(1);
+    mesh.name = `Rock_${presetName}_impostor`;
+    this.scene.add(mesh);
+
+    presetData.impostor = {
+      geometry: geo,
+      material: mat,
+      mesh,
+      idxToId: new Map(),
+      freeIndices: [],
+      nextIdx: 0,
+      count: 0,
+      dirty: false,
+      width: w,
+      height: h,
+    };
+
+    console.log(
+      `[ProcgenRockInstancer] Created impostor for ${presetName}: ${w.toFixed(1)}x${h.toFixed(1)}m, ` +
+        `hasNormals=${!!result.normalAtlasTexture}`,
+    );
   }
 
   /**
@@ -436,88 +676,30 @@ export class ProcgenRockInstancer {
   }
 
   /**
-   * Bake an impostor for a preset.
+   * Get target LOD for a distance squared value.
+   *
+   * With DISABLE_LOD2_CARDS and DISABLE_IMPOSTORS both true:
+   * - LOD0 (0-50m): Full detail
+   * - LOD1 (50-150m): Simplified with dissolve fade
+   * - Culled (150m+): Not rendered
    */
-  private async bakeImpostor(
-    presetName: string,
-    mesh: THREE.Mesh,
-    presetData: PresetMeshes,
-  ): Promise<void> {
-    const impostorKey = `rock_${presetName}_v2`;
-
-    // Get or bake impostor with normals for dynamic lighting
-    const result = await this.impostorManager.getOrCreate(impostorKey, mesh, {
-      atlasSize: IMPOSTOR_SIZE,
-      gridSizeX: 16,
-      gridSizeY: 8,
-      hemisphere: true,
-      category: "rock",
-      priority: BakePriority.NORMAL,
-      bakeMode: ImpostorBakeMode.STANDARD, // Bake with normals for dynamic lighting
-    });
-
-    if (!result || !result.atlasTexture) {
-      console.warn(
-        `[ProcgenRockInstancer] Failed to bake impostor for ${presetName}`,
-      );
-      return;
+  private getLODForDistance(distSq: number, _hasImpostor: boolean): number {
+    // Skip LOD2 cards and impostors - only use LOD0 and LOD1
+    if (DISABLE_LOD2_CARDS && DISABLE_IMPOSTORS) {
+      if (distSq >= LOD_DIST_SQ.cull) return 4; // Cull at 150m
+      if (distSq >= LOD_DIST_SQ.lod1) return 1; // LOD1 from 50-150m
+      return 0; // LOD0 from 0-50m
     }
 
-    // Create impostor instanced mesh with normal atlas for dynamic lighting
-    const material = createTSLImpostorMaterial({
-      atlasTexture: result.atlasTexture,
-      normalAtlasTexture: result.normalAtlasTexture, // Enable dynamic lighting
-      gridSizeX: result.gridSizeX,
-      gridSizeY: result.gridSizeY,
-      transparent: true,
-      depthWrite: true,
-    });
+    // Legacy paths (when cards/impostors enabled)
+    if (DISABLE_IMPOSTORS) {
+      if (distSq >= LOD_DIST_SQ.impostor) return 4;
+      if (distSq >= LOD_DIST_SQ.lod2) return 2;
+      if (distSq >= LOD_DIST_SQ.lod1) return 1;
+      return 0;
+    }
 
-    const bbox = new THREE.Box3().setFromObject(mesh);
-    const size = new THREE.Vector3();
-    bbox.getSize(size);
-
-    const impostorWidth = Math.max(size.x, size.z);
-    const impostorHeight = size.y;
-
-    // Create billboard geometry
-    const geo = new THREE.PlaneGeometry(impostorWidth, impostorHeight);
-    geo.translate(0, impostorHeight / 2, 0);
-
-    const impostorMesh = new THREE.InstancedMesh(
-      geo,
-      material,
-      MAX_INSTANCES_PER_PRESET,
-    );
-    impostorMesh.name = `Rock_${presetName}_Impostor`;
-    impostorMesh.count = 0;
-    impostorMesh.frustumCulled = false;
-    impostorMesh.castShadow = false;
-    impostorMesh.receiveShadow = false;
-    impostorMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-
-    this.scene.add(impostorMesh);
-
-    presetData.impostor = {
-      geometry: geo,
-      material,
-      mesh: impostorMesh,
-      idxToId: new Map(),
-      freeIndices: [],
-      nextIdx: 0,
-      count: 0,
-      dirty: false,
-      width: impostorWidth,
-      height: impostorHeight,
-    };
-  }
-
-  /**
-   * Get target LOD for a distance squared value.
-   */
-  private getLODForDistance(distSq: number): number {
     if (distSq >= LOD_DIST_SQ.cull) return 4;
-    if (distSq >= LOD_DIST_SQ.impostor) return 3;
     if (distSq >= LOD_DIST_SQ.lod2) return 2;
     if (distSq >= LOD_DIST_SQ.lod1) return 1;
     return 0;
@@ -530,7 +712,7 @@ export class ProcgenRockInstancer {
     instance: RockInstance,
     distSq: number,
   ): number {
-    const targetLOD = this.getLODForDistance(distSq);
+    const targetLOD = this.getLODForDistance(distSq, instance.hasImpostor);
     const currentLOD = instance.currentLOD;
 
     // Moving closer: switch immediately
@@ -538,13 +720,23 @@ export class ProcgenRockInstancer {
 
     // Moving farther: add hysteresis
     if (targetLOD > currentLOD) {
-      const thresholds = [
-        0,
-        LOD_DIST_SQ.lod1,
-        LOD_DIST_SQ.lod2,
-        LOD_DIST_SQ.impostor,
-        LOD_DIST_SQ.cull,
-      ];
+      // Simplified thresholds when LOD2/impostor disabled
+      const thresholds =
+        DISABLE_LOD2_CARDS && DISABLE_IMPOSTORS
+          ? [
+              0,
+              LOD_DIST_SQ.lod1,
+              LOD_DIST_SQ.cull,
+              LOD_DIST_SQ.cull,
+              LOD_DIST_SQ.cull,
+            ]
+          : [
+              0,
+              LOD_DIST_SQ.lod1,
+              LOD_DIST_SQ.lod2,
+              LOD_DIST_SQ.impostor,
+              LOD_DIST_SQ.cull,
+            ];
       const threshold = thresholds[currentLOD + 1] ?? LOD_DIST_SQ.cull;
       if (distSq > threshold + HYSTERESIS_SQ) {
         return targetLOD;
@@ -586,14 +778,28 @@ export class ProcgenRockInstancer {
       const progress = Math.min(1, elapsed / LOD_FADE_MS);
 
       if (progress >= 1) {
-        // Transition complete
-        this.removeFromLODMesh(instance, instance.transition.from);
+        // Transition complete - remove from old LOD
+        const fromLOD = instance.transition.from;
+        if (fromLOD < 3) {
+          this.removeFromLODMesh(instance, fromLOD);
+        } else if (fromLOD === 3) {
+          // Remove from per-preset impostor mesh
+          this.removeFromImpostorMesh(instance);
+        }
         this.setInstanceFade(instance, instance.currentLOD, 1);
         instance.transition = null;
       } else {
-        // Update fades
-        this.setInstanceFade(instance, instance.transition.from, 1 - progress);
-        this.setInstanceFade(instance, instance.transition.to, progress);
+        // Update fades (only for LOD0-2, impostor doesn't support fade)
+        if (instance.transition.from < 3) {
+          this.setInstanceFade(
+            instance,
+            instance.transition.from,
+            1 - progress,
+          );
+        }
+        if (instance.transition.to < 3) {
+          this.setInstanceFade(instance, instance.transition.to, progress);
+        }
       }
     }
   }
@@ -645,22 +851,68 @@ export class ProcgenRockInstancer {
         meshData.dirty = true;
       }
     } else if (lod === 3 && presetData.impostor) {
-      // Impostor
-      const idx = this.addToImpostorMesh(presetData.impostor, instance.id);
-      instance.lodIndices[3] = idx;
-
-      this.tempPosition.copy(instance.position);
-      this.tempQuat.setFromAxisAngle(
-        new THREE.Vector3(0, 1, 0),
-        instance.rotation,
-      );
-      this.tempScale.set(instance.scale, instance.scale, instance.scale);
-      this.tempMatrix.compose(this.tempPosition, this.tempQuat, this.tempScale);
-
-      presetData.impostor.mesh.setMatrixAt(idx, this.tempMatrix);
-      presetData.impostor.mesh.instanceMatrix.needsUpdate = true;
-      presetData.impostor.dirty = true;
+      // Impostor - add to per-preset impostor mesh
+      this.addToImpostorMesh(instance, presetData.impostor);
     }
+  }
+
+  /**
+   * Add instance to per-preset impostor mesh.
+   */
+  private addToImpostorMesh(
+    instance: RockInstance,
+    impostorData: ImpostorMeshData,
+  ): void {
+    // Reuse freed index if available
+    const idx =
+      impostorData.freeIndices.length > 0
+        ? impostorData.freeIndices.pop()!
+        : impostorData.nextIdx++;
+
+    if (idx >= IMPOSTOR_CONFIG.MAX_INSTANCES) {
+      console.warn(`[ProcgenRockInstancer] Max impostor instances reached`);
+      return;
+    }
+
+    instance.lodIndices[3] = idx;
+    impostorData.idxToId.set(idx, instance.id);
+
+    // Set transform - billboard position above ground
+    this.tempPosition.copy(instance.position);
+    this.tempPosition.y += impostorData.height * instance.scale * 0.5;
+    this.tempQuat.identity(); // Billboard rotation updated in updateImpostorBillboarding
+    this.tempScale.set(
+      impostorData.width * instance.scale,
+      impostorData.height * instance.scale,
+      1,
+    );
+    this.tempMatrix.compose(this.tempPosition, this.tempQuat, this.tempScale);
+    impostorData.mesh.setMatrixAt(idx, this.tempMatrix);
+
+    impostorData.count = Math.max(impostorData.count, idx + 1);
+    impostorData.mesh.count = impostorData.count;
+    impostorData.mesh.instanceMatrix.needsUpdate = true;
+    impostorData.dirty = true;
+  }
+
+  /**
+   * Remove instance from per-preset impostor mesh.
+   */
+  private removeFromImpostorMesh(instance: RockInstance): void {
+    const idx = instance.lodIndices[3];
+    if (idx < 0) return;
+
+    const presetData = this.presetMeshes.get(instance.presetName);
+    if (!presetData?.impostor) return;
+
+    const impostorData = presetData.impostor;
+    impostorData.mesh.setMatrixAt(idx, this.zeroMatrix);
+    impostorData.mesh.instanceMatrix.needsUpdate = true;
+    impostorData.idxToId.delete(idx);
+    impostorData.freeIndices.push(idx);
+    impostorData.dirty = true;
+
+    instance.lodIndices[3] = -1;
   }
 
   /**
@@ -704,63 +956,27 @@ export class ProcgenRockInstancer {
   }
 
   /**
-   * Add instance to impostor mesh, reusing freed indices when available.
-   */
-  private addToImpostorMesh(meshData: ImpostorMeshData, id: string): number {
-    const idx =
-      meshData.freeIndices.length > 0
-        ? meshData.freeIndices.pop()!
-        : meshData.nextIdx++;
-
-    meshData.idxToId.set(idx, id);
-    meshData.count = Math.max(meshData.count, idx + 1);
-    meshData.mesh.count = meshData.count;
-    return idx;
-  }
-
-  /**
    * Remove instance from a LOD mesh, recycling its index.
    */
   private removeFromLODMesh(instance: RockInstance, lod: number): void {
+    if (lod >= 3) return; // Impostor handled by atlased manager
     const idx = instance.lodIndices[lod];
     if (idx < 0) return;
 
     const presetData = this.presetMeshes.get(instance.presetName);
     if (!presetData) return;
 
-    if (lod < 3) {
-      const meshData = presetData[LOD_KEYS[lod]];
-      if (meshData) {
-        this.tempMatrix.makeScale(0, 0, 0);
-        meshData.mesh.setMatrixAt(idx, this.tempMatrix);
-        meshData.mesh.instanceMatrix.needsUpdate = true;
-        meshData.idxToId.delete(idx);
-        meshData.freeIndices.push(idx); // Recycle the index
-        meshData.dirty = true;
-      }
+    const meshData = presetData[LOD_KEYS[lod]];
+    if (meshData) {
+      this.tempMatrix.makeScale(0, 0, 0);
+      meshData.mesh.setMatrixAt(idx, this.tempMatrix);
+      meshData.mesh.instanceMatrix.needsUpdate = true;
+      meshData.idxToId.delete(idx);
+      meshData.freeIndices.push(idx); // Recycle the index
+      meshData.dirty = true;
     }
 
     instance.lodIndices[lod] = -1;
-  }
-
-  /**
-   * Remove instance from impostor mesh, recycling its index.
-   */
-  private removeFromImpostorMesh(instance: RockInstance): void {
-    const idx = instance.lodIndices[3];
-    if (idx < 0) return;
-
-    const presetData = this.presetMeshes.get(instance.presetName);
-    if (!presetData?.impostor) return;
-
-    this.tempMatrix.makeScale(0, 0, 0);
-    presetData.impostor.mesh.setMatrixAt(idx, this.tempMatrix);
-    presetData.impostor.mesh.instanceMatrix.needsUpdate = true;
-    presetData.impostor.idxToId.delete(idx);
-    presetData.impostor.freeIndices.push(idx); // Recycle the index
-    presetData.impostor.dirty = true;
-
-    instance.lodIndices[3] = -1;
   }
 
   /**
@@ -795,45 +1011,6 @@ export class ProcgenRockInstancer {
   }
 
   /**
-   * Pre-warm the impostor cache from IndexedDB for known presets.
-   * Call this on startup to avoid rebaking cached impostors.
-   */
-  async preWarmImpostorCache(presets: string[]): Promise<number> {
-    let loadedCount = 0;
-    const startTime = performance.now();
-
-    console.log(
-      `[ProcgenRockInstancer] Pre-warming impostor cache for ${presets.length} presets...`,
-    );
-
-    for (const presetName of presets) {
-      // IMPORTANT: Key must match bakeImpostor() which uses `rock_${presetName}_v2`
-      const impostorKey = `rock_${presetName}_v2`;
-      const cached = await this.impostorManager.preload(impostorKey, {
-        atlasSize: IMPOSTOR_SIZE,
-        gridSizeX: 16,
-        gridSizeY: 8,
-        hemisphere: true,
-        bakeMode: ImpostorBakeMode.STANDARD, // Must match bakeImpostor options
-      });
-
-      if (cached) {
-        loadedCount++;
-        console.log(
-          `[ProcgenRockInstancer] ✅ Loaded cached impostor: ${presetName}`,
-        );
-      }
-    }
-
-    const elapsed = Math.round(performance.now() - startTime);
-    console.log(
-      `[ProcgenRockInstancer] Pre-warm complete: ${loadedCount}/${presets.length} impostors loaded from cache in ${elapsed}ms`,
-    );
-
-    return loadedCount;
-  }
-
-  /**
    * Get stats for debugging.
    */
   getStats(): {
@@ -852,6 +1029,22 @@ export class ProcgenRockInstancer {
       lodCounts,
       presetCount: this.presetMeshes.size,
     };
+  }
+
+  /**
+   * Pre-warm the impostor cache for specified rock presets.
+   * This loads/bakes impostors ahead of time for faster initial rendering.
+   */
+  async preWarmImpostorCache(presetNames: string[]): Promise<void> {
+    // Ensure all presets are loaded first
+    const loadPromises = presetNames.map((name) =>
+      this.ensurePresetLoaded(name),
+    );
+    await Promise.all(loadPromises);
+
+    console.log(
+      `[ProcgenRockInstancer] Pre-warmed impostor cache for ${presetNames.length} presets`,
+    );
   }
 
   /**

@@ -11,6 +11,14 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    // Define process.env for pre-built packages that use it (e.g., MovementUtils.ts)
+    define: {
+      "process.env.NODE_ENV": JSON.stringify(mode),
+      "process.env.GAME_MODE": JSON.stringify(env.GAME_MODE || ""),
+    },
+    build: {
+      target: "esnext", // Support top-level await
+    },
     resolve: {
       dedupe: ["react", "react-dom", "react/jsx-runtime", "three"],
       alias: {
@@ -20,6 +28,27 @@ export default defineConfig(({ mode }) => {
         "react/jsx-runtime": path.resolve(
           __dirname,
           "../../node_modules/react/jsx-runtime",
+        ),
+        // Three.js WebGPU module
+        "three/webgpu": path.resolve(
+          __dirname,
+          "../../node_modules/three/build/three.webgpu.js",
+        ),
+        "three/tsl": path.resolve(
+          __dirname,
+          "../../node_modules/three/build/three.tsl.js",
+        ),
+        // Three.js addons (examples/jsm)
+        "three/addons": path.resolve(
+          __dirname,
+          "../../node_modules/three/examples/jsm",
+        ),
+        // Ensure single Three.js instance across all packages
+        three: path.resolve(__dirname, "../../node_modules/three"),
+        // Use client-only build of shared to exclude server-side modules (fs-extra, etc.)
+        "@hyperscape/shared": path.resolve(
+          __dirname,
+          "../shared/build/framework.client.js",
         ),
         // Workspace package aliases
         "@hyperscape/decimation": path.resolve(
@@ -75,7 +104,10 @@ export default defineConfig(({ mode }) => {
         "@react-three/fiber",
         "@react-three/drei",
       ],
+      // Exclude Node.js-only modules that shouldn't be bundled for browser
+      exclude: ["fs-extra", "graceful-fs", "better-sqlite3", "knex"],
       esbuildOptions: {
+        target: "esnext", // Support top-level await in dependencies like yoga-layout
         resolveExtensions: [".mjs", ".js", ".jsx", ".json", ".ts", ".tsx"],
       },
     },

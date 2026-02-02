@@ -46,11 +46,15 @@ export {
 export { SimplexNoise } from "./noise";
 export { createRng, hashSeed } from "./rng";
 
-// Triplanar material
+// TSL Material (WebGPU compatible triplanar texturing)
 export {
-  createTriplanarRockMaterial,
-  updateTriplanarMaterial,
-} from "./triplanarMaterial";
+  createRockMaterial,
+  createVertexColorRockMaterial,
+  updateRockColors,
+  updateRockTexture,
+  type RockMaterialResult,
+  type RockMaterialUniforms,
+} from "./RockMaterialTSL";
 
 // Texture utilities
 export {

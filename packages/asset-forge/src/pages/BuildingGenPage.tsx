@@ -7,6 +7,7 @@
  * - 9 building types (bank, store, inn, smithy, etc.)
  * - Custom preset saving (seed + settings)
  * - Export configuration as JSON
+ * - Navigation mesh visualization and pathfinding testing
  */
 
 import {
@@ -19,11 +20,28 @@ import {
   Download,
   Upload,
   Trash2,
+  Navigation,
+  Eye,
+  EyeOff,
+  Route,
 } from "lucide-react";
-import React, { useState, useCallback, Suspense, useEffect } from "react";
+import React, {
+  useState,
+  useCallback,
+  Suspense,
+  useEffect,
+  useRef,
+} from "react";
 
 import type { BuildingPreset } from "@/types/ProcgenPresets";
 import { notify } from "@/utils/notify";
+import type {
+  BuildingViewerHandle,
+  TownViewerHandle,
+  PathInfo,
+  NavStats,
+  NavigationVisualizerOptions,
+} from "@hyperscape/procgen/building/viewer";
 
 // API base
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3401";
@@ -95,6 +113,24 @@ export const BuildingGenPage: React.FC = () => {
   const [savedPresets, setSavedPresets] = useState<BuildingPreset[]>([]);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [newPresetName, setNewPresetName] = useState("");
+
+  // Navigation state
+  const [navigationEnabled, setNavigationEnabled] = useState(false);
+  const [navigationOptions, setNavigationOptions] =
+    useState<NavigationVisualizerOptions>({
+      showWalkableTiles: true,
+      showDoors: true,
+      showStairs: true,
+      showWalls: true,
+      showEntryPoints: true,
+      showDemoPaths: false,
+    });
+  const [pathInfo, setPathInfo] = useState<PathInfo | null>(null);
+  const [navStats, setNavStats] = useState<NavStats | null>(null);
+
+  // Viewer refs for external control
+  const buildingViewerRef = useRef<BuildingViewerHandle>(null);
+  const townViewerRef = useRef<TownViewerHandle>(null);
 
   // Load saved presets on mount
   useEffect(() => {
@@ -198,6 +234,34 @@ export const BuildingGenPage: React.FC = () => {
       setIsGenerating(false);
     }, 200);
   }, []);
+
+  // Navigation callbacks
+  const handlePathUpdate = useCallback((info: PathInfo) => {
+    setPathInfo(info);
+  }, []);
+
+  const handleNavStatsUpdate = useCallback((stats: NavStats | null) => {
+    setNavStats(stats);
+  }, []);
+
+  const handleToggleNavOption = useCallback(
+    (optionKey: keyof NavigationVisualizerOptions) => {
+      setNavigationOptions((prev) => ({
+        ...prev,
+        [optionKey]: !prev[optionKey],
+      }));
+    },
+    [],
+  );
+
+  const handleClearPath = useCallback(() => {
+    if (viewMode === "building") {
+      buildingViewerRef.current?.clearNavigationPath();
+    } else {
+      townViewerRef.current?.clearNavigationPath();
+    }
+    setPathInfo(null);
+  }, [viewMode]);
 
   const handleRandomSeed = useCallback(() => {
     if (viewMode === "building") {
@@ -624,6 +688,196 @@ export const BuildingGenPage: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* Navigation Testing Panel */}
+          <div className="bg-bg-secondary rounded-lg p-4 border border-border-primary">
+            <h3 className="font-semibold text-text-primary mb-4 flex items-center gap-2">
+              <Navigation size={18} />
+              Navigation Testing
+            </h3>
+
+            <div className="space-y-4">
+              {/* Enable/Disable Toggle */}
+              <label className="flex items-center gap-2 text-sm text-text-primary cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={navigationEnabled}
+                  onChange={(e) => setNavigationEnabled(e.target.checked)}
+                  className="rounded"
+                />
+                <span className="flex items-center gap-1">
+                  {navigationEnabled ? <Eye size={14} /> : <EyeOff size={14} />}
+                  Show Nav Mesh
+                </span>
+              </label>
+
+              {navigationEnabled && (
+                <>
+                  {/* Visualization Options */}
+                  <div className="space-y-2">
+                    <p className="text-xs text-text-secondary">Show:</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="flex items-center gap-1 text-xs text-text-primary cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={navigationOptions.showWalkableTiles}
+                          onChange={() =>
+                            handleToggleNavOption("showWalkableTiles")
+                          }
+                          className="rounded w-3 h-3"
+                        />
+                        Walkable
+                      </label>
+                      <label className="flex items-center gap-1 text-xs text-text-primary cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={navigationOptions.showWalls}
+                          onChange={() => handleToggleNavOption("showWalls")}
+                          className="rounded w-3 h-3"
+                        />
+                        Walls
+                      </label>
+                      <label className="flex items-center gap-1 text-xs text-text-primary cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={navigationOptions.showDoors}
+                          onChange={() => handleToggleNavOption("showDoors")}
+                          className="rounded w-3 h-3"
+                        />
+                        Doors
+                      </label>
+                      <label className="flex items-center gap-1 text-xs text-text-primary cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={navigationOptions.showStairs}
+                          onChange={() => handleToggleNavOption("showStairs")}
+                          className="rounded w-3 h-3"
+                        />
+                        Stairs
+                      </label>
+                      <label className="flex items-center gap-1 text-xs text-text-primary cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={navigationOptions.showEntryPoints}
+                          onChange={() =>
+                            handleToggleNavOption("showEntryPoints")
+                          }
+                          className="rounded w-3 h-3"
+                        />
+                        Entry Points
+                      </label>
+                      <label className="flex items-center gap-1 text-xs text-text-primary cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={navigationOptions.showDemoPaths}
+                          onChange={() =>
+                            handleToggleNavOption("showDemoPaths")
+                          }
+                          className="rounded w-3 h-3"
+                        />
+                        Demo Paths
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Path Info */}
+                  <div className="border-t border-border-primary pt-3">
+                    <p className="text-xs text-text-secondary mb-2 flex items-center gap-1">
+                      <Route size={12} />
+                      Click Testing
+                    </p>
+                    <p className="text-xs text-text-secondary mb-2">
+                      Left-click: Set start | Right-click: Set end
+                    </p>
+
+                    {pathInfo && (pathInfo.start || pathInfo.end) ? (
+                      <div className="bg-bg-tertiary rounded p-2 space-y-1">
+                        {pathInfo.start && (
+                          <div className="text-xs">
+                            <span className="text-cyan-400">Start:</span>{" "}
+                            <span className="text-text-primary font-mono">
+                              ({pathInfo.start.x}, {pathInfo.start.z})
+                            </span>
+                          </div>
+                        )}
+                        {pathInfo.end && (
+                          <div className="text-xs">
+                            <span className="text-fuchsia-400">End:</span>{" "}
+                            <span className="text-text-primary font-mono">
+                              ({pathInfo.end.x}, {pathInfo.end.z})
+                            </span>
+                          </div>
+                        )}
+                        {pathInfo.length > 0 && (
+                          <div className="text-xs">
+                            <span className="text-text-secondary">Path:</span>{" "}
+                            <span
+                              className={
+                                pathInfo.partial
+                                  ? "text-orange-400"
+                                  : "text-green-400"
+                              }
+                            >
+                              {pathInfo.length} tiles
+                              {pathInfo.partial && " (partial)"}
+                            </span>
+                          </div>
+                        )}
+                        {pathInfo.start &&
+                          pathInfo.end &&
+                          pathInfo.length === 0 && (
+                            <div className="text-xs text-red-400">
+                              No path found!
+                            </div>
+                          )}
+                        <button
+                          onClick={handleClearPath}
+                          className="mt-2 text-xs px-2 py-1 bg-bg-secondary rounded hover:bg-bg-primary transition-colors"
+                        >
+                          Clear Path
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-text-secondary italic">
+                        Click on the building to test paths
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Nav Stats */}
+                  {navStats && (
+                    <div className="border-t border-border-primary pt-3">
+                      <p className="text-xs text-text-secondary mb-2">
+                        Nav Mesh Stats:
+                      </p>
+                      <div className="grid grid-cols-2 gap-1 text-xs">
+                        <span className="text-text-secondary">Floors:</span>
+                        <span className="text-text-primary">
+                          {navStats.floors}
+                        </span>
+                        <span className="text-text-secondary">Walkable:</span>
+                        <span className="text-text-primary">
+                          {navStats.walkableTiles}
+                        </span>
+                        <span className="text-text-secondary">Walls:</span>
+                        <span className="text-text-primary">
+                          {navStats.walls}
+                        </span>
+                        <span className="text-text-secondary">Doors:</span>
+                        <span className="text-text-primary">
+                          {navStats.doors}
+                        </span>
+                        <span className="text-text-secondary">Stairs:</span>
+                        <span className="text-text-primary">
+                          {navStats.stairs}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Viewer */}
@@ -643,6 +897,7 @@ export const BuildingGenPage: React.FC = () => {
           >
             {viewMode === "building" ? (
               <BuildingViewer
+                ref={buildingViewerRef}
                 key={`building-${key}-${buildingType}-${seed}`}
                 initialType={buildingType}
                 initialSeed={seed}
@@ -651,9 +906,14 @@ export const BuildingGenPage: React.FC = () => {
                 showStats
                 showControls
                 backgroundColor={0x1a1a2e}
+                navigationEnabled={navigationEnabled}
+                navigationOptions={navigationOptions}
+                onPathUpdate={handlePathUpdate}
+                onNavStatsUpdate={handleNavStatsUpdate}
               />
             ) : (
               <TownViewer
+                ref={townViewerRef}
                 key={`town-${key}-${townSeed}-${townSize}`}
                 initialSeed={townSeed}
                 initialSize={townSize}
@@ -662,6 +922,10 @@ export const BuildingGenPage: React.FC = () => {
                 showStats
                 showControls
                 backgroundColor={0x1a1a2e}
+                navigationEnabled={navigationEnabled}
+                navigationOptions={navigationOptions}
+                onPathUpdate={handlePathUpdate}
+                onNavStatsUpdate={handleNavStatsUpdate}
               />
             )}
           </Suspense>

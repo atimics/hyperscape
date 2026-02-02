@@ -99,22 +99,56 @@ export const FLOOR_THICKNESS = 0.2;
 export const ROOF_THICKNESS = 0.22;
 export const FLOOR_HEIGHT = WALL_HEIGHT + FLOOR_THICKNESS;
 
+// ============================================================
+// INTERIOR DIMENSIONS
+// ============================================================
+
+/**
+ * Inset from exterior cell boundary to interior floor/ceiling edge.
+ * Interior surfaces should be sized to fit WITHIN the walls, not overlap them.
+ *
+ * - Walls are WALL_THICKNESS thick, centered on the cell boundary
+ * - Interior surfaces should stop at the INNER face of walls
+ * - This equals half the wall thickness (wall extends WALL_THICKNESS/2 into the room)
+ * - Add small epsilon (2cm) to prevent z-fighting at edges
+ */
+export const INTERIOR_INSET = WALL_THICKNESS / 2 + 0.02;
+
+/**
+ * Full interior span reduction per axis.
+ * When a surface has external walls on BOTH sides of an axis,
+ * reduce total span by this amount (double the inset).
+ */
+export const INTERIOR_SPAN_REDUCTION = INTERIOR_INSET * 2;
+
 // Foundation - elevates building off ground for terrain robustness
-export const FOUNDATION_HEIGHT = 0.5;
+export const FOUNDATION_HEIGHT = 0.6; // Raised 0.1m to prevent floor/terrain collision
 export const FOUNDATION_OVERHANG = 0.15; // How much foundation extends past walls
+
+/**
+ * Z-fighting prevention offset for floor tiles.
+ * Floor tile top surface is offset by this amount above the structural base
+ * (foundation for ground floor, ceiling for upper floors) to prevent
+ * coplanar surface z-fighting.
+ */
+export const FLOOR_ZFIGHT_OFFSET = 0.01;
 
 // Terrain base - extends foundation below ground to handle uneven terrain
 export const TERRAIN_DEPTH = 1.0; // How far foundation extends below ground level
 
 // Entrance steps
-export const ENTRANCE_STEP_HEIGHT = 0.25; // Height of each step
+export const ENTRANCE_STEP_HEIGHT = 0.3; // Height of each step (2 steps × 0.3 = 0.6m foundation)
 export const ENTRANCE_STEP_DEPTH = 0.4; // Depth (horizontal) of each step
 export const ENTRANCE_STEP_COUNT = 2; // Steps going UP to foundation
 export const TERRAIN_STEP_COUNT = 4; // Additional steps going DOWN into terrain
 
-// Terrace/balcony railings
-export const RAILING_HEIGHT = 1.0;
-export const RAILING_THICKNESS = 0.08;
+// Terrace/balcony railings - posts with horizontal rails style
+export const RAILING_HEIGHT = 1.0; // Total height of railing
+export const RAILING_POST_SIZE = 0.1; // Thickness of vertical posts
+export const RAILING_RAIL_HEIGHT = 0.06; // Height of horizontal rails
+export const RAILING_RAIL_DEPTH = 0.04; // Depth of horizontal rails
+export const RAILING_POST_SPACING = 1.2; // Max distance between posts (meters)
+export const RAILING_THICKNESS = 0.08; // Legacy - kept for compatibility
 
 export const DOOR_WIDTH = CELL_SIZE * 0.4;
 export const DOOR_HEIGHT = WALL_HEIGHT * 0.7;

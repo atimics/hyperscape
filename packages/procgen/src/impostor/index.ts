@@ -1,8 +1,12 @@
 /**
  * Tree Impostor Module
  *
- * Re-exports impostor utilities from @hyperscape/impostor
- * and provides tree-specific wrappers.
+ * Tree-specific impostor utilities that wrap @hyperscape/impostor.
+ *
+ * For core impostor functionality (OctahedralImpostor, ImpostorBaker, etc.),
+ * import directly from @hyperscape/impostor.
+ *
+ * @module TreeImpostor
  */
 
 // Tree-specific impostor API
@@ -10,19 +14,5 @@ export {
   TreeImpostor,
   bakeTreeImpostor,
   type TreeImpostorOptions,
+  type BakeMode,
 } from "./TreeImpostor.js";
-
-// Re-export commonly used types from the impostor library
-export {
-  OctahedralImpostor,
-  OctahedronType,
-  type OctahedronTypeValue,
-  ImpostorBaker,
-  type CompatibleRenderer,
-  type ImpostorBakeConfig,
-  type ImpostorBakeResult,
-  type ImpostorInstance,
-  type ImpostorViewData,
-  createTSLImpostorMaterial,
-  type TSLImpostorMaterial,
-} from "@hyperscape/impostor";

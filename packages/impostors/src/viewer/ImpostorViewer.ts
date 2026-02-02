@@ -827,18 +827,28 @@ export class ImpostorViewer {
       depthFar: this.bakeResult.depthFar ?? 10,
     });
 
-    // Set default lighting
+    // Set default lighting (matches UI defaults: azimuth=30°, elevation=55°)
     const tslMat = this.impostorMaterial as TSLImpostorMaterial;
     if (
       tslMat.updateLighting &&
       (this.bakeResult.normalAtlasTexture || this.bakeResult.depthAtlasTexture)
     ) {
+      // Calculate initial light direction from default azimuth/elevation
+      const azimuthRad = (30 * Math.PI) / 180;
+      const elevationRad = (55 * Math.PI) / 180;
+      const cosElevation = Math.cos(elevationRad);
+      const lightDirection = new THREE.Vector3(
+        Math.cos(azimuthRad) * cosElevation,
+        Math.sin(elevationRad),
+        Math.sin(azimuthRad) * cosElevation,
+      ).normalize();
+
       tslMat.updateLighting({
         ambientColor: new THREE.Vector3(1, 1, 1),
         ambientIntensity: 0.4,
         directionalLights: [
           {
-            direction: new THREE.Vector3(0.5, 0.8, 0.3).normalize(),
+            direction: lightDirection,
             color: new THREE.Vector3(1, 0.98, 0.95),
             intensity: 1.2,
           },
@@ -850,17 +860,28 @@ export class ImpostorViewer {
       });
     }
 
-    // Scale impostor based on bounding sphere diameter
-    const diameter = this.bakeResult.boundingSphere.radius * 2;
+    // Scale impostor to match baker's scaling logic
+    // Baker uses: scaleFactor = 0.5 / effectiveRadius
+    // where effectiveRadius = max(dim.x, dim.y, dim.z) / 2 * 1.05
+    // So the effective diameter that fills the atlas cell is max(dim) * 1.05
+    let effectiveDiameter: number;
+    if (this.bakeResult.boundingBox) {
+      const dim = new THREE.Vector3();
+      this.bakeResult.boundingBox.getSize(dim);
+      effectiveDiameter = Math.max(dim.x, dim.y, dim.z) * 1.05;
+    } else {
+      // Fallback to sphere radius if no bounding box (shouldn't happen)
+      effectiveDiameter = this.bakeResult.boundingSphere.radius * 2 * 1.05;
+    }
 
     this.impostorMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
       this.impostorMaterial,
     );
     // Scale to match original mesh size
-    this.impostorMesh.scale.setScalar(diameter);
-    // Position at z=2, with bottom of quad at ground level (y = radius since quad is centered)
-    this.impostorMesh.position.set(0, diameter / 2, 2);
+    this.impostorMesh.scale.setScalar(effectiveDiameter);
+    // Position at z=2, with bottom of quad at ground level
+    this.impostorMesh.position.set(0, effectiveDiameter / 2, 2);
     this.scene.add(this.impostorMesh);
 
     const wireframeMat = this.createBasicMaterial({
@@ -872,8 +893,8 @@ export class ImpostorViewer {
       wireframeMat,
     );
     // Match impostor scale and position
-    this.wireframeMesh.scale.setScalar(diameter);
-    this.wireframeMesh.position.set(0, diameter / 2, 2);
+    this.wireframeMesh.scale.setScalar(effectiveDiameter);
+    this.wireframeMesh.position.set(0, effectiveDiameter / 2, 2);
     this.wireframeMesh.visible = this.debugState.showWireframe;
     this.scene.add(this.wireframeMesh);
 
@@ -1195,13 +1216,48 @@ export class ImpostorViewer {
     // Lighting controls (only shown for AAA modes)
     const lightingFolder = this.pane.addFolder({
       title: "Lighting",
-      expanded: false,
+      expanded: true,
     });
     const lightingParams = {
       ambientIntensity: 0.4,
       lightIntensity: 1.2,
+      lightAzimuth: 30, // Horizontal angle in degrees (0 = +X, 90 = +Z)
+      lightElevation: 55, // Vertical angle in degrees (0 = horizon, 90 = directly above)
       specularIntensity: 0.5,
       specularShininess: 32,
+      showLightHelper: true,
+    };
+
+    // Create visual light direction helper
+    const lightHelperLength = 3;
+    const lightHelperArrow = new THREE.ArrowHelper(
+      new THREE.Vector3(0.5, 0.8, 0.3).normalize(),
+      new THREE.Vector3(0, 2, 0),
+      lightHelperLength,
+      0xffff00,
+      0.5,
+      0.25,
+    );
+    lightHelperArrow.name = "lightDirectionHelper";
+    this.scene.add(lightHelperArrow);
+
+    // Calculate light direction from azimuth and elevation
+    const calculateLightDirection = (
+      azimuthDeg: number,
+      elevationDeg: number,
+    ): THREE.Vector3 => {
+      const azimuthRad = (azimuthDeg * Math.PI) / 180;
+      const elevationRad = (elevationDeg * Math.PI) / 180;
+
+      // Convert spherical to cartesian
+      // Elevation: 0 = horizon (y=0), 90 = directly above (y=1)
+      // Azimuth: 0 = +X, 90 = +Z, 180 = -X, 270 = -Z
+      const cosElevation = Math.cos(elevationRad);
+      const x = Math.cos(azimuthRad) * cosElevation;
+      const y = Math.sin(elevationRad);
+      const z = Math.sin(azimuthRad) * cosElevation;
+
+      return new THREE.Vector3(x, y, z).normalize();
     };
 
     // Helper to update lighting for TSL material
@@ -1218,49 +1274,103 @@ export class ImpostorViewer {
       }
     };
 
+    // Update both the visual helper and the impostor material lighting
+    const updateLightDirection = () => {
+      const direction = calculateLightDirection(
+        lightingParams.lightAzimuth,
+        lightingParams.lightElevation,
+      );
+
+      // Update the visual arrow helper
+      lightHelperArrow.setDirection(direction);
+
+      // Update the impostor material
+      updateLighting({
+        directionalLights: [
+          {
+            direction: direction.clone(),
+            color: new THREE.Vector3(1, 0.98, 0.95),
+            intensity: lightingParams.lightIntensity,
+          },
+        ],
+      });
+    };
+
+    // Initialize light direction
+    updateLightDirection();
+
     lightingFolder
       .addBinding(lightingParams, "ambientIntensity", {
         min: 0,
         max: 2,
         step: 0.1,
+        label: "Ambient",
       })
       .on("change", ({ value }) => {
         updateLighting({ ambientIntensity: value });
       });
+
     lightingFolder
       .addBinding(lightingParams, "lightIntensity", {
         min: 0,
         max: 3,
         step: 0.1,
+        label: "Sun Intensity",
       })
-      .on("change", ({ value }) => {
-        updateLighting({
-          directionalLights: [
-            {
-              direction: new THREE.Vector3(0.5, 0.8, 0.3).normalize(),
-              color: new THREE.Vector3(1, 0.98, 0.95),
-              intensity: value,
-            },
-          ],
-        });
+      .on("change", () => {
+        updateLightDirection();
       });
+
+    lightingFolder
+      .addBinding(lightingParams, "lightAzimuth", {
+        min: 0,
+        max: 360,
+        step: 5,
+        label: "Sun Azimuth",
+      })
+      .on("change", () => {
+        updateLightDirection();
+      });
+
+    lightingFolder
+      .addBinding(lightingParams, "lightElevation", {
+        min: 5,
+        max: 90,
+        step: 5,
+        label: "Sun Elevation",
+      })
+      .on("change", () => {
+        updateLightDirection();
+      });
+
     lightingFolder
       .addBinding(lightingParams, "specularIntensity", {
         min: 0,
         max: 2,
         step: 0.1,
+        label: "Specular",
       })
       .on("change", ({ value }) => {
         updateLighting({ specular: { intensity: value } });
       });
+
     lightingFolder
       .addBinding(lightingParams, "specularShininess", {
         min: 4,
         max: 256,
         step: 4,
+        label: "Shininess",
       })
       .on("change", ({ value }) => {
         updateLighting({ specular: { shininess: value } });
+      });
+
+    lightingFolder
+      .addBinding(lightingParams, "showLightHelper", {
+        label: "Show Light Arrow",
+      })
+      .on("change", ({ value }) => {
+        lightHelperArrow.visible = value;
       });
 
     // Upload

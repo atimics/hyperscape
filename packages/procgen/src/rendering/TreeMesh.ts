@@ -11,6 +11,7 @@
  */
 
 import * as THREE from "three";
+import { MeshStandardNodeMaterial } from "three/webgpu";
 import type { TreeData, GeometryOptions } from "../types.js";
 import {
   generateBranchGeometry,
@@ -321,39 +322,39 @@ export function generateTreeMesh(
 }
 
 /**
- * Create a default branch material.
+ * Create a default branch material (WebGPU compatible).
  */
-export function createDefaultBranchMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
-    color: 0x4a3728,
-    roughness: 0.9,
-    metalness: 0.0,
-    side: THREE.DoubleSide,
-  });
+export function createDefaultBranchMaterial(): MeshStandardNodeMaterial {
+  const mat = new MeshStandardNodeMaterial();
+  mat.color = new THREE.Color(0x4a3728);
+  mat.roughness = 0.9;
+  mat.metalness = 0.0;
+  mat.side = THREE.DoubleSide;
+  return mat;
 }
 
 /**
- * Create a default leaf material.
+ * Create a default leaf material (WebGPU compatible).
  */
-export function createDefaultLeafMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
-    color: 0x3d7a3d,
-    roughness: 0.8,
-    metalness: 0.0,
-    side: THREE.DoubleSide,
-  });
+export function createDefaultLeafMaterial(): MeshStandardNodeMaterial {
+  const mat = new MeshStandardNodeMaterial();
+  mat.color = new THREE.Color(0x3d7a3d);
+  mat.roughness = 0.8;
+  mat.metalness = 0.0;
+  mat.side = THREE.DoubleSide;
+  return mat;
 }
 
 /**
- * Create a default blossom material.
+ * Create a default blossom material (WebGPU compatible).
  */
-export function createDefaultBlossomMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
-    color: 0xffc0cb,
-    roughness: 0.6,
-    metalness: 0.0,
-    side: THREE.DoubleSide,
-  });
+export function createDefaultBlossomMaterial(): MeshStandardNodeMaterial {
+  const mat = new MeshStandardNodeMaterial();
+  mat.color = new THREE.Color(0xffc0cb);
+  mat.roughness = 0.6;
+  mat.metalness = 0.0;
+  mat.side = THREE.DoubleSide;
+  return mat;
 }
 
 /**
@@ -397,5 +398,6 @@ export function disposeTreeMesh(result: TreeMeshResult): void {
   result.group.clear();
 }
 
-// Re-export instanced leaf utilities
-export { createInstancedLeafMaterial } from "../geometry/LeafGeometry.js";
+// Re-export instanced leaf utilities (TSL only - WebGPU)
+// NOTE: GLSL createInstancedLeafMaterial removed - use createInstancedLeafMaterialTSL from geometry/LeafMaterialTSL.js
+export { createInstancedLeafMaterialTSL } from "../geometry/LeafMaterialTSL.js";

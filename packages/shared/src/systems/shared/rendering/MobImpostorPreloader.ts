@@ -21,10 +21,7 @@
 
 import THREE from "../../../extras/three/three";
 import type { World } from "../../../types";
-import {
-  AnimatedImpostorManager,
-  ANIMATED_IMPOSTOR_CONFIG,
-} from "./AnimatedImpostorManager";
+import { AnimatedImpostorManager } from "./AnimatedImpostorManager";
 import { modelCache } from "../../../utils/rendering/ModelCache";
 
 /**
@@ -181,7 +178,7 @@ export async function prewarmMobImpostors(world: World): Promise<void> {
  * This queries the DataManager to find all NPC types and their models,
  * deduplicating by model path.
  */
-async function collectMobModelsToBake(world: World): Promise<MobModelDef[]> {
+async function collectMobModelsToBake(_world: World): Promise<MobModelDef[]> {
   const models: MobModelDef[] = [];
   const seenPaths = new Set<string>();
 

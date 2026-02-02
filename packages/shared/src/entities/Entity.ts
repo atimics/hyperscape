@@ -137,6 +137,15 @@ export type EventCallback = (data: unknown) => void;
  * and component-based architecture. All game objects inherit from Entity.
  */
 export class Entity implements IEntity {
+  /**
+   * DISABLE ALL HLOD IMPOSTORS
+   * When true, entities never create or show impostor billboards.
+   * Entities stay on their best available 3D mesh (LOD0/LOD1) and use dissolve fade.
+   * This matches the tree/vegetation rendering style for visual consistency.
+   * Enable in browser console: Entity.DISABLE_HLOD = true
+   */
+  static DISABLE_HLOD = true;
+
   /** Enable verbose HLOD debug logging (enable in browser console: Entity.HLOD_DEBUG = true) */
   static HLOD_DEBUG = false;
 
@@ -1559,6 +1568,9 @@ export class Entity implements IEntity {
   ): Promise<void> {
     // Skip on server
     if (this.world.isServer || !this.mesh) return;
+
+    // Skip when HLOD is globally disabled - entities use dissolve fade instead
+    if (Entity.DISABLE_HLOD) return;
 
     const category = options.category ?? "resource";
 

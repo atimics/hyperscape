@@ -5,3 +5,4 @@
 
 export * from "./generator";
 export * from "./town";
+export * from "./materials";

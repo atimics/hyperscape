@@ -379,7 +379,13 @@ export class BiomeSystem {
 
   /** Get numeric biome ID for shader use */
   getBiomeId(biomeName: string): number {
-    return BIOME_IDS[biomeName] ?? 0;
+    const id = BIOME_IDS[biomeName];
+    if (id === undefined) {
+      throw new Error(
+        `[BiomeSystem] Unknown biome name: ${biomeName}. Add to BIOME_IDS.`,
+      );
+    }
+    return id;
   }
 
   /**

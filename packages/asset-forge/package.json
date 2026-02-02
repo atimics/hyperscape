@@ -13,7 +13,7 @@
     "build:services": "bun scripts/build-services.mjs",
     "start": "bun run start:api",
     "start:api": "bun run build:services && bun server/api-elysia.ts",
-    "clean": "rm -rf dist",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
     "lint": "eslint . --ext .ts,.tsx",
     "preview": "vite preview",
     "assets:audit": "bun x tsx scripts/audit-assets.ts",

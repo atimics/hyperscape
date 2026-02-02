@@ -5,6 +5,11 @@
  * LOD transitions from mesh rendering to atlased impostors.
  *
  * @module AtlasedTreeImpostors
+ *
+ * @deprecated NOT CURRENTLY USED - This class is never instantiated. Tree impostors
+ * are handled directly by ProcgenTreeInstancer using TSLImpostorMaterial.
+ * This class exists for potential future refactoring but is not integrated
+ * into the main rendering pipeline.
  */
 
 import THREE from "../../../extras/three/three";
@@ -215,6 +220,13 @@ export class AtlasedTreeImpostors {
   // UPDATE
   // ============================================================================
 
+  // Lighting sync state
+  private _lightDir = new THREE.Vector3(0.5, 0.8, 0.3);
+  private _lightColor = new THREE.Vector3(1, 1, 1);
+  private _ambientColor = new THREE.Vector3(0.5, 0.55, 0.65);
+  private _lastLightUpdate = 0;
+  private _lightingLoggedOnce = false;
+
   update(camera?: THREE.Camera): void {
     if (!this.initialized) return;
     const cam = camera ?? this.world.camera;
@@ -222,6 +234,78 @@ export class AtlasedTreeImpostors {
 
     cam.getWorldPosition(this.camPos);
     this.atlasManager.update(cam);
+    this.syncLighting();
+  }
+
+  /**
+   * Sync impostor lighting with scene's sun light.
+   */
+  private syncLighting(): void {
+    const now = performance.now();
+    // Only update lighting once per frame (~16ms)
+    if (now - this._lastLightUpdate < 16) return;
+    this._lastLightUpdate = now;
+
+    // Get environment system for sun light and hemisphere light
+    const env = this.world.getSystem("environment") as {
+      sunLight?: THREE.DirectionalLight;
+      lightDirection?: THREE.Vector3;
+      hemisphereLight?: THREE.HemisphereLight;
+    } | null;
+
+    if (!env?.sunLight) {
+      if (!this._lightingLoggedOnce) {
+        console.warn(
+          "[AtlasedTreeImpostors] No sunLight in environment - using default lighting",
+        );
+        this._lightingLoggedOnce = true;
+      }
+      return;
+    }
+
+    const sun = env.sunLight;
+    // Light direction is negated (light goes FROM direction TO target)
+    if (env.lightDirection) {
+      this._lightDir.copy(env.lightDirection).negate();
+    } else {
+      this._lightDir.set(0.5, 0.8, 0.3);
+    }
+
+    // Scale light color by intensity
+    this._lightColor.set(
+      sun.color.r * sun.intensity,
+      sun.color.g * sun.intensity,
+      sun.color.b * sun.intensity,
+    );
+
+    // Get ambient from hemisphere light
+    if (env.hemisphereLight) {
+      const hemi = env.hemisphereLight;
+      this._ambientColor.set(
+        hemi.color.r * hemi.intensity * 0.5,
+        hemi.color.g * hemi.intensity * 0.5,
+        hemi.color.b * hemi.intensity * 0.5,
+      );
+    } else {
+      this._ambientColor.set(0.5, 0.55, 0.65);
+    }
+
+    // Diagnostic: log once when lighting is connected
+    if (!this._lightingLoggedOnce) {
+      console.log(
+        `[AtlasedTreeImpostors] Lighting connected: dir=(${this._lightDir.x.toFixed(2)}, ${this._lightDir.y.toFixed(2)}, ${this._lightDir.z.toFixed(2)}), ` +
+          `color=(${this._lightColor.x.toFixed(2)}, ${this._lightColor.y.toFixed(2)}, ${this._lightColor.z.toFixed(2)}), ` +
+          `ambient=(${this._ambientColor.x.toFixed(2)}, ${this._ambientColor.y.toFixed(2)}, ${this._ambientColor.z.toFixed(2)})`,
+      );
+      this._lightingLoggedOnce = true;
+    }
+
+    // Update atlased impostor manager lighting
+    this.atlasManager.updateLighting(
+      this._lightDir,
+      this._lightColor,
+      this._ambientColor,
+    );
   }
 
   private getDistanceSq(position: THREE.Vector3): number {

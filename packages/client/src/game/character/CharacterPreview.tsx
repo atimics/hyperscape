@@ -155,8 +155,11 @@ export const CharacterPreview: React.FC<CharacterPreviewProps> = ({
           }
         }
 
-        VRMUtils.removeUnnecessaryVertices(gltf.scene);
-        VRMUtils.combineSkeletons(gltf.scene);
+        // Type assertions needed due to three.js version mismatch between packages
+        VRMUtils.removeUnnecessaryVertices(
+          gltf.scene as unknown as THREE.Object3D,
+        );
+        VRMUtils.combineSkeletons(gltf.scene as unknown as THREE.Object3D);
 
         vrmRef.current = vrm;
 
@@ -221,13 +224,20 @@ export const CharacterPreview: React.FC<CharacterPreviewProps> = ({
         };
 
         console.log("[CharacterPreview] Retargeting animations...");
+        // Type assertions needed due to three.js version mismatch between packages
         const waveClip = retargetAnimationToVRM(
-          waveGltf,
+          waveGltf as unknown as {
+            scene: THREE.Group;
+            animations: THREE.AnimationClip[];
+          },
           getBoneName,
           rootToHips,
         );
         const idleClip = retargetAnimationToVRM(
-          idleGltf,
+          idleGltf as unknown as {
+            scene: THREE.Group;
+            animations: THREE.AnimationClip[];
+          },
           getBoneName,
           rootToHips,
         );

@@ -64,8 +64,14 @@ export function collapseEdge(
 
   // For every neighbor, replace vertexToRemove with vertexCollapsingInto
   for (const n of neighborList) {
-    edges.get(n)?.delete(vertexToRemove);
-    edges.get(n)?.add(vertexCollapsingInto);
+    const neighborSet = edges.get(n);
+    if (!neighborSet) {
+      throw new Error(
+        `Edge map inconsistency: neighbor vertex ${n} not found in edge map during collapse`,
+      );
+    }
+    neighborSet.delete(vertexToRemove);
+    neighborSet.add(vertexCollapsingInto);
   }
 
   // Add all neighbors to vertexCollapsingInto
@@ -103,8 +109,14 @@ export function renameVertex(
 
   // Update all neighbors to point to the new name
   for (const n of neighborList) {
-    edges.get(n)?.delete(oldName);
-    edges.get(n)?.add(newName);
+    const neighborSet = edges.get(n);
+    if (!neighborSet) {
+      throw new Error(
+        `Edge map inconsistency: neighbor vertex ${n} not found in edge map during rename`,
+      );
+    }
+    neighborSet.delete(oldName);
+    neighborSet.add(newName);
   }
 
   // Move neighbors to new vertex

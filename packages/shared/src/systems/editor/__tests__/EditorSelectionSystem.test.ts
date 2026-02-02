@@ -1109,4 +1109,28 @@ describe("EditorSelectionSystem", () => {
       expect(system.isSelected("behind")).toBe(false);
     });
   });
+
+  describe("monitoring events", () => {
+    it("should emit ready event on successful init", async () => {
+      const world = createMockWorld();
+      const system = new EditorSelectionSystem(world as never);
+      const listener = vi.fn();
+      system.on("ready", listener);
+      await system.init({});
+      expect(listener).toHaveBeenCalledWith({ system: "editor-selection" });
+    });
+
+    it("should emit init-failed event when no renderer", async () => {
+      const world = createMockWorld();
+      world.graphics = null;
+      const system = new EditorSelectionSystem(world as never);
+      const listener = vi.fn();
+      system.on("init-failed", listener);
+      await system.init({});
+      expect(listener).toHaveBeenCalledWith({
+        reason: "no-renderer",
+        system: "editor-selection",
+      });
+    });
+  });
 });

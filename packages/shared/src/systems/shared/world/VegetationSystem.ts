@@ -136,6 +136,14 @@ let CHUNK_RENDER_DISTANCE = 300; // CPU hides chunks (buffer zone for loading)
 const BOUNDING_SPHERE_BUFFER = 20;
 
 /**
+ * IMPOSTOR DISABLE FLAG
+ * When true, vegetation uses dissolve fade-out at distance instead of impostor billboards.
+ * The 3D meshes (LOD0/LOD1/LOD2) stay visible and fade out via GPU dithered dissolve.
+ * This matches the tree rendering style for visual consistency.
+ */
+const DISABLE_IMPOSTORS = true;
+
+/**
  * Chunked instanced mesh - one per spatial chunk per asset type
  */
 interface ChunkedInstancedMesh {
@@ -533,8 +541,11 @@ export class VegetationSystem extends System {
   /**
    * Initialize the octahedral imposter system.
    * Creates OctahedralImpostor instance for high-quality multi-angle rendering.
+   *
+   * NOTE: When DISABLE_IMPOSTORS is true, this function returns immediately.
    */
   private initOctahedralImpostor(): void {
+    if (DISABLE_IMPOSTORS) return; // Impostors disabled - using dissolve fade instead
     if (this.octahedralImpostor) return; // Already initialized
 
     // Get renderer (supports both WebGL and WebGPU renderers)
@@ -554,9 +565,7 @@ export class VegetationSystem extends System {
       | undefined;
     this.usesTSL = !!backend?.isWebGPUBackend;
 
-    // Create the octahedral impostor system
-    // OctahedralImpostor uses CompatibleRenderer interface that works with both
-    // WebGLRenderer and WebGPURenderer since it only uses basic rendering operations
+    // Create the octahedral impostor system (WebGPU)
     this.octahedralImpostor = new OctahedralImpostor(
       renderer as CompatibleRenderer,
     );
@@ -637,7 +646,7 @@ export class VegetationSystem extends System {
           `[VegetationSystem] Loaded ${this.assetDefinitions.size} vegetation asset definitions`,
         );
       }
-    } catch (error) {
+    } catch (_error) {
       // Vegetation manifest is optional - silently continue without it
       console.warn(
         "[VegetationSystem] Vegetation manifest not available, continuing without vegetation assets",
@@ -2557,6 +2566,9 @@ export class VegetationSystem extends System {
    * Imposter baking is GPU-intensive, so we process one per idle callback
    * to avoid frame drops during asset loading.
    *
+   * NOTE: When DISABLE_IMPOSTORS is true, this function returns immediately.
+   * Vegetation uses dissolve fade instead of impostors for visual consistency.
+   *
    * @param assetId - Asset identifier
    * @param modelScene - The loaded 3D model scene
    * @param _geometry - Model geometry (unused, kept for API compatibility)
@@ -2566,6 +2578,8 @@ export class VegetationSystem extends System {
     modelScene: THREE.Object3D,
     _geometry: THREE.BufferGeometry,
   ): void {
+    // Skip impostor creation when disabled - vegetation fades out via GPU dissolve shader
+    if (DISABLE_IMPOSTORS) return;
     if (this.imposters.has(assetId)) return;
     if (this.pendingImposterBakes.some((p) => p.assetId === assetId)) return;
 
@@ -3456,10 +3470,20 @@ export class VegetationSystem extends System {
       this._currentVisibleChunks.add(chunkKey);
 
       // STAGE 2: Determine target LOD level based on distance
-      // LOD Pipeline: 0=LOD0, 1=LOD1, 2=LOD2, 3=Impostor, 4=Culled
+      // LOD Pipeline: 0=LOD0, 1=LOD1, 2=LOD2, 3=Impostor (disabled), 4=Culled
       // All comparisons use squared distances for performance
+      // When DISABLE_IMPOSTORS is true, 3D meshes stay visible and dissolve fade at distance
+      // Force impostor mode when rendering for reflection camera (performance) - only if enabled
+      const forceImpostor =
+        !DISABLE_IMPOSTORS &&
+        this.world.isRenderingReflection &&
+        this.imposters.has(state.assetId);
+
       let targetLOD: ChunkLODLevel;
-      if (distSq < lodConfig.lod1DistanceSq * hysteresisSq) {
+      if (forceImpostor) {
+        // Reflection camera: always use impostor for performance (when enabled)
+        targetLOD = 3;
+      } else if (distSq < lodConfig.lod1DistanceSq * hysteresisSq) {
         // Very close - use LOD0 (full detail)
         targetLOD = 0;
       } else if (distSq < lodConfig.lod1DistanceSq) {
@@ -3472,6 +3496,9 @@ export class VegetationSystem extends System {
         // In LOD1/LOD2 transition zone - use hysteresis
         targetLOD =
           state.lodLevel <= 2 ? state.lodLevel : hasLOD2 ? 2 : hasLOD1 ? 1 : 0;
+      } else if (DISABLE_IMPOSTORS) {
+        // IMPOSTORS DISABLED: Stay on best available 3D LOD, let GPU shader dissolve fade
+        targetLOD = hasLOD2 ? 2 : hasLOD1 ? 1 : 0;
       } else if (distSq < lodConfig.imposterDistanceSq * hysteresisSq) {
         // LOD2 range - use LOD2 if available, otherwise best available
         targetLOD = hasLOD2 ? 2 : hasLOD1 ? 1 : 0;
@@ -3616,8 +3643,18 @@ export class VegetationSystem extends System {
    * Heavy operations (imposter add/remove) are spread across frames to prevent jank.
    * Prioritizes "from3D" (remove from imposter) over "toImposter" (add to imposter)
    * to free up memory first.
+   *
+   * NOTE: When DISABLE_IMPOSTORS is true, impostor queues are skipped entirely.
    */
   private processLODTransitions(): void {
+    // Skip impostor processing when disabled
+    if (DISABLE_IMPOSTORS) {
+      // Clear any queues that might have been populated before flag was checked
+      this._deferredFrom3D.length = 0;
+      this._deferredToImposter.length = 0;
+      return;
+    }
+
     let processed = 0;
     const maxTransitions = this.MAX_LOD_TRANSITIONS_PER_FRAME;
 
@@ -3640,8 +3677,11 @@ export class VegetationSystem extends System {
    * Add a chunk's instances to the octahedral imposter system.
    * Creates individual ImpostorInstance objects with view-dependent blending.
    * Each instance has its own material with dissolve support for distance-based fading.
+   *
+   * NOTE: When DISABLE_IMPOSTORS is true, this function returns immediately.
    */
   private addChunkToImposter(chunkKey: string): void {
+    if (DISABLE_IMPOSTORS) return; // Impostors disabled - using dissolve fade instead
     const instanceData = this.chunkInstanceData.get(chunkKey);
     if (!instanceData || instanceData.length === 0) return;
 
@@ -3764,8 +3804,11 @@ export class VegetationSystem extends System {
    * OPTIMIZATION: Limited per frame to prevent jank. Billboard updates are
    * visual polish - slight lag in view-dependent blending is less noticeable
    * than frame drops.
+   *
+   * NOTE: When DISABLE_IMPOSTORS is true, this function returns immediately.
    */
   private updateImposterBillboards(_cameraX: number, _cameraZ: number): void {
+    if (DISABLE_IMPOSTORS) return; // Impostors disabled - using dissolve fade instead
     const camera = this.world.camera;
     if (!camera) return;
 

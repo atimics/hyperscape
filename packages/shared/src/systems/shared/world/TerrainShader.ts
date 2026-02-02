@@ -1,6 +1,15 @@
 /**
  * TerrainShader - TSL Node Material for OSRS-style vertex color terrain
  * Flat shaded, no textures - pure vertex colors based on height/slope/noise
+ *
+ * **SHARED CODE:**
+ * The core terrain material is also available in @hyperscape/procgen TerrainGen module.
+ * For standalone terrain rendering (Asset Forge, viewers), use:
+ *   import { TerrainGen } from '@hyperscape/procgen';
+ *   const material = TerrainGen.createTerrainMaterial();
+ *
+ * This file (TerrainShader.ts) includes additional game-specific integrations
+ * like heightmap support, compute shader vertex colors, and road influence.
  */
 
 import THREE, {

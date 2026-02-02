@@ -374,6 +374,13 @@ export class TownGenerator {
     const cellSize = worldSize / gridSize;
     const candidates: TownCandidate[] = [];
 
+    // Debug: Track rejection reasons
+    let edgeSkipped = 0;
+    let underwaterSkipped = 0;
+    let biomeSkipped = 0;
+    let totalEvaluated = 0;
+    const sampleHeights: number[] = [];
+
     this.resetRandom(this.seed + 12345);
 
     for (let gx = 0; gx < gridSize; gx++) {
@@ -383,9 +390,17 @@ export class TownGenerator {
         const x = baseX + (this.random() - 0.5) * cellSize * 0.8;
         const z = baseZ + (this.random() - 0.5) * cellSize * 0.8;
 
+        totalEvaluated++;
+
         // Skip positions too close to world edge
         if (Math.abs(x) > halfWorld - 200 || Math.abs(z) > halfWorld - 200) {
+          edgeSkipped++;
           continue;
+        }
+
+        // Sample height for diagnostics (first 10 candidates)
+        if (sampleHeights.length < 10) {
+          sampleHeights.push(this.terrain.getHeightAt(x, z));
         }
 
         const flatnessScore = this.calculateFlatness(x, z);
@@ -393,8 +408,15 @@ export class TownGenerator {
         const biome = this.getBiomeAt(x, z);
         const biomeScore = biomeSuitability[biome] ?? 0.3;
 
-        // Skip unsuitable locations
-        if (waterProximityScore === 0 || biomeScore < 0.1) continue;
+        // Skip unsuitable locations - track rejection reasons
+        if (waterProximityScore === 0) {
+          underwaterSkipped++;
+          continue;
+        }
+        if (biomeScore < 0.1) {
+          biomeSkipped++;
+          continue;
+        }
 
         const suitabilityNoise =
           (this.noise.simplex2D(x * 0.002, z * 0.002) + 1) * 0.5;
@@ -414,6 +436,20 @@ export class TownGenerator {
           biome,
         });
       }
+    }
+
+    // Debug: Log candidate evaluation statistics
+    console.log(
+      `[TownGenerator] Candidate evaluation: ${totalEvaluated} total, ` +
+        `${edgeSkipped} edge-skipped, ${underwaterSkipped} underwater, ${biomeSkipped} bad-biome, ` +
+        `${candidates.length} passed (waterThreshold=${this.config.waterThreshold})`,
+    );
+    if (sampleHeights.length > 0) {
+      const avgHeight =
+        sampleHeights.reduce((a, b) => a + b, 0) / sampleHeights.length;
+      console.log(
+        `[TownGenerator] Sample heights: [${sampleHeights.map((h) => h.toFixed(1)).join(", ")}] avg=${avgHeight.toFixed(1)}m`,
+      );
     }
 
     return candidates;

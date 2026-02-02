@@ -449,7 +449,12 @@ export class TerrainGenerator {
           worldZ,
           normalizedHeight,
         );
-        const dominantBiome = influences[0]?.type ?? "plains";
+        if (influences.length === 0) {
+          throw new Error(
+            `[TerrainGenerator] No biome influences at position (${worldX}, ${worldZ})`,
+          );
+        }
+        const dominantBiome = influences[0].type;
         biomeIds[index] = this.biomeSystem.getBiomeId(dominantBiome);
 
         // Track biome weights for tile dominant biome
@@ -573,7 +578,12 @@ export class TerrainGenerator {
       normalizedHeight,
     );
 
-    const dominantBiome = biomeInfluences[0]?.type ?? "plains";
+    if (biomeInfluences.length === 0) {
+      throw new Error(
+        `[TerrainGenerator] No biome influences at position (${worldX}, ${worldZ})`,
+      );
+    }
+    const dominantBiome = biomeInfluences[0].type;
     const islandMaskValue = this.islandMask.getIslandMaskAt(worldX, worldZ);
     const normal = this.getNormalAt(worldX, worldZ);
 

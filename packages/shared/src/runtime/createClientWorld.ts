@@ -83,9 +83,6 @@ import {
   TREE_PRESETS,
 } from "../systems/shared/world/ProcgenTreeCache";
 
-// Mob impostor pre-warming (bakes animated impostors at load time, like Horde)
-import { prewarmMobImpostors } from "../systems/shared/rendering/MobImpostorPreloader";
-
 // PhysX loading - used to defer heavy work until WASM is loaded
 import { waitForPhysX } from "../physics/PhysXManager";
 

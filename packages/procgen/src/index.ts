@@ -1,8 +1,10 @@
 /**
  * @hyperscape/procgen
  *
- * Procedural generation toolkit for trees, plants, rocks, and buildings.
+ * Procedural generation toolkit for trees, plants, rocks, buildings, grass, and flowers.
  * Tree generation is based on the Weber & Penn algorithm.
+ *
+ * For impostor/LOD functionality, import from @hyperscape/impostor.
  *
  * @packageDocumentation
  */
@@ -63,6 +65,13 @@ export {
   getBlossomShape,
   ALL_LEAF_SHAPES,
   ALL_BLOSSOM_SHAPES,
+  // Instanced rendering
+  generateInstancedLeaves,
+  generateInstancedLeavesAndBlossoms,
+  createLeafCardGeometry,
+  type InstancedLeafResult,
+  type InstancedLeafOptions,
+  type ProceduralLeafShape,
   // Vertex AO computation
   computeVertexAO,
   computeQuickVertexAO,
@@ -73,6 +82,24 @@ export {
   type TSLInstancedLeafMaterial,
   type TSLInstancedLeafMaterialOptions,
   type TSLLeafShape,
+  // Leaf cluster generation (basic spatial)
+  LeafClusterGenerator,
+  LeafClusterBaker,
+  createClusterBillboardGeometry,
+  createClusterTransforms,
+  calculateClusterDensities,
+  type LeafCluster,
+  type LeafClusterResult,
+  type LeafClusterOptions,
+  type BakedCluster,
+  type ClusterAtlas,
+  type ClusterBakeOptions,
+  // Branch-aware clustering (SpeedTree style)
+  BranchClusterGenerator,
+  type BranchLeafData,
+  type BranchCluster,
+  type BranchClusterResult,
+  type BranchClusterOptions,
 } from "./geometry/index.js";
 
 // Parameters and presets
@@ -127,24 +154,13 @@ export {
 // Export utilities
 export { exportToGLB, exportToGLBFile } from "./export/index.js";
 
-// Impostor System (LOD) - re-exports from @hyperscape/impostor
+// Tree Impostor (tree-specific wrapper for @hyperscape/impostor)
+// For core impostor functionality, import from @hyperscape/impostor directly
 export {
-  // Tree-specific API
   TreeImpostor,
   bakeTreeImpostor,
   type TreeImpostorOptions,
-  // Re-exported from @hyperscape/impostor for convenience
-  OctahedralImpostor,
-  OctahedronType,
-  type OctahedronTypeValue,
-  ImpostorBaker,
-  type CompatibleRenderer,
-  type ImpostorBakeConfig,
-  type ImpostorBakeResult,
-  type ImpostorInstance,
-  type ImpostorViewData,
-  createTSLImpostorMaterial,
-  type TSLImpostorMaterial,
+  type BakeMode,
 } from "./impostor/index.js";
 
 // Additional generators (namespaced to avoid export collisions)
@@ -153,3 +169,8 @@ export * as RockGen from "./rock/index.js";
 export * as BuildingGen from "./building/index.js";
 export * as TerrainGen from "./terrain/index.js";
 export * as VegetationGen from "./vegetation/index.js";
+export * as GrassGen from "./grass/index.js";
+export * as FlowerGen from "./flowers/index.js";
+
+// Standalone context for Asset Forge and viewers
+export * as Standalone from "./standalone/index.js";

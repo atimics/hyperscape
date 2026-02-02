@@ -194,6 +194,28 @@ async function saveToIndexedDB(url: string, file: File): Promise<void> {
   }
 }
 
+/**
+ * Clear a corrupted file from IndexedDB persistent cache.
+ * Call this when a model fails to parse due to corruption.
+ */
+async function clearFromIndexedDB(url: string): Promise<void> {
+  const db = await initAssetDB();
+  if (!db) return;
+
+  return new Promise((resolve) => {
+    try {
+      const transaction = db.transaction(ASSET_STORE_NAME, "readwrite");
+      const store = transaction.objectStore(ASSET_STORE_NAME);
+      const request = store.delete(url);
+
+      request.onerror = () => resolve();
+      request.onsuccess = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
 function nodeToINode(node: Node): INode {
   // Ensure transforms are current, then return the actual Node instance
   node.updateTransform();
@@ -610,6 +632,33 @@ export class ClientLoader extends SystemBase {
       // Trigger processing
       this.processPriorityQueue();
     });
+  };
+
+  /**
+   * Clear a corrupted file from all caches (memory + IndexedDB).
+   * Call this when a model fails to parse due to corruption.
+   *
+   * @param url - URL of the file to clear
+   */
+  clearCachedFile = async (url: string): Promise<void> => {
+    url = this.world.resolveURL(url);
+
+    // Clear from memory cache
+    this.files.delete(url);
+
+    // Clear from in-flight promises
+    this.filePromises.delete(url);
+
+    // Clear from IndexedDB
+    try {
+      await clearFromIndexedDB(url);
+      console.log(`[ClientLoader] Cleared corrupted cache for: ${url}`);
+    } catch (error) {
+      console.warn(
+        `[ClientLoader] Failed to clear IndexedDB cache for ${url}:`,
+        error,
+      );
+    }
   };
 
   /**

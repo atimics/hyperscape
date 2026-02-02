@@ -1,16 +1,6 @@
 /**
- * EditorCameraSystem.ts - Camera Controls for Editor Mode
- *
- * Provides camera controls optimized for world editing:
- * - Orbital mode: Rotate around a focus point (for inspecting objects)
- * - Pan mode: Move the camera parallel to view plane
- * - Fly mode: Free-form camera movement (WASD + mouse)
- * - Zoom: Scroll wheel or pinch gesture
- *
- * This system uses THREE.js OrbitControls as the base but adds
- * editor-specific features like focus-on-selection and camera bookmarks.
- *
- * @module EditorCameraSystem
+ * Editor camera with orbit/pan/fly modes. Requires graphics renderer.
+ * Check isReady before using controls.
  */
 
 import * as THREE from "three";
@@ -23,14 +13,8 @@ import {
 import type { World } from "../../core/World";
 import type { WorldOptions } from "../../types";
 
-/**
- * Camera mode for editor
- */
 export type EditorCameraMode = "orbit" | "pan" | "fly";
 
-/**
- * Camera bookmark for saving/restoring camera positions
- */
 export interface CameraBookmark {
   name: string;
   position: THREE.Vector3;
@@ -38,77 +22,47 @@ export interface CameraBookmark {
   zoom: number;
 }
 
-/**
- * Configuration for EditorCameraSystem
- */
 export interface EditorCameraConfig {
-  /** Initial camera mode */
   initialMode: EditorCameraMode;
-  /** Enable damping/inertia for smooth camera movement */
   enableDamping: boolean;
-  /** Damping factor (0-1, higher = more responsive) */
   dampingFactor: number;
-  /** Minimum distance for orbit/zoom */
   minDistance: number;
-  /** Maximum distance for orbit/zoom */
   maxDistance: number;
-  /** Enable zoom */
   enableZoom: boolean;
-  /** Enable pan */
   enablePan: boolean;
-  /** Enable rotate */
   enableRotate: boolean;
-  /** Pan speed multiplier */
   panSpeed: number;
-  /** Rotate speed multiplier */
   rotateSpeed: number;
-  /** Zoom speed multiplier */
   zoomSpeed: number;
-  /** Fly mode movement speed (units per second) */
   flySpeed: number;
-  /** Fly mode fast multiplier (when holding shift) */
   flyFastMultiplier: number;
 }
 
+/** Defaults tuned for world-scale editing (terrain ~2048 units, buildings ~10-50 units) */
 const DEFAULT_CONFIG: EditorCameraConfig = {
   initialMode: "orbit",
   enableDamping: true,
-  dampingFactor: 0.1,
-  minDistance: 1,
-  maxDistance: 2000,
+  dampingFactor: 0.1, // Lower = smoother, 0.05-0.25 typical range
+  minDistance: 1, // Allow close inspection of small objects
+  maxDistance: 2000, // Covers full terrain diagonal (~2900 for 2048x2048)
   enableZoom: true,
   enablePan: true,
   enableRotate: true,
   panSpeed: 1.0,
   rotateSpeed: 1.0,
   zoomSpeed: 1.0,
-  flySpeed: 50,
-  flyFastMultiplier: 3,
+  flySpeed: 50, // Units/sec, covers terrain in ~40s at normal speed
+  flyFastMultiplier: 3, // 150 units/sec with shift held
 };
 
-/**
- * EditorCameraSystem - Camera controls for world editing
- *
- * Provides multiple camera modes and smooth controls for editing workflows.
- *
- * Note: This system requires a graphics renderer with a DOM element.
- * If not available, the system will be partially initialized (isReady = false).
- * Check `isReady` before relying on camera controls.
- */
 export class EditorCameraSystem extends System {
   private config: EditorCameraConfig;
   private controls: OrbitControls | null = null;
   private mode: EditorCameraMode = "orbit";
   private bookmarks: Map<string, CameraBookmark> = new Map();
   private domElement: HTMLElement | null = null;
-
-  /**
-   * Whether the system is fully initialized with working controls.
-   * False if graphics/renderer was not available during init.
-   */
   public isReady = false;
 
-  // Fly mode state
   private flyKeys = {
     forward: false,
     backward: false,
@@ -120,7 +74,6 @@ export class EditorCameraSystem extends System {
   };
   private flyDirection = new THREE.Vector3();
 
-  // Reusable vectors for calculations
   private _tempVec3 = new THREE.Vector3();
   private _tempEuler = new THREE.Euler(0, 0, 0, "YXZ");
 
@@ -140,14 +93,13 @@ export class EditorCameraSystem extends System {
   override async init(options: WorldOptions): Promise<void> {
     await super.init(options);
 
-    // Get DOM element from graphics system
     const graphics = this.world.graphics;
     if (!graphics?.renderer?.domElement) {
-      console.warn(
-        "[EditorCameraSystem] No renderer DOM element available - camera controls disabled. " +
-          "Check isReady property before using controls.",
-      );
-      this.isReady = false;
+      console.warn("[EditorCameraSystem] No renderer - controls disabled");
+      this.emit("init-failed", {
+        reason: "no-renderer",
+        system: "editor-camera",
+      });
       return;
     }
 
@@ -155,14 +107,13 @@ export class EditorCameraSystem extends System {
     this.setupOrbitControls();
     this.setupKeyboardListeners();
     this.isReady = true;
+    this.emit("ready", { system: "editor-camera" });
   }
 
   private setupOrbitControls(): void {
     if (!this.domElement) return;
 
     this.controls = new OrbitControls(this.world.camera, this.domElement);
-
-    // Configure controls based on config
     this.controls.enableDamping = this.config.enableDamping;
     this.controls.dampingFactor = this.config.dampingFactor;
     this.controls.minDistance = this.config.minDistance;
@@ -173,42 +124,31 @@ export class EditorCameraSystem extends System {
     this.controls.panSpeed = this.config.panSpeed;
     this.controls.rotateSpeed = this.config.rotateSpeed;
     this.controls.zoomSpeed = this.config.zoomSpeed;
-
-    // Set reasonable defaults for world editing
     this.controls.screenSpacePanning = true;
     this.controls.mouseButtons = {
       LEFT: THREE.MOUSE.ROTATE,
       MIDDLE: THREE.MOUSE.PAN,
       RIGHT: THREE.MOUSE.PAN,
     };
-
-    // Set initial target to origin
     this.controls.target.set(0, 0, 0);
-
-    // Position camera for a good initial view
     this.world.camera.position.set(50, 50, 50);
     this.controls.update();
   }
 
   private setupKeyboardListeners(): void {
     if (!this.domElement) return;
-
-    // Make canvas focusable
     this.domElement.tabIndex = 0;
-
     this.domElement.addEventListener("keydown", this.onKeyDown);
     this.domElement.addEventListener("keyup", this.onKeyUp);
     this.domElement.addEventListener("blur", this.onBlur);
   }
 
   private onKeyDown = (event: KeyboardEvent): void => {
-    // Don't handle if focused on input
     if (
       event.target instanceof HTMLInputElement ||
       event.target instanceof HTMLTextAreaElement
-    ) {
+    )
       return;
-    }
 
     switch (event.code) {
       case "KeyW":
@@ -236,7 +176,6 @@ export class EditorCameraSystem extends System {
       case "ShiftRight":
         this.flyKeys.fast = true;
         break;
-      // Mode switching shortcuts
       case "Digit1":
         this.setMode("orbit");
         break;
@@ -246,11 +185,8 @@ export class EditorCameraSystem extends System {
       case "Digit3":
         this.setMode("fly");
         break;
-      // Focus on origin
       case "KeyF":
-        if (event.shiftKey) {
-          this.focusOn(new THREE.Vector3(0, 0, 0));
-        }
+        if (event.shiftKey) this.focusOn(new THREE.Vector3(0, 0, 0));
         break;
     }
   };
@@ -286,114 +222,82 @@ export class EditorCameraSystem extends System {
   };
 
   private onBlur = (): void => {
-    // Reset all fly keys when focus is lost
-    const keys = this.flyKeys;
-    keys.forward = keys.backward = keys.left = keys.right = false;
-    keys.up = keys.down = keys.fast = false;
+    const k = this.flyKeys;
+    k.forward = k.backward = k.left = k.right = k.up = k.down = k.fast = false;
   };
 
-  /**
-   * Set the camera mode
-   */
   setMode(mode: EditorCameraMode): void {
     this.mode = mode;
-
-    if (this.controls) {
-      switch (mode) {
-        case "orbit":
-          this.controls.enableRotate = true;
-          this.controls.enablePan = true;
-          this.controls.mouseButtons = {
-            LEFT: THREE.MOUSE.ROTATE,
-            MIDDLE: THREE.MOUSE.PAN,
-            RIGHT: THREE.MOUSE.PAN,
-          };
-          break;
-        case "pan":
-          this.controls.enableRotate = false;
-          this.controls.enablePan = true;
-          this.controls.mouseButtons = {
-            LEFT: THREE.MOUSE.PAN,
-            MIDDLE: THREE.MOUSE.PAN,
-            RIGHT: THREE.MOUSE.PAN,
-          };
-          break;
-        case "fly":
-          // In fly mode, we handle movement ourselves
-          this.controls.enableRotate = true;
-          this.controls.enablePan = false;
-          this.controls.mouseButtons = {
-            LEFT: THREE.MOUSE.ROTATE,
-            MIDDLE: undefined as unknown as THREE.MOUSE,
-            RIGHT: undefined as unknown as THREE.MOUSE,
-          };
-          break;
-      }
+    if (!this.controls) {
+      this.emit("mode-changed", { mode });
+      return;
     }
 
+    switch (mode) {
+      case "orbit":
+        this.controls.enableRotate = true;
+        this.controls.enablePan = true;
+        this.controls.mouseButtons = {
+          LEFT: THREE.MOUSE.ROTATE,
+          MIDDLE: THREE.MOUSE.PAN,
+          RIGHT: THREE.MOUSE.PAN,
+        };
+        break;
+      case "pan":
+        this.controls.enableRotate = false;
+        this.controls.enablePan = true;
+        this.controls.mouseButtons = {
+          LEFT: THREE.MOUSE.PAN,
+          MIDDLE: THREE.MOUSE.PAN,
+          RIGHT: THREE.MOUSE.PAN,
+        };
+        break;
+      case "fly":
+        this.controls.enableRotate = true;
+        this.controls.enablePan = false;
+        this.controls.mouseButtons = {
+          LEFT: THREE.MOUSE.ROTATE,
+          MIDDLE: undefined as unknown as THREE.MOUSE,
+          RIGHT: undefined as unknown as THREE.MOUSE,
+        };
+        break;
+    }
     this.emit("mode-changed", { mode });
   }
 
-  /**
-   * Get current camera mode
-   */
   getMode(): EditorCameraMode {
     return this.mode;
   }
 
-  /**
-   * Focus camera on a specific point
-   */
   focusOn(target: THREE.Vector3, distance?: number): void {
     if (!this.controls) return;
-
-    // Calculate distance if not provided
-    const focusDistance =
-      distance ?? this.world.camera.position.distanceTo(target);
-    const clampedDistance = THREE.MathUtils.clamp(
-      focusDistance,
+    const d = THREE.MathUtils.clamp(
+      distance ?? this.world.camera.position.distanceTo(target),
       this.config.minDistance,
       this.config.maxDistance,
     );
-
-    // Animate to target (simple immediate move for now)
     this.controls.target.copy(target);
-
-    // Position camera at appropriate distance
-    const direction = this._tempVec3
+    const dir = this._tempVec3
       .copy(this.world.camera.position)
       .sub(target)
       .normalize();
-    this.world.camera.position
-      .copy(target)
-      .addScaledVector(direction, clampedDistance);
-
+    this.world.camera.position.copy(target).addScaledVector(dir, d);
     this.controls.update();
-    this.emit("focus-changed", {
-      target: target.clone(),
-      distance: clampedDistance,
-    });
+    this.emit("focus-changed", { target: target.clone(), distance: d });
   }
 
-  /**
-   * Focus camera on a bounding box
-   */
-  focusOnBounds(box: THREE.Box3, padding: number = 1.2): void {
+  focusOnBounds(box: THREE.Box3, padding = 1.2): void {
     const center = new THREE.Vector3();
     const size = new THREE.Vector3();
     box.getCenter(center);
     box.getSize(size);
-
-    const maxDim = Math.max(size.x, size.y, size.z);
     const fov = this.world.camera.fov * (Math.PI / 180);
-    const distance = (maxDim * padding) / (2 * Math.tan(fov / 2));
-
-    this.focusOn(center, distance);
+    this.focusOn(
+      center,
+      (Math.max(size.x, size.y, size.z) * padding) / (2 * Math.tan(fov / 2)),
+    );
   }
 
-  /**
-   * Save current camera position as a bookmark
-   */
   saveBookmark(name: string): void {
     const bookmark: CameraBookmark = {
       name,
@@ -405,77 +309,46 @@ export class EditorCameraSystem extends System {
     this.emit("bookmark-saved", { bookmark });
   }
 
-  /**
-   * Load a camera bookmark
-   */
   loadBookmark(name: string): boolean {
     const bookmark = this.bookmarks.get(name);
     if (!bookmark) return false;
-
     this.world.camera.position.copy(bookmark.position);
     this.world.camera.zoom = bookmark.zoom;
     this.world.camera.updateProjectionMatrix();
-
     if (this.controls) {
       this.controls.target.copy(bookmark.target);
       this.controls.update();
     }
-
     this.emit("bookmark-loaded", { bookmark });
     return true;
   }
 
-  /**
-   * Get all bookmarks
-   */
   getBookmarks(): CameraBookmark[] {
     return Array.from(this.bookmarks.values());
   }
 
-  /**
-   * Delete a bookmark
-   */
   deleteBookmark(name: string): boolean {
     const deleted = this.bookmarks.delete(name);
-    if (deleted) {
-      this.emit("bookmark-deleted", { name });
-    }
+    if (deleted) this.emit("bookmark-deleted", { name });
     return deleted;
   }
 
-  /**
-   * Get the orbit controls instance for external customization
-   */
   getControls(): OrbitControls | null {
     return this.controls;
   }
-
-  /**
-   * Get current camera target
-   */
   getTarget(): THREE.Vector3 {
     return this.controls?.target.clone() ?? new THREE.Vector3();
   }
 
-  /**
-   * Set camera target without changing camera position
-   */
   setTarget(target: THREE.Vector3): void {
-    if (this.controls) {
-      this.controls.target.copy(target);
-      this.controls.update();
-    }
+    if (!this.controls) return;
+    this.controls.target.copy(target);
+    this.controls.update();
   }
 
   override update(delta: number): void {
     if (!this.controls) return;
-
-    // Handle fly mode movement
-    if (this.mode === "fly") {
-      this.updateFlyMode(delta);
-    }
-
-    // Always update orbit controls (handles damping)
+    if (this.mode === "fly") this.updateFlyMode(delta);
     this.controls.update();
   }
 
@@ -483,47 +356,32 @@ export class EditorCameraSystem extends System {
     const speed = this.flyKeys.fast
       ? this.config.flySpeed * this.config.flyFastMultiplier
       : this.config.flySpeed;
+    const dir = this.flyDirection.set(0, 0, 0);
 
-    // Reset direction
-    this.flyDirection.set(0, 0, 0);
+    if (this.flyKeys.forward) dir.z -= 1;
+    if (this.flyKeys.backward) dir.z += 1;
+    if (this.flyKeys.left) dir.x -= 1;
+    if (this.flyKeys.right) dir.x += 1;
+    if (this.flyKeys.up) dir.y += 1;
+    if (this.flyKeys.down) dir.y -= 1;
 
-    // Calculate movement direction based on camera orientation
-    if (this.flyKeys.forward) this.flyDirection.z -= 1;
-    if (this.flyKeys.backward) this.flyDirection.z += 1;
-    if (this.flyKeys.left) this.flyDirection.x -= 1;
-    if (this.flyKeys.right) this.flyDirection.x += 1;
-    if (this.flyKeys.up) this.flyDirection.y += 1;
-    if (this.flyKeys.down) this.flyDirection.y -= 1;
+    if (dir.lengthSq() === 0) return;
+    dir.normalize();
 
-    // Normalize if moving diagonally
-    if (this.flyDirection.lengthSq() > 0) {
-      this.flyDirection.normalize();
+    this._tempEuler.setFromQuaternion(this.world.camera.quaternion, "YXZ");
+    const cos = Math.cos(this._tempEuler.y),
+      sin = Math.sin(this._tempEuler.y);
+    const mx = (dir.x * cos - dir.z * sin) * speed * delta;
+    const my = dir.y * speed * delta;
+    const mz = (dir.x * sin + dir.z * cos) * speed * delta;
 
-      // Get camera rotation (Y-axis only for horizontal movement)
-      this._tempEuler.setFromQuaternion(this.world.camera.quaternion, "YXZ");
-      const yRotation = this._tempEuler.y;
-
-      // Rotate horizontal movement by camera Y rotation
-      const cos = Math.cos(yRotation);
-      const sin = Math.sin(yRotation);
-      const x = this.flyDirection.x * cos - this.flyDirection.z * sin;
-      const z = this.flyDirection.x * sin + this.flyDirection.z * cos;
-
-      // Apply movement
-      const moveX = x * speed * delta;
-      const moveY = this.flyDirection.y * speed * delta;
-      const moveZ = z * speed * delta;
-
-      this.world.camera.position.x += moveX;
-      this.world.camera.position.y += moveY;
-      this.world.camera.position.z += moveZ;
-
-      // Move target along with camera in fly mode
-      if (this.controls) {
-        this.controls.target.x += moveX;
-        this.controls.target.y += moveY;
-        this.controls.target.z += moveZ;
-      }
+    this.world.camera.position.x += mx;
+    this.world.camera.position.y += my;
+    this.world.camera.position.z += mz;
+    if (this.controls) {
+      this.controls.target.x += mx;
+      this.controls.target.y += my;
+      this.controls.target.z += mz;
     }
   }
 

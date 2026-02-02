@@ -6,9 +6,17 @@
  * Architecture:
  * - SpriteNodeMaterial for billboard flowers
  * - SSBO with bit-packed position, height, and visibility data
- * - Shared VegetationSsboUtils for visibility, alpha, and Y offset
+ * - Uses grass heightmap and exclusion textures for terrain integration
  * - WindManager integration for sway animation
- * - 16x update throttle (flowers are less dynamic than grass)
+ * - Updates every frame for stable world-space positioning
+ *
+ * **PERFORMANCE OPTIMIZATIONS:**
+ * - Compute shaders pre-initialized during load (no first-frame spike)
+ * - All heavy work done before gameplay starts
+ *
+ * **RELATED MODULES:**
+ * - For standalone flower generation (Asset Forge, viewers), see @hyperscape/procgen FlowerGen module
+ * - FlowerGen provides simpler flower geometry/materials without SSBO compute integration
  *
  * @module ProceduralFlowers
  */
@@ -33,21 +41,55 @@ import THREE, {
   mix,
   INFINITY,
   time,
+  clamp,
+  max,
+  PI,
+  PI2,
+  viewportCoordinate,
+  mod,
+  abs,
+  add,
+  sub,
+  mul,
+  atan,
+  smoothstep,
+  fract,
 } from "../../../extras/three/three";
 import { SpriteNodeMaterial } from "three/webgpu";
 import { System } from "../infrastructure/System";
 import type { World } from "../../../types";
 import { tslUtils } from "../../../utils/TSLUtils";
-import {
-  VegetationSsboUtils,
-  getHeightmapMax,
-  setHeightmapTexture,
-} from "./VegetationSsboUtils";
+import { VegetationSsboUtils } from "./VegetationSsboUtils";
 import { windManager } from "./Wind";
+import {
+  getGrassHeightmapTextureNode,
+  getGrassHeightmapUniforms,
+  getGrassExclusionTexture,
+  getGrassGridExclusionTexture,
+  getGrassRoadInfluenceTexture,
+} from "./ProceduralGrass";
+import { getNoiseTexture, generateNoiseTexture } from "./TerrainShader";
 
 // TSL types - use any for dynamic TSL function signatures
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type TSLFn = (...args: any[]) => any;
+
+// ============================================================================
+// ASYNC UTILITIES - Non-blocking main thread helpers
+// ============================================================================
+
+/**
+ * Yield to browser event loop - allows rendering and input processing
+ */
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestIdleCallback !== "undefined") {
+      requestIdleCallback(() => resolve(), { timeout: 16 });
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
+}
 
 // ============================================================================
 // CONFIGURATION - Matches Revo Realms
@@ -56,10 +98,10 @@ type TSLFn = (...args: any[]) => any;
 const getConfig = () => {
   const FLOWER_WIDTH = 0.5;
   const FLOWER_HEIGHT = 1;
-  const TILE_SIZE = 150;
-  const FLOWERS_PER_SIDE = 64;
-  const MIN_SCALE = 0.125;
-  const MAX_SCALE = 0.2;
+  const TILE_SIZE = 140; // Match grass tile size for 58m visibility
+  const FLOWERS_PER_SIDE = 32; // ~1000 flowers - sparse meadow distribution
+  const MIN_SCALE = 0.04; // Tiny wildflowers, barely visible
+  const MAX_SCALE = 0.08; // Small delicate flowers
   return {
     MIN_SCALE,
     MAX_SCALE,
@@ -84,6 +126,7 @@ const config = getConfig();
 const uniforms = {
   uPlayerDeltaXZ: uniform(new THREE.Vector2(0, 0)),
   uPlayerPosition: uniform(new THREE.Vector3(0, 0, 0)),
+  uCameraPosition: uniform(new THREE.Vector3(0, 0, 0)), // For distance culling
   uCameraForward: uniform(new THREE.Vector3(0, 0, 0)),
   // Culling
   uCameraMatrix: uniform(new THREE.Matrix4()),
@@ -92,16 +135,25 @@ const uniforms = {
   uCullPadNDCX: uniform(0.075),
   uCullPadNDCYNear: uniform(0.75),
   uCullPadNDCYFar: uniform(0.2),
-  // Tint colors
-  uColor1: uniform(new THREE.Color().setRGB(0.02, 0.14, 0.33)),
-  uColor2: uniform(new THREE.Color().setRGB(0.99, 0.64, 0.0)),
-  uColorStrength: uniform(0.275),
+  // Flower-specific distance culling - match grass distances
+  // Grass: R0=36m, R1=54m, FadeStart=54m, FadeEnd=58m
+  uR0: uniform(36), // Full density within 36m (match grass)
+  uR1: uniform(54), // Thin to minimum by 54m (match grass)
+  uPMin: uniform(0.03), // Keep 3% at outer edge
+  uFadeStart: uniform(54), // Start Bayer dither at 54m (match grass)
+  uFadeEnd: uniform(58), // Fully faded by 58m (match grass)
+  // Tint colors - muted, natural tones
+  uColor1: uniform(new THREE.Color().setRGB(0.02, 0.1, 0.25)),
+  uColor2: uniform(new THREE.Color().setRGB(0.7, 0.5, 0.0)),
+  uColorStrength: uniform(0.15), // Reduced for subtle appearance
 };
 
-// Noise texture
+// Noise texture for position variation
 let flowerNoiseTexture: THREE.Texture | null = null;
 // Flower atlas texture (optional - uses procedural if not available)
 let flowerAtlasTexture: THREE.Texture | null = null;
+// Terrain noise texture - SHARED with TerrainShader and ProceduralGrass for consistent dirt detection
+let terrainNoiseTexture: THREE.Texture | null = null;
 
 // ============================================================================
 // FLOWER SSBO - Bit-packed data structure
@@ -113,28 +165,44 @@ let flowerAtlasTexture: THREE.Texture | null = null;
 
 type InstancedArrayBuffer = ReturnType<typeof instancedArray>;
 
+// Max height for bit-packing (matches grass heightmap max)
+const HEIGHTMAP_MAX = 100;
+
 class FlowerSsbo {
   private buffer: InstancedArrayBuffer;
 
-  // Compute shaders - initialized in constructor after heightmap is ready
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  computeInit: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  computeUpdate: any;
+  // Track initialization state
+  private _initialized = false;
 
   constructor() {
     this.buffer = instancedArray(config.COUNT, "vec4");
+    // NOTE: We DO NOT use onInit callback here anymore!
+    // This caused first-frame spikes because computeInit ran during gameplay.
+    // Instead, call runInitialization() explicitly during loading.
+  }
 
-    // Create compute shaders AFTER buffer is ready
-    // These capture the current heightmapTexture value from VegetationSsboUtils
-    this.computeInit = this.createComputeInit();
-    this.computeUpdate = this.createComputeUpdate();
+  /**
+   * Run compute initialization explicitly during loading phase.
+   * This avoids first-frame spikes by pre-running heavy compute work.
+   * @returns Promise that resolves when initialization is complete
+   */
+  async runInitialization(renderer: THREE.WebGPURenderer): Promise<void> {
+    if (this._initialized) return;
 
-    this.computeUpdate.onInit(
-      ({ renderer }: { renderer: THREE.WebGPURenderer }) => {
-        renderer.computeAsync(this.computeInit);
-      },
+    console.log("[ProceduralFlowers] Running SSBO compute initialization...");
+    const startTime = performance.now();
+
+    // Run compute init - this populates all flower positions
+    await renderer.computeAsync(this.computeInit);
+
+    this._initialized = true;
+    console.log(
+      `[ProceduralFlowers] SSBO init complete: ${(performance.now() - startTime).toFixed(1)}ms`,
     );
+  }
+
+  get isInitialized(): boolean {
+    return this._initialized;
   }
 
   get computeBuffer(): InstancedArrayBuffer {
@@ -142,12 +210,12 @@ class FlowerSsbo {
   }
 
   // ============================================================================
-  // UNPACKING FUNCTIONS - Created as methods to capture current heightmapMax
+  // UNPACKING FUNCTIONS
   // ============================================================================
 
   // @ts-expect-error TSL Fn with array destructuring params - dynamic typing
   getYOffset: TSLFn = Fn(([data = vec4(0)]) => {
-    return tslUtils.unpackUnits(data.z, 0, 12, 0, Math.ceil(getHeightmapMax()));
+    return tslUtils.unpackUnits(data.z, 0, 12, 0, HEIGHTMAP_MAX);
   });
 
   // @ts-expect-error TSL Fn with array destructuring params - dynamic typing
@@ -170,14 +238,7 @@ class FlowerSsbo {
 
   // @ts-expect-error TSL Fn with array destructuring params - dynamic typing
   private setYOffset: TSLFn = Fn(([data = vec4(0), value = float(0)]) => {
-    data.z = tslUtils.packUnits(
-      data.z,
-      0,
-      12,
-      value,
-      0,
-      Math.ceil(getHeightmapMax()),
-    );
+    data.z = tslUtils.packUnits(data.z, 0, 12, value, 0, HEIGHTMAP_MAX);
     return data;
   });
 
@@ -197,110 +258,306 @@ class FlowerSsbo {
   });
 
   // ============================================================================
-  // COMPUTE INIT - Created in constructor to capture current texture state
+  // COMPUTE INIT
   // ============================================================================
 
-  private createComputeInit() {
-    return Fn(() => {
-      const data = this.buffer.element(instanceIndex);
+  computeInit = Fn(() => {
+    const data = this.buffer.element(instanceIndex);
 
-      // Position XZ in grid
-      const row = floor(float(instanceIndex).div(config.FLOWERS_PER_SIDE));
-      const col = float(instanceIndex).mod(config.FLOWERS_PER_SIDE);
+    // Position XZ in grid
+    const row = floor(float(instanceIndex).div(config.FLOWERS_PER_SIDE));
+    const col = float(instanceIndex).mod(config.FLOWERS_PER_SIDE);
 
-      const randX = hash(instanceIndex.add(4321));
-      const randZ = hash(instanceIndex.add(1234));
-      const offsetX = col
-        .mul(config.SPACING)
-        .sub(config.TILE_HALF_SIZE)
-        .add(randX.mul(config.SPACING * 0.5));
-      const offsetZ = row
-        .mul(config.SPACING)
-        .sub(config.TILE_HALF_SIZE)
-        .add(randZ.mul(config.SPACING * 0.5));
+    const randX = hash(instanceIndex.add(4321));
+    const randZ = hash(instanceIndex.add(1234));
+    const offsetX = col
+      .mul(config.SPACING)
+      .sub(config.TILE_HALF_SIZE)
+      .add(randX.mul(config.SPACING * 0.5));
+    const offsetZ = row
+      .mul(config.SPACING)
+      .sub(config.TILE_HALF_SIZE)
+      .add(randZ.mul(config.SPACING * 0.5));
 
-      // UV for noise sampling
-      const _uv = vec3(offsetX, 0, offsetZ)
-        .xz.add(config.TILE_HALF_SIZE)
-        .div(config.TILE_SIZE)
-        .abs();
+    // UV for noise sampling
+    const _uv = vec3(offsetX, 0, offsetZ)
+      .xz.add(config.TILE_HALF_SIZE)
+      .div(config.TILE_SIZE)
+      .abs();
 
-      // Sample noise for position variation
-      // Use hash as fallback since it's always available
-      const noiseR = flowerNoiseTexture
-        ? texture(flowerNoiseTexture, _uv).r
-        : hash(instanceIndex.mul(0.73));
-      const noiseG = flowerNoiseTexture
-        ? texture(flowerNoiseTexture, _uv).g
-        : hash(instanceIndex.mul(1.27));
-      const noiseB = flowerNoiseTexture
-        ? texture(flowerNoiseTexture, _uv).b
-        : hash(instanceIndex.mul(0.91));
-      const noiseA = flowerNoiseTexture
-        ? texture(flowerNoiseTexture, _uv).a
-        : hash(instanceIndex.mul(1.53));
+    // Sample noise for position variation
+    // Use hash as fallback since it's always available
+    const noiseR = flowerNoiseTexture
+      ? texture(flowerNoiseTexture, _uv).r
+      : hash(instanceIndex.mul(0.73));
+    const noiseG = flowerNoiseTexture
+      ? texture(flowerNoiseTexture, _uv).g
+      : hash(instanceIndex.mul(1.27));
+    const noiseB = flowerNoiseTexture
+      ? texture(flowerNoiseTexture, _uv).b
+      : hash(instanceIndex.mul(0.91));
+    const noiseA = flowerNoiseTexture
+      ? texture(flowerNoiseTexture, _uv).a
+      : hash(instanceIndex.mul(1.53));
 
-      const noiseVec = vec4(noiseR, noiseG, noiseB, noiseA);
-      data.assign(this.setNoise(data, noiseVec));
-      const wrapNoise = noiseR;
+    const noiseVec = vec4(noiseR, noiseG, noiseB, noiseA);
+    data.assign(this.setNoise(data, noiseVec));
+    const wrapNoise = noiseR;
 
-      const noiseX = wrapNoise.mul(99.37);
-      const noiseZ = wrapNoise.mul(49.71);
+    const noiseX = wrapNoise.mul(99.37);
+    const noiseZ = wrapNoise.mul(49.71);
 
-      data.x = offsetX.add(noiseX);
-      data.y = offsetZ.add(noiseZ);
-    })().compute(config.COUNT, [config.WORKGROUP_SIZE]);
-  }
+    data.x = offsetX.add(noiseX);
+    data.y = offsetZ.add(noiseZ);
+  })().compute(config.COUNT, [config.WORKGROUP_SIZE]);
 
   // ============================================================================
-  // COMPUTE UPDATE - Created in constructor to capture current heightmap
+  // COMPUTE UPDATE
   // ============================================================================
 
-  private createComputeUpdate() {
-    // Get the computeYOffset function dynamically - it captures current heightmapTexture
-    const computeYOffset = VegetationSsboUtils.getComputeYOffset();
+  computeUpdate = Fn(() => {
+    const data = this.buffer.element(instanceIndex);
 
-    return Fn(() => {
-      const data = this.buffer.element(instanceIndex);
+    // Position wrapping using shared utility
+    const pos = VegetationSsboUtils.wrapPosition(
+      vec2(data.x, data.y),
+      uniforms.uPlayerDeltaXZ,
+      config.TILE_SIZE,
+    );
 
-      // Position wrapping using shared utility
-      const pos = VegetationSsboUtils.wrapPosition(
-        vec2(data.x, data.y),
-        uniforms.uPlayerDeltaXZ,
-        config.TILE_SIZE,
+    data.x = pos.x;
+    data.y = pos.z;
+
+    // Local offset from player
+    const offsetX = pos.x;
+    const offsetZ = pos.z;
+
+    // World position = local offset + player/camera position
+    const worldX = offsetX.add(uniforms.uPlayerPosition.x);
+    const worldZ = offsetZ.add(uniforms.uPlayerPosition.z);
+
+    // Sample heightmap for Y position using GRASS HEIGHTMAP (same as grass system)
+    // This ensures flowers are placed on the exact same terrain as grass
+    const grassHeightmap = getGrassHeightmapTextureNode();
+    const grassUniforms = getGrassHeightmapUniforms();
+
+    // Calculate heightmap UVs (needed for both height and slope calculation)
+    const halfWorld = grassUniforms.uHeightmapWorldSize.mul(0.5);
+    const hmUvX = worldX
+      .sub(grassUniforms.uHeightmapCenterX)
+      .add(halfWorld)
+      .div(grassUniforms.uHeightmapWorldSize);
+    const hmUvZ = worldZ
+      .sub(grassUniforms.uHeightmapCenterZ)
+      .add(halfWorld)
+      .div(grassUniforms.uHeightmapWorldSize);
+    const hmUV = vec2(
+      hmUvX.clamp(float(0.001), float(0.999)),
+      hmUvZ.clamp(float(0.001), float(0.999)),
+    );
+
+    let heightmapY: ReturnType<typeof float>;
+    if (grassHeightmap) {
+      const hmSample = grassHeightmap.sample(hmUV);
+      heightmapY = hmSample.r.mul(grassUniforms.uHeightmapMax);
+    } else {
+      // Fallback: use player Y level
+      heightmapY = uniforms.uPlayerPosition.y;
+    }
+
+    // Store Y offset
+    data.assign(this.setYOffset(data, heightmapY));
+
+    // World position with height for visibility check
+    const worldPos = vec3(worldX, heightmapY, worldZ);
+
+    // Visibility check using shared utility
+    const isVisible = VegetationSsboUtils.computeVisibility(
+      worldPos,
+      uniforms.uCameraMatrix,
+      uniforms.uFx,
+      uniforms.uFy,
+      config.FLOWER_BOUNDING_SPHERE_RADIUS,
+      uniforms.uCullPadNDCX,
+      uniforms.uCullPadNDCYNear,
+      uniforms.uCullPadNDCYFar,
+    );
+
+    // ============================================================================
+    // EXCLUSION CHECK - Same as grass for consistent building/road exclusion
+    // ============================================================================
+
+    // Grid-based exclusion (CollisionMatrix blocked tiles)
+    const gridExclusion = getGrassGridExclusionTexture();
+    const gridNotExcluded = float(1.0).toVar();
+    if (gridExclusion.isEnabled && gridExclusion.textureNode) {
+      const gridHalfWorld = gridExclusion.uWorldSize.mul(0.5);
+      const gridUvX = worldX
+        .sub(gridExclusion.uCenterX)
+        .add(gridHalfWorld)
+        .div(gridExclusion.uWorldSize);
+      const gridUvZ = worldZ
+        .sub(gridExclusion.uCenterZ)
+        .add(gridHalfWorld)
+        .div(gridExclusion.uWorldSize);
+      const gridUV = vec2(
+        gridUvX.clamp(0.001, 0.999),
+        gridUvZ.clamp(0.001, 0.999),
       );
+      const gridExclusionValue = gridExclusion.textureNode.sample(gridUV).r;
+      gridNotExcluded.assign(float(1).sub(gridExclusionValue));
+    }
 
-      data.x = pos.x;
-      data.y = pos.z;
+    // Legacy texture exclusion (buildings, duel arenas)
+    // Use same thresholds as grass for consistent building edge behavior
+    const legacyExclusion = getGrassExclusionTexture();
+    const legacyHalfWorld = legacyExclusion.uWorldSize.mul(0.5);
+    const legacyUvX = worldX
+      .sub(legacyExclusion.uCenterX)
+      .add(legacyHalfWorld)
+      .div(legacyExclusion.uWorldSize);
+    const legacyUvZ = worldZ
+      .sub(legacyExclusion.uCenterZ)
+      .add(legacyHalfWorld)
+      .div(legacyExclusion.uWorldSize);
+    const legacyUV = vec2(
+      legacyUvX.clamp(0.001, 0.999),
+      legacyUvZ.clamp(0.001, 0.999),
+    );
+    const legacyExclusionValue = legacyExclusion.textureNode.sample(legacyUV).r;
+    // Hard cutoff with dithering - flowers within 0.1m of building edge are hidden
+    // Matches grass threshold (exclusion > 0.6 = hidden)
+    const legacyDitherRand = hash(float(instanceIndex).mul(11.45));
+    const legacyNotExcluded = step(
+      legacyExclusionValue,
+      float(0.6).add(legacyDitherRand.mul(0.2)),
+    );
 
-      const worldPos = pos.add(uniforms.uPlayerPosition);
+    // ============================================================================
+    // BIOME CHECKS - Same as grass: no flowers on roads, dirt, sand
+    // Uses SAME noise texture as TerrainShader and ProceduralGrass for consistency
+    // ============================================================================
 
-      // Visibility check using shared utility
-      const isVisible = VegetationSsboUtils.computeVisibility(
-        worldPos,
-        uniforms.uCameraMatrix,
-        uniforms.uFx,
-        uniforms.uFy,
-        config.FLOWER_BOUNDING_SPHERE_RADIUS,
-        uniforms.uCullPadNDCX,
-        uniforms.uCullPadNDCYNear,
-        uniforms.uCullPadNDCYFar,
+    // Road influence culling - sample road texture directly
+    const roadInfluence = getGrassRoadInfluenceTexture();
+    const roadHalfWorld = roadInfluence.uWorldSize.mul(0.5);
+    const roadUvX = worldX
+      .sub(roadInfluence.uCenterX)
+      .add(roadHalfWorld)
+      .div(roadInfluence.uWorldSize);
+    const roadUvZ = worldZ
+      .sub(roadInfluence.uCenterZ)
+      .add(roadHalfWorld)
+      .div(roadInfluence.uWorldSize);
+    const roadUV = vec2(
+      roadUvX.clamp(0.001, 0.999),
+      roadUvZ.clamp(0.001, 0.999),
+    );
+    const roadValue = roadInfluence.textureNode.sample(roadUV).r;
+    const roadDitherRand = hash(float(instanceIndex).mul(9.12));
+    const _notOnRoad = step(
+      roadValue,
+      roadInfluence.uThreshold.add(roadDitherRand.mul(0.15)),
+    );
+
+    // Dirt patch detection - MUST use same noise texture as TerrainShader and ProceduralGrass
+    // to ensure flowers are excluded from the EXACT same dirt patches
+    const TERRAIN_NOISE_SCALE = 0.0008;
+    const DIRT_THRESHOLD = 0.5;
+
+    // Sample terrain noise at world position - MATCHES grass exactly
+    const noiseUV = vec2(worldX, worldZ).mul(TERRAIN_NOISE_SCALE);
+    let terrainNoiseValue: ReturnType<typeof float>;
+    if (terrainNoiseTexture) {
+      // Use shared terrain noise texture for exact dirt patch matching
+      terrainNoiseValue = texture(terrainNoiseTexture, noiseUV).r;
+    } else {
+      // Hash fallback - MUST match grass fallback: same scale for x and z
+      terrainNoiseValue = hash(
+        worldX
+          .mul(TERRAIN_NOISE_SCALE * 1000)
+          .add(worldZ.mul(TERRAIN_NOISE_SCALE * 1000)),
       );
+    }
 
-      data.assign(this.setVisibility(data, isVisible));
+    // Dirt patch factor - smoothstep(0.45, 0.65, noiseValue) - MATCHES TerrainShader.ts exactly
+    const dirtPatchFactor = smoothstep(
+      float(DIRT_THRESHOLD - 0.05),
+      float(DIRT_THRESHOLD + 0.15),
+      terrainNoiseValue,
+    );
 
-      If(isVisible, () => {
-        // Y offset from heightmap - use the dynamically created function
-        // that captures the current heightmapTexture
-        const yOffset = computeYOffset(worldPos);
-        data.assign(this.setYOffset(data, yOffset));
+    // Calculate slope from heightmap for slope-based culling
+    // Sample neighboring heights
+    const slopeEpsilon = float(1.0);
+    const hmUvRight = vec2(
+      hmUvX
+        .add(slopeEpsilon.div(grassUniforms.uHeightmapWorldSize))
+        .clamp(0.001, 0.999),
+      hmUvZ.clamp(0.001, 0.999),
+    );
+    const hmUvForward = vec2(
+      hmUvX.clamp(0.001, 0.999),
+      hmUvZ
+        .add(slopeEpsilon.div(grassUniforms.uHeightmapWorldSize))
+        .clamp(0.001, 0.999),
+    );
+    const hCenter = heightmapY;
+    const hRight = grassHeightmap
+      ? grassHeightmap.sample(hmUvRight).r.mul(grassUniforms.uHeightmapMax)
+      : heightmapY;
+    const hForward = grassHeightmap
+      ? grassHeightmap.sample(hmUvForward).r.mul(grassUniforms.uHeightmapMax)
+      : heightmapY;
 
-        // Alpha from grass map using shared utility
-        const alphaVisibility = VegetationSsboUtils.computeAlpha(worldPos);
-        data.assign(this.setVisibility(data, alphaVisibility));
-      });
-    })().compute(config.COUNT, [config.WORKGROUP_SIZE]);
-  }
+    // Compute slope (0 = flat, 1 = vertical)
+    const dx = hRight.sub(hCenter);
+    const dz = hForward.sub(hCenter);
+    const normalY = float(1.0).div(
+      float(1.0).add(dx.mul(dx)).add(dz.mul(dz)).pow(0.5),
+    );
+    const slope = float(1.0).sub(normalY.abs());
+
+    // Flatness for dirt patches (dirt patches only on flat ground)
+    const flatnessFactor = smoothstep(float(0.3), float(0.05), slope);
+
+    // Slope-based suppression - MATCHES GRASS EXACTLY
+    const slopeFactor = smoothstep(float(0.25), float(0.6), slope);
+
+    // Combined dirt factor - MATCHES GRASS EXACTLY
+    const _combinedDirtFactor = max(
+      dirtPatchFactor.mul(flatnessFactor).mul(0.7), // Reduce dirt patch impact
+      slopeFactor.mul(0.6), // Reduce slope impact
+    );
+
+    // Dithered culling on dirt - MATCHES GRASS EXACTLY (wider range for smooth transition)
+    const dirtDitherRand = hash(float(instanceIndex).mul(5.67));
+    const _notOnDirt = step(_combinedDirtFactor, dirtDitherRand.mul(0.5)); // 0-0.5 dither range
+
+    // Sand zone (6-10m height on flat ground) - no flowers on beaches
+    const sandZone = smoothstep(float(10.0), float(6.0), heightmapY).mul(
+      flatnessFactor,
+    );
+    const sandDitherRand = hash(float(instanceIndex).mul(6.78));
+    const _notOnSand = step(sandZone.mul(0.8), sandDitherRand.mul(0.4));
+
+    // Water zone - no flowers below water level (5m)
+    const waterDitherRand = hash(float(instanceIndex).mul(7.89));
+    const waterFade = smoothstep(float(5.0), float(6.0), heightmapY);
+    const _aboveWater = step(waterDitherRand, waterFade);
+
+    // Combine: all must allow flowers
+    const notExcluded = gridNotExcluded
+      .mul(legacyNotExcluded)
+      .mul(_notOnRoad)
+      .mul(_notOnDirt)
+      .mul(_notOnSand)
+      .mul(_aboveWater);
+
+    // Combined visibility
+    const finalVisibility = isVisible.mul(notExcluded);
+    data.assign(this.setVisibility(data, finalVisibility));
+  })().compute(config.COUNT, [config.WORKGROUP_SIZE]);
 }
 
 // ============================================================================
@@ -320,7 +577,7 @@ class FlowerMaterial extends SpriteNodeMaterial {
     this.precision = "lowp";
     this.stencilWrite = false;
     this.forceSinglePass = true;
-    this.transparent = false;
+    this.transparent = true; // Enable for dithered fade
 
     const data = this.ssbo.computeBuffer.element(instanceIndex);
     const isVisible = this.ssbo.getVisibility(data);
@@ -331,31 +588,140 @@ class FlowerMaterial extends SpriteNodeMaterial {
     const rand1 = hash(instanceIndex.add(9234));
     const rand2 = hash(instanceIndex.add(33.87));
 
-    // Position with wind sway (use TSL time for proper animation)
+    // === DISTANCE-BASED CULLING - FLOWER-SPECIFIC (SHORTER than grass) ===
+    // Flowers fade closer than grass to reduce visual noise and popping at distance
+    // Grass: R0=8m, R1=14m, FadeStart=14m, FadeEnd=18m
+    // Flowers: R0=6m, R1=10m, FadeStart=10m, FadeEnd=14m
+
+    // Distance from camera (x,z are local offsets from mesh center which follows camera)
+    const distSq = x.mul(x).add(z.mul(z));
+
+    // Stochastic distance culling with flower-specific distances
+    const R0 = uniforms.uR0;
+    const R1 = uniforms.uR1;
+    const pMin = uniforms.uPMin;
+    const R0Sq = R0.mul(R0);
+    const R1Sq = R1.mul(R1);
+    const t = clamp(
+      distSq.sub(R0Sq).div(max(R1Sq.sub(R0Sq), float(0.00001))),
+      0.0,
+      1.0,
+    );
+    const p = mix(float(1.0), pMin, t); // 1 at center, pMin at edge
+    const rnd = hash(float(instanceIndex).mul(0.73));
+    const stochasticKeep = step(rnd, p);
+
+    // Distance fade with Bayer dithering - flower-specific shorter range
+    const fadeStartSq = uniforms.uFadeStart.mul(uniforms.uFadeStart);
+    const fadeEndSq = uniforms.uFadeEnd.mul(uniforms.uFadeEnd);
+    const linearFade = float(1.0).sub(
+      clamp(
+        distSq
+          .sub(fadeStartSq)
+          .div(max(fadeEndSq.sub(fadeStartSq), float(0.001))),
+        0.0,
+        1.0,
+      ),
+    );
+    const ditherRand = hash(float(instanceIndex).mul(1.31));
+    const ditherVisible = step(ditherRand, linearFade);
+
+    // Combined visibility
+    const finalVisible = isVisible.mul(stochasticKeep).mul(ditherVisible);
+
+    // NATURAL WIND - noise-modulated, not pure sinusoidal
     const windIntensity = windManager.uIntensity;
     const windDirection = windManager.uDirection;
-    const timer = time.add(float(2).add(windIntensity.mul(0.25)));
-    const swayX = sin(timer.add(rand1.mul(100))).mul(0.25);
-    const swayY = rand2.mul(0.5);
-    const swayZ = cos(timer.mul(2).add(rand2.mul(33.76))).mul(0.15);
-    const swayOffset = vec3(swayX, swayY, swayZ);
+
+    // Per-instance frequency variation (breaks uniform oscillation)
+    const freqX = rand1.mul(0.4).add(0.8); // 0.8-1.2x base
+    const freqZ = rand2.mul(0.3).add(0.85); // 0.85-1.15x base
+    const phaseX = rand1.mul(PI2);
+    const phaseZ = rand2.mul(PI2);
+
+    // Layer multiple frequencies for organic motion
+    const baseSpeed = float(0.8).add(windIntensity.mul(0.3));
+    const sway1X = sin(time.mul(baseSpeed.mul(freqX)).add(phaseX));
+    const sway2X = sin(
+      time.mul(baseSpeed.mul(freqX).mul(1.7)).add(phaseX.mul(0.6)),
+    );
+    const sway1Z = sin(time.mul(baseSpeed.mul(freqZ).mul(0.9)).add(phaseZ));
+    const sway2Z = sin(
+      time.mul(baseSpeed.mul(freqZ).mul(1.5)).add(phaseZ.mul(0.8)),
+    );
+
+    // Blend layers for natural movement
+    const swayX = sway1X.mul(0.6).add(sway2X.mul(0.3)).mul(0.08);
+    const swayY = rand2.mul(0.2); // Static height variation
+    const swayZ = sway1Z.mul(0.5).add(sway2Z.mul(0.35)).mul(0.06);
+
+    // Add wind direction influence
+    const windSwayX = swayX.add(windDirection.x.mul(windIntensity).mul(0.15));
+    const windSwayZ = swayZ.add(windDirection.y.mul(windIntensity).mul(0.15));
+    const swayOffset = vec3(windSwayX, swayY, windSwayZ);
 
     // INFINITY offset for invisible flowers
     const offscreenOffset = uniforms.uCameraForward
       .mul(INFINITY)
-      .mul(float(1).sub(isVisible));
+      .mul(float(1).sub(finalVisible));
 
-    const offsetX = x.add(windDirection.x.mul(windIntensity).mul(0.5));
-    const baseHeight = rand1.add(rand2).add(0.25).clamp();
+    const offsetX = x.add(windDirection.x.mul(windIntensity).mul(0.3));
+    // Height offset: 0.02-0.15 range - flowers sit low in the grass
+    // Grass blade height is 0.5m, so flowers should peek just above ground
+    const baseHeight = rand1.mul(0.13).add(0.02);
     const offsetY = y.add(baseHeight);
-    const offsetZ = z.add(windDirection.y.mul(windIntensity).mul(0.5));
+    const offsetZ = z.add(windDirection.y.mul(windIntensity).mul(0.3));
     const basePosition = vec3(offsetX, offsetY, offsetZ);
     this.positionNode = basePosition.add(swayOffset).add(offscreenOffset);
 
-    // Size
-    this.scaleNode = vec3(
-      rand1.remap(0, 1, config.MIN_SCALE, config.MAX_SCALE),
+    // Size - uniform scale to avoid stretching (flower sprites are square)
+    const baseScale = rand1.remap(
+      float(0),
+      float(1),
+      float(config.MIN_SCALE),
+      float(config.MAX_SCALE),
     );
+    this.scaleNode = vec3(baseScale, baseScale, baseScale);
+
+    // OLD SCHOOL 8x8 BAYER SCREEN-SPACE DITHERING for flowers
+    const fragCoord = viewportCoordinate;
+    const ix = mod(floor(fragCoord.x), float(8.0));
+    const iy = mod(floor(fragCoord.y), float(8.0));
+
+    // 8x8 Bayer matrix calculation
+    const bit0_x = mod(ix, float(2.0));
+    const bit1_x = mod(floor(mul(ix, float(0.5))), float(2.0));
+    const bit2_x = floor(mul(ix, float(0.25)));
+    const bit0_y = mod(iy, float(2.0));
+    const bit1_y = mod(floor(mul(iy, float(0.5))), float(2.0));
+    const bit2_y = floor(mul(iy, float(0.25)));
+
+    const xor0 = abs(sub(bit0_x, bit0_y));
+    const xor1 = abs(sub(bit1_x, bit1_y));
+    const xor2 = abs(sub(bit2_x, bit2_y));
+
+    const bayerInt = add(
+      add(
+        add(mul(xor0, float(32.0)), mul(bit0_y, float(16.0))),
+        add(mul(xor1, float(8.0)), mul(bit1_y, float(4.0))),
+      ),
+      add(mul(xor2, float(2.0)), bit2_y),
+    );
+    const bayerThreshold = mul(bayerInt, float(0.015625)); // 1/64
+
+    // Distance-based Bayer fade (x, z are local offsets from mesh center)
+    const distFromCamSq = x.mul(x).add(z.mul(z));
+    // Reuse fadeStartSq and fadeEndSq from earlier distance fade calculation
+    const distFade = float(1.0).sub(
+      clamp(
+        distFromCamSq
+          .sub(fadeStartSq)
+          .div(max(fadeEndSq.sub(fadeStartSq), float(0.001))),
+        0.0,
+        1.0,
+      ),
+    );
+    const bayerFadeVisible = step(bayerThreshold, distFade);
 
     // Diffuse color
     if (flowerAtlasTexture) {
@@ -365,30 +731,121 @@ class FlowerMaterial extends SpriteNodeMaterial {
       const sign = step(rand2, rand1).mul(2).sub(1);
       const color = mix(tint, flower.xyz, rand1.add(rand2.mul(sign)));
       this.colorNode = color.mul(uniforms.uColorStrength);
-      this.opacityNode = isVisible.mul(flower.w);
-      this.alphaTest = 0.15;
+      this.opacityNode = finalVisible.mul(flower.w).mul(bayerFadeVisible);
+      this.alphaTest = 0.1;
     } else {
-      // Procedural flower colors
-      const pink = vec3(1.0, 0.3, 0.5);
-      const yellow = vec3(1.0, 0.8, 0.2);
-      const purple = vec3(0.6, 0.3, 0.8);
-      const orange = vec3(1.0, 0.5, 0.2);
+      // Procedural wildflower colors - natural meadow tones
+      // White/cream daisies, yellow buttercups, purple clover, pink/red poppies, blue forget-me-nots
+      const white = vec3(0.95, 0.93, 0.88);
+      const cream = vec3(0.95, 0.9, 0.75);
+      const yellow = vec3(0.9, 0.8, 0.2);
+      const purple = vec3(0.6, 0.4, 0.7);
+      const pink = vec3(0.85, 0.5, 0.55);
+      const blue = vec3(0.4, 0.55, 0.85);
+      const red = vec3(0.8, 0.25, 0.2);
 
-      const colorIndex = floor(rand2.mul(4));
-      const color1 = mix(pink, yellow, step(1, colorIndex));
-      const color2 = mix(color1, purple, step(2, colorIndex));
-      const finalColor = mix(color2, orange, step(3, colorIndex));
+      // Select flower type (0-6) based on random
+      const flowerType = floor(rand2.mul(7));
 
-      // Petal pattern (circle)
-      const uvCoord = uv();
-      const distFromCenter = uvCoord.sub(0.5).length();
-      const petalPattern = step(distFromCenter, 0.4);
+      // UV coordinates centered at 0
+      const uvCoord = uv().sub(0.5);
+      const dist = uvCoord.length();
+      const angle = atan(uvCoord.y, uvCoord.x);
 
-      this.colorNode = finalColor
-        .mul(petalPattern)
-        .mul(uniforms.uColorStrength);
-      this.opacityNode = isVisible.mul(petalPattern);
-      this.alphaTest = 0.15;
+      // Flower type 0-1: Daisy (white/cream petals, yellow center)
+      // Petals using polar coordinates with sin modulation
+      const daisyPetals = float(8).add(rand1.mul(4)); // 8-12 petals
+      const daisyPetalShape = sin(angle.mul(daisyPetals)).mul(0.5).add(0.5);
+      const daisyRadius = float(0.35).add(daisyPetalShape.mul(0.1));
+      const daisyMask = smoothstep(daisyRadius.add(0.02), daisyRadius, dist);
+      const daisyCenter = smoothstep(float(0.12), float(0.08), dist);
+      const daisyPetalColor = mix(white, cream, rand1);
+      const daisyColor = mix(daisyPetalColor, yellow, daisyCenter);
+
+      // Flower type 2: Buttercup (simple yellow 5 petals)
+      const buttercupPetals = float(5);
+      const buttercupShape = sin(angle.mul(buttercupPetals).add(PI.mul(0.5)))
+        .mul(0.5)
+        .add(0.5);
+      const buttercupRadius = float(0.3).add(buttercupShape.mul(0.12));
+      const buttercupMask = smoothstep(
+        buttercupRadius.add(0.02),
+        buttercupRadius,
+        dist,
+      );
+      const buttercupCenter = smoothstep(float(0.08), float(0.05), dist);
+      const buttercupColor = mix(yellow, yellow.mul(0.7), buttercupCenter);
+
+      // Flower type 3: Clover (purple/pink fuzzy ball)
+      const cloverNoise = sin(angle.mul(12).add(dist.mul(20)))
+        .mul(0.5)
+        .add(0.5);
+      const cloverRadius = float(0.32).add(cloverNoise.mul(0.08));
+      const cloverMask = smoothstep(cloverRadius.add(0.03), cloverRadius, dist);
+      const cloverColor = mix(purple, pink, rand1.mul(0.5));
+
+      // Flower type 4: Forget-me-not (tiny blue 5 petals, white center)
+      const forgetPetals = float(5);
+      const forgetShape = sin(angle.mul(forgetPetals)).mul(0.5).add(0.5);
+      const forgetRadius = float(0.28).add(forgetShape.mul(0.15));
+      const forgetMask = smoothstep(forgetRadius.add(0.02), forgetRadius, dist);
+      const forgetCenter = smoothstep(float(0.1), float(0.06), dist);
+      const forgetColor = mix(blue, white, forgetCenter);
+
+      // Flower type 5: Poppy (red 4 petals, dark center)
+      const poppyPetals = float(4);
+      const poppyShape = sin(angle.mul(poppyPetals).add(PI.mul(0.25)))
+        .mul(0.5)
+        .add(0.5);
+      const poppyRadius = float(0.32).add(poppyShape.mul(0.1));
+      const poppyMask = smoothstep(poppyRadius.add(0.02), poppyRadius, dist);
+      const poppyCenter = smoothstep(float(0.1), float(0.06), dist);
+      const poppyColor = mix(red, vec3(0.15, 0.1, 0.1), poppyCenter);
+
+      // Flower type 6: Simple dot (tiny colored dot)
+      const dotMask = smoothstep(float(0.2), float(0.15), dist);
+      const dotColorMix = floor(rand1.mul(4));
+      const dotColor1 = mix(yellow, pink, step(float(1), dotColorMix));
+      const dotColor2 = mix(dotColor1, white, step(float(2), dotColorMix));
+      const dotColor = mix(dotColor2, purple, step(float(3), dotColorMix));
+
+      // Select flower based on type
+      const isDaisy = step(flowerType, float(1.5)); // types 0-1
+      const isButtercup = step(float(1.5), flowerType).mul(
+        step(flowerType, float(2.5)),
+      );
+      const isClover = step(float(2.5), flowerType).mul(
+        step(flowerType, float(3.5)),
+      );
+      const isForget = step(float(3.5), flowerType).mul(
+        step(flowerType, float(4.5)),
+      );
+      const isPoppy = step(float(4.5), flowerType).mul(
+        step(flowerType, float(5.5)),
+      );
+      const isDot = step(float(5.5), flowerType);
+
+      // Combine masks
+      const flowerMask = daisyMask
+        .mul(isDaisy)
+        .add(buttercupMask.mul(isButtercup))
+        .add(cloverMask.mul(isClover))
+        .add(forgetMask.mul(isForget))
+        .add(poppyMask.mul(isPoppy))
+        .add(dotMask.mul(isDot));
+
+      // Combine colors
+      const flowerColor = daisyColor
+        .mul(isDaisy)
+        .add(buttercupColor.mul(isButtercup))
+        .add(cloverColor.mul(isClover))
+        .add(forgetColor.mul(isForget))
+        .add(poppyColor.mul(isPoppy))
+        .add(dotColor.mul(isDot));
+
+      this.colorNode = flowerColor.mul(float(0.8).add(rand1.mul(0.4))); // Slight brightness variation
+      this.opacityNode = finalVisible.mul(flowerMask).mul(bayerFadeVisible);
+      this.alphaTest = 0.1;
     }
   }
 }
@@ -403,18 +860,23 @@ export class ProceduralFlowerSystem extends System {
   private material: FlowerMaterial | null = null;
   private renderer: THREE.WebGPURenderer | null = null;
   private flowersInitialized = false;
-  private frameCount = 0;
+
+  // Track camera position for proper delta calculation (world-stable positioning)
+  private lastCameraX = 0;
+  private lastCameraZ = 0;
 
   // Textures
   private noiseTexture: THREE.Texture | null = null;
   private atlasTexture: THREE.Texture | null = null;
+  private terrainNoiseTexture: THREE.Texture | null = null;
 
   constructor(world: World) {
     super(world);
   }
 
   getDependencies() {
-    return { required: [], optional: ["graphics", "terrain"] };
+    // Flowers depend on grass for shared heightmap texture
+    return { required: [], optional: ["graphics", "terrain", "grass"] };
   }
 
   async start(): Promise<void> {
@@ -480,6 +942,25 @@ export class ProceduralFlowerSystem extends System {
     } else {
       console.log("[ProceduralFlowers] Using procedural flower colors");
     }
+
+    // Load terrain noise texture - SHARED with TerrainShader and ProceduralGrass
+    // This ensures flowers respect the EXACT same dirt patches as grass and terrain
+    let terrainNoise = getNoiseTexture();
+    if (!terrainNoise) {
+      // Generate it if terrain hasn't yet (shouldn't happen normally)
+      terrainNoise = generateNoiseTexture();
+    }
+    if (terrainNoise) {
+      this.terrainNoiseTexture = terrainNoise;
+      terrainNoiseTexture = terrainNoise;
+      console.log(
+        "[ProceduralFlowers] Using terrain's noise texture for consistent dirt patches",
+      );
+    } else {
+      console.log(
+        "[ProceduralFlowers] Using hash fallback for noise (terrain noise unavailable)",
+      );
+    }
   }
 
   private async initializeFlowers(): Promise<void> {
@@ -503,11 +984,33 @@ export class ProceduralFlowerSystem extends System {
       return;
     }
 
+    // Wait for grass heightmap to be ready (flowers depend on it)
+    // The grass system must initialize first so we can share its heightmap
+    let retries = 0;
+    const maxRetries = 50; // 5 seconds max wait
+    while (!getGrassHeightmapTextureNode() && retries < maxRetries) {
+      console.log(
+        `[ProceduralFlowers] Waiting for grass heightmap... (${retries + 1}/${maxRetries})`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      retries++;
+    }
+
+    if (!getGrassHeightmapTextureNode()) {
+      console.warn(
+        "[ProceduralFlowers] Grass heightmap not available after timeout - flowers will use player Y level",
+      );
+    } else {
+      console.log(
+        "[ProceduralFlowers] Grass heightmap ready, proceeding with initialization",
+      );
+    }
+
+    const initStartTime = performance.now();
+    console.log("[ProceduralFlowers] Starting async initialization...");
+
     // Load textures first
     await this.loadTextures();
-
-    // Setup heightmap for VegetationSsboUtils (so flowers follow terrain)
-    await this.setupHeightmap();
 
     // Create SSBO
     this.ssbo = new FlowerSsbo();
@@ -525,84 +1028,38 @@ export class ProceduralFlowerSystem extends System {
     this.mesh.castShadow = false;
     this.mesh.receiveShadow = false;
 
+    // Render order: Flowers render AFTER player silhouette (50) but BEFORE player (100)
+    this.mesh.renderOrder = 76;
+
+    // Layer 1 = main camera only (excludes minimap and reflection cameras)
+    this.mesh.layers.set(1);
+
     stage.scene.add(this.mesh);
+
+    // Initialize camera tracking to current position to prevent first-frame jump
+    const camera = this.world.camera;
+    if (camera) {
+      this.lastCameraX = camera.position.x;
+      this.lastCameraZ = camera.position.z;
+      this.mesh.position.set(camera.position.x, 0, camera.position.z);
+    }
+
+    // Pre-run GPU compute initialization during loading
+    // This is the KEY OPTIMIZATION - run heavy compute BEFORE gameplay starts
+    console.log(
+      "[ProceduralFlowers] Pre-running GPU compute initialization...",
+    );
+    await this.ssbo.runInitialization(this.renderer);
+
+    // Yield to ensure GPU work is flushed
+    await yieldToMain();
+
     this.flowersInitialized = true;
 
+    const totalTime = performance.now() - initStartTime;
     console.log(
-      `[ProceduralFlowers] Initialized with ${config.COUNT.toLocaleString()} flowers`,
-    );
-  }
-
-  /**
-   * Setup heightmap texture for VegetationSsboUtils
-   * This allows flowers to be placed at correct terrain height
-   */
-  private async setupHeightmap(): Promise<void> {
-    // Get terrain system for height sampling
-    interface TerrainSystemInterface {
-      getHeightAt?: (x: number, z: number) => number;
-    }
-    const terrainSystem = this.world.getSystem(
-      "terrain",
-    ) as TerrainSystemInterface | null;
-
-    if (!terrainSystem || typeof terrainSystem.getHeightAt !== "function") {
-      console.warn(
-        "[ProceduralFlowers] No terrain system - flowers will be at Y=0",
-      );
-      return;
-    }
-
-    // Generate heightmap by sampling terrain
-    const size = 256;
-    const worldSize = 800; // Should match terrain size
-    const data = new Float32Array(size * size * 4);
-    const halfWorld = worldSize / 2;
-
-    let maxHeight = 0;
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const worldX = (x / size) * worldSize - halfWorld;
-        const worldZ = (y / size) * worldSize - halfWorld;
-        const height = terrainSystem.getHeightAt(worldX, worldZ);
-
-        const idx = (y * size + x) * 4;
-        data[idx] = height;
-        data[idx + 1] = height;
-        data[idx + 2] = height;
-        data[idx + 3] = 1;
-
-        if (height > maxHeight) maxHeight = height;
-      }
-    }
-
-    // Normalize to 0-1 range
-    if (maxHeight > 0) {
-      for (let i = 0; i < data.length; i += 4) {
-        data[i] /= maxHeight;
-        data[i + 1] /= maxHeight;
-        data[i + 2] /= maxHeight;
-      }
-    }
-
-    const heightmapTexture = new THREE.DataTexture(
-      data,
-      size,
-      size,
-      THREE.RGBAFormat,
-      THREE.FloatType,
-    );
-    heightmapTexture.wrapS = THREE.ClampToEdgeWrapping;
-    heightmapTexture.wrapT = THREE.ClampToEdgeWrapping;
-    heightmapTexture.minFilter = THREE.LinearFilter;
-    heightmapTexture.magFilter = THREE.LinearFilter;
-    heightmapTexture.needsUpdate = true;
-
-    // Set on VegetationSsboUtils so computeYOffset works
-    setHeightmapTexture(heightmapTexture, maxHeight);
-
-    console.log(
-      `[ProceduralFlowers] Heightmap ready: ${size}x${size}, max height: ${maxHeight.toFixed(1)}m`,
+      `[ProceduralFlowers] Initialization complete: ${totalTime.toFixed(1)}ms total, ` +
+        `${config.COUNT.toLocaleString()} flowers`,
     );
   }
 
@@ -610,20 +1067,20 @@ export class ProceduralFlowerSystem extends System {
     if (!this.flowersInitialized || !this.mesh || !this.ssbo || !this.renderer)
       return;
 
-    // 16x throttle like Revo Realms (flowers are less dynamic)
-    this.frameCount++;
-    if (this.frameCount % 16 !== 0) return;
-
     const camera = this.world.camera;
     if (!camera) return;
 
-    const playerPos = camera.position;
+    const cameraPos = camera.position;
 
-    // Calculate delta
-    const dx = playerPos.x - this.mesh.position.x;
-    const dz = playerPos.z - this.mesh.position.z;
-    uniforms.uPlayerDeltaXZ.value.set(dx, dz);
-    uniforms.uPlayerPosition.value.copy(playerPos);
+    // Calculate camera movement delta for position wrapping (EVERY FRAME - no throttling)
+    const deltaX = cameraPos.x - this.lastCameraX;
+    const deltaZ = cameraPos.z - this.lastCameraZ;
+    this.lastCameraX = cameraPos.x;
+    this.lastCameraZ = cameraPos.z;
+
+    uniforms.uPlayerDeltaXZ.value.set(deltaX, deltaZ);
+    uniforms.uPlayerPosition.value.copy(cameraPos);
+    uniforms.uCameraPosition.value.copy(cameraPos);
 
     // Camera frustum data
     const proj = camera.projectionMatrix;
@@ -632,10 +1089,10 @@ export class ProceduralFlowerSystem extends System {
     uniforms.uCameraMatrix.value.copy(proj).multiply(camera.matrixWorldInverse);
     camera.getWorldDirection(uniforms.uCameraForward.value);
 
-    // Move mesh to follow player
-    this.mesh.position.copy(playerPos).setY(0);
+    // Move mesh to follow camera
+    this.mesh.position.set(cameraPos.x, 0, cameraPos.z);
 
-    // Run compute shader
+    // Run compute shader every frame (no throttling)
     this.renderer.computeAsync(this.ssbo.computeUpdate);
   }
 
@@ -703,8 +1160,11 @@ export class ProceduralFlowerSystem extends System {
     this.atlasTexture?.dispose();
     this.noiseTexture = null;
     this.atlasTexture = null;
+    // Don't dispose terrainNoiseTexture - it's shared with TerrainShader and ProceduralGrass
+    this.terrainNoiseTexture = null;
 
     flowerNoiseTexture = null;
     flowerAtlasTexture = null;
+    terrainNoiseTexture = null;
   }
 }

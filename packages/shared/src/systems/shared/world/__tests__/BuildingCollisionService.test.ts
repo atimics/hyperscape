@@ -20,6 +20,7 @@ import { CollisionMatrix } from "../../movement/CollisionMatrix";
 import { CollisionFlag } from "../../movement/CollisionFlags";
 import type { BuildingLayoutInput } from "../../../../types/world/building-collision-types";
 import type { World } from "../../../../core/World";
+import { FOUNDATION_HEIGHT, FLOOR_HEIGHT } from "@hyperscape/procgen/building";
 
 /** Combined wall flags for testing */
 const ALL_WALL_FLAGS =
@@ -1009,8 +1010,7 @@ describe("BuildingCollisionService", () => {
 
       const elevation = service.getFloorElevation(tileX, tileZ, 0);
       // Ground floor elevation = worldY + FOUNDATION_HEIGHT + 0 * FLOOR_HEIGHT
-      // FOUNDATION_HEIGHT = 0.5
-      expect(elevation).toBe(groundY + 0.5);
+      expect(elevation).toBe(groundY + FOUNDATION_HEIGHT);
     });
 
     it("getFloorElevation returns correct elevation for upper floors", () => {
@@ -1030,11 +1030,11 @@ describe("BuildingCollisionService", () => {
 
       // Floor 0 elevation
       const floor0Elevation = service.getFloorElevation(tileX, tileZ, 0);
-      expect(floor0Elevation).toBe(groundY + 0.5); // FOUNDATION_HEIGHT
+      expect(floor0Elevation).toBe(groundY + FOUNDATION_HEIGHT);
 
       // Floor 1 elevation
       const floor1Elevation = service.getFloorElevation(tileX, tileZ, 1);
-      expect(floor1Elevation).toBe(groundY + 0.5 + 3.4); // FOUNDATION_HEIGHT + FLOOR_HEIGHT
+      expect(floor1Elevation).toBe(groundY + FOUNDATION_HEIGHT + FLOOR_HEIGHT);
     });
 
     it("getFloorElevation returns null for tile outside building", () => {
@@ -1604,6 +1604,103 @@ describe("BuildingCollisionService", () => {
         0,
       );
       expect(isBlockedOutward).toBe(false);
+    });
+
+    it("allows side approach to door exterior tiles (not blocked by step directional restriction)", () => {
+      // This test verifies the fix for door exterior tiles being approachable from ANY direction
+      // Previously, step tiles would block side approach, making doors unreachable from certain angles
+      const layout = createSimpleBuildingLayout();
+      service.registerBuilding(
+        "side-approach-test",
+        "town-1",
+        layout,
+        { x: 8, y: 0, z: 8 },
+        0,
+      );
+
+      const building = service.getBuilding("side-approach-test");
+      expect(building).toBeDefined();
+
+      const groundFloor = building!.floors[0];
+      const doorWall = groundFloor.wallSegments.find(
+        (w) => w.hasOpening && w.openingType === "door",
+      );
+      expect(doorWall).toBeDefined();
+
+      // Get the door exterior tile coordinates
+      const doorTiles = BuildingCollisionService.getDoorExteriorAndInterior(
+        doorWall!.tileX,
+        doorWall!.tileZ,
+        doorWall!.side,
+      );
+      const exteriorX = doorTiles.exteriorX;
+      const exteriorZ = doorTiles.exteriorZ;
+
+      // Verify the door exterior tile is a step tile (prerequisite for this fix)
+      const _stepTile = service.getStepTile(exteriorX, exteriorZ);
+      // Note: Door exterior may or may not be a step tile depending on geometry
+      // If it's not a step tile, the fix doesn't apply (and side approach is already allowed)
+
+      // Test side approach (perpendicular to the door direction)
+      // If door faces north (Z-), exterior is at Z-1, so side approach is from X+1 or X-1
+      let sideApproachFromX = exteriorX;
+      let sideApproachFromZ = exteriorZ;
+
+      if (doorWall!.side === "north" || doorWall!.side === "south") {
+        // Door faces along Z axis, so approach from side means from X direction
+        sideApproachFromX = exteriorX + 1;
+      } else {
+        // Door faces along X axis, so approach from side means from Z direction
+        sideApproachFromZ = exteriorZ + 1;
+      }
+
+      // The door exterior tile should NOT be blocked when approached from the side
+      // This is the key behavior we're testing - the fix allows any approach to door exteriors
+      const isStepBlocked = service.isStepBlocked(
+        sideApproachFromX,
+        sideApproachFromZ,
+        exteriorX,
+        exteriorZ,
+      );
+
+      // Door exterior tiles should allow side approach (even if it's a step tile)
+      expect(isStepBlocked).toBe(false);
+
+      // Test front approach (along the door direction) - should also be allowed
+      let frontApproachFromX = exteriorX;
+      let frontApproachFromZ = exteriorZ;
+
+      if (doorWall!.side === "north") frontApproachFromZ -= 1;
+      else if (doorWall!.side === "south") frontApproachFromZ += 1;
+      else if (doorWall!.side === "east") frontApproachFromX += 1;
+      else if (doorWall!.side === "west") frontApproachFromX -= 1;
+
+      const isFrontApproachBlocked = service.isStepBlocked(
+        frontApproachFromX,
+        frontApproachFromZ,
+        exteriorX,
+        exteriorZ,
+      );
+
+      // Front approach should also be allowed
+      expect(isFrontApproachBlocked).toBe(false);
+
+      // Test diagonal approach - should also be allowed for door exterior
+      const isDiagonalApproachBlocked = service.isStepBlocked(
+        sideApproachFromX +
+          (doorWall!.side === "north" ? 0 : doorWall!.side === "south" ? 0 : 1),
+        sideApproachFromZ +
+          (doorWall!.side === "north"
+            ? -1
+            : doorWall!.side === "south"
+              ? 1
+              : 0),
+        exteriorX,
+        exteriorZ,
+      );
+
+      // Diagonal approach should also be allowed for door exterior
+      expect(isDiagonalApproachBlocked).toBe(false);
     });
 
     it("blocks walking into building through solid wall", () => {

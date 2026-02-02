@@ -11,11 +11,13 @@ import {
   Uint32BufferAttribute,
   Group,
   Mesh,
-  MeshStandardMaterial,
   CanvasTexture,
   DoubleSide,
+  Color,
   type Object3D,
+  type Material,
 } from "three";
+import { MeshStandardNodeMaterial } from "three/webgpu";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 
 import type {
@@ -1494,13 +1496,12 @@ export class PlantGenerator {
       leafBaseColor.l,
     );
 
-    // Create leaf material using TexBaseColor as base
-    const leafMaterial = new MeshStandardMaterial({
-      color: leafColorHex,
-      roughness: 0.7,
-      metalness: 0.0,
-      side: DoubleSide,
-    });
+    // Create leaf material using TexBaseColor as base (WebGPU compatible)
+    const leafMaterial = new MeshStandardNodeMaterial();
+    leafMaterial.color = new Color(leafColorHex);
+    leafMaterial.roughness = 0.7;
+    leafMaterial.metalness = 0.0;
+    leafMaterial.side = DoubleSide;
 
     if (textures.albedo) {
       leafMaterial.map = imageDataToTexture(textures.albedo);
@@ -1509,18 +1510,17 @@ export class PlantGenerator {
       leafMaterial.normalMap = imageDataToTexture(textures.normal);
     }
 
-    // Create stem/trunk material using stem color parameters with vertex colors
+    // Create stem/trunk material using stem color parameters with vertex colors (WebGPU compatible)
     const stemBaseColorHex = hslToHex(
       stemBaseColor.h,
       stemBaseColor.s,
       stemBaseColor.l,
     );
-    const stemMaterial = new MeshStandardMaterial({
-      color: stemBaseColorHex,
-      roughness: 1.0 - stemShine * 0.5, // Higher shine = lower roughness
-      metalness: stemShine * 0.1, // Slight metalness for shine
-      vertexColors: true, // Enable vertex colors for gradients
-    });
+    const stemMaterial = new MeshStandardNodeMaterial();
+    stemMaterial.color = new Color(stemBaseColorHex);
+    stemMaterial.roughness = 1.0 - stemShine * 0.5; // Higher shine = lower roughness
+    stemMaterial.metalness = stemShine * 0.1; // Slight metalness for shine
+    stemMaterial.vertexColors = true; // Enable vertex colors for gradients
 
     // Add trunk mesh
     const trunkMesh = new Mesh(trunkGeometry, stemMaterial);
@@ -1640,10 +1640,14 @@ export class PlantGenerator {
       group.traverse((obj) => {
         if (obj instanceof Mesh) {
           obj.geometry.dispose();
-          if (obj.material instanceof MeshStandardMaterial) {
-            obj.material.dispose();
-            if (obj.material.map) obj.material.map.dispose();
-            if (obj.material.normalMap) obj.material.normalMap.dispose();
+          const mat = obj.material as Material & {
+            map?: { dispose: () => void };
+            normalMap?: { dispose: () => void };
+          };
+          if (mat && typeof mat.dispose === "function") {
+            mat.dispose();
+            if (mat.map) mat.map.dispose();
+            if (mat.normalMap) mat.normalMap.dispose();
           }
         }
       });

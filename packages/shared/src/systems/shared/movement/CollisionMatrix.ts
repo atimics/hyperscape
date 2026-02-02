@@ -331,15 +331,37 @@ export class CollisionMatrix implements ICollisionMatrix {
       }
 
       // Check wall flags for diagonal clipping
-      // Horizontal tile: check if wall blocks from our Z direction
-      const horizWallFlag = getWallFlagForDirection(0, -dz);
-      if (horizWallFlag && horizFlags & horizWallFlag) {
+      // For diagonal movement, we need to check walls on intermediate tiles that would
+      // intersect our diagonal path. We check BOTH directions because building walls
+      // register flags on both interior (facing outward) and exterior (facing inward) tiles.
+
+      // Horizontal tile: check any wall in Z direction (north or south edge)
+      // These walls are on the boundary that our diagonal crosses
+      const horizWallFlagEntry = getWallFlagForDirection(0, -dz); // Entry from diagonal direction
+      const horizWallFlagExit = getWallFlagForDirection(0, dz); // Exit toward destination
+      if (
+        (horizWallFlagEntry && horizFlags & horizWallFlagEntry) ||
+        (horizWallFlagExit && horizFlags & horizWallFlagExit)
+      ) {
         return true;
       }
 
-      // Vertical tile: check if wall blocks from our X direction
-      const vertWallFlag = getWallFlagForDirection(-dx, 0);
-      if (vertWallFlag && vertFlags & vertWallFlag) {
+      // Vertical tile: check any wall in X direction (east or west edge)
+      const vertWallFlagEntry = getWallFlagForDirection(-dx, 0); // Entry from diagonal direction
+      const vertWallFlagExit = getWallFlagForDirection(dx, 0); // Exit toward destination
+      if (
+        (vertWallFlagEntry && vertFlags & vertWallFlagEntry) ||
+        (vertWallFlagExit && vertFlags & vertWallFlagExit)
+      ) {
+        return true;
+      }
+
+      // Also check destination for corner walls
+      // Buildings register cardinal wall flags (WALL_NORTH, WALL_WEST) not diagonal ones
+      // If destination has walls on BOTH edges we'd enter through, it's a blocked corner
+      const xEntryWallFlag = getWallFlagForDirection(-dx, 0); // e.g., WALL_WEST for dx=1
+      const zEntryWallFlag = getWallFlagForDirection(0, -dz); // e.g., WALL_NORTH for dz=1
+      if (destFlags & xEntryWallFlag && destFlags & zEntryWallFlag) {
         return true;
       }
     }

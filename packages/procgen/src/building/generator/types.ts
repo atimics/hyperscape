@@ -7,6 +7,29 @@
 // RECIPE TYPES
 // ============================================================
 
+/**
+ * Wall material types for building exteriors
+ * Each type has a corresponding procedural pattern in the shader
+ */
+export type WallMaterialType =
+  | "brick" // Red/brown brick with mortar - classic medieval
+  | "stone" // Stone ashlar blocks - formal/civic buildings
+  | "timber" // Timber frame with stucco infill - Tudor style
+  | "stucco" // Plain stucco/plaster - simple cottages
+  | "wood"; // Horizontal wood planks - rustic/frontier
+
+/**
+ * Material ID encoding for UV2 attribute
+ * Shader uses this to select procedural pattern
+ */
+export const WALL_MATERIAL_IDS: Record<WallMaterialType, number> = {
+  brick: 0.0,
+  stone: 0.2,
+  timber: 0.4,
+  stucco: 0.6,
+  wood: 0.8,
+};
+
 export interface BuildingRecipe {
   label: string;
   widthRange: [number, number];
@@ -27,6 +50,8 @@ export interface BuildingRecipe {
   minUpperFloorShrinkCells?: number;
   patioDoorChance?: number;
   patioDoorCountRange?: [number, number];
+  // Wall material type for exterior walls
+  wallMaterial?: WallMaterialType;
   // Footprint styles: "foyer" | "courtyard" | "gallery"
   footprintStyle?: string;
   // Foyer style options (extension at front)
@@ -130,6 +155,8 @@ export interface CounterPlacement {
 export interface PropPlacements {
   innBar?: CounterPlacement | null;
   bankCounter?: CounterPlacement | null;
+  /** Forge placement for smithy (blacksmith stands near the forge) */
+  forge?: { col: number; row: number } | null;
 }
 
 // ============================================================
@@ -161,6 +188,10 @@ export interface BuildingGeneratorOptions {
   generateLODs?: boolean;
   /** Pre-computed layout to reuse (skips layout generation if provided) */
   cachedLayout?: BuildingLayout;
+  /** Enable interior lighting baked into vertex colors (default: true) */
+  enableInteriorLighting?: boolean;
+  /** Interior light intensity multiplier (default: 1.0) */
+  interiorLightIntensity?: number;
 }
 
 /** LOD level configuration */
@@ -178,6 +209,26 @@ export interface LODMesh {
   distance: number;
 }
 
+/**
+ * Separate geometry arrays for different material groups
+ */
+export interface BuildingGeometryArrays {
+  /** Wall geometry (uses main wall material) */
+  walls: THREE.BufferGeometry[];
+  /** Floor geometry */
+  floors: THREE.BufferGeometry[];
+  /** Roof geometry */
+  roofs: THREE.BufferGeometry[];
+  /** Window frame geometry (wood/stone) */
+  windowFrames: THREE.BufferGeometry[];
+  /** Window glass pane geometry (transparent material) */
+  windowGlass: THREE.BufferGeometry[];
+  /** Door frame/trim geometry */
+  doorFrames: THREE.BufferGeometry[];
+  /** Shutter geometry */
+  shutters: THREE.BufferGeometry[];
+}
+
 export interface GeneratedBuilding {
   mesh: THREE.Mesh | THREE.Group;
   layout: BuildingLayout;
@@ -186,6 +237,10 @@ export interface GeneratedBuilding {
   typeKey: string;
   /** Optional LOD meshes for distance-based rendering */
   lods?: LODMesh[];
+  /** Optional separate geometry arrays for multi-material rendering */
+  geometryArrays?: BuildingGeometryArrays;
+  /** Optional prop placements (NPC positions for inn bar, bank counter, etc.) */
+  propPlacements?: PropPlacements;
 }
 
 // Import THREE types

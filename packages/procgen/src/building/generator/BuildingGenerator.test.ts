@@ -1082,6 +1082,49 @@ describe("BuildingGenerator", () => {
         expect(plan.roomMap.length).toBe(plan.footprint.length);
       }
     });
+
+    it("CRITICAL: every building must have at least one entrance on ground floor", () => {
+      // Test all building types with 100 different seeds each
+      // This verifies the fallback door placement logic works correctly
+      const types = Object.keys(BUILDING_RECIPES);
+      const seedsPerType = 100;
+      let buildingsWithoutDoors = 0;
+      const failures: string[] = [];
+
+      for (const typeKey of types) {
+        const recipe = BUILDING_RECIPES[typeKey];
+
+        for (let seedNum = 0; seedNum < seedsPerType; seedNum++) {
+          const rng = createRng(`door_test_${typeKey}_${seedNum}`);
+          const layout = generator.generateLayout(recipe, rng);
+
+          // Check ground floor (floorPlans[0]) has at least one entrance
+          const groundFloor = layout.floorPlans[0];
+          const entrances = Array.from(
+            groundFloor.externalOpenings.entries(),
+          ).filter(([_key, type]) => type === "door" || type === "arch");
+
+          if (entrances.length === 0) {
+            buildingsWithoutDoors++;
+            failures.push(
+              `${typeKey} with seed 'door_test_${typeKey}_${seedNum}'`,
+            );
+          }
+        }
+      }
+
+      if (failures.length > 0) {
+        console.error(
+          `[CRITICAL] ${buildingsWithoutDoors} buildings have NO doors:\n` +
+            failures.slice(0, 10).join("\n") +
+            (failures.length > 10
+              ? `\n... and ${failures.length - 10} more`
+              : ""),
+        );
+      }
+
+      expect(buildingsWithoutDoors).toBe(0);
+    });
   });
 
   describe("buildBuilding", () => {

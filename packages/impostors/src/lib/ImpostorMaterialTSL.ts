@@ -46,7 +46,6 @@ const {
   sin,
   cos,
   pow,
-  min,
   max,
   clamp,
   normalize,
@@ -172,10 +171,10 @@ export function createTSLImpostorMaterial(
   } = options;
 
   // Ensure render target textures work with TSL
-  const setupTexture = (
-    tex: THREE_NAMESPACE.Texture | undefined,
-    isLinear = false,
-  ) => {
+  // CRITICAL: All atlases must be marked as LINEAR to prevent WebGPU from auto-decoding.
+  // The shader handles gamma decode manually via pow(2.2) for the albedo atlas.
+  // If atlas is marked sRGB, WebGPU auto-decodes + shader decodes = double gamma = wrong colors.
+  const setupTexture = (tex: THREE_NAMESPACE.Texture | undefined) => {
     if (!tex) return;
     if (!tex.isRenderTargetTexture) {
       tex.needsUpdate = true;
@@ -186,15 +185,14 @@ export function createTSLImpostorMaterial(
     if (!tex.generateMipmaps) {
       tex.generateMipmaps = false;
     }
-    // Normal/depth/PBR textures must be in linear space to prevent gamma conversion
-    if (isLinear) {
-      tex.colorSpace = THREE_NAMESPACE.LinearSRGBColorSpace;
-    }
+    // ALL textures must be linear to prevent WebGPU auto-gamma conversion.
+    // The shader manually handles sRGB decode for albedo.
+    tex.colorSpace = THREE_NAMESPACE.LinearSRGBColorSpace;
   };
-  setupTexture(atlasTexture); // Color atlas can be sRGB
-  setupTexture(normalAtlasTexture, true); // Normal atlas MUST be linear
-  setupTexture(depthAtlasTexture, true); // Depth atlas should be linear
-  setupTexture(pbrAtlasTexture, true); // PBR atlas should be linear
+  setupTexture(atlasTexture); // Albedo atlas - shader does sRGB decode manually
+  setupTexture(normalAtlasTexture); // Normal atlas - raw data
+  setupTexture(depthAtlasTexture); // Depth atlas - raw data
+  setupTexture(pbrAtlasTexture); // PBR atlas - raw data
 
   // Create node material
   const material = new MeshBasicNodeMaterial();
@@ -227,10 +225,11 @@ export function createTSLImpostorMaterial(
   const uUseDepthBlending = uniform(int(enableDepthBlending ? 1 : 0));
   const uUsePBR = uniform(int(pbrAtlasTexture ? 1 : 0));
   const uUseSpecular = uniform(int(enableSpecular ? 1 : 0));
+  const uHasNormals = uniform(int(normalAtlasTexture ? 1 : 0));
 
-  // Lighting uniforms
-  const uAmbientColor = uniform(vec3(1, 1, 1));
-  const uAmbientIntensity = uniform(float(0.4));
+  // Lighting uniforms - reduced defaults to better match original tree appearance
+  const uAmbientColor = uniform(vec3(0.6, 0.65, 0.7)); // Slightly bluish ambient (sky)
+  const uAmbientIntensity = uniform(float(0.3)); // Reduced from 0.4
   const uNumDirectionalLights = uniform(int(1));
 
   // Directional light arrays (up to 4)
@@ -241,13 +240,13 @@ export function createTSLImpostorMaterial(
     uniform(vec3(0, 1, 0)),
   ];
   const uDirLightColors = [
-    uniform(vec3(1, 0.98, 0.95)),
+    uniform(vec3(1, 0.98, 0.95)), // Warm sunlight
     uniform(vec3(1, 1, 1)),
     uniform(vec3(1, 1, 1)),
     uniform(vec3(1, 1, 1)),
   ];
   const uDirLightIntensities = [
-    uniform(float(1.2)),
+    uniform(float(0.9)), // Reduced from 1.2
     uniform(float(0)),
     uniform(float(0)),
     uniform(float(0)),
@@ -377,48 +376,11 @@ export function createTSLImpostorMaterial(
       const color = uAtlasTexture.sample(cellUV);
       return vec4(color.rgb, color.a);
     })();
-  } else if (!enableAAA) {
-    // Simple non-AAA mode: just blend atlas colors without lighting
-    // This is used when only atlasTexture is provided (no normals, depth, or PBR)
-    colorNode = Fn(() => {
-      const billboardUV = uv();
-
-      // Get cell indices
-      const cellA = flatToCoords(uFaceIndices.x);
-      const cellB = flatToCoords(uFaceIndices.y);
-      const cellC = flatToCoords(uFaceIndices.z);
-
-      // Atlas UVs
-      const atlasUV_a = div(add(cellA, billboardUV), uGridSize);
-      const atlasUV_b = div(add(cellB, billboardUV), uGridSize);
-      const atlasUV_c = div(add(cellC, billboardUV), uGridSize);
-
-      // Sample atlas
-      const color_a = uAtlasTexture.sample(atlasUV_a);
-      const color_b = uAtlasTexture.sample(atlasUV_b);
-      const color_c = uAtlasTexture.sample(atlasUV_c);
-
-      // Alpha-weighted blending (same as GLSL material)
-      const wa_raw = mul(uFaceWeights.x, color_a.a);
-      const wb_raw = mul(uFaceWeights.y, color_b.a);
-      const wc_raw = mul(uFaceWeights.z, color_c.a);
-      const totalWeight = add(add(wa_raw, wb_raw), wc_raw);
-
-      // Normalize weights
-      const wa = div(wa_raw, totalWeight);
-      const wb = div(wb_raw, totalWeight);
-      const wc = div(wc_raw, totalWeight);
-
-      // Blend colors
-      const blendedColor = add(
-        add(mul(color_a, wa), mul(color_b, wb)),
-        mul(color_c, wc),
-      );
-
-      // Output sRGB directly (atlas is already in sRGB)
-      return vec4(blendedColor.rgb, totalWeight);
-    })();
   } else {
+    // =========================================================================
+    // UNIFIED RENDERING PATH - Always uses correct gamma pipeline
+    // Lighting is applied when normals are available, otherwise just gamma-correct
+    // =========================================================================
     // Mode 0: Full AAA rendering with blending and lighting
     // NOTE: TSL doesn't support traditional loops, so we unroll for all 4 lights
     colorNode = Fn(() => {
@@ -472,7 +434,10 @@ export function createTSLImpostorMaterial(
       const wb_raw = select(uUseDepthBlending, wb_depth, wb_std);
       const wc_raw = select(uUseDepthBlending, wc_depth, wc_std);
 
-      const totalWeight = add(add(wa_raw, wb_raw), wc_raw);
+      const totalWeightRaw = add(add(wa_raw, wb_raw), wc_raw);
+      // Prevent division by zero when all sampled cells have alpha=0
+      // This can happen at edge viewing angles where atlas cells are transparent
+      const totalWeight = max(totalWeightRaw, float(0.0001));
 
       // Normalize weights
       const wa = div(wa_raw, totalWeight);
@@ -825,27 +790,28 @@ export function createTSLImpostorMaterial(
 
       // Final composition - diffuse contribution (metals have reduced diffuse)
       const oneMinusMetallic = sub(float(1), metallic);
-      const lightingSum = add(ambient, mul(totalDiffuse, float(0.5)));
+      // Use full diffuse contribution (removed 0.5 multiplier that was reducing light response)
+      const lightingSum = add(ambient, totalDiffuse);
       const diffuseContrib = mul(
         mul(oneMinusMetallic, albedoLinear),
         lightingSum,
       );
 
-      // Add specular
-      const litColor = add(diffuseContrib, totalSpecular);
+      // Add specular (reduced intensity for more natural look)
+      const litColor = add(diffuseContrib, mul(totalSpecular, float(0.5)));
 
-      // Soft clamp and tonemap
-      const clampedColor = min(litColor, vec3(1.2, 1.2, 1.2));
-      const tonemapped = div(
-        clampedColor,
-        add(clampedColor, vec3(0.1, 0.1, 0.1)),
-      );
-      const brightened = mul(tonemapped, float(1.1));
+      // If no normals available, skip lighting and just use albedo with full brightness
+      // This handles the case where only a color atlas is provided (fallback)
+      const colorToOutput = select(uHasNormals, litColor, albedoLinear);
 
-      // Convert to sRGB
-      const finalColor = pow(brightened, vec3(0.4545, 0.4545, 0.4545));
+      // Simple clamp - no tonemapping needed since lighting values are pre-balanced
+      // The ambient + diffuse values are designed to stay in 0-1 range for typical scenes
+      // Heavy tonemapping was compressing lighting contrast and hiding normal-based shading
+      const clampedColor = clamp(colorToOutput, vec3(0, 0, 0), vec3(1, 1, 1));
 
-      return vec4(finalColor, totalWeight);
+      // Output LINEAR values - the renderer handles sRGB encoding automatically
+      // (removing manual pow(0.4545) to avoid double gamma correction)
+      return vec4(clampedColor, totalWeight);
     })();
   }
 
@@ -1071,6 +1037,16 @@ export function createSimpleTSLImpostorMaterial(
     side = THREE_NAMESPACE.DoubleSide,
   } = config;
 
+  // Configure texture for proper sampling
+  // Mark as sRGB so WebGPU auto-decodes to linear, then renderer encodes back to sRGB
+  // This is the standard approach when no manual lighting calculations are needed
+  atlasTexture.colorSpace = THREE_NAMESPACE.SRGBColorSpace;
+  atlasTexture.wrapS = THREE_NAMESPACE.ClampToEdgeWrapping;
+  atlasTexture.wrapT = THREE_NAMESPACE.ClampToEdgeWrapping;
+  if (!atlasTexture.isRenderTargetTexture) {
+    atlasTexture.needsUpdate = true;
+  }
+
   const material = new MeshBasicNodeMaterial();
 
   // Center cell index - middle of the grid
@@ -1084,6 +1060,7 @@ export function createSimpleTSLImpostorMaterial(
   );
 
   // Color node - simple atlas sampling at fixed cell
+  // WebGPU handles gamma automatically: sRGB texture → linear sample → sRGB output
   material.colorNode = Fn(() => {
     const uvCoord = uv();
 
@@ -1092,7 +1069,7 @@ export function createSimpleTSLImpostorMaterial(
     const cellOffset = mul(uCellIndex, cellSize);
     const cellUV = add(cellOffset, mul(uvCoord, cellSize));
 
-    // Sample atlas at cell UV
+    // Sample atlas at cell UV (WebGPU auto-decodes sRGB to linear)
     const color = texture(atlasTexture, cellUV);
 
     return color;

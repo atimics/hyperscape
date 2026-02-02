@@ -3,8 +3,10 @@
  *
  * Centralized rendering utilities including:
  * - ImpostorManager: On-demand impostor generation and caching with IndexedDB persistence
- * - AtlasedImpostorManager: Mega-atlas system for diverse forests with minimal draw calls
+ * - AtlasedImpostorManager: Mega-atlas system for trees (16 slots)
+ * - AtlasedRockPlantImpostorManager: Mega-atlas system for rocks/plants (16 shared slots)
  * - AnimatedImpostorManager: Walk cycle animated impostors for mobs/NPCs
+ * - DynamicBuildingImpostorAtlas: Dynamic slot-based atlas for buildings (16 slots)
  * - LODLevel: Enum for entity LOD states
  * - Types for impostor initialization
  */
@@ -23,6 +25,11 @@ export {
   AtlasedImpostorManager,
   ATLASED_IMPOSTOR_CONFIG,
 } from "./AtlasedImpostorManager";
+
+export {
+  AtlasedRockPlantImpostorManager,
+  ROCK_PLANT_ATLAS_CONFIG,
+} from "./AtlasedRockPlantImpostorManager";
 
 export { AtlasedImpostorDebug } from "./AtlasedImpostorDebug";
 
@@ -48,3 +55,10 @@ export {
   prewarmMobImpostors,
   getMobImpostorStats,
 } from "./MobImpostorPreloader";
+
+// Dynamic building impostor atlas
+export {
+  DynamicBuildingImpostorAtlas,
+  DYNAMIC_ATLAS_CONFIG,
+  type AtlasBuildingData,
+} from "./DynamicBuildingImpostorAtlas";

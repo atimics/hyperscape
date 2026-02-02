@@ -596,4 +596,28 @@ describe("EditorCameraSystem", () => {
       }
     });
   });
+
+  describe("monitoring events", () => {
+    it("should emit ready event on successful init", async () => {
+      const world = createMockWorld();
+      const system = new EditorCameraSystem(world as never);
+      const listener = vi.fn();
+      system.on("ready", listener);
+      await system.init({});
+      expect(listener).toHaveBeenCalledWith({ system: "editor-camera" });
+    });
+
+    it("should emit init-failed event when no renderer", async () => {
+      const world = createMockWorld();
+      world.graphics = null;
+      const system = new EditorCameraSystem(world as never);
+      const listener = vi.fn();
+      system.on("init-failed", listener);
+      await system.init({});
+      expect(listener).toHaveBeenCalledWith({
+        reason: "no-renderer",
+        system: "editor-camera",
+      });
+    });
+  });
 });

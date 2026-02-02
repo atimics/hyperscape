@@ -108,6 +108,21 @@ export type SmoothParams = {
 };
 
 /**
+ * Scraping/flattening parameters for realistic rock shapes.
+ * Creates flat faces by projecting vertices onto random planes.
+ */
+export type ScrapeParams = {
+  /** Number of scraping planes (0 = disabled, 3-12 typical) */
+  count: number;
+  /** Minimum radius of scrape effect (0-1, relative to rock size) */
+  minRadius: number;
+  /** Maximum radius of scrape effect (0-1, relative to rock size) */
+  maxRadius: number;
+  /** Scrape depth/strength (0-1) */
+  strength: number;
+};
+
+/**
  * Vertex color parameters
  */
 export type ColorParams = {
@@ -204,6 +219,8 @@ export type RockParams = {
   noise: NoiseParams;
   /** Edge cracking settings */
   cracks: CrackParams;
+  /** Scraping/flattening for realistic flat faces */
+  scrape: ScrapeParams;
   /** Surface smoothing settings */
   smooth: SmoothParams;
   /** Vertex color settings */
@@ -231,6 +248,7 @@ export type PartialRockParams = {
   scale?: Partial<Scale3D>;
   noise?: Partial<NoiseParams>;
   cracks?: Partial<CrackParams>;
+  scrape?: Partial<ScrapeParams>;
   smooth?: Partial<SmoothParams>;
   colors?: Partial<ColorParams>;
   material?: Partial<MaterialParams>;

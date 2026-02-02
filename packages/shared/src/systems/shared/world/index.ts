@@ -5,6 +5,7 @@
 
 export * from "./Environment";
 export * from "./TerrainSystem";
+export * from "./TerrainShader";
 export * from "./SkySystem";
 export * from "./WaterSystem";
 export * from "./Wind";
@@ -17,8 +18,16 @@ export * from "./POISystem";
 export * from "./RoadNetworkSystem";
 export * from "./BuildingRenderingSystem";
 export * from "./BuildingCollisionService";
+export * from "./GrassExclusionManager";
 export * from "./ProcgenRockCache";
 export * from "./ProcgenRockInstancer";
+export * from "./ProcgenPlantCache";
+export * from "./ProcgenPlantInstancer";
 export * from "./ProcgenTreeCache";
 export * from "./ProcgenTreeInstancer";
 export * from "./AtlasedTreeImpostors";
+
+// Tree LOD System (consolidated tree baking and rendering)
+export * from "./TreeLODSystem";
+export * from "./TreeLODMaterials";
+export * from "./TreeLODIntegration";

@@ -4,7 +4,14 @@
  * Interactive tool for visualizing and testing tree generation.
  */
 
-import { createColoredCube } from "@hyperscape/impostor";
+import {
+  createColoredCube,
+  ImpostorBaker,
+  OctahedralImpostor,
+  OctahedronType,
+  type ImpostorBakeResult,
+  type ImpostorInstance,
+} from "@hyperscape/impostor";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
@@ -22,13 +29,8 @@ import {
   computeQuickVertexAO,
   disposeTreeMesh,
   getPreset,
-  ImpostorBaker,
-  OctahedralImpostor,
-  OctahedronType,
   TreeGenerator,
   TreeImpostor,
-  type ImpostorBakeResult,
-  type ImpostorInstance,
   type TreeMeshResult,
 } from "../src/index.js";
 import {
@@ -50,7 +52,7 @@ import {
   type TexturePatternType,
   type UVMethodType,
 } from "../src/rock/index.js";
-import { NavigationVisualizer } from "./NavigationVisualizer.js";
+import { NavigationVisualizer } from "../src/building/viewer/NavigationVisualizer.js";
 
 // DOM elements
 const canvasContainer = document.getElementById("canvas-container")!;

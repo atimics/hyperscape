@@ -23,12 +23,14 @@ import {
   LeafShape,
   createInstancedLeafMaterialTSL,
   TREE_LOD_PRESETS,
+  BranchClusterGenerator,
+  TreeGenerator,
   type TreeMeshResult,
   type TreeParams,
   type TreeShapeType,
   type LeafShapeType,
   type GeometryOptions,
-  type CompatibleRenderer,
+  type BranchClusterResult,
 } from "@hyperscape/procgen";
 import {
   TreePine,
@@ -46,8 +48,15 @@ import {
   ChevronRight,
   Image,
   Sliders,
+  Sun,
 } from "lucide-react";
-import React, { useRef, useEffect, useState, useCallback } from "react";
+import React, {
+  useRef,
+  useEffect,
+  useState,
+  useCallback,
+  useMemo,
+} from "react";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { MeshStandardNodeMaterial, MeshBasicNodeMaterial } from "three/webgpu";
@@ -168,6 +177,7 @@ export const TreeGenPage: React.FC = () => {
     geometry: boolean;
     lod: boolean;
     impostor: boolean;
+    lighting: boolean;
   }>({
     shape: true,
     trunk: false,
@@ -176,7 +186,19 @@ export const TreeGenPage: React.FC = () => {
     geometry: false,
     lod: false,
     impostor: false,
+    lighting: true,
   });
+
+  // Lighting controls for impostor
+  const [lightingSettings, setLightingSettings] = useState({
+    azimuth: 30, // Horizontal angle in degrees (0 = +X, 90 = +Z)
+    elevation: 55, // Vertical angle in degrees (0 = horizon, 90 = directly above)
+    intensity: 1.2,
+    ambientIntensity: 0.5,
+    showHelper: true,
+  });
+  const lightHelperRef = useRef<THREE.ArrowHelper | null>(null);
+  const sunLightRef = useRef<THREE.DirectionalLight | null>(null);
 
   // Batch generation state
   const [batchMode, setBatchMode] = useState(false);
@@ -215,6 +237,26 @@ export const TreeGenPage: React.FC = () => {
     normalAtlasTexture: null,
     mesh: null,
   });
+
+  // Branch cluster state (used for cluster visualization)
+  const clusterGroupRef = useRef<THREE.Group | null>(null);
+  const [clusterResult, setClusterResult] =
+    useState<BranchClusterResult | null>(null);
+  const [showClusters, setShowClusters] = useState(false);
+  const clusterSettings = useMemo(
+    () => ({
+      minStemDepth: 1,
+      minLeavesPerCluster: 3,
+      maxLeavesPerCluster: 40,
+      targetClusterCount: 80,
+      cullOverlapping: true,
+      overlapThreshold: 0.3,
+    }),
+    [],
+  );
+
+  // Auto-generate LODs when tree is generated
+  const [autoGenerateLODs, setAutoGenerateLODs] = useState(true);
   const [impostorSettings, setImpostorSettings] = useState({
     atlasSize: 2048,
     gridSize: 16,
@@ -222,6 +264,66 @@ export const TreeGenPage: React.FC = () => {
   });
 
   const presetNames = getPresetNames();
+
+  // Calculate light direction from azimuth and elevation
+  const calculateLightDirection = useCallback(
+    (azimuthDeg: number, elevationDeg: number): THREE.Vector3 => {
+      const azimuthRad = (azimuthDeg * Math.PI) / 180;
+      const elevationRad = (elevationDeg * Math.PI) / 180;
+
+      // Convert spherical to cartesian
+      // Elevation: 0 = horizon (y=0), 90 = directly above (y=1)
+      // Azimuth: 0 = +X, 90 = +Z, 180 = -X, 270 = -Z
+      const cosElevation = Math.cos(elevationRad);
+      const x = Math.cos(azimuthRad) * cosElevation;
+      const y = Math.sin(elevationRad);
+      const z = Math.sin(azimuthRad) * cosElevation;
+
+      return new THREE.Vector3(x, y, z).normalize();
+    },
+    [],
+  );
+
+  // Update light direction helper and scene light
+  const updateLightDirection = useCallback(() => {
+    const direction = calculateLightDirection(
+      lightingSettings.azimuth,
+      lightingSettings.elevation,
+    );
+
+    // Update ArrowHelper
+    if (lightHelperRef.current) {
+      lightHelperRef.current.setDirection(direction);
+      lightHelperRef.current.visible = lightingSettings.showHelper;
+    }
+
+    // Update scene's sun light to match
+    if (sunLightRef.current) {
+      sunLightRef.current.position
+        .copy(direction)
+        .multiplyScalar(30)
+        .add(new THREE.Vector3(0, 5, 0));
+      sunLightRef.current.intensity = lightingSettings.intensity;
+    }
+
+    // Update impostor instance lighting
+    if (impostorInstanceRef.current?.updateLighting) {
+      impostorInstanceRef.current.updateLighting({
+        lightDirection: direction.clone(),
+        lightColor: new THREE.Vector3(1.0, 0.98, 0.95),
+        lightIntensity: lightingSettings.intensity,
+        ambientColor: new THREE.Vector3(0.5, 0.55, 0.6),
+        ambientIntensity: lightingSettings.ambientIntensity,
+      });
+    }
+  }, [
+    calculateLightDirection,
+    lightingSettings.azimuth,
+    lightingSettings.elevation,
+    lightingSettings.intensity,
+    lightingSettings.ambientIntensity,
+    lightingSettings.showHelper,
+  ]);
 
   // Toggle panel expand/collapse
   const togglePanel = (panel: keyof typeof expandedPanels) => {
@@ -541,11 +643,26 @@ export const TreeGenPage: React.FC = () => {
     sun.shadow.camera.top = 30;
     sun.shadow.camera.bottom = -30;
     scene.add(sun);
+    sunLightRef.current = sun;
 
     // Fill light
     const fill = new THREE.DirectionalLight(0xffffff, 0.3);
     fill.position.set(-10, 10, -10);
     scene.add(fill);
+
+    // Light direction helper (ArrowHelper for visualizing light direction)
+    const initialDirection = new THREE.Vector3(0.5, 0.8, 0.3).normalize();
+    const lightHelper = new THREE.ArrowHelper(
+      initialDirection,
+      new THREE.Vector3(0, 15, 0), // Position above the scene
+      8, // Length
+      0xffff00, // Yellow color
+      1.5, // Head length
+      0.8, // Head width
+    );
+    lightHelper.name = "lightDirectionHelper";
+    scene.add(lightHelper);
+    lightHelperRef.current = lightHelper;
 
     // Ground plane
     const groundGeo = new THREE.CircleGeometry(50, 64);
@@ -561,6 +678,13 @@ export const TreeGenPage: React.FC = () => {
     const grid = new THREE.GridHelper(100, 100, 0x555555, 0x333333);
     grid.position.y = 0.01;
     scene.add(grid);
+
+    // Cluster visualization group
+    const clusterGroup = new THREE.Group();
+    clusterGroup.name = "ClusterGroup";
+    clusterGroup.visible = false; // Hidden by default
+    scene.add(clusterGroup);
+    clusterGroupRef.current = clusterGroup;
 
     // Resize handler
     const handleResize = () => {
@@ -621,6 +745,13 @@ export const TreeGenPage: React.FC = () => {
 
       ground.geometry.dispose();
       groundMat.dispose();
+
+      // Dispose light helper
+      if (lightHelperRef.current) {
+        scene.remove(lightHelperRef.current);
+        lightHelperRef.current = null;
+      }
+      sunLightRef.current = null;
 
       if (rendererRef.current) {
         containerEl.removeChild(rendererRef.current.domElement);
@@ -741,7 +872,7 @@ export const TreeGenPage: React.FC = () => {
           },
         });
         result.group.position.set(position, 0, 0);
-        result.group.traverse((obj) => {
+        result.group.traverse((obj: THREE.Object3D) => {
           if (obj instanceof THREE.Mesh) {
             obj.castShadow = true;
             obj.receiveShadow = true;
@@ -779,7 +910,7 @@ export const TreeGenPage: React.FC = () => {
       // IMPORTANT: bake() is async for WebGPU - must await before createInstance()
       await treeImpostor.bake(
         lod0Result,
-        rendererRef.current as CompatibleRenderer,
+        rendererRef.current as AssetForgeRenderer,
       );
       impostorRef.current = treeImpostor;
       console.log(
@@ -809,6 +940,10 @@ export const TreeGenPage: React.FC = () => {
         treeSize / 2, // Center of billboard - bottom at y=0
         0,
       );
+      // Impostor should NOT cast shadows - the quad would cast a square shadow
+      // instead of the tree shape. It can receive shadows though.
+      impostorInstance.mesh.castShadow = false;
+      impostorInstance.mesh.receiveShadow = true;
       sceneRef.current.add(impostorInstance.mesh);
       lodMeshRefs.current.impostor = impostorInstance.mesh;
       impostorInstanceRef.current = impostorInstance; // Store for update loop
@@ -817,16 +952,25 @@ export const TreeGenPage: React.FC = () => {
         impostorInstance.mesh.position,
       );
 
-      // Configure impostor lighting
+      // Configure impostor lighting using current light settings
       if (impostorInstance.updateLighting) {
+        const lightDir = calculateLightDirection(
+          lightingSettings.azimuth,
+          lightingSettings.elevation,
+        );
         impostorInstance.updateLighting({
-          lightDirection: new THREE.Vector3(0.5, 0.8, 0.3).normalize(),
+          lightDirection: lightDir,
           lightColor: new THREE.Vector3(1.0, 0.98, 0.95),
-          lightIntensity: 1.2,
+          lightIntensity: lightingSettings.intensity,
           ambientColor: new THREE.Vector3(0.5, 0.55, 0.6),
-          ambientIntensity: 0.5,
+          ambientIntensity: lightingSettings.ambientIntensity,
         });
-        console.log("[TreeGenPage] Configured impostor lighting");
+        console.log(
+          "[TreeGenPage] Configured impostor lighting with azimuth:",
+          lightingSettings.azimuth,
+          "elevation:",
+          lightingSettings.elevation,
+        );
       }
 
       // Add debug atlas planes to visualize both color and normal atlases
@@ -909,10 +1053,112 @@ export const TreeGenPage: React.FC = () => {
     }
 
     setIsGenerating(false);
-  }, [clearLODPreviews, preset, seed, advancedParams, impostorSettings]);
+  }, [
+    clearLODPreviews,
+    preset,
+    seed,
+    advancedParams,
+    impostorSettings,
+    lightingSettings,
+    calculateLightDirection,
+  ]);
 
-  // Generate single tree
-  const generateTreeMesh = useCallback(() => {
+  // Create cluster visualization meshes
+  const createClusterVisualization = useCallback(
+    (result: BranchClusterResult, group: THREE.Group) => {
+      const { clusters, leaves } = result;
+
+      // Colors for different stem depths
+      const depthColors = [
+        0xff6b6b, // Depth 0 - red
+        0x4ecdc4, // Depth 1 - teal
+        0xffd93d, // Depth 2 - yellow
+        0x6bcb77, // Depth 3 - green
+        0x4d96ff, // Depth 4+ - blue
+      ];
+
+      for (let i = 0; i < clusters.length; i++) {
+        const cluster = clusters[i];
+        const color =
+          depthColors[Math.min(cluster.stemDepth, depthColors.length - 1)];
+
+        // Create billboard quad representing the cluster
+        const billboardGeo = new THREE.PlaneGeometry(
+          cluster.width,
+          cluster.height,
+        );
+
+        // Create a texture showing the leaf arrangement
+        const canvas = document.createElement("canvas");
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext("2d")!;
+
+        // Background with alpha
+        ctx.fillStyle = "rgba(0, 0, 0, 0)";
+        ctx.fillRect(0, 0, 128, 128);
+
+        // Draw leaf positions as circles
+        const leafColor = `rgba(${(color >> 16) & 255}, ${(color >> 8) & 255}, ${color & 255}, 0.8)`;
+        ctx.fillStyle = leafColor;
+
+        for (const idx of cluster.leafIndices) {
+          const leaf = leaves[idx];
+          // Project leaf position to billboard space
+          const relPos = leaf.position.clone().sub(cluster.center);
+
+          // Simple projection onto billboard plane
+          const x = (relPos.x / cluster.width + 0.5) * 128;
+          const y = (1 - (relPos.y / cluster.height + 0.5)) * 128;
+
+          // Draw leaf as ellipse
+          ctx.beginPath();
+          ctx.ellipse(x, y, 8, 12, Math.random() * Math.PI, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Add border to show cluster bounds
+        ctx.strokeStyle = leafColor;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(2, 2, 124, 124);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.needsUpdate = true;
+
+        const billboardMat = new MeshBasicNodeMaterial({
+          map: texture,
+          transparent: true,
+          opacity: 0.85,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+
+        const billboard = new THREE.Mesh(billboardGeo, billboardMat);
+        billboard.position.copy(cluster.center);
+
+        // Orient the billboard to face outward from tree center and be vertical (Y-up)
+        // Use the cluster's billboardNormal and billboardUp
+        const matrix = new THREE.Matrix4();
+        const right = new THREE.Vector3()
+          .crossVectors(cluster.billboardUp, cluster.billboardNormal)
+          .normalize();
+        matrix.makeBasis(right, cluster.billboardUp, cluster.billboardNormal);
+        billboard.setRotationFromMatrix(matrix);
+
+        billboard.userData = {
+          clusterId: cluster.id,
+          clusterIndex: i,
+          stemDepth: cluster.stemDepth,
+        };
+
+        group.add(billboard);
+      }
+    },
+    [],
+  );
+
+  // Generate single tree (and optionally LODs + clusters)
+  const generateTreeMesh = useCallback(async () => {
     if (!sceneRef.current) return;
 
     // Clear batch mode if active
@@ -925,6 +1171,21 @@ export const TreeGenPage: React.FC = () => {
       clearLODPreviews();
       setShowLODPreview(false);
     }
+
+    // Clear cluster visualization
+    if (clusterGroupRef.current) {
+      while (clusterGroupRef.current.children.length > 0) {
+        const child = clusterGroupRef.current.children[0];
+        clusterGroupRef.current.remove(child);
+        if (child instanceof THREE.Mesh) {
+          child.geometry?.dispose();
+          if (child.material instanceof THREE.Material) {
+            child.material.dispose();
+          }
+        }
+      }
+    }
+    setClusterResult(null);
 
     setIsGenerating(true);
     const startTime = performance.now();
@@ -949,14 +1210,12 @@ export const TreeGenPage: React.FC = () => {
       }
 
       // Merge with advanced params if enabled
-      // Merge preset with any parameter overrides
       const treeParams = createTreeParams({
         ...basePresetParams,
         ...advancedParams,
       });
 
-      // Generate tree with params
-      // Use TSL (WebGPU-compatible) instanced leaf material for full performance
+      // Use TreeGenerator to get access to tree data for cluster generation
       const webGPULeafMaterial = createInstancedLeafMaterialTSL({
         color: new THREE.Color(0x3d7a3d),
         colorVariation: 0.15,
@@ -964,14 +1223,18 @@ export const TreeGenPage: React.FC = () => {
         leafShape: "elliptic",
         subsurfaceScatter: 0.35,
       });
-      const result = generateTree(treeParams, {
-        generation: { seed },
+
+      const generator = new TreeGenerator(treeParams, {
+        generation: { seed, generateLeaves: true },
         geometry: geometryOptions,
         mesh: {
           useInstancedLeaves: true,
           leafMaterial: webGPULeafMaterial,
         },
       });
+
+      const result = generator.generate();
+      const treeData = generator.getLastTreeData();
 
       if (result.group) {
         // Remove leaves if not showing
@@ -981,7 +1244,7 @@ export const TreeGenPage: React.FC = () => {
 
         result.group.castShadow = true;
         result.group.receiveShadow = true;
-        result.group.traverse((obj) => {
+        result.group.traverse((obj: THREE.Object3D) => {
           if (obj instanceof THREE.Mesh) {
             obj.castShadow = true;
             obj.receiveShadow = true;
@@ -989,6 +1252,33 @@ export const TreeGenPage: React.FC = () => {
         });
         sceneRef.current.add(result.group);
         currentTreeRef.current = result;
+
+        // Generate branch clusters if tree data is available
+        if (
+          treeData &&
+          treeData.leaves.length > 0 &&
+          treeData.stems.length > 0
+        ) {
+          const clusterGenerator = new BranchClusterGenerator({
+            minStemDepth: clusterSettings.minStemDepth,
+            minLeavesPerCluster: clusterSettings.minLeavesPerCluster,
+            maxLeavesPerCluster: clusterSettings.maxLeavesPerCluster,
+            targetClusterCount: clusterSettings.targetClusterCount,
+            cullOverlappingLeaves: clusterSettings.cullOverlapping,
+            overlapThreshold: clusterSettings.overlapThreshold,
+          });
+          const clusters = clusterGenerator.generateClusters(
+            treeData.leaves,
+            treeData.stems,
+            treeData.params,
+          );
+          setClusterResult(clusters);
+
+          // Create cluster visualization
+          if (clusterGroupRef.current) {
+            createClusterVisualization(clusters, clusterGroupRef.current);
+          }
+        }
 
         // Center camera on tree
         if (cameraRef.current && controlsRef.current) {
@@ -1008,6 +1298,14 @@ export const TreeGenPage: React.FC = () => {
           triangles: result.triangleCount,
           time: Math.round(performance.now() - startTime),
         });
+
+        // Auto-generate LODs if enabled (after tree is visible)
+        if (autoGenerateLODs && rendererRef.current) {
+          // Small delay to let the tree render first
+          setTimeout(() => {
+            generateLODPreviews();
+          }, 100);
+        }
       }
     } catch (error) {
       console.error("Tree generation error:", error);
@@ -1025,6 +1323,10 @@ export const TreeGenPage: React.FC = () => {
     geometryOptions,
     showLODPreview,
     clearLODPreviews,
+    clusterSettings,
+    autoGenerateLODs,
+    generateLODPreviews,
+    createClusterVisualization,
   ]);
 
   // Generate batch of trees
@@ -1091,7 +1393,7 @@ export const TreeGenPage: React.FC = () => {
 
           result.group.castShadow = true;
           result.group.receiveShadow = true;
-          result.group.traverse((obj) => {
+          result.group.traverse((obj: THREE.Object3D) => {
             if (obj instanceof THREE.Mesh) {
               obj.castShadow = true;
               obj.receiveShadow = true;
@@ -1173,6 +1475,11 @@ export const TreeGenPage: React.FC = () => {
     generateTreeMesh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Update light direction when settings change
+  useEffect(() => {
+    updateLightDirection();
+  }, [updateLightDirection]);
 
   // Get current preset params for display
   const currentPresetParams = getPreset(preset);
@@ -1329,7 +1636,7 @@ export const TreeGenPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex items-center gap-4">
+              <div className="flex flex-col gap-2">
                 <label className="flex items-center gap-2 text-sm text-text-primary cursor-pointer">
                   <input
                     type="checkbox"
@@ -1338,6 +1645,34 @@ export const TreeGenPage: React.FC = () => {
                     className="rounded"
                   />
                   Show Leaves
+                </label>
+                <label className="flex items-center gap-2 text-sm text-text-primary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showClusters}
+                    onChange={(e) => {
+                      setShowClusters(e.target.checked);
+                      if (clusterGroupRef.current) {
+                        clusterGroupRef.current.visible = e.target.checked;
+                      }
+                    }}
+                    className="rounded"
+                  />
+                  Show Clusters
+                  {clusterResult && (
+                    <span className="text-xs text-text-tertiary">
+                      ({clusterResult.stats.clusterCount})
+                    </span>
+                  )}
+                </label>
+                <label className="flex items-center gap-2 text-sm text-text-primary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoGenerateLODs}
+                    onChange={(e) => setAutoGenerateLODs(e.target.checked)}
+                    className="rounded"
+                  />
+                  Auto-generate LODs
                 </label>
               </div>
 
@@ -2154,6 +2489,123 @@ export const TreeGenPage: React.FC = () => {
                     className="w-full"
                   />
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* Lighting Controls */}
+          <div className="bg-bg-secondary rounded-lg border border-border-primary overflow-hidden">
+            <button
+              onClick={() => togglePanel("lighting")}
+              className="w-full px-4 py-3 flex items-center justify-between text-text-primary hover:bg-bg-tertiary transition-colors"
+            >
+              <span className="font-semibold flex items-center gap-2">
+                <Sun size={16} />
+                Lighting
+              </span>
+              {expandedPanels.lighting ? (
+                <ChevronDown size={18} />
+              ) : (
+                <ChevronRight size={18} />
+              )}
+            </button>
+            {expandedPanels.lighting && (
+              <div className="px-4 pb-4 space-y-3">
+                <div>
+                  <label className="block text-xs text-text-secondary mb-1">
+                    Sun Azimuth: {lightingSettings.azimuth}°
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={360}
+                    step={5}
+                    value={lightingSettings.azimuth}
+                    onChange={(e) =>
+                      setLightingSettings((prev) => ({
+                        ...prev,
+                        azimuth: parseInt(e.target.value),
+                      }))
+                    }
+                    className="w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-text-secondary mb-1">
+                    Sun Elevation: {lightingSettings.elevation}°
+                  </label>
+                  <input
+                    type="range"
+                    min={5}
+                    max={90}
+                    step={5}
+                    value={lightingSettings.elevation}
+                    onChange={(e) =>
+                      setLightingSettings((prev) => ({
+                        ...prev,
+                        elevation: parseInt(e.target.value),
+                      }))
+                    }
+                    className="w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-text-secondary mb-1">
+                    Sun Intensity: {lightingSettings.intensity.toFixed(1)}
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={3}
+                    step={0.1}
+                    value={lightingSettings.intensity}
+                    onChange={(e) =>
+                      setLightingSettings((prev) => ({
+                        ...prev,
+                        intensity: parseFloat(e.target.value),
+                      }))
+                    }
+                    className="w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-text-secondary mb-1">
+                    Ambient Intensity:{" "}
+                    {lightingSettings.ambientIntensity.toFixed(1)}
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    value={lightingSettings.ambientIntensity}
+                    onChange={(e) =>
+                      setLightingSettings((prev) => ({
+                        ...prev,
+                        ambientIntensity: parseFloat(e.target.value),
+                      }))
+                    }
+                    className="w-full"
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-xs text-text-primary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={lightingSettings.showHelper}
+                    onChange={(e) =>
+                      setLightingSettings((prev) => ({
+                        ...prev,
+                        showHelper: e.target.checked,
+                      }))
+                    }
+                    className="rounded"
+                  />
+                  Show Light Direction Arrow
+                </label>
+                <p className="text-xs text-text-tertiary mt-2">
+                  Adjust light direction to see how the impostor responds to
+                  dynamic lighting via the normal atlas.
+                </p>
               </div>
             )}
           </div>

@@ -156,11 +156,16 @@ export class Stem {
    * @returns StemData for serialization
    */
   toData(radiusArray: number[]): StemData {
+    if (radiusArray.length < this.curvePoints.length) {
+      throw new Error(
+        `[Stem.toData] radiusArray length (${radiusArray.length}) must match curvePoints length (${this.curvePoints.length})`,
+      );
+    }
     const points: StemPoint[] = this.curvePoints.map((cp, i) => ({
       position: cp.co.clone(),
       handleLeft: cp.handleLeft.clone(),
       handleRight: cp.handleRight.clone(),
-      radius: radiusArray[i] ?? this.radius,
+      radius: radiusArray[i],
     }));
 
     return {

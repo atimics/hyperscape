@@ -152,6 +152,25 @@ export const {
   element,
 } = THREE_NAMESPACE.TSL;
 
+// Tangent space attributes for normal mapping
+export const {
+  tangentLocal,
+  tangentWorld,
+  tangentView,
+  bitangentLocal,
+  bitangentWorld,
+  bitangentView,
+  TBNViewMatrix,
+} = THREE_NAMESPACE.TSL;
+
+// Loop control for compute shaders - explicitly typed for declaration generation
+export const Loop = THREE_NAMESPACE.TSL
+  .Loop as typeof import("three/src/nodes/utils/LoopNode.js").Loop;
+export const Break = THREE_NAMESPACE.TSL
+  .Break as typeof import("three/src/nodes/utils/LoopNode.js").Break;
+export const Continue = THREE_NAMESPACE.TSL
+  .Continue as typeof import("three/src/nodes/utils/LoopNode.js").Continue;
+
 // Re-export Node Materials (these ARE directly on three/webgpu)
 export {
   MeshStandardNodeMaterial,

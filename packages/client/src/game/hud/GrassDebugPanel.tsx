@@ -9,11 +9,58 @@ import React, { useCallback, useEffect, useState, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useThemeStore } from "@/ui";
 import type { ClientWorld } from "../../types";
-import { Leaf, X, Eye, EyeOff, Wind, Palette, Layers } from "lucide-react";
+import { Leaf, X, Eye, EyeOff, Wind, Palette, Sun, Moon } from "lucide-react";
 
 interface GrassDebugPanelProps {
   world: ClientWorld;
 }
+
+/** Type for grass system API accessed from debug panel */
+type GrassSystemAPI = {
+  getMesh?: () => { visible: boolean } | null;
+  setVisible?: (visible: boolean) => void;
+  isVisible?: () => boolean;
+  // Wind
+  setWindStrength?: (v: number) => void;
+  getWindStrength?: () => number;
+  setWindSpeed?: (v: number) => void;
+  getWindSpeed?: () => number;
+  setWindScale?: (v: number) => void;
+  getWindScale?: () => number;
+  // LOD0 fade
+  setFadeStart?: (v: number) => void;
+  getFadeStart?: () => number;
+  setFadeEnd?: (v: number) => void;
+  getFadeEnd?: () => number;
+  // Culling
+  setCullingR0?: (v: number) => void;
+  getCullingR0?: () => number;
+  setCullingR1?: (v: number) => void;
+  getCullingR1?: () => number;
+  setCullingPMin?: (v: number) => void;
+  getCullingPMin?: () => number;
+  // Trail
+  setTrailRadius?: (v: number) => void;
+  getTrailRadius?: () => number;
+  // Day/night
+  setDayColor?: (r: number, g: number, b: number) => void;
+  getDayColor?: () => { r: number; g: number; b: number };
+  setNightColor?: (r: number, g: number, b: number) => void;
+  getNightColor?: () => { r: number; g: number; b: number };
+  setDayNightMix?: (v: number) => void;
+  getDayNightMix?: () => number;
+  // LOD1 cards
+  setLOD1FadeInStart?: (v: number) => void;
+  getLOD1FadeInStart?: () => number;
+  setLOD1FadeInEnd?: (v: number) => void;
+  getLOD1FadeInEnd?: () => number;
+  setLOD1FadeOutStart?: (v: number) => void;
+  getLOD1FadeOutStart?: () => number;
+  setLOD1FadeOutEnd?: (v: number) => void;
+  getLOD1FadeOutEnd?: () => number;
+  // Terrain
+  renderTerrainProjection?: () => void;
+} | null;
 
 interface SliderRowProps {
   label: string;
@@ -119,6 +166,70 @@ function ToggleRow({ label, value, onChange, icon }: ToggleRowProps) {
   );
 }
 
+interface ColorRowProps {
+  label: string;
+  value: { r: number; g: number; b: number };
+  onChange: (color: { r: number; g: number; b: number }) => void;
+  icon?: React.ReactNode;
+}
+
+function ColorRow({ label, value, onChange, icon }: ColorRowProps) {
+  const theme = useThemeStore((s) => s.theme);
+
+  // Convert RGB 0-1 to hex
+  const toHex = (c: { r: number; g: number; b: number }) => {
+    const r = Math.round(c.r * 255)
+      .toString(16)
+      .padStart(2, "0");
+    const g = Math.round(c.g * 255)
+      .toString(16)
+      .padStart(2, "0");
+    const b = Math.round(c.b * 255)
+      .toString(16)
+      .padStart(2, "0");
+    return `#${r}${g}${b}`;
+  };
+
+  // Convert hex to RGB 0-1
+  const fromHex = (hex: string) => {
+    const r = parseInt(hex.slice(1, 3), 16) / 255;
+    const g = parseInt(hex.slice(3, 5), 16) / 255;
+    const b = parseInt(hex.slice(5, 7), 16) / 255;
+    return { r, g, b };
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center gap-2">
+        {icon}
+        <span
+          className="text-[10px]"
+          style={{ color: theme.colors.text.secondary }}
+        >
+          {label}
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="color"
+          value={toHex(value)}
+          onChange={(e) => onChange(fromHex(e.target.value))}
+          className="w-6 h-6 rounded cursor-pointer border-0"
+          style={{
+            background: "transparent",
+          }}
+        />
+        <span
+          className="text-[9px] font-mono"
+          style={{ color: theme.colors.text.muted }}
+        >
+          {toHex(value).toUpperCase()}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function GrassDebugPanel({ world }: GrassDebugPanelProps) {
   const theme = useThemeStore((s) => s.theme);
   const [isVisible, setIsVisible] = useState(false);
@@ -126,63 +237,80 @@ export function GrassDebugPanel({ world }: GrassDebugPanelProps) {
 
   // Grass settings state - initialized from grass system when panel opens
   const [grassEnabled, setGrassEnabled] = useState(true);
-  const [windEnabled, setWindEnabled] = useState(true);
-  const [windStrength, setWindStrength] = useState(0.15);
-  const [windSpeed, setWindSpeed] = useState(0.3);
-  const [bladeHeight, setBladeHeight] = useState(0.5); // New default
-  const [bladeWidth, setBladeWidth] = useState(0.06); // New default
-  const [fadeStart, setFadeStart] = useState(90); // New default
-  const [fadeEnd, setFadeEnd] = useState(100); // New default
+  // Wind
+  const [windStrength, setWindStrength] = useState(0.4);
+  const [windSpeed, setWindSpeed] = useState(0.25);
+  const [windScale, setWindScale] = useState(1.75);
+  // LOD0 fade (distance where blades fade out)
+  const [fadeStart, setFadeStart] = useState(35);
+  const [fadeEnd, setFadeEnd] = useState(50);
+  // Culling (density falloff over distance)
+  const [cullingR0, setCullingR0] = useState(25);
+  const [cullingR1, setCullingR1] = useState(50);
+  const [cullingPMin, setCullingPMin] = useState(0.15);
+  // Trail (player distortion)
+  const [trailRadius, setTrailRadius] = useState(0.6);
+  // Day/night colors
+  const [dayColor, setDayColorState] = useState({ r: 1, g: 1, b: 1 });
+  const [nightColor, setNightColorState] = useState({
+    r: 0.25,
+    g: 0.3,
+    b: 0.35,
+  });
+  const [dayNightMix, setDayNightMix] = useState(1.0);
+  // LOD1 fade (dithered card distance) - Classic mode
+  const [lod1FadeInStart, setLod1FadeInStart] = useState(18);
+  const [lod1FadeInEnd, setLod1FadeInEnd] = useState(28);
+  const [lod1FadeOutStart, setLod1FadeOutStart] = useState(50);
+  const [lod1FadeOutEnd, setLod1FadeOutEnd] = useState(65);
 
-  // Get grass system reference with proper typing
-  const grassSystem = useMemo(() => {
-    return world.getSystem?.("grass") as {
-      getMesh?: () => { visible: boolean } | null;
-      setVisible?: (visible: boolean) => void;
-      isVisible?: () => boolean;
-      setWindEnabled?: (enabled: boolean) => void;
-      isWindEnabled?: () => boolean;
-      getTime?: () => number;
-      // Shader parameter setters
-      setWindStrength?: (value: number) => void;
-      getWindStrength?: () => number;
-      setWindSpeed?: (value: number) => void;
-      getWindSpeed?: () => number;
-      setBladeHeight?: (value: number) => void;
-      getBladeHeight?: () => number;
-      setBladeWidth?: (value: number) => void;
-      getBladeWidth?: () => number;
-      setFadeStart?: (value: number) => void;
-      getFadeStart?: () => number;
-      setFadeEnd?: (value: number) => void;
-      getFadeEnd?: () => number;
-      // Terrain projection
-      renderTerrainProjection?: () => void;
-    } | null;
-  }, [world]);
+  // Get grass system reference
+  const grassSystem = useMemo(
+    () => world.getSystem?.("grass") as GrassSystemAPI,
+    [world],
+  );
+
+  // Helper to create value change handlers (reduces boilerplate)
+  const makeHandler = <T,>(
+    setState: React.Dispatch<React.SetStateAction<T>>,
+    setter?: (v: T) => void,
+  ) =>
+    useCallback(
+      (v: T) => {
+        setState(v);
+        setter?.(v);
+      },
+      [setter],
+    );
 
   // Handler for refreshing terrain color projection
-  const handleRefreshColors = useCallback(() => {
-    if (grassSystem?.renderTerrainProjection) {
-      grassSystem.renderTerrainProjection();
-    }
-  }, [grassSystem]);
+  const handleRefreshColors = useCallback(
+    () => grassSystem?.renderTerrainProjection?.(),
+    [grassSystem],
+  );
 
-  // Initialize state from grass system values when panel opens
+  // Initialize state from grass system when panel opens
   useEffect(() => {
-    if (isVisible && grassSystem) {
-      if (grassSystem.getWindStrength)
-        setWindStrength(grassSystem.getWindStrength());
-      if (grassSystem.getWindSpeed) setWindSpeed(grassSystem.getWindSpeed());
-      if (grassSystem.getBladeHeight)
-        setBladeHeight(grassSystem.getBladeHeight());
-      if (grassSystem.getBladeWidth) setBladeWidth(grassSystem.getBladeWidth());
-      if (grassSystem.getFadeStart) setFadeStart(grassSystem.getFadeStart());
-      if (grassSystem.getFadeEnd) setFadeEnd(grassSystem.getFadeEnd());
-      if (grassSystem.isVisible) setGrassEnabled(grassSystem.isVisible());
-      if (grassSystem.isWindEnabled)
-        setWindEnabled(grassSystem.isWindEnabled());
-    }
+    if (!isVisible || !grassSystem) return;
+    // Sync all values from system to local state
+    const g = grassSystem;
+    g.getWindStrength && setWindStrength(g.getWindStrength());
+    g.getWindSpeed && setWindSpeed(g.getWindSpeed());
+    g.getWindScale && setWindScale(g.getWindScale());
+    g.getFadeStart && setFadeStart(g.getFadeStart());
+    g.getFadeEnd && setFadeEnd(g.getFadeEnd());
+    g.getCullingR0 && setCullingR0(g.getCullingR0());
+    g.getCullingR1 && setCullingR1(g.getCullingR1());
+    g.getCullingPMin && setCullingPMin(g.getCullingPMin());
+    g.getTrailRadius && setTrailRadius(g.getTrailRadius());
+    g.isVisible && setGrassEnabled(g.isVisible());
+    g.getDayColor && setDayColorState(g.getDayColor());
+    g.getNightColor && setNightColorState(g.getNightColor());
+    g.getDayNightMix && setDayNightMix(g.getDayNightMix());
+    g.getLOD1FadeInStart && setLod1FadeInStart(g.getLOD1FadeInStart());
+    g.getLOD1FadeInEnd && setLod1FadeInEnd(g.getLOD1FadeInEnd());
+    g.getLOD1FadeOutStart && setLod1FadeOutStart(g.getLOD1FadeOutStart());
+    g.getLOD1FadeOutEnd && setLod1FadeOutEnd(g.getLOD1FadeOutEnd());
   }, [isVisible, grassSystem]);
 
   // Long-press 'g' detection
@@ -215,75 +343,76 @@ export function GrassDebugPanel({ world }: GrassDebugPanelProps) {
 
   // Apply grass visibility
   useEffect(() => {
-    if (grassSystem?.setVisible) {
-      grassSystem.setVisible(grassEnabled);
-    }
+    grassSystem?.setVisible?.(grassEnabled);
   }, [grassEnabled, grassSystem]);
 
-  // Apply wind enabled state
-  useEffect(() => {
-    if (grassSystem?.setWindEnabled) {
-      grassSystem.setWindEnabled(windEnabled);
-    }
-  }, [windEnabled, grassSystem]);
+  // Consolidated change handlers (setState + call system API)
+  const handleWindStrengthChange = makeHandler(
+    setWindStrength,
+    grassSystem?.setWindStrength,
+  );
+  const handleWindSpeedChange = makeHandler(
+    setWindSpeed,
+    grassSystem?.setWindSpeed,
+  );
+  const handleWindScaleChange = makeHandler(
+    setWindScale,
+    grassSystem?.setWindScale,
+  );
+  const handleFadeStartChange = makeHandler(
+    setFadeStart,
+    grassSystem?.setFadeStart,
+  );
+  const handleFadeEndChange = makeHandler(setFadeEnd, grassSystem?.setFadeEnd);
+  const handleCullingR0Change = makeHandler(
+    setCullingR0,
+    grassSystem?.setCullingR0,
+  );
+  const handleCullingR1Change = makeHandler(
+    setCullingR1,
+    grassSystem?.setCullingR1,
+  );
+  const handleCullingPMinChange = makeHandler(
+    setCullingPMin,
+    grassSystem?.setCullingPMin,
+  );
+  const handleTrailRadiusChange = makeHandler(
+    setTrailRadius,
+    grassSystem?.setTrailRadius,
+  );
+  const handleDayNightMixChange = makeHandler(
+    setDayNightMix,
+    grassSystem?.setDayNightMix,
+  );
+  const handleLod1FadeInStartChange = makeHandler(
+    setLod1FadeInStart,
+    grassSystem?.setLOD1FadeInStart,
+  );
+  const handleLod1FadeInEndChange = makeHandler(
+    setLod1FadeInEnd,
+    grassSystem?.setLOD1FadeInEnd,
+  );
+  const handleLod1FadeOutStartChange = makeHandler(
+    setLod1FadeOutStart,
+    grassSystem?.setLOD1FadeOutStart,
+  );
+  const handleLod1FadeOutEndChange = makeHandler(
+    setLod1FadeOutEnd,
+    grassSystem?.setLOD1FadeOutEnd,
+  );
 
-  // Apply shader parameter changes in real-time
-  const handleWindStrengthChange = useCallback(
-    (value: number) => {
-      setWindStrength(value);
-      if (grassSystem?.setWindStrength) {
-        grassSystem.setWindStrength(value);
-      }
+  // Color handlers need special treatment (3 args)
+  const handleDayColorChange = useCallback(
+    (c: { r: number; g: number; b: number }) => {
+      setDayColorState(c);
+      grassSystem?.setDayColor?.(c.r, c.g, c.b);
     },
     [grassSystem],
   );
-
-  const handleWindSpeedChange = useCallback(
-    (value: number) => {
-      setWindSpeed(value);
-      if (grassSystem?.setWindSpeed) {
-        grassSystem.setWindSpeed(value);
-      }
-    },
-    [grassSystem],
-  );
-
-  const handleBladeHeightChange = useCallback(
-    (value: number) => {
-      setBladeHeight(value);
-      if (grassSystem?.setBladeHeight) {
-        grassSystem.setBladeHeight(value);
-      }
-    },
-    [grassSystem],
-  );
-
-  const handleBladeWidthChange = useCallback(
-    (value: number) => {
-      setBladeWidth(value);
-      if (grassSystem?.setBladeWidth) {
-        grassSystem.setBladeWidth(value);
-      }
-    },
-    [grassSystem],
-  );
-
-  const handleFadeStartChange = useCallback(
-    (value: number) => {
-      setFadeStart(value);
-      if (grassSystem?.setFadeStart) {
-        grassSystem.setFadeStart(value);
-      }
-    },
-    [grassSystem],
-  );
-
-  const handleFadeEndChange = useCallback(
-    (value: number) => {
-      setFadeEnd(value);
-      if (grassSystem?.setFadeEnd) {
-        grassSystem.setFadeEnd(value);
-      }
+  const handleNightColorChange = useCallback(
+    (c: { r: number; g: number; b: number }) => {
+      setNightColorState(c);
+      grassSystem?.setNightColor?.(c.r, c.g, c.b);
     },
     [grassSystem],
   );
@@ -437,21 +566,6 @@ export function GrassDebugPanel({ world }: GrassDebugPanelProps) {
               )
             }
           />
-          <ToggleRow
-            label="Wind Animation"
-            value={windEnabled}
-            onChange={setWindEnabled}
-            icon={
-              <Wind
-                size={12}
-                style={{
-                  color: windEnabled
-                    ? theme.colors.state.info
-                    : theme.colors.text.muted,
-                }}
-              />
-            }
-          />
           {/* Refresh terrain colors button */}
           <button
             onClick={handleRefreshColors}
@@ -469,6 +583,39 @@ export function GrassDebugPanel({ world }: GrassDebugPanelProps) {
           </button>
         </div>
 
+        {/* Day/Night Colors */}
+        <div className="space-y-2">
+          <div
+            className="text-[9px] font-semibold uppercase tracking-wider flex items-center gap-1"
+            style={{ color: theme.colors.text.muted }}
+          >
+            <Sun size={10} />
+            Day/Night
+          </div>
+          <ColorRow
+            label="Day Color"
+            value={dayColor}
+            onChange={handleDayColorChange}
+            icon={
+              <Sun size={10} style={{ color: theme.colors.state.warning }} />
+            }
+          />
+          <ColorRow
+            label="Night Color"
+            value={nightColor}
+            onChange={handleNightColorChange}
+            icon={<Moon size={10} style={{ color: theme.colors.state.info }} />}
+          />
+          <SliderRow
+            label="Day/Night Mix"
+            value={dayNightMix}
+            min={0}
+            max={1}
+            step={0.05}
+            onChange={handleDayNightMixChange}
+          />
+        </div>
+
         {/* Wind Controls */}
         <div className="space-y-2">
           <div
@@ -482,7 +629,7 @@ export function GrassDebugPanel({ world }: GrassDebugPanelProps) {
             label="Strength"
             value={windStrength}
             min={0}
-            max={0.5}
+            max={1}
             step={0.01}
             onChange={handleWindStrengthChange}
           />
@@ -494,63 +641,143 @@ export function GrassDebugPanel({ world }: GrassDebugPanelProps) {
             step={0.05}
             onChange={handleWindSpeedChange}
           />
+          <SliderRow
+            label="Scale"
+            value={windScale}
+            min={0.5}
+            max={5}
+            step={0.25}
+            onChange={handleWindScaleChange}
+          />
         </div>
 
-        {/* Blade Controls */}
+        {/* Trail (Player Distortion) */}
         <div className="space-y-2">
           <div
             className="text-[9px] font-semibold uppercase tracking-wider flex items-center gap-1"
             style={{ color: theme.colors.text.muted }}
           >
-            <Layers size={10} />
-            Blades
+            Trail
           </div>
           <SliderRow
-            label="Height"
-            value={bladeHeight}
-            min={0.1}
-            max={1.0}
-            step={0.02}
-            onChange={handleBladeHeightChange}
-            suffix="m"
-          />
-          <SliderRow
-            label="Width"
-            value={bladeWidth}
-            min={0.02}
-            max={0.15}
-            step={0.005}
-            onChange={handleBladeWidthChange}
+            label="Radius"
+            value={trailRadius}
+            min={0}
+            max={3}
+            step={0.1}
+            onChange={handleTrailRadiusChange}
             suffix="m"
           />
         </div>
 
-        {/* Distance Controls */}
+        {/* LOD0 Fade (Blade Distance) */}
         <div className="space-y-2">
           <div
             className="text-[9px] font-semibold uppercase tracking-wider flex items-center gap-1"
             style={{ color: theme.colors.text.muted }}
           >
-            <Palette size={10} />
-            Distance
+            LOD0 Fade (Blades)
           </div>
           <SliderRow
-            label="Fade Start"
+            label="Start"
             value={fadeStart}
-            min={20}
-            max={150}
-            step={5}
+            min={5}
+            max={60}
+            step={1}
             onChange={handleFadeStartChange}
             suffix="m"
           />
           <SliderRow
-            label="Fade End"
+            label="End"
             value={fadeEnd}
-            min={30}
-            max={200}
-            step={5}
+            min={10}
+            max={80}
+            step={1}
             onChange={handleFadeEndChange}
             suffix="m"
+          />
+        </div>
+
+        {/* LOD1 Fade (Simple Triangles) */}
+        <div className="space-y-2">
+          <div
+            className="text-[9px] font-semibold uppercase tracking-wider flex items-center gap-1"
+            style={{ color: theme.colors.text.muted }}
+          >
+            <Leaf size={10} />
+            LOD1 Fade
+          </div>
+          <SliderRow
+            label="Fade In Start"
+            value={lod1FadeInStart}
+            min={5}
+            max={50}
+            step={1}
+            onChange={handleLod1FadeInStartChange}
+            suffix="m"
+          />
+          <SliderRow
+            label="Fade In End"
+            value={lod1FadeInEnd}
+            min={10}
+            max={60}
+            step={1}
+            onChange={handleLod1FadeInEndChange}
+            suffix="m"
+          />
+          <SliderRow
+            label="Fade Out Start"
+            value={lod1FadeOutStart}
+            min={30}
+            max={100}
+            step={1}
+            onChange={handleLod1FadeOutStartChange}
+            suffix="m"
+          />
+          <SliderRow
+            label="Fade Out End"
+            value={lod1FadeOutEnd}
+            min={40}
+            max={120}
+            step={1}
+            onChange={handleLod1FadeOutEndChange}
+            suffix="m"
+          />
+        </div>
+
+        {/* Culling (Density Falloff) */}
+        <div className="space-y-2">
+          <div
+            className="text-[9px] font-semibold uppercase tracking-wider flex items-center gap-1"
+            style={{ color: theme.colors.text.muted }}
+          >
+            Culling
+          </div>
+          <SliderRow
+            label="Full Density"
+            value={cullingR0}
+            min={5}
+            max={50}
+            step={1}
+            onChange={handleCullingR0Change}
+            suffix="m"
+          />
+          <SliderRow
+            label="Min Density At"
+            value={cullingR1}
+            min={20}
+            max={100}
+            step={1}
+            onChange={handleCullingR1Change}
+            suffix="m"
+          />
+          <SliderRow
+            label="Min Density %"
+            value={cullingPMin}
+            min={0}
+            max={1}
+            step={0.05}
+            onChange={handleCullingPMinChange}
           />
         </div>
 

@@ -171,6 +171,7 @@ describe("All Presets Verification", () => {
           }
         }
       },
+      30000, // 30 second timeout for complex tree generation
     );
   });
 

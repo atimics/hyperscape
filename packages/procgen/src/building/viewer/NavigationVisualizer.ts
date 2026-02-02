@@ -9,8 +9,8 @@
  * - A→B pathfinding with BFS
  * - Demo paths showing outside→inside navigation
  *
- * Uses standalone implementations (no @hyperscape/shared dependency)
- * to keep the viewer self-contained.
+ * **UNIFIED WITH ENGINE:** Uses @hyperscape/shared systems (BFSPathfinder, types)
+ * so testing here tests the same code the game uses.
  */
 
 import * as THREE from "three";
@@ -18,64 +18,56 @@ import type {
   BuildingLayout,
   FloorPlan,
   StairPlacement,
-} from "../src/building/generator/types.js";
-import type {
-  GeneratedTown,
-  TownBuilding,
-} from "../src/building/town/types.js";
+} from "../generator/types.js";
+import type { GeneratedTown } from "../town/types.js";
 import {
   CELL_SIZE,
   TILES_PER_CELL,
   FLOOR_HEIGHT,
   FOUNDATION_HEIGHT,
   getSideVector,
-  getOppositeSide,
-} from "../src/building/generator/constants.js";
+} from "../generator/constants.js";
 
 // ============================================================================
-// TYPES
+// IMPORTS FROM @hyperscape/shared (ENGINE SYSTEMS)
 // ============================================================================
 
-/** Cardinal direction for walls */
-type WallDirection = "north" | "south" | "east" | "west";
+import {
+  // Engine pathfinder - SAME CODE AS THE GAME
+  BFSPathfinder,
+  // Types
+  type TileCoord,
+  // Building collision types and utilities
+  type WallDirection,
+  type WallSegment,
+  type StairTile,
+  type FloorCollisionData,
+  cellToWorldTile,
+  rotateWallDirection,
+  getOppositeDirection,
+  toWallDirection,
+  buildingTileKey as tileKey,
+  // Tile utilities - use shared implementation instead of duplicating
+  parseTileKey,
+} from "@hyperscape/shared";
 
-/** Wall segment data */
-interface WallSegment {
-  tileX: number;
-  tileZ: number;
-  side: WallDirection;
-  hasOpening: boolean;
-  openingType?: "door" | "arch" | "window";
-}
+// ============================================================================
+// LOCAL TYPES (visualization-specific, not in shared)
+// ============================================================================
 
-/** Stair tile data */
-interface StairTile {
-  tileX: number;
-  tileZ: number;
-  fromFloor: number;
-  toFloor: number;
-  direction: WallDirection;
-  isLanding: boolean;
-}
-
-/** Floor collision data */
-interface FloorCollisionData {
-  floorIndex: number;
-  elevation: number;
-  walkableTiles: Set<string>;
+/** Extended floor collision data with exterior tiles for visualization */
+interface FloorCollisionDataWithExterior extends FloorCollisionData {
   exteriorTiles: Set<string>; // Ground tiles outside the building
-  wallSegments: WallSegment[];
-  stairTiles: StairTile[];
 }
 
-/** Building collision data */
+/** Building collision data for visualization */
 interface BuildingCollisionData {
   buildingId: string;
   worldPosition: { x: number; y: number; z: number };
   rotation: number;
   cellWidth: number;
   cellDepth: number;
-  floors: FloorCollisionData[];
+  floors: FloorCollisionDataWithExterior[];
   groundElevation: number; // Ground level (without foundation)
   boundingBox: {
     minTileX: number;
@@ -83,12 +75,6 @@ interface BuildingCollisionData {
     minTileZ: number;
     maxTileZ: number;
   };
-}
-
-/** Tile coordinate */
-interface TileCoord {
-  x: number;
-  z: number;
 }
 
 /** Visualization options */
@@ -127,6 +113,12 @@ interface MultiFloorPath {
   totalTiles: number;
 }
 
+/** Result of creating a walkability checker - includes both the function and wall data for validation */
+interface WalkabilityCheckerResult {
+  isWalkable: (tile: TileCoord, fromTile?: TileCoord) => boolean;
+  wallLookup: Map<string, Set<WallDirection>>;
+}
+
 // ============================================================================
 // COLORS
 // ============================================================================
@@ -154,82 +146,11 @@ const COLORS = {
 // COORDINATE HELPERS
 // ============================================================================
 
-function tileKey(x: number, z: number): string {
-  return `${x},${z}`;
-}
-
-function parseTileKey(key: string): TileCoord {
-  const [x, z] = key.split(",").map(Number);
-  return { x, z };
-}
-
 /**
- * Convert building cell to world tile coordinate
- */
-function cellToWorldTile(
-  col: number,
-  row: number,
-  buildingCenterX: number,
-  buildingCenterZ: number,
-  buildingWidth: number,
-  buildingDepth: number,
-  rotation: number,
-): TileCoord {
-  // Cell (0,0) is at the SW corner of the building
-  // Building center is at (width/2, depth/2) in cell space
-  const localX = (col - buildingWidth / 2 + 0.5) * CELL_SIZE;
-  const localZ = (row - buildingDepth / 2 + 0.5) * CELL_SIZE;
-
-  // Apply rotation around building center
-  const cos = Math.cos(rotation);
-  const sin = Math.sin(rotation);
-  const rotatedX = localX * cos - localZ * sin;
-  const rotatedZ = localX * sin + localZ * cos;
-
-  // Convert to world coordinates and then to tile
-  return {
-    x: Math.floor(buildingCenterX + rotatedX),
-    z: Math.floor(buildingCenterZ + rotatedZ),
-  };
-}
-
-/**
- * Rotate a wall direction based on building rotation
- */
-function rotateWallDirection(
-  direction: WallDirection,
-  rotation: number,
-): WallDirection {
-  const normalized = ((rotation % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-  const quadrant = Math.round(normalized / (Math.PI / 2)) % 4;
-  const directions: WallDirection[] = ["north", "east", "south", "west"];
-  const dirIndex = directions.indexOf(direction);
-  return directions[(dirIndex + quadrant) % 4];
-}
-
-/**
- * Get opposite wall direction
+ * Get opposite wall direction (wrapper for shared function)
  */
 function getOppositeWallDirection(dir: WallDirection): WallDirection {
-  const map: Record<WallDirection, WallDirection> = {
-    north: "south",
-    south: "north",
-    east: "west",
-    west: "east",
-  };
-  return map[dir];
-}
-
-/**
- * Convert direction string to WallDirection
- */
-function toWallDirection(dir: string): WallDirection {
-  const normalized = dir.toLowerCase();
-  if (normalized === "north" || normalized === "n") return "north";
-  if (normalized === "south" || normalized === "s") return "south";
-  if (normalized === "east" || normalized === "e") return "east";
-  if (normalized === "west" || normalized === "w") return "west";
-  return "south";
+  return getOppositeDirection(dir);
 }
 
 // ============================================================================
@@ -249,7 +170,6 @@ function isValidRotation(rotation: number): boolean {
 
 /**
  * Generate collision data from a building layout
- * (Standalone implementation - no BuildingCollisionService dependency)
  *
  * NOTE: Only 0/90/180/270 degree rotations are supported.
  * Arbitrary rotations will produce incorrect wall positions.
@@ -268,7 +188,7 @@ function generateCollisionData(
     );
   }
 
-  const floors: FloorCollisionData[] = [];
+  const floors: FloorCollisionDataWithExterior[] = [];
   let minTileX = Infinity;
   let maxTileX = -Infinity;
   let minTileZ = Infinity;
@@ -335,7 +255,7 @@ function generateFloorCollisionData(
   layout: BuildingLayout,
   worldPosition: { x: number; y: number; z: number },
   rotation: number,
-): FloorCollisionData {
+): FloorCollisionDataWithExterior {
   const walkableTiles = new Set<string>();
   const exteriorTiles = new Set<string>(); // Will be populated later for floor 0
   const wallSegments: WallSegment[] = [];
@@ -350,15 +270,15 @@ function generateFloorCollisionData(
     for (let col = 0; col < floorPlan.footprint[row].length; col++) {
       if (!floorPlan.footprint[row][col]) continue;
 
-      // Get center tile of this cell
+      // Get center tile of this cell using shared utility
       const centerTile = cellToWorldTile(
-        col,
-        row,
+        { col, row },
         worldPosition.x,
         worldPosition.z,
         layout.width,
         layout.depth,
         rotation,
+        CELL_SIZE,
       );
 
       // Register all tiles within this cell as walkable
@@ -430,15 +350,15 @@ function generateCellWalls(
     { dir: "west", dc: -1, dr: 0 },
   ];
 
-  // Get center tile of this cell
+  // Get center tile of this cell using shared utility
   const centerTile = cellToWorldTile(
-    col,
-    row,
+    { col, row },
     worldPosition.x,
     worldPosition.z,
     buildingWidth,
     buildingDepth,
     rotation,
+    CELL_SIZE,
   );
 
   // Calculate tile offsets for the cell (cell is TILES_PER_CELL x TILES_PER_CELL)
@@ -496,12 +416,10 @@ function generateCellWalls(
 
     if (!hasWall) continue;
 
-    // Get the rotated wall direction
+    // Get the rotated wall direction using shared utility
     const worldDir = rotateWallDirection(dir, rotation);
 
     // Register wall for ALL tiles along this edge of the cell
-    // For north/south walls: iterate along X axis
-    // For east/west walls: iterate along Z axis
     // IMPORTANT: Doors/openings should only be on CENTER tiles, not all edge tiles!
     for (
       let offset = -halfTiles;
@@ -512,32 +430,25 @@ function generateCellWalls(
       let tileZ = centerTile.z;
 
       // Determine which tiles are on this edge based on direction
-      // After rotation, we need to apply the offset along the appropriate axis
       if (worldDir === "north" || worldDir === "south") {
-        // North/south walls span the X axis
         tileX = centerTile.x + offset;
-        // Position the wall on the correct edge
         if (worldDir === "north") {
-          tileZ = centerTile.z - halfTiles; // North edge
+          tileZ = centerTile.z - halfTiles;
         } else {
-          tileZ = centerTile.z + (TILES_PER_CELL - halfTiles - 1); // South edge
+          tileZ = centerTile.z + (TILES_PER_CELL - halfTiles - 1);
         }
       } else {
-        // East/west walls span the Z axis
         tileZ = centerTile.z + offset;
-        // Position the wall on the correct edge
         if (worldDir === "west") {
-          tileX = centerTile.x - halfTiles; // West edge
+          tileX = centerTile.x - halfTiles;
         } else {
-          tileX = centerTile.x + (TILES_PER_CELL - halfTiles - 1); // East edge
+          tileX = centerTile.x + (TILES_PER_CELL - halfTiles - 1);
         }
       }
 
-      // Doors/arches should only be on the CENTER tiles (middle tiles of the edge)
-      // For a cell with TILES_PER_CELL tiles, the center tiles are around offset 0
-      // Calculate dynamically: center tiles are the middle 2 tiles (or 1 if odd)
-      const centerStart = -Math.floor(TILES_PER_CELL / 4); // -1 for TILES_PER_CELL=4
-      const centerEnd = Math.ceil(TILES_PER_CELL / 4) - 1; // 0 for TILES_PER_CELL=4
+      // Doors/arches should only be on the CENTER tiles
+      const centerStart = -Math.floor(TILES_PER_CELL / 4);
+      const centerEnd = Math.ceil(TILES_PER_CELL / 4) - 1;
       const isCenterTile = offset >= centerStart && offset <= centerEnd;
       const tileHasOpening = hasOpening && isCenterTile;
 
@@ -568,15 +479,15 @@ function generateStairTiles(
   const tiles: StairTile[] = [];
   const direction = toWallDirection(stairs.direction);
 
-  // Bottom of stairs (departure tile)
+  // Bottom of stairs (departure tile) using shared utility
   const bottomTile = cellToWorldTile(
-    stairs.col,
-    stairs.row,
+    { col: stairs.col, row: stairs.row },
     worldPosition.x,
     worldPosition.z,
     buildingWidth,
     buildingDepth,
     rotation,
+    CELL_SIZE,
   );
 
   tiles.push({
@@ -588,15 +499,15 @@ function generateStairTiles(
     isLanding: false,
   });
 
-  // Top of stairs (landing tile)
+  // Top of stairs (landing tile) using shared utility
   const landingTile = cellToWorldTile(
-    stairs.landing.col,
-    stairs.landing.row,
+    { col: stairs.landing.col, row: stairs.landing.row },
     worldPosition.x,
     worldPosition.z,
     buildingWidth,
     buildingDepth,
     rotation,
+    CELL_SIZE,
   );
 
   tiles.push({
@@ -612,282 +523,13 @@ function generateStairTiles(
 }
 
 // ============================================================================
-// BFS PATHFINDING (Standalone implementation)
+// PATHFINDING USING ENGINE BFSPathfinder
 // ============================================================================
 
-/** Direction offsets for 8-directional movement */
-const TILE_DIRECTIONS: ReadonlyArray<{ x: number; z: number }> = [
-  { x: -1, z: 0 }, // West
-  { x: 1, z: 0 }, // East
-  { x: 0, z: -1 }, // South
-  { x: 0, z: 1 }, // North
-  { x: -1, z: -1 }, // SW
-  { x: 1, z: -1 }, // SE
-  { x: -1, z: 1 }, // NW
-  { x: 1, z: 1 }, // NE
-];
-
-type WalkabilityChecker = (tile: TileCoord, fromTile?: TileCoord) => boolean;
-
-/** Result of creating a walkability checker - includes both the function and wall data for validation */
-interface WalkabilityCheckerResult {
-  isWalkable: WalkabilityChecker;
-  wallLookup: Map<string, Set<WallDirection>>;
-}
-
 /**
- * BFS Pathfinding with naive diagonal approach
+ * Singleton BFSPathfinder instance - SAME CODE AS THE GAME ENGINE
  */
-function findPath(
-  start: TileCoord,
-  end: TileCoord,
-  isWalkable: WalkabilityChecker,
-  maxIterations = 2000,
-  wallLookup?: Map<string, Set<WallDirection>>,
-): TileCoord[] {
-  // Already at destination
-  if (start.x === end.x && start.z === end.z) {
-    return [];
-  }
-
-  // Try naive diagonal path first
-  const naivePath = findNaiveDiagonalPath(start, end, isWalkable, wallLookup);
-  if (naivePath.length > 0) {
-    return naivePath;
-  }
-
-  // Fall back to BFS
-  return findBFSPath(start, end, isWalkable, maxIterations, wallLookup);
-}
-
-/**
- * Naive diagonal pathing (OSRS follow-mode style)
- */
-function findNaiveDiagonalPath(
-  start: TileCoord,
-  end: TileCoord,
-  isWalkable: WalkabilityChecker,
-  wallLookup?: Map<string, Set<WallDirection>>,
-): TileCoord[] {
-  const path: TileCoord[] = [];
-  let current = { ...start };
-  let iterations = 0;
-
-  while ((current.x !== end.x || current.z !== end.z) && iterations < 500) {
-    iterations++;
-
-    const dx = Math.sign(end.x - current.x);
-    const dz = Math.sign(end.z - current.z);
-    let nextTile: TileCoord | null = null;
-
-    if (dx !== 0 && dz !== 0) {
-      // Diagonal movement
-      const diagonal: TileCoord = { x: current.x + dx, z: current.z + dz };
-      if (canMoveTo(current, diagonal, isWalkable, wallLookup)) {
-        nextTile = diagonal;
-      } else {
-        // Try cardinals
-        const xDist = Math.abs(end.x - current.x);
-        const zDist = Math.abs(end.z - current.z);
-
-        if (xDist >= zDist) {
-          const cardinalX: TileCoord = { x: current.x + dx, z: current.z };
-          const cardinalZ: TileCoord = { x: current.x, z: current.z + dz };
-          if (canMoveTo(current, cardinalX, isWalkable, wallLookup))
-            nextTile = cardinalX;
-          else if (canMoveTo(current, cardinalZ, isWalkable, wallLookup))
-            nextTile = cardinalZ;
-        } else {
-          const cardinalZ: TileCoord = { x: current.x, z: current.z + dz };
-          const cardinalX: TileCoord = { x: current.x + dx, z: current.z };
-          if (canMoveTo(current, cardinalZ, isWalkable, wallLookup))
-            nextTile = cardinalZ;
-          else if (canMoveTo(current, cardinalX, isWalkable, wallLookup))
-            nextTile = cardinalX;
-        }
-      }
-    } else if (dx !== 0) {
-      const cardinalX: TileCoord = { x: current.x + dx, z: current.z };
-      if (canMoveTo(current, cardinalX, isWalkable, wallLookup))
-        nextTile = cardinalX;
-    } else if (dz !== 0) {
-      const cardinalZ: TileCoord = { x: current.x, z: current.z + dz };
-      if (canMoveTo(current, cardinalZ, isWalkable, wallLookup))
-        nextTile = cardinalZ;
-    }
-
-    if (!nextTile) return []; // Blocked - use BFS
-    path.push(nextTile);
-    current = nextTile;
-
-    if (path.length > 200) return path;
-  }
-
-  return path;
-}
-
-/**
- * BFS pathfinding
- */
-function findBFSPath(
-  start: TileCoord,
-  end: TileCoord,
-  isWalkable: WalkabilityChecker,
-  maxIterations: number,
-  wallLookup?: Map<string, Set<WallDirection>>,
-): TileCoord[] {
-  const visited = new Set<string>();
-  const parent = new Map<string, TileCoord>();
-  const queue: TileCoord[] = [start];
-  visited.add(tileKey(start.x, start.z));
-
-  let iterations = 0;
-  let queueIndex = 0;
-
-  while (queueIndex < queue.length && iterations < maxIterations) {
-    iterations++;
-    const current = queue[queueIndex++];
-
-    if (current.x === end.x && current.z === end.z) {
-      return reconstructPath(start, end, parent);
-    }
-
-    for (const dir of TILE_DIRECTIONS) {
-      const neighbor: TileCoord = {
-        x: current.x + dir.x,
-        z: current.z + dir.z,
-      };
-      const neighborKey = tileKey(neighbor.x, neighbor.z);
-
-      if (visited.has(neighborKey)) continue;
-      if (!canMoveTo(current, neighbor, isWalkable, wallLookup)) continue;
-
-      visited.add(neighborKey);
-      parent.set(neighborKey, current);
-      queue.push(neighbor);
-    }
-  }
-
-  // Return partial path to closest tile
-  return findPartialPath(start, end, visited, parent);
-}
-
-/**
- * Check if movement between tiles is valid
- *
- * For diagonal movement, implements proper corner-clipping prevention:
- * - Both cardinal tiles must be walkable
- * - Neither cardinal tile can have walls that would block the diagonal cut
- *
- * @param from Source tile
- * @param to Destination tile
- * @param isWalkable Function to check tile walkability
- * @param wallLookup Optional wall data for corner-clip wall checks
- */
-function canMoveTo(
-  from: TileCoord,
-  to: TileCoord,
-  isWalkable: WalkabilityChecker,
-  wallLookup?: Map<string, Set<WallDirection>>,
-): boolean {
-  if (!isWalkable(to, from)) return false;
-
-  const dx = to.x - from.x;
-  const dz = to.z - from.z;
-
-  // Diagonal corner clipping check (OSRS-style)
-  if (Math.abs(dx) === 1 && Math.abs(dz) === 1) {
-    const cardinalX: TileCoord = { x: from.x + dx, z: from.z };
-    const cardinalZ: TileCoord = { x: from.x, z: from.z + dz };
-
-    // Both cardinal tiles must be walkable
-    if (!isWalkable(cardinalX, from) || !isWalkable(cardinalZ, from)) {
-      return false;
-    }
-
-    // Additional corner-clip wall checks
-    // When moving diagonally, walls on cardinal tiles can block the diagonal "cut"
-    // even if the tiles themselves are walkable.
-    //
-    // Example: Moving from (0,0) to (1,1) with dx=+1, dz=+1
-    //   - cardinalX is (1,0) - check for SOUTH wall (blocks the diagonal going up)
-    //   - cardinalZ is (0,1) - check for EAST wall (blocks the diagonal going right)
-    if (wallLookup) {
-      const cardinalXKey = tileKey(cardinalX.x, cardinalX.z);
-      const cardinalZKey = tileKey(cardinalZ.x, cardinalZ.z);
-
-      // Wall direction on cardinalX that would block diagonal (in the Z movement direction)
-      // dz > 0 = moving south, so SOUTH wall on cardinalX blocks the cut
-      // dz < 0 = moving north, so NORTH wall on cardinalX blocks the cut
-      const xTileBlockingWall: WallDirection = dz > 0 ? "south" : "north";
-      const cardinalXWalls = wallLookup.get(cardinalXKey);
-      if (cardinalXWalls?.has(xTileBlockingWall)) {
-        return false;
-      }
-
-      // Wall direction on cardinalZ that would block diagonal (in the X movement direction)
-      // dx > 0 = moving east, so EAST wall on cardinalZ blocks the cut
-      // dx < 0 = moving west, so WEST wall on cardinalZ blocks the cut
-      const zTileBlockingWall: WallDirection = dx > 0 ? "east" : "west";
-      const cardinalZWalls = wallLookup.get(cardinalZKey);
-      if (cardinalZWalls?.has(zTileBlockingWall)) {
-        return false;
-      }
-    }
-  }
-
-  return true;
-}
-
-/**
- * Reconstruct path from parent map
- */
-function reconstructPath(
-  start: TileCoord,
-  end: TileCoord,
-  parent: Map<string, TileCoord>,
-): TileCoord[] {
-  const path: TileCoord[] = [];
-  let current = end;
-
-  while (current.x !== start.x || current.z !== start.z) {
-    path.push(current);
-    const p = parent.get(tileKey(current.x, current.z));
-    if (!p) break;
-    current = p;
-  }
-
-  path.reverse();
-  return path.slice(0, 200);
-}
-
-/**
- * Find partial path to closest visited tile
- */
-function findPartialPath(
-  start: TileCoord,
-  end: TileCoord,
-  visited: Set<string>,
-  parent: Map<string, TileCoord>,
-): TileCoord[] {
-  let closest: TileCoord | null = null;
-  let closestDist = Infinity;
-
-  for (const key of visited) {
-    const tile = parseTileKey(key);
-    const dist = Math.abs(tile.x - end.x) + Math.abs(tile.z - end.z);
-    if (dist < closestDist) {
-      closestDist = dist;
-      closest = tile;
-    }
-  }
-
-  if (!closest || (closest.x === start.x && closest.z === start.z)) {
-    return [];
-  }
-
-  return reconstructPath(start, closest, parent);
-}
+const enginePathfinder = new BFSPathfinder();
 
 /**
  * Validate a path doesn't go through any walls
@@ -896,7 +538,7 @@ function findPartialPath(
 function validatePath(
   path: TileCoord[],
   start: TileCoord,
-  isWalkable: WalkabilityChecker,
+  isWalkable: (tile: TileCoord, fromTile?: TileCoord) => boolean,
   wallLookup: Map<string, Set<WallDirection>>,
 ): void {
   if (path.length === 0) return;
@@ -907,9 +549,7 @@ function validatePath(
     const from = fullPath[i];
     const to = fullPath[i + 1];
 
-    // Check if movement is walkable
     if (!isWalkable(to, from)) {
-      // Get wall info for better error message
       const toKey = tileKey(to.x, to.z);
       const fromKey = tileKey(from.x, from.z);
       const toWalls = wallLookup.get(toKey);
@@ -918,7 +558,6 @@ function validatePath(
       const dx = to.x - from.x;
       const dz = to.z - from.z;
 
-      // Determine which direction we were trying to move
       let moveDesc = "";
       if (dx === 0 && dz === 1) moveDesc = "south (dz=+1)";
       else if (dx === 0 && dz === -1) moveDesc = "north (dz=-1)";
@@ -935,50 +574,20 @@ function validatePath(
       );
     }
 
-    // Also validate diagonal corner clipping
+    // Validate diagonal corner clipping
     const dx = to.x - from.x;
     const dz = to.z - from.z;
     if (Math.abs(dx) === 1 && Math.abs(dz) === 1) {
       const cardinalX: TileCoord = { x: from.x + dx, z: from.z };
       const cardinalZ: TileCoord = { x: from.x, z: from.z + dz };
 
-      // Both cardinal paths must be walkable for diagonal to be valid
       if (!isWalkable(cardinalX, from) || !isWalkable(cardinalZ, from)) {
         throw new Error(
           `PATH VALIDATION ERROR: Diagonal step ${i} clips through corner!\n` +
             `  From: (${from.x}, ${from.z})\n` +
             `  To: (${to.x}, ${to.z})\n` +
             `  Cardinal X (${cardinalX.x}, ${cardinalX.z}) walkable: ${isWalkable(cardinalX, from)}\n` +
-            `  Cardinal Z (${cardinalZ.x}, ${cardinalZ.z}) walkable: ${isWalkable(cardinalZ, from)}\n` +
-            `  Diagonal movement requires both cardinal adjacent tiles to be walkable.`,
-        );
-      }
-
-      // Also check for walls on cardinal tiles that would block the diagonal cut
-      const cardinalXKey = tileKey(cardinalX.x, cardinalX.z);
-      const cardinalZKey = tileKey(cardinalZ.x, cardinalZ.z);
-      const cardinalXWalls = wallLookup.get(cardinalXKey);
-      const cardinalZWalls = wallLookup.get(cardinalZKey);
-
-      // Wall on cardinalX in Z direction blocks the diagonal
-      const xTileBlockingWall: WallDirection = dz > 0 ? "south" : "north";
-      if (cardinalXWalls?.has(xTileBlockingWall)) {
-        throw new Error(
-          `PATH VALIDATION ERROR: Diagonal step ${i} clips through wall on cardinal X tile!\n` +
-            `  From: (${from.x}, ${from.z})\n` +
-            `  To: (${to.x}, ${to.z})\n` +
-            `  Cardinal X (${cardinalX.x}, ${cardinalX.z}) has ${xTileBlockingWall} wall blocking diagonal.`,
-        );
-      }
-
-      // Wall on cardinalZ in X direction blocks the diagonal
-      const zTileBlockingWall: WallDirection = dx > 0 ? "east" : "west";
-      if (cardinalZWalls?.has(zTileBlockingWall)) {
-        throw new Error(
-          `PATH VALIDATION ERROR: Diagonal step ${i} clips through wall on cardinal Z tile!\n` +
-            `  From: (${from.x}, ${from.z})\n` +
-            `  To: (${to.x}, ${to.z})\n` +
-            `  Cardinal Z (${cardinalZ.x}, ${cardinalZ.z}) has ${zTileBlockingWall} wall blocking diagonal.`,
+            `  Cardinal Z (${cardinalZ.x}, ${cardinalZ.z}) walkable: ${isWalkable(cardinalZ, from)}`,
         );
       }
     }
@@ -991,32 +600,17 @@ function validatePath(
 
 /**
  * Find a path that can span multiple floors using stairs
- *
- * The algorithm:
- * 1. Start on the source floor
- * 2. If destination is on same floor, find direct path
- * 3. If destination is on different floor, find path to appropriate stair
- * 4. Transition through stair to next floor
- * 5. Repeat until destination floor is reached
- * 6. Find final path to destination on that floor
- *
- * @param start - Starting tile and floor
- * @param end - Destination tile and floor
- * @param floors - All floor collision data
- * @param createChecker - Function to create walkability checker for a floor
- * @returns MultiFloorPath with segments for each floor, or null if no path found
  */
 function findMultiFloorPath(
   start: MultiFloorTile,
   end: MultiFloorTile,
-  floors: FloorCollisionData[],
+  floors: FloorCollisionDataWithExterior[],
   createChecker: (floorIndex: number) => WalkabilityCheckerResult,
 ): MultiFloorPath | null {
   const segments: MultiFloorPathSegment[] = [];
   let currentTile: TileCoord = { x: start.x, z: start.z };
   let currentFloor = start.floor;
 
-  // Maximum iterations to prevent infinite loops
   const maxFloorTransitions = floors.length * 2;
   let transitions = 0;
 
@@ -1033,20 +627,17 @@ function findMultiFloorPath(
 
     // Are we on the destination floor?
     if (currentFloor === end.floor) {
-      // Find path to destination
-      const path = findPath(
+      // Use engine BFSPathfinder
+      const path = enginePathfinder.findPath(
         currentTile,
         { x: end.x, z: end.z },
         checker.isWalkable,
-        2000,
-        checker.wallLookup,
       );
 
       if (
         path.length === 0 &&
         (currentTile.x !== end.x || currentTile.z !== end.z)
       ) {
-        // Can't reach destination on this floor
         console.warn(
           `[MultiFloorPath] Can't reach destination on floor ${currentFloor}`,
         );
@@ -1071,16 +662,9 @@ function findMultiFloorPath(
     const targetFloorHigher = end.floor > currentFloor;
     const stairTiles = floor.stairTiles;
 
-    // Find a stair that goes in the right direction
-    // Stair data structure:
-    // - fromFloor: lower floor index
-    // - toFloor: higher floor index (always fromFloor + 1)
-    // - isLanding: false = bottom of stairs (on fromFloor), true = top of stairs (on toFloor)
     let targetStair: StairTile | null = null;
     for (const stair of stairTiles) {
       if (targetFloorHigher) {
-        // Going UP - need the bottom of stairs (isLanding=false) that leads to a higher floor
-        // We're on currentFloor, so we need fromFloor === currentFloor
         if (
           !stair.isLanding &&
           stair.fromFloor === currentFloor &&
@@ -1090,8 +674,6 @@ function findMultiFloorPath(
           break;
         }
       } else {
-        // Going DOWN - need the landing/top of stairs (isLanding=true) on current floor
-        // The landing is on toFloor, so we need toFloor === currentFloor
         if (
           stair.isLanding &&
           stair.toFloor === currentFloor &&
@@ -1103,17 +685,14 @@ function findMultiFloorPath(
       }
     }
 
-    // If no direct stair found, check for any stair that gets us closer
     if (!targetStair) {
       for (const stair of stairTiles) {
         if (targetFloorHigher) {
-          // Any stair bottom on this floor that goes up
           if (!stair.isLanding && stair.fromFloor === currentFloor) {
             targetStair = stair;
             break;
           }
         } else {
-          // Any stair top/landing on this floor that goes down
           if (stair.isLanding && stair.toFloor === currentFloor) {
             targetStair = stair;
             break;
@@ -1129,14 +708,12 @@ function findMultiFloorPath(
       return null;
     }
 
-    // Find path to stair
+    // Find path to stair using engine BFSPathfinder
     const stairTile: TileCoord = { x: targetStair.tileX, z: targetStair.tileZ };
-    const pathToStair = findPath(
+    const pathToStair = enginePathfinder.findPath(
       currentTile,
       stairTile,
       checker.isWalkable,
-      2000,
-      checker.wallLookup,
     );
 
     if (
@@ -1144,7 +721,7 @@ function findMultiFloorPath(
       (currentTile.x !== stairTile.x || currentTile.z !== stairTile.z)
     ) {
       console.warn(
-        `[MultiFloorPath] Can't reach stair at (${stairTile.x}, ${stairTile.z}) from (${currentTile.x}, ${currentTile.z})`,
+        `[MultiFloorPath] Can't reach stair at (${stairTile.x}, ${stairTile.z})`,
       );
       return null;
     }
@@ -1158,8 +735,6 @@ function findMultiFloorPath(
     });
 
     // Transition to next floor
-    // Going UP: we arrive at toFloor (the landing)
-    // Going DOWN: we arrive at fromFloor (the bottom)
     const nextFloorIndex = targetFloorHigher
       ? targetStair.toFloor
       : targetStair.fromFloor;
@@ -1169,40 +744,26 @@ function findMultiFloorPath(
       return null;
     }
 
-    // Find matching stair tile on next floor
-    // The stair connects the same two floors, so both floors have stair tiles
     const matchingStair = nextFloor.stairTiles.find((s) => {
-      // Match by direction (same staircase)
       if (s.direction !== targetStair!.direction) return false;
-      // Match by connected floors
       if (
         s.fromFloor !== targetStair!.fromFloor ||
         s.toFloor !== targetStair!.toFloor
       )
         return false;
-
-      // If going up, we arrive at the landing (top); if going down, we arrive at bottom
-      if (targetFloorHigher) {
-        return s.isLanding; // We arrive at the landing
-      } else {
-        return !s.isLanding; // We arrive at the bottom
-      }
+      return targetFloorHigher ? s.isLanding : !s.isLanding;
     });
 
     if (matchingStair) {
       currentTile = { x: matchingStair.tileX, z: matchingStair.tileZ };
     } else {
-      // Fallback: estimate position based on stair direction
-      // The landing is offset from the bottom by the stair direction
       const dirVec = getSideVector(targetStair.direction);
       if (targetFloorHigher) {
-        // Going up - landing is in the direction of stair
         currentTile = {
           x: targetStair.tileX + dirVec.x * TILES_PER_CELL,
           z: targetStair.tileZ + dirVec.z * TILES_PER_CELL,
         };
       } else {
-        // Going down - bottom is opposite of stair direction from landing
         currentTile = {
           x: targetStair.tileX - dirVec.x * TILES_PER_CELL,
           z: targetStair.tileZ - dirVec.z * TILES_PER_CELL,
@@ -1253,6 +814,14 @@ export class NavigationVisualizer {
   private buildingCollisionDataCache: Map<number, BuildingCollisionData> =
     new Map();
 
+  // Callbacks for React integration
+  private onPathUpdate?: (pathInfo: {
+    start: TileCoord | null;
+    end: TileCoord | null;
+    length: number;
+    partial: boolean;
+  }) => void;
+
   constructor(scene: THREE.Scene, camera: THREE.Camera) {
     this.scene = scene;
     this.camera = camera;
@@ -1285,6 +854,20 @@ export class NavigationVisualizer {
   // ===========================================================================
   // PUBLIC API
   // ===========================================================================
+
+  /**
+   * Set callback for path updates (for React state sync)
+   */
+  setPathUpdateCallback(
+    callback: (pathInfo: {
+      start: TileCoord | null;
+      end: TileCoord | null;
+      length: number;
+      partial: boolean;
+    }) => void,
+  ): void {
+    this.onPathUpdate = callback;
+  }
 
   /**
    * Set building layout for visualization
@@ -1402,9 +985,6 @@ export class NavigationVisualizer {
 
   /**
    * Handle mouse click for A→B pathfinding
-   * @param event Mouse event
-   * @param canvas Canvas element
-   * @param button 0 = left (set A), 2 = right (set B)
    */
   handleClick(
     event: MouseEvent,
@@ -1422,7 +1002,6 @@ export class NavigationVisualizer {
     this.raycaster.setFromCamera(mouse, this.camera);
     const target = new THREE.Vector3();
 
-    // Update ground plane to match building elevation
     const elevation = this.collisionData.floors[0]?.elevation ?? 0;
     this.groundPlane.constant = -elevation;
 
@@ -1437,10 +1016,8 @@ export class NavigationVisualizer {
     };
 
     if (button === 0) {
-      // Left click - set point A
       this.clickState.pointA = tile;
     } else if (button === 2) {
-      // Right click - set point B
       this.clickState.pointB = tile;
     }
 
@@ -1455,6 +1032,7 @@ export class NavigationVisualizer {
     this.clickState = { pointA: null, pointB: null };
     this.clearMarkers();
     this.clearPath("user-path");
+    this.onPathUpdate?.({ start: null, end: null, length: 0, partial: false });
   }
 
   /**
@@ -1484,14 +1062,12 @@ export class NavigationVisualizer {
     this.clearVisualization();
 
     if (!this.collisionData) {
-      // Town mode - show all buildings as outlines
       if (this.townData) {
         this.visualizeTownOverview();
       }
       return;
     }
 
-    // Visualize building collision data
     for (const floor of this.collisionData.floors) {
       if (this.options.showWalkableTiles) {
         this.visualizeWalkableTiles(floor, this.collisionData.groundElevation);
@@ -1520,7 +1096,6 @@ export class NavigationVisualizer {
   }
 
   private clearVisualization(): void {
-    // Clear visualization group
     while (this.visualizationGroup.children.length > 0) {
       const child = this.visualizationGroup.children[0];
       this.visualizationGroup.remove(child);
@@ -1529,7 +1104,6 @@ export class NavigationVisualizer {
       }
     }
 
-    // Clear path group
     while (this.pathGroup.children.length > 0) {
       const child = this.pathGroup.children[0];
       this.pathGroup.remove(child);
@@ -1558,7 +1132,6 @@ export class NavigationVisualizer {
       if (obj instanceof THREE.Line) {
         obj.geometry.dispose();
       }
-      // Meshes share geometry/material from pool, no need to dispose
     }
   }
 
@@ -1569,7 +1142,6 @@ export class NavigationVisualizer {
   private visualizeTownOverview(): void {
     if (!this.townData) return;
 
-    // Show building footprints as colored outlines
     for (let i = 0; i < this.townData.buildings.length; i++) {
       const building = this.townData.buildings[i];
       const collisionData = this.buildingCollisionDataCache.get(i);
@@ -1579,7 +1151,6 @@ export class NavigationVisualizer {
       const isSelected = i === this.selectedBuildingIndex;
       const color = isSelected ? 0xffff00 : 0x888888;
 
-      // Draw bounding box outline
       const { minTileX, maxTileX, minTileZ, maxTileZ } =
         collisionData.boundingBox;
       const width = maxTileX - minTileX + 1;
@@ -1598,7 +1169,6 @@ export class NavigationVisualizer {
       outline.name = `building-outline-${i}`;
       this.visualizationGroup.add(outline);
 
-      // Draw entrance marker
       if (building.entrance) {
         const entranceGeo = new THREE.CircleGeometry(0.5, 16);
         const entranceMat = this.getMaterial(COLORS.DOOR);
@@ -1615,7 +1185,7 @@ export class NavigationVisualizer {
   }
 
   private visualizeWalkableTiles(
-    floor: FloorCollisionData,
+    floor: FloorCollisionDataWithExterior,
     groundElevation: number,
   ): void {
     const interiorColor =
@@ -1624,13 +1194,11 @@ export class NavigationVisualizer {
         : COLORS.WALKABLE_FLOOR_1;
     const floorY = floor.elevation + 0.02;
 
-    // Interior tiles (at floor elevation, above foundation)
     for (const key of floor.walkableTiles) {
       const { x, z } = parseTileKey(key);
       this.addTileMesh(x, floorY, z, interiorColor);
     }
 
-    // Exterior tiles (ground floor only, at ground level - not foundation level)
     if (floor.floorIndex === 0 && floor.exteriorTiles.size > 0) {
       const groundY = groundElevation + 0.02;
       for (const key of floor.exteriorTiles) {
@@ -1640,11 +1208,11 @@ export class NavigationVisualizer {
     }
   }
 
-  private visualizeWalls(floor: FloorCollisionData): void {
+  private visualizeWalls(floor: FloorCollisionDataWithExterior): void {
     const y = floor.elevation + 0.25;
 
     for (const wall of floor.wallSegments) {
-      if (wall.hasOpening) continue; // Skip doors/arches
+      if (wall.hasOpening) continue;
 
       const colorMap: Record<WallDirection, number> = {
         north: COLORS.WALL_NORTH,
@@ -1663,7 +1231,7 @@ export class NavigationVisualizer {
     }
   }
 
-  private visualizeDoors(floor: FloorCollisionData): void {
+  private visualizeDoors(floor: FloorCollisionDataWithExterior): void {
     const y = floor.elevation + 0.25;
 
     for (const wall of floor.wallSegments) {
@@ -1673,25 +1241,20 @@ export class NavigationVisualizer {
     }
   }
 
-  private visualizeStairs(floor: FloorCollisionData): void {
+  private visualizeStairs(floor: FloorCollisionDataWithExterior): void {
     if (!this.collisionData) return;
 
     for (const stair of floor.stairTiles) {
-      // Calculate proper elevation based on whether this is the landing or bottom
-      // Landing is at the upper floor's elevation, bottom is at current floor's elevation
       let stairY: number;
       if (stair.isLanding) {
-        // Landing - use next floor's elevation
         const nextFloor = this.collisionData.floors[stair.toFloor];
         stairY = nextFloor
           ? nextFloor.elevation
           : floor.elevation + FLOOR_HEIGHT;
       } else {
-        // Bottom of stairs - use current floor elevation
         stairY = floor.elevation;
       }
 
-      // Create stepped visualization
       const stepGeo = new THREE.BoxGeometry(0.8, 0.3, 0.8);
       const stepMat = this.getMaterial(COLORS.STAIR);
       const stepMesh = new THREE.Mesh(stepGeo, stepMat);
@@ -1702,7 +1265,6 @@ export class NavigationVisualizer {
       );
       this.visualizationGroup.add(stepMesh);
 
-      // Add direction arrow pointing UP for bottom, pointing in stair direction for landing
       const arrowDir = getSideVector(stair.direction);
       const arrowGeo = new THREE.ConeGeometry(0.2, 0.4, 8);
       const arrowMat = this.getMaterial(COLORS.STAIR);
@@ -1714,12 +1276,8 @@ export class NavigationVisualizer {
       );
 
       if (stair.isLanding) {
-        // Landing arrow points horizontally in stair direction
         arrow.rotation.x = Math.PI / 2;
         arrow.rotation.z = Math.atan2(-arrowDir.x, arrowDir.z);
-      } else {
-        // Bottom arrow points UP to indicate "go up stairs"
-        // No rotation needed - cone points up by default
       }
       this.visualizationGroup.add(arrow);
     }
@@ -1731,17 +1289,14 @@ export class NavigationVisualizer {
     const floor0 = this.collisionData.floors[0];
     if (!floor0) return;
 
-    // Entry points are outside, so use ground elevation
     const groundY = this.collisionData.groundElevation + 0.03;
 
-    // Find external doors
     const doorWalls = floor0.wallSegments.filter(
       (w) =>
         w.hasOpening && (w.openingType === "door" || w.openingType === "arch"),
     );
 
     for (const door of doorWalls) {
-      // Place entry marker outside the door
       const dirVec = getSideVector(door.side);
       const entryX = door.tileX + dirVec.x * 2;
       const entryZ = door.tileZ + dirVec.z * 2;
@@ -1761,7 +1316,6 @@ export class NavigationVisualizer {
     const floor0 = this.collisionData.floors[0];
     if (!floor0) return;
 
-    // Find an external door
     const doorWall = floor0.wallSegments.find(
       (w) =>
         w.hasOpening && (w.openingType === "door" || w.openingType === "arch"),
@@ -1769,14 +1323,12 @@ export class NavigationVisualizer {
 
     if (!doorWall) return;
 
-    // Calculate entry point (outside) and floor center
     const dirVec = getSideVector(doorWall.side);
     const entryTile: TileCoord = {
       x: doorWall.tileX + dirVec.x * 5,
       z: doorWall.tileZ + dirVec.z * 5,
     };
 
-    // Find floor center
     const tiles = Array.from(floor0.walkableTiles).map(parseTileKey);
     const centerX = Math.floor(
       tiles.reduce((s, t) => s + t.x, 0) / tiles.length,
@@ -1786,12 +1338,10 @@ export class NavigationVisualizer {
     );
     const centerTile: TileCoord = { x: centerX, z: centerZ };
 
-    // Create walkability checker factory for multi-floor path
     const createChecker = (floorIndex: number) =>
       this.createWalkabilityChecker(floorIndex);
     const floor0Checker = createChecker(0);
 
-    // Find path from outside to center (with validation)
     try {
       const path = this.findPathAndValidate(
         entryTile,
@@ -1808,7 +1358,7 @@ export class NavigationVisualizer {
         );
       }
 
-      // If multi-floor building with stairs, show multi-floor path demonstrations
+      // Multi-floor demo paths
       if (
         this.collisionData.floors.length > 1 &&
         floor0.stairTiles.length > 0
@@ -1829,7 +1379,6 @@ export class NavigationVisualizer {
             z: stairTop.tileZ,
           };
 
-          // Path from center to stair bottom
           const pathToStair = this.findPathAndValidate(
             centerTile,
             stairBottomTile,
@@ -1844,7 +1393,6 @@ export class NavigationVisualizer {
             );
           }
 
-          // Path from stair top to upper floor center
           const floor1Tiles = Array.from(floor1.walkableTiles).map(
             parseTileKey,
           );
@@ -1875,8 +1423,6 @@ export class NavigationVisualizer {
             );
           }
 
-          // ===== NEW: Multi-floor path from upper floor to outside =====
-          // This demonstrates the ability to navigate DOWN stairs and out of the building
           const multiFloorPath = findMultiFloorPath(
             { x: floor1CenterX, z: floor1CenterZ, floor: 1 },
             { x: entryTile.x, z: entryTile.z, floor: 0 },
@@ -1890,18 +1436,14 @@ export class NavigationVisualizer {
               "demo-multifloor-descent",
             );
           }
-          // Note: If no multi-floor path found, it's not necessarily an error -
-          // the building may only have one floor or no accessible stairs
         }
       }
     } catch (error) {
-      // Path validation failed - this is a bug! Make it VERY visible.
       console.error(
         "[NavigationVisualizer] Demo path validation failed - BUG DETECTED:",
         error,
       );
 
-      // Render a big red X at the building center to indicate failure
       const errorMarkerGeo = new THREE.BoxGeometry(2, 2, 2);
       const errorMarkerMat = this.getMaterial(0xff0000);
       const errorMarker = new THREE.Mesh(errorMarkerGeo, errorMarkerMat);
@@ -1913,7 +1455,6 @@ export class NavigationVisualizer {
       errorMarker.name = "demo-path-error";
       this.pathGroup.add(errorMarker);
 
-      // Also throw in development to make bugs unmissable
       if (
         typeof process !== "undefined" &&
         process.env?.NODE_ENV === "development"
@@ -1966,8 +1507,15 @@ export class NavigationVisualizer {
       !this.clickState.pointA ||
       !this.clickState.pointB ||
       !this.collisionData
-    )
+    ) {
+      this.onPathUpdate?.({
+        start: this.clickState.pointA,
+        end: this.clickState.pointB,
+        length: 0,
+        partial: false,
+      });
       return;
+    }
 
     const floor0Checker = this.createWalkabilityChecker(0);
     const elevation = this.collisionData.floors[0]?.elevation ?? 0;
@@ -1979,24 +1527,31 @@ export class NavigationVisualizer {
         floor0Checker,
       );
 
+      const wasPartial = enginePathfinder.wasLastPathPartial();
+
       if (path.length > 0) {
         this.renderPath(
           [this.clickState.pointA, ...path],
           elevation + 0.15,
-          0x00ff00,
+          wasPartial ? 0xffaa00 : 0x00ff00, // Orange for partial, green for complete
           "user-path",
         );
       } else {
-        // No path found - show direct line in red
         this.renderPath(
           [this.clickState.pointA, this.clickState.pointB],
           elevation + 0.15,
-          0xff0000,
+          0xff0000, // Red for no path
           "user-path",
         );
       }
+
+      this.onPathUpdate?.({
+        start: this.clickState.pointA,
+        end: this.clickState.pointB,
+        length: path.length,
+        partial: wasPartial,
+      });
     } catch (error) {
-      // Path validation failed - show error path in red and log
       console.error(
         "[NavigationVisualizer] User path validation failed - BUG DETECTED:",
         error,
@@ -2007,6 +1562,12 @@ export class NavigationVisualizer {
         0xff0000,
         "user-path",
       );
+      this.onPathUpdate?.({
+        start: this.clickState.pointA,
+        end: this.clickState.pointB,
+        length: 0,
+        partial: true,
+      });
     }
   }
 
@@ -2069,7 +1630,6 @@ export class NavigationVisualizer {
   ): void {
     if (tiles.length < 2) return;
 
-    // Draw connecting line
     const points: THREE.Vector3[] = tiles.map(
       (t) => new THREE.Vector3(t.x + 0.5, y + 0.05, t.z + 0.5),
     );
@@ -2081,23 +1641,19 @@ export class NavigationVisualizer {
     line.renderOrder = 200;
     this.pathGroup.add(line);
 
-    // Draw tile highlights along the path
     const tileHighlightColor = COLORS.PATH_TILE;
     const tileMaterial = this.getMaterial(tileHighlightColor);
     for (const tile of tiles) {
       const mesh = new THREE.Mesh(this.tileGeometry, tileMaterial);
       mesh.position.set(tile.x + 0.5, y + 0.03, tile.z + 0.5);
       mesh.rotation.x = -Math.PI / 2;
-      mesh.scale.set(0.7, 0.7, 1); // Slightly smaller to show underlying tile
+      mesh.scale.set(0.7, 0.7, 1);
       mesh.name = name;
       mesh.renderOrder = 150;
       this.pathGroup.add(mesh);
     }
   }
 
-  /**
-   * Render a multi-floor path with smooth elevation transitions on stairs
-   */
   private renderMultiFloorPath(multiPath: MultiFloorPath, name: string): void {
     if (!this.collisionData) return;
 
@@ -2109,7 +1665,6 @@ export class NavigationVisualizer {
       0xffaa00, // Orange - floor 3+
     ];
 
-    // Collect all 3D points for the complete path line
     const allPoints: THREE.Vector3[] = [];
 
     for (let segIdx = 0; segIdx < multiPath.segments.length; segIdx++) {
@@ -2127,30 +1682,24 @@ export class NavigationVisualizer {
         const tile = segment.tiles[i];
         let y = segment.elevation;
 
-        // If this is the last tile of a segment that ends at stairs,
-        // and there's a next segment, interpolate elevation
         if (
           segment.endsAtStair &&
           nextSegment &&
           i === segment.tiles.length - 1
         ) {
-          // Find the stair for elevation interpolation
           const stair = floor.stairTiles.find(
             (s) => s.tileX === tile.x && s.tileZ === tile.z,
           );
           if (stair) {
             const nextFloor = floors[nextSegment.floorIndex];
             if (nextFloor) {
-              // Start of stair transition - still at current floor elevation
               y = segment.elevation;
             }
           }
         }
 
-        // Add point to complete path
         allPoints.push(new THREE.Vector3(tile.x + 0.5, y + 0.1, tile.z + 0.5));
 
-        // Draw tile highlight
         const mesh = new THREE.Mesh(this.tileGeometry, tileMaterial);
         mesh.position.set(tile.x + 0.5, y + 0.03, tile.z + 0.5);
         mesh.rotation.x = -Math.PI / 2;
@@ -2160,7 +1709,6 @@ export class NavigationVisualizer {
         this.pathGroup.add(mesh);
       }
 
-      // If this segment ends at stairs, add interpolated points for the stair transition
       if (segment.endsAtStair && nextSegment) {
         const lastTile = segment.tiles[segment.tiles.length - 1];
         const stair = floor.stairTiles.find(
@@ -2170,8 +1718,6 @@ export class NavigationVisualizer {
         if (stair) {
           const nextFloor = floors[nextSegment.floorIndex];
           if (nextFloor) {
-            // Add intermediate points for smooth stair visualization
-            // Use TILES_PER_CELL for consistent stair length
             const stairSteps = TILES_PER_CELL;
             const dirVec = getSideVector(stair.direction);
             for (let step = 1; step <= stairSteps; step++) {
@@ -2190,7 +1736,6 @@ export class NavigationVisualizer {
       }
     }
 
-    // Draw the complete connecting line
     if (allPoints.length >= 2) {
       const geometry = new THREE.BufferGeometry().setFromPoints(allPoints);
       const material = new THREE.LineBasicMaterial({
@@ -2219,7 +1764,7 @@ export class NavigationVisualizer {
   }
 
   // ===========================================================================
-  // WALKABILITY CHECKER
+  // WALKABILITY CHECKER (Creates callback for ENGINE BFSPathfinder)
   // ===========================================================================
 
   private createWalkabilityChecker(
@@ -2240,23 +1785,15 @@ export class NavigationVisualizer {
 
     // Build wall lookup for fast queries
     const wallLookup = new Map<string, Set<WallDirection>>();
-    let wallCount = 0;
-    let openingCount = 0;
     for (const wall of wallSegments) {
-      if (wall.hasOpening) {
-        openingCount++;
-        continue; // Doors/arches don't block
-      }
+      if (wall.hasOpening) continue; // Doors/arches don't block
 
-      wallCount++;
       const key = tileKey(wall.tileX, wall.tileZ);
       if (!wallLookup.has(key)) {
         wallLookup.set(key, new Set());
       }
       wallLookup.get(key)!.add(wall.side);
     }
-
-    // Debug stats available via getStats() method if needed
 
     const isWalkable = (tile: TileCoord, fromTile?: TileCoord): boolean => {
       const key = tileKey(tile.x, tile.z);
@@ -2273,17 +1810,12 @@ export class NavigationVisualizer {
         const dx = tile.x - fromTile.x;
         const dz = tile.z - fromTile.z;
 
-        // Determine the direction of movement and which wall we're entering through
-        // Coordinate system: North = -Z, South = +Z, East = +X, West = -X
-        // approachDir = which edge of destination tile we're entering through
+        // Determine approach direction
         let approachDir: WallDirection | null = null;
-        if (dx === 0 && dz === 1)
-          approachDir = "north"; // Moving south, enter through north edge
-        else if (dx === 0 && dz === -1)
-          approachDir = "south"; // Moving north, enter through south edge
-        else if (dx === 1 && dz === 0)
-          approachDir = "west"; // Moving east, enter through west edge
-        else if (dx === -1 && dz === 0) approachDir = "east"; // Moving west, enter through east edge
+        if (dx === 0 && dz === 1) approachDir = "north";
+        else if (dx === 0 && dz === -1) approachDir = "south";
+        else if (dx === 1 && dz === 0) approachDir = "west";
+        else if (dx === -1 && dz === 0) approachDir = "east";
 
         if (approachDir) {
           // Check if target tile has wall on the edge we're entering through
@@ -2292,7 +1824,7 @@ export class NavigationVisualizer {
             return false;
           }
 
-          // Check if source tile has wall blocking exit (opposite direction)
+          // Check if source tile has wall blocking exit
           const exitDir = getOppositeWallDirection(approachDir);
           const fromKey = tileKey(fromTile.x, fromTile.z);
           const fromWalls = wallLookup.get(fromKey);
@@ -2309,7 +1841,7 @@ export class NavigationVisualizer {
   }
 
   /**
-   * Find path and validate it doesn't go through walls
+   * Find path using ENGINE BFSPathfinder and validate
    * @throws Error if path goes through a wall (indicates a bug)
    */
   private findPathAndValidate(
@@ -2317,13 +1849,15 @@ export class NavigationVisualizer {
     end: TileCoord,
     checker: WalkabilityCheckerResult,
   ): TileCoord[] {
-    const path = findPath(
-      start,
-      end,
-      checker.isWalkable,
-      2000,
-      checker.wallLookup,
-    );
+    // USE THE ENGINE BFSPathfinder - same code as the game!
+    const path = enginePathfinder.findPath(start, end, checker.isWalkable);
+
+    // Log if the engine pathfinder returned a partial path
+    if (enginePathfinder.wasLastPathPartial()) {
+      console.warn(
+        `[NavigationVisualizer] Engine BFSPathfinder returned partial path from (${start.x}, ${start.z}) to (${end.x}, ${end.z})`,
+      );
+    }
 
     // Validate the path doesn't go through walls
     if (path.length > 0) {
@@ -2331,7 +1865,6 @@ export class NavigationVisualizer {
         validatePath(path, start, checker.isWalkable, checker.wallLookup);
       } catch (error) {
         console.error("[NavigationVisualizer] Path validation failed:", error);
-        // Re-throw to make bugs visible
         throw error;
       }
     }

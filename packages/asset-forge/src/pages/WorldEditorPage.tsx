@@ -20,26 +20,33 @@
  * @module WorldEditorPage
  */
 
-import React, { useRef, useState, useCallback, useEffect } from "react";
 import {
-  Mountain,
-  TreePine,
   Building2,
-  Route,
-  Sprout, // Using Sprout for grass (no Grass icon in lucide)
+  Camera,
   Eye,
   EyeOff,
-  RefreshCw,
-  Settings,
-  Camera,
-  Move,
-  RotateCw,
-  Maximize,
   Grid3x3,
-  Sun,
+  Maximize,
   Moon,
+  Mountain,
+  Move,
+  RefreshCw,
+  RotateCw,
+  Route,
+  Settings,
+  Sprout, // Using Sprout for grass (no Grass icon in lucide)
+  Sun,
+  TreePine,
 } from "lucide-react";
+import React, { useRef, useState, useCallback, useEffect } from "react";
 
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/common";
 import {
   EditorWorldProvider,
   useEditorWorld,
@@ -54,13 +61,6 @@ import {
   useBuildings,
   useEnvironment,
 } from "@/context/EditorWorldContext";
-import {
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/common";
 
 // ============================================================================
 // EDITOR TOOLBAR
@@ -232,7 +232,7 @@ function EditorControlsPanel() {
 
   const handleTerrainRegenerate = useCallback(() => {
     if (terrain) {
-      terrain.generate({});
+      terrain.generate?.({});
     }
   }, [terrain]);
 
@@ -240,7 +240,7 @@ function EditorControlsPanel() {
     (hour: number) => {
       setTimeOfDay(hour);
       if (environment) {
-        environment.setTimeOfDay(hour);
+        environment.setTimeOfDay?.(hour);
       }
     },
     [environment],
@@ -333,7 +333,7 @@ function EditorControlsPanel() {
         enabled={grassEnabled}
         onToggle={() => {
           setGrassEnabled(!grassEnabled);
-          grass?.setEnabled(!grassEnabled);
+          grass?.setEnabled?.(!grassEnabled);
         }}
       >
         <p className="text-xs text-gray-400">

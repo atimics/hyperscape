@@ -23,7 +23,7 @@
  */
 
 import * as THREE from "three";
-import { MeshBasicNodeMaterial } from "three/webgpu";
+import { MeshBasicNodeMaterial, MeshStandardNodeMaterial } from "three/webgpu";
 import { ProcgenRockInstancer } from "./ProcgenRockInstancer";
 import type { World } from "../../../core/World";
 import {
@@ -36,14 +36,25 @@ import {
   type SerializedGeometry,
 } from "../../../utils/rendering/ProcgenCacheDB";
 
+// Note: TSL triplanar material imports removed - using simple vertex colors for now
+// TODO: Re-add when implementing baked texture atlas
+
 /** Number of variants to cache per rock preset */
 const VARIANTS_PER_PRESET = 3;
 
 /**
  * Cache version - increment this when the generation algorithm changes
  * to invalidate cached variants and force regeneration.
+ *
+ * Version history:
+ * - v1: Initial rock generation
+ * - v2: Added scraping algorithm for realistic flat faces, triplanar textures for LOD0
+ * - v3: Fixed WebGPU lighting - use MeshStandardNodeMaterial instead of WebGL MeshStandardMaterial
+ * - v4: LOD0 uses proper TSL triplanar material, LOD1 uses vertex colors only
+ * - v5: LOD0 uses pure texture mode (no vertex color multiplication)
+ * - v6: Reverted to simple vertex colors for LOD0 (triplanar was broken)
  */
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 6;
 
 /** World reference for instancer registration */
 let worldRef: World | null = null;
@@ -118,11 +129,21 @@ interface PresetCache {
 const presetCache = new Map<string, PresetCache>();
 
 /**
- * RockGenerator import (lazy loaded to avoid circular deps).
+ * RockGenerator and material imports (lazy loaded to avoid circular deps).
  */
 let RockGenerator:
   | typeof import("@hyperscape/procgen/rock").RockGenerator
   | null = null;
+// These are loaded but reserved for future use:
+let _getPreset: typeof import("@hyperscape/procgen/rock").getPreset | null =
+  null;
+let _mergeParams: typeof import("@hyperscape/procgen/rock").mergeParams | null =
+  null;
+let _DEFAULT_PARAMS:
+  | typeof import("@hyperscape/procgen/rock").DEFAULT_PARAMS
+  | null = null;
+let _ColorMode: typeof import("@hyperscape/procgen/rock").ColorMode | null =
+  null;
 let procgenLoaded = false;
 let procgenLoadPromise: Promise<void> | null = null;
 let procgenLoadFailed = false;
@@ -145,6 +166,10 @@ async function loadProcgen(): Promise<boolean> {
   procgenLoadPromise = import("@hyperscape/procgen/rock")
     .then((procgen) => {
       RockGenerator = procgen.RockGenerator;
+      _getPreset = procgen.getPreset;
+      _mergeParams = procgen.mergeParams;
+      _DEFAULT_PARAMS = procgen.DEFAULT_PARAMS;
+      _ColorMode = procgen.ColorMode;
       procgenLoaded = true;
       console.log(
         "[ProcgenRockCache] Successfully loaded @hyperscape/procgen/rock",
@@ -278,8 +303,13 @@ function generateLOD2CardRock(
 
 /**
  * Serialize a rock variant for IndexedDB storage.
+ * @param variant - The rock variant to serialize
+ * @param presetName - The preset name (needed to recreate triplanar material on load)
  */
-function serializeRockVariant(variant: RockVariant): SerializedRockVariant {
+function serializeRockVariant(
+  variant: RockVariant,
+  presetName: string,
+): SerializedRockVariant {
   // Serialize LOD2 card geometries
   const lod2Geometries: SerializedGeometry[] = [];
   if (variant.lod2Group) {
@@ -300,31 +330,57 @@ function serializeRockVariant(variant: RockVariant): SerializedRockVariant {
     averageColor: serializeColor(variant.averageColor),
     vertexCount: variant.vertexCount,
     triangleCount: variant.triangleCount,
+    presetName, // Store preset name for material recreation
   };
 }
 
 /**
- * Deserialize a rock variant from IndexedDB storage.
+ * Create the material for LOD0.
+ * Currently uses simple vertex colors (same as LOD1) for reliability.
+ * TODO: Implement baked texture atlas for better quality without triplanar overhead.
  */
-function deserializeRockVariant(data: SerializedRockVariant): RockVariant {
-  // Deserialize main geometry and create mesh
-  const geometry = deserializeGeometry(data.geometry);
-  const material = new MeshBasicNodeMaterial();
+async function createLOD0Material(
+  _presetName: string,
+): Promise<THREE.Material> {
+  const material = new MeshStandardNodeMaterial();
   material.vertexColors = true;
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.name = "ProcgenRock_LOD0";
+  material.roughness = 0.85;
+  material.metalness = 0.0;
+  return material;
+}
 
-  // Deserialize LOD1 if present
+/**
+ * Deserialize a rock variant from IndexedDB storage.
+ *
+ * LOD0: TSL triplanar textured material for close-up detail
+ * LOD1: Simple vertex colors for performance (mid-distance)
+ * LOD2: Billboard cards with average color (far distance)
+ */
+async function deserializeRockVariant(
+  data: SerializedRockVariant,
+): Promise<RockVariant> {
+  const presetName = data.presetName ?? "boulder"; // Fallback for old cached data
+
+  // Deserialize main geometry and create LOD0 mesh with TSL triplanar material
+  const geometry = deserializeGeometry(data.geometry);
+  const lod0Material = await createLOD0Material(presetName);
+  const mesh = new THREE.Mesh(geometry, lod0Material);
+  mesh.name = `ProcgenRock_${presetName}_LOD0`;
+
+  // Deserialize LOD1 with vertex colors (simpler material for performance)
   let lod1Mesh: THREE.Mesh | null = null;
   if (data.lod1Geometry) {
     const lod1Geo = deserializeGeometry(data.lod1Geometry);
-    const lod1Mat = new MeshBasicNodeMaterial();
+    // Use MeshStandardNodeMaterial with vertex colors for LOD1
+    const lod1Mat = new MeshStandardNodeMaterial();
     lod1Mat.vertexColors = true;
+    lod1Mat.roughness = 0.85;
+    lod1Mat.metalness = 0.0;
     lod1Mesh = new THREE.Mesh(lod1Geo, lod1Mat);
-    lod1Mesh.name = "ProcgenRock_LOD1";
+    lod1Mesh.name = `ProcgenRock_${presetName}_LOD1`;
   }
 
-  // Deserialize LOD2 card group
+  // Deserialize LOD2 card group (billboard with average color)
   const averageColor = deserializeColor(data.averageColor);
   const lod2Group = generateLOD2CardRock(data.dimensions, averageColor);
 
@@ -383,8 +439,21 @@ async function generateVariants(presetName: string): Promise<RockVariant[]> {
     const { vertexCount, triangleCount } = countGeometry(result.geometry);
     const { averageColor, dimensions } = extractRockMetadata(result.mesh);
 
+    // Keep the material from RockGenerator - it already creates proper TSL materials
+    // with triplanar texturing based on color mode (Texture, Blend, or Vertex)
+
     // Generate LOD1 and LOD2
     const lod1Result = generateLOD1Rock(generator, presetName, seed);
+
+    // LOD1 uses MeshStandardNodeMaterial for consistent lighting with LOD0
+    if (lod1Result?.mesh) {
+      const lod1Mat = new MeshStandardNodeMaterial();
+      lod1Mat.vertexColors = true;
+      lod1Mat.roughness = 0.85;
+      lod1Mat.metalness = 0.0;
+      lod1Result.mesh.material = lod1Mat;
+    }
+
     const lod2Group = generateLOD2CardRock(dimensions, averageColor);
 
     variants.push({
@@ -411,8 +480,8 @@ async function generateVariants(presetName: string): Promise<RockVariant[]> {
         `(avg: ${avgVerts} verts, ${avgTris} tris)`,
     );
 
-    // Save to IndexedDB for persistence
-    const serialized = variants.map(serializeRockVariant);
+    // Save to IndexedDB for persistence (include preset name for material recreation)
+    const serialized = variants.map((v) => serializeRockVariant(v, presetName));
     procgenCacheDB
       .saveCachedVariants("rocks", presetName, serialized, CACHE_VERSION)
       .catch((err) =>
@@ -464,8 +533,8 @@ export async function ensureRockVariantsLoaded(
     let variants: RockVariant[];
 
     if (cached && cached.length > 0) {
-      // Deserialize from cache
-      variants = cached.map(deserializeRockVariant);
+      // Deserialize from cache (async to create proper materials)
+      variants = await Promise.all(cached.map(deserializeRockVariant));
       console.log(
         `[ProcgenRockCache] Loaded ${variants.length} cached variants for "${presetName}"`,
       );

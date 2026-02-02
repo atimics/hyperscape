@@ -15,13 +15,26 @@
  * actual interaction logic to focused handler classes.
  */
 
+import * as THREE from "three";
+import { LineBasicNodeMaterial } from "three/webgpu";
 import { System } from "../../shared/infrastructure/System";
 import type { World } from "../../../core/World";
 import type { InteractableEntityType, ContextMenuAction } from "./types";
 import type { Position3D } from "../../../types/core/base-types";
-import { INPUT, TIMING, MESSAGE_TYPES, DEBUG_INTERACTIONS } from "./constants";
+import {
+  INPUT,
+  TIMING,
+  MESSAGE_TYPES,
+  DEBUG_INTERACTIONS,
+  PATH_VISUALIZATION,
+} from "./constants";
 import { EventType } from "../../../types/events/event-types";
-import { worldToTile, tileToWorld } from "../../shared/movement/TileSystem";
+import {
+  worldToTile,
+  tileToWorld,
+  type TileCoord,
+} from "../../shared/movement/TileSystem";
+import { BFSPathfinder } from "../../shared/movement/BFSPathfinder";
 import type { BuildingCollisionService } from "../../shared/world/BuildingCollisionService";
 
 // Services
@@ -82,6 +95,11 @@ export class InteractionRouter extends System {
     validTargetIds: new Set(),
     actionType: "none",
   };
+
+  // Path visualization
+  private pathLine: THREE.Line | null = null;
+  private pathLineTimeout: ReturnType<typeof setTimeout> | null = null;
+  private pathfinder: BFSPathfinder = new BFSPathfinder();
 
   constructor(world: World) {
     super(world);
@@ -259,6 +277,9 @@ export class InteractionRouter extends System {
     this.visualFeedback.destroy();
     this.contextMenu.destroy();
 
+    // Clear path visualization
+    this.clearPathVisualization();
+
     // Clear handlers map to prevent memory leaks on recreation
     this.handlers.clear();
 
@@ -374,7 +395,7 @@ export class InteractionRouter extends System {
   };
 
   /**
-   * Show terrain context menu with "Walk here" and "Cancel" options
+   * Show terrain context menu with "Walk here", "Show path here", and "Cancel" options
    * Used by both desktop right-click and mobile long-press
    */
   private showTerrainContextMenu(
@@ -402,6 +423,16 @@ export class InteractionRouter extends System {
       },
     };
 
+    const showPathAction: ContextMenuAction = {
+      id: "show-path",
+      label: "Show path here",
+      enabled: true,
+      priority: 1,
+      handler: () => {
+        this.showPathToPosition(terrainPos);
+      },
+    };
+
     const cancelAction: ContextMenuAction = {
       id: "cancel",
       label: "Cancel",
@@ -414,10 +445,277 @@ export class InteractionRouter extends System {
 
     this.contextMenu.showMenu(
       null,
-      [walkAction, cancelAction],
+      [walkAction, showPathAction, cancelAction],
       screenX,
       screenY,
     );
+  }
+
+  /**
+   * Show a visual path from the player to the target position.
+   * The path is calculated using BFS pathfinding and displayed as a colored line.
+   *
+   * Path colors indicate pathfinding result:
+   * - Green: Complete path found
+   * - Orange: Partial path (destination unreachable but got close)
+   * - Red: No path found (blocked) - shows direct line to indicate intended target
+   */
+  private showPathToPosition(targetPos: THREE.Vector3): void {
+    const player = this.world.getPlayer?.();
+    if (!player) {
+      if (DEBUG_INTERACTIONS) {
+        console.warn("[ShowPath] Cannot show path: no player found");
+      }
+      return;
+    }
+
+    const scene = this.world.stage?.scene;
+    if (!scene) {
+      if (DEBUG_INTERACTIONS) {
+        console.warn("[ShowPath] Cannot show path: no scene available");
+      }
+      return;
+    }
+
+    // Clear any existing path visualization
+    this.clearPathVisualization();
+
+    // Get player and target tiles
+    const playerTile = worldToTile(player.position.x, player.position.z);
+    const targetTile = worldToTile(targetPos.x, targetPos.z);
+
+    // Get terrain system for height lookups and walkability
+    const terrain = this.world.getSystem("terrain") as {
+      getHeightAt?: (x: number, z: number) => number | null;
+      isPositionWalkable?: (
+        x: number,
+        z: number,
+      ) => { walkable: boolean; reason?: string };
+    } | null;
+
+    // Get collision matrix for static obstacles and directional walls
+    const collision = this.world.collision as {
+      hasFlags?: (x: number, z: number, flags: number) => boolean;
+      isBlocked?: (
+        fromX: number,
+        fromZ: number,
+        toX: number,
+        toZ: number,
+      ) => boolean;
+    } | null;
+
+    // Get collision service for building walls
+    const collisionService = this.getBuildingCollisionService();
+
+    // Determine player's current floor for multi-story building support
+    // Query the collision service to find what floor the player is on
+    let playerFloor = 0;
+    if (collisionService) {
+      const playerCollision = collisionService.queryCollision(
+        playerTile.x,
+        playerTile.z,
+        0,
+      );
+      if (
+        playerCollision.isInsideBuilding &&
+        playerCollision.floorIndex !== null
+      ) {
+        playerFloor = playerCollision.floorIndex;
+      }
+    }
+
+    // Track what collision systems are available for accurate path representation
+    // If systems are missing, paths may be incomplete - log warning in debug mode
+    const hasTerrainWalkability = terrain?.isPositionWalkable !== undefined;
+    const hasCollisionMatrix = collision?.hasFlags !== undefined;
+    const hasBuildingCollision = collisionService !== null;
+
+    if (DEBUG_INTERACTIONS) {
+      console.log("[ShowPath] Collision systems available:", {
+        terrain: hasTerrainWalkability,
+        collision: hasCollisionMatrix,
+        buildings: hasBuildingCollision,
+        playerFloor,
+      });
+    }
+
+    // Create walkability checker that considers all available collision systems
+    // NOTE: If a system is unavailable, we assume walkable (optimistic) but log warning
+    const isWalkable = (tile: TileCoord, fromTile?: TileCoord): boolean => {
+      // Check terrain walkability (slope, water, etc.)
+      if (hasTerrainWalkability) {
+        const result = terrain!.isPositionWalkable!(tile.x + 0.5, tile.z + 0.5);
+        if (!result.walkable) return false;
+      }
+
+      // Check static collision matrix (rocks, trees, static objects)
+      if (hasCollisionMatrix) {
+        if (collision!.hasFlags!(tile.x, tile.z, 1)) {
+          return false;
+        }
+      }
+
+      // Check CollisionMatrix directional walls (including diagonal clipping)
+      // This catches building walls registered in CollisionMatrix
+      if (hasCollisionMatrix && fromTile && collision!.isBlocked) {
+        if (collision!.isBlocked(fromTile.x, fromTile.z, tile.x, tile.z)) {
+          return false;
+        }
+      }
+
+      // Check building walls (floor-specific, handles upper floors not in CollisionMatrix)
+      if (hasBuildingCollision && fromTile) {
+        const isBlocked = collisionService!.isWallBlocked(
+          fromTile.x,
+          fromTile.z,
+          tile.x,
+          tile.z,
+          playerFloor, // Use player's current floor, not hardcoded 0
+        );
+        if (isBlocked) return false;
+      }
+
+      return true;
+    };
+
+    // Find path using BFS
+    const path = this.pathfinder.findPath(playerTile, targetTile, isWalkable);
+
+    if (path.length === 0) {
+      // No path found - show a red line directly to target to indicate intent
+      if (DEBUG_INTERACTIONS) {
+        console.log("[ShowPath] No path found, showing blocked indicator");
+      }
+      this.createPathLine(
+        [playerTile, targetTile],
+        terrain,
+        PATH_VISUALIZATION.COLOR_BLOCKED,
+        true, // blocked/unreachable
+      );
+      return;
+    }
+
+    // Check if path is partial (couldn't reach actual destination)
+    const isPartial = this.pathfinder.wasLastPathPartial();
+    const lineColor = isPartial
+      ? PATH_VISUALIZATION.COLOR_PARTIAL
+      : PATH_VISUALIZATION.COLOR_COMPLETE;
+
+    if (DEBUG_INTERACTIONS) {
+      console.log("[ShowPath] Path found:", {
+        length: path.length,
+        partial: isPartial,
+        from: playerTile,
+        to: targetTile,
+      });
+    }
+
+    // Create the path line visualization
+    this.createPathLine(path, terrain, lineColor, false);
+  }
+
+  /**
+   * Create a Three.js line to visualize the path.
+   *
+   * @param path - Array of tiles representing the path
+   * @param terrain - Terrain system for height lookups (may be null)
+   * @param color - Line color (hex)
+   * @param isBlocked - If true, path is blocked/unreachable (uses lower opacity)
+   */
+  private createPathLine(
+    path: TileCoord[],
+    terrain: {
+      getHeightAt?: (x: number, z: number) => number | null;
+    } | null,
+    color: number,
+    isBlocked: boolean,
+  ): void {
+    const scene = this.world.stage?.scene;
+    if (!scene) {
+      if (DEBUG_INTERACTIONS) {
+        console.warn("[ShowPath] Cannot create path line: no scene");
+      }
+      return;
+    }
+
+    if (path.length < 2) {
+      if (DEBUG_INTERACTIONS) {
+        console.warn(
+          "[ShowPath] Cannot create path line: need at least 2 points, got",
+          path.length,
+        );
+      }
+      return;
+    }
+
+    // Create points array with world positions
+    const points: THREE.Vector3[] = [];
+
+    for (const tile of path) {
+      const worldPos = tileToWorld(tile);
+      let y = 0;
+
+      // Get terrain height at this position if terrain system is available
+      if (terrain?.getHeightAt) {
+        const height = terrain.getHeightAt(worldPos.x, worldPos.z);
+        if (height !== null && Number.isFinite(height)) {
+          y = height;
+        }
+      }
+
+      points.push(
+        new THREE.Vector3(
+          worldPos.x,
+          y + PATH_VISUALIZATION.HEIGHT_OFFSET,
+          worldPos.z,
+        ),
+      );
+    }
+
+    // Create geometry and material
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new LineBasicNodeMaterial();
+    material.color = new THREE.Color(color);
+    material.linewidth = PATH_VISUALIZATION.LINE_WIDTH;
+    material.transparent = true;
+    material.opacity = isBlocked
+      ? PATH_VISUALIZATION.OPACITY_BLOCKED
+      : PATH_VISUALIZATION.OPACITY_NORMAL;
+    material.depthTest = true;
+    material.depthWrite = false;
+
+    // Create line and add to scene
+    this.pathLine = new THREE.Line(geometry, material);
+    this.pathLine.name = "PathVisualization";
+    this.pathLine.renderOrder = 999;
+    scene.add(this.pathLine);
+
+    // Auto-clear after configured duration
+    this.pathLineTimeout = setTimeout(() => {
+      this.clearPathVisualization();
+    }, PATH_VISUALIZATION.AUTO_CLEAR_MS);
+  }
+
+  /**
+   * Clear the current path visualization
+   */
+  private clearPathVisualization(): void {
+    if (this.pathLineTimeout) {
+      clearTimeout(this.pathLineTimeout);
+      this.pathLineTimeout = null;
+    }
+
+    if (this.pathLine) {
+      const scene = this.world.stage?.scene;
+      if (scene) {
+        scene.remove(this.pathLine);
+      }
+      this.pathLine.geometry.dispose();
+      if (this.pathLine.material instanceof THREE.Material) {
+        this.pathLine.material.dispose();
+      }
+      this.pathLine = null;
+    }
   }
 
   private onMouseDown = (event: MouseEvent): void => {
@@ -623,19 +921,23 @@ export class InteractionRouter extends System {
     }
 
     // Snap to tile center
-    const tile = worldToTile(terrainPos.x, terrainPos.z);
-    const snappedPos = tileToWorld(tile);
+    let tile = worldToTile(terrainPos.x, terrainPos.z);
+    let snappedPos = tileToWorld(tile);
 
     // NOTE: Door pathfinding is handled SERVER-SIDE via two-stage navigation.
     // The server detects when the target is inside a building and the player is outside,
     // then automatically routes through the nearest door.
     // Client-side redirection was removed to avoid conflict with server logic.
 
-    // Stair click targeting: if clicking on stairs, resolve Y to destination floor
+    // Stair click targeting: if clicking on stairs, redirect to destination tile
+    // This makes the player walk ACROSS the stairs (from bottom to top or vice versa)
     if (player) {
-      const stairDestination = this.checkStairClickTargeting(tile, player);
-      if (stairDestination !== null) {
-        terrainPos.y = stairDestination;
+      const stairTarget = this.checkStairClickTargeting(tile, player);
+      if (stairTarget !== null) {
+        // Update the target tile and position to the other end of the stairs
+        tile = stairTarget.destinationTile;
+        snappedPos = tileToWorld(tile);
+        terrainPos.y = stairTarget.elevation;
       }
     }
 
@@ -734,17 +1036,21 @@ export class InteractionRouter extends System {
   }
 
   /**
-   * Check if clicking on stairs and return destination floor elevation.
-   * When clicking on stairs, the movement should target the destination floor's Y position.
+   * Check if clicking on stairs and return destination tile + elevation.
+   * When clicking on stairs, the movement should target the tile at the OTHER end
+   * of the stairs (so player walks across them) with the destination floor's Y position.
    *
    * @param targetTile - The tile the player clicked on
    * @param player - The player entity (to determine current floor)
-   * @returns Destination floor elevation, or null if not clicking on stairs
+   * @returns Stair destination info (tile + elevation), or null if not clicking on stairs
    */
   private checkStairClickTargeting(
     targetTile: { x: number; z: number },
     player: { position: { x: number; y: number; z: number } },
-  ): number | null {
+  ): {
+    destinationTile: { x: number; z: number };
+    elevation: number;
+  } | null {
     const collisionService = this.getBuildingCollisionService();
     if (!collisionService) return null;
 
@@ -778,15 +1084,19 @@ export class InteractionRouter extends System {
       }
     }
 
-    // Check if target tile is a stair and get destination
-    const stairDest = collisionService.getStairDestination(
+    // Check if target tile is a stair and get destination landing tile
+    // This returns the tile at the OTHER end of the stairs so player walks across
+    const stairLanding = collisionService.getStairLandingTile(
       targetTile.x,
       targetTile.z,
       currentFloor,
     );
 
-    if (stairDest) {
-      return stairDest.elevation;
+    if (stairLanding) {
+      return {
+        destinationTile: { x: stairLanding.tileX, z: stairLanding.tileZ },
+        elevation: stairLanding.elevation,
+      };
     }
 
     return null;

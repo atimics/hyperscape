@@ -17,7 +17,9 @@ import {
   TerrainGenerator,
   createConfigFromPreset,
   TERRAIN_PRESETS,
+  createTerrainMaterial as createGameTerrainMaterial,
   type TerrainConfig,
+  type TerrainUniforms,
 } from "@hyperscape/procgen/terrain";
 import React, {
   useEffect,
@@ -32,7 +34,8 @@ import {
   LineBasicNodeMaterial,
 } from "three/webgpu";
 
-import type { WorldCreationConfig } from "./types";
+import { buildingWalkabilityService } from "./BuildingWalkabilityService";
+import type { WorldCreationConfig, GeneratedRoad } from "./types";
 
 import {
   THREE,
@@ -143,6 +146,8 @@ export interface TileBasedTerrainProps {
   flyModeEnabled?: boolean;
   /** Called when fly mode state changes */
   onFlyModeChange?: (enabled: boolean) => void;
+  /** Pre-generated road network (uses actual pathfinding data) */
+  roads?: GeneratedRoad[];
 }
 
 // Vegetation types and their visual appearance
@@ -549,17 +554,170 @@ function createTemplateGeometry(
 }
 
 /**
- * Create terrain material with vertex colors
- * Uses MeshStandardNodeMaterial for WebGPU compatibility
+ * Create terrain material using the game's terrain shader
+ * This ensures Asset Forge renders terrain identically to the game,
+ * including road influence blending via the roadInfluence vertex attribute.
  */
-function createTerrainMaterial(): THREE.Material {
-  const material = new MeshStandardNodeMaterial();
-  material.vertexColors = true;
-  material.roughness = 0.9;
-  material.metalness = 0.0;
-  material.flatShading = false;
-  material.side = THREE.FrontSide;
-  return material;
+function createTerrainMaterial(): THREE.Material & {
+  terrainUniforms?: TerrainUniforms;
+} {
+  try {
+    // Use the game's terrain shader for unified rendering
+    const material = createGameTerrainMaterial();
+    console.log(
+      "[TileBasedTerrain] Using game terrain shader with road influence support",
+    );
+    return material;
+  } catch (error) {
+    // Fallback to simple vertex colors if game shader fails to load
+    console.warn(
+      "[TileBasedTerrain] Falling back to simple terrain material:",
+      error,
+    );
+    const material = new MeshStandardNodeMaterial();
+    material.vertexColors = true;
+    material.roughness = 0.9;
+    material.metalness = 0.0;
+    material.flatShading = false;
+    material.side = THREE.FrontSide;
+    return material;
+  }
+}
+
+// Road influence calculation constants
+const ROAD_INFLUENCE_BLEND_WIDTH = 2; // meters of blending beyond road edge
+
+// Debug: track which roads we've logged (by their ID to detect changes)
+let lastRoadDebugId: string | null = null;
+let loggedFirstInfluenceVertex = false;
+
+/**
+ * Calculate road influence at a point based on distance to nearest road segment.
+ * Returns 0-1 where 1 = center of road, 0 = no road influence.
+ */
+function calculateRoadInfluenceAtPoint(
+  worldX: number,
+  worldZ: number,
+  roads: GeneratedRoad[] | undefined,
+  worldCenterOffset: number,
+): number {
+  if (!roads || roads.length === 0) return 0;
+
+  // Debug: log road coordinates when roads change
+  const currentRoadId = roads[0]?.id ?? null;
+  if (currentRoadId !== lastRoadDebugId && roads.length > 0) {
+    lastRoadDebugId = currentRoadId;
+    loggedFirstInfluenceVertex = false; // Reset so we log first influence vertex for new roads
+    console.log("[RoadInfluence] ===== ROADS DATA =====");
+    console.log("[RoadInfluence] Total roads:", roads.length);
+    console.log("[RoadInfluence] World center offset:", worldCenterOffset);
+
+    // Log first road details
+    const firstRoad = roads[0];
+    const firstPoint = firstRoad.path[0];
+    const lastPoint = firstRoad.path[firstRoad.path.length - 1];
+    console.log("[RoadInfluence] First road:", {
+      id: firstRoad.id,
+      start: { x: firstPoint.x.toFixed(1), z: firstPoint.z.toFixed(1) },
+      end: { x: lastPoint.x.toFixed(1), z: lastPoint.z.toFixed(1) },
+      width: firstRoad.width,
+      pathLength: firstRoad.path.length,
+      isMainRoad: firstRoad.isMainRoad,
+    });
+
+    // Log sample vertex position for comparison
+    console.log("[RoadInfluence] Sample vertex worldX/worldZ:", {
+      worldX: worldX.toFixed(1),
+      worldZ: worldZ.toFixed(1),
+    });
+    console.log("[RoadInfluence] =====================");
+  }
+
+  let minDistance = Infinity;
+  let closestRoadWidth = 4; // default road width
+
+  for (const road of roads) {
+    if (road.path.length < 2) continue;
+
+    // Check each segment of the road
+    for (let i = 0; i < road.path.length - 1; i++) {
+      const p1 = road.path[i];
+      const p2 = road.path[i + 1];
+
+      // Road paths are stored with world-center offset applied in rendering
+      // but the raw path is in terrain generator coordinates
+      const x1 = p1.x;
+      const z1 = p1.z;
+      const x2 = p2.x;
+      const z2 = p2.z;
+
+      // Distance from point to line segment
+      const distance = distanceToLineSegment(worldX, worldZ, x1, z1, x2, z2);
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestRoadWidth = road.width || 4;
+      }
+    }
+  }
+
+  // Calculate influence based on distance
+  const halfWidth = closestRoadWidth / 2;
+  const totalInfluenceWidth = halfWidth + ROAD_INFLUENCE_BLEND_WIDTH;
+
+  if (minDistance >= totalInfluenceWidth) {
+    return 0;
+  }
+
+  // Calculate final influence value
+  let influence: number;
+  if (minDistance <= halfWidth) {
+    influence = 1.0;
+  } else {
+    // Smoothstep blending at edges
+    const t = 1.0 - (minDistance - halfWidth) / ROAD_INFLUENCE_BLEND_WIDTH;
+    influence = t * t * (3 - 2 * t); // smoothstep
+  }
+
+  // Debug: Log first vertex with significant road influence
+  if (influence > 0.5 && !loggedFirstInfluenceVertex) {
+    console.log(
+      `[RoadInfluence] Found vertex with influence=${influence.toFixed(2)} at (${worldX.toFixed(1)}, ${worldZ.toFixed(1)}), minDist=${minDistance.toFixed(1)}, roadWidth=${closestRoadWidth}`,
+    );
+    loggedFirstInfluenceVertex = true;
+  }
+
+  return influence;
+}
+
+/**
+ * Calculate perpendicular distance from a point to a line segment
+ */
+function distanceToLineSegment(
+  px: number,
+  pz: number,
+  x1: number,
+  z1: number,
+  x2: number,
+  z2: number,
+): number {
+  const dx = x2 - x1;
+  const dz = z2 - z1;
+  const lengthSq = dx * dx + dz * dz;
+
+  if (lengthSq === 0) {
+    // Segment is a point
+    return Math.sqrt((px - x1) ** 2 + (pz - z1) ** 2);
+  }
+
+  // Parameter t of closest point on line
+  let t = ((px - x1) * dx + (pz - z1) * dz) / lengthSq;
+  t = Math.max(0, Math.min(1, t)); // Clamp to segment
+
+  // Closest point on segment
+  const closestX = x1 + t * dx;
+  const closestZ = z1 + t * dz;
+
+  return Math.sqrt((px - closestX) ** 2 + (pz - closestZ) ** 2);
 }
 
 /**
@@ -578,7 +736,8 @@ function createWaterMaterial(): THREE.Material {
 }
 
 /**
- * Generate tile geometry with proper heightmap and colors
+ * Generate tile geometry with proper heightmap, colors, and road influence.
+ * Uses the same approach as the game's TerrainSystem for unified rendering.
  */
 function generateTileGeometry(
   tileX: number,
@@ -589,10 +748,13 @@ function generateTileGeometry(
   waterThreshold: number,
   maxHeight: number,
   worldSizeTiles: number,
+  roads?: GeneratedRoad[],
 ): { geometry: THREE.PlaneGeometry; hasWater: boolean } {
   const geometry = templateGeometry.clone();
   const positions = geometry.attributes.position;
   const colors = new Float32Array(positions.count * 3);
+  const roadInfluences = new Float32Array(positions.count);
+  const biomeIds = new Float32Array(positions.count);
 
   let hasWater = false;
   const shorelineThreshold = waterThreshold / maxHeight + 0.1; // Normalized
@@ -600,6 +762,18 @@ function generateTileGeometry(
   // Calculate world center offset - island mask is centered at (0,0)
   // so we need to offset our tile coordinates to be centered around the world center
   const worldCenterOffset = (worldSizeTiles * tileSize) / 2;
+
+  // Biome name to ID mapping (matching game's shader expectations)
+  const biomeNameToId: Record<string, number> = {
+    plains: 0,
+    forest: 1,
+    valley: 2,
+    desert: 3,
+    tundra: 4,
+    swamp: 5,
+    mountains: 6,
+    lakes: 7,
+  };
 
   for (let i = 0; i < positions.count; i++) {
     const localX = positions.getX(i);
@@ -621,7 +795,7 @@ function generateTileGeometry(
       hasWater = true;
     }
 
-    // Get biome color
+    // Get biome color (used for fallback/debug rendering)
     const biomeColor = BIOME_COLORS[query.biome] || BIOME_COLORS.plains;
     let r = biomeColor.r;
     let g = biomeColor.g;
@@ -648,9 +822,52 @@ function generateTileGeometry(
     colors[i * 3] = r;
     colors[i * 3 + 1] = g;
     colors[i * 3 + 2] = b;
+
+    // Store biome ID for shader
+    biomeIds[i] = biomeNameToId[query.biome] ?? 0;
+
+    // Calculate road influence at this vertex
+    // Roads are in terrain-space coordinates, so use worldX/worldZ directly
+    roadInfluences[i] = calculateRoadInfluenceAtPoint(
+      worldX,
+      worldZ,
+      roads,
+      worldCenterOffset,
+    );
+  }
+
+  // Debug: count non-zero road influences for this tile
+  let nonZeroCount = 0;
+  let maxInfluence = 0;
+  for (let i = 0; i < roadInfluences.length; i++) {
+    if (roadInfluences[i] > 0) {
+      nonZeroCount++;
+      if (roadInfluences[i] > maxInfluence) maxInfluence = roadInfluences[i];
+    }
+  }
+  // Log for tiles with road influence OR for the first few tiles to debug coords
+  const shouldLog =
+    nonZeroCount > 0 || (tileX >= 0 && tileX <= 2 && tileZ >= 0 && tileZ <= 2);
+  if (shouldLog) {
+    // Calculate the world coordinate range for this tile
+    const tileWorldMinX = tileX * tileSize - worldCenterOffset;
+    const tileWorldMaxX = (tileX + 1) * tileSize - worldCenterOffset;
+    const tileWorldMinZ = tileZ * tileSize - worldCenterOffset;
+    const tileWorldMaxZ = (tileZ + 1) * tileSize - worldCenterOffset;
+    console.log(
+      `[Tile ${tileX},${tileZ}] Road influence: ${nonZeroCount}/${roadInfluences.length} vertices, max=${maxInfluence.toFixed(2)}`,
+    );
+    console.log(
+      `  Tile world bounds: X[${tileWorldMinX.toFixed(0)} to ${tileWorldMaxX.toFixed(0)}], Z[${tileWorldMinZ.toFixed(0)} to ${tileWorldMaxZ.toFixed(0)}]`,
+    );
   }
 
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geometry.setAttribute("biomeId", new THREE.BufferAttribute(biomeIds, 1));
+  geometry.setAttribute(
+    "roadInfluence",
+    new THREE.BufferAttribute(roadInfluences, 1),
+  );
   geometry.computeVertexNormals();
   positions.needsUpdate = true;
 
@@ -668,7 +885,17 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
   showVegetation = false,
   flyModeEnabled = false,
   onFlyModeChange,
+  roads: providedRoads,
 }) => {
+  // Debug: log when roads prop changes
+  const prevRoadsLengthRef = useRef<number | undefined>(undefined);
+  if (providedRoads?.length !== prevRoadsLengthRef.current) {
+    console.log(
+      `[TileBasedTerrain] Roads prop changed: ${prevRoadsLengthRef.current ?? "undefined"} -> ${providedRoads?.length ?? "undefined"}`,
+    );
+    prevRoadsLengthRef.current = providedRoads?.length;
+  }
+
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<AssetForgeRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -813,7 +1040,7 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
       const key = getTileKey(tileX, tileZ);
       if (tilesRef.current.has(key)) return; // Already exists
 
-      // Generate tile geometry
+      // Generate tile geometry with road influence support
       const { geometry, hasWater } = generateTileGeometry(
         tileX,
         tileZ,
@@ -823,6 +1050,7 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
         waterThreshold,
         maxHeight,
         worldSize,
+        providedRoads, // Pass roads for road influence calculation
       );
 
       // Create terrain mesh
@@ -863,7 +1091,7 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
 
       setLoadedTiles(tilesRef.current.size);
     },
-    [getTileKey, tileSize, waterThreshold, maxHeight, worldSize],
+    [getTileKey, tileSize, waterThreshold, maxHeight, worldSize, providedRoads],
   );
 
   // Unload a tile
@@ -1175,7 +1403,28 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
               // Calculate slope from surface normal (1 - y component gives steepness)
               slope = query.normal ? 1 - Math.abs(query.normal.y) : 0;
               // Walkable if not too steep and not underwater
-              walkable = slope < 0.7 && terrainHeight > waterThreshold;
+              const terrainWalkable =
+                slope < 0.7 && terrainHeight > waterThreshold;
+
+              // Check building walkability (unified with game's BuildingCollisionService logic)
+              // Building interiors are walkable even if terrain underneath isn't
+              const buildingCheck = buildingWalkabilityService.checkWalkability(
+                worldX,
+                worldZ,
+                terrainWalkable,
+              );
+              walkable = buildingCheck.walkable;
+
+              // Update terrain height to building floor if inside a building
+              if (buildingCheck.inBuilding) {
+                const floorHeight = buildingWalkabilityService.getFloorHeight(
+                  worldX,
+                  worldZ,
+                );
+                if (floorHeight !== null) {
+                  terrainHeight = floorHeight;
+                }
+              }
             }
 
             // Check if in a town (approximate - check against generated towns)
@@ -1321,41 +1570,142 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
     scene.add(vegetationContainer);
     vegetationContainerRef.current = vegetationContainer;
 
-    // Wilderness zone overlay (PVP area in north)
+    // Wilderness zone visual (PVP area in north) - border band + floating skull
     const wildernessStartPercent = 0.3; // Start at 30% from center (north direction)
     const worldSizeForWilderness = worldSize * tileSize;
     const worldCenterForWilderness = worldSizeForWilderness / 2;
     const wildernessBoundaryZ =
       worldCenterForWilderness -
       worldSizeForWilderness * wildernessStartPercent;
-    const wildernessHeight = wildernessBoundaryZ; // From boundary to north edge (z=0)
+    const wildernessDepth = wildernessBoundaryZ; // From boundary to north edge (z=0)
     const wildernessWidth = worldSizeForWilderness;
 
-    const wildernessGeometry = new THREE.PlaneGeometry(
+    // Create wilderness border group
+    const wildernessGroup = new THREE.Group();
+    const borderHeight = 8.0; // Height of border walls
+    const borderColor = 0xff0000; // Bright red
+
+    // Border wall material (very transparent to not block grass)
+    const borderWallMaterial = new MeshBasicNodeMaterial();
+    borderWallMaterial.color = new THREE.Color(borderColor);
+    borderWallMaterial.transparent = true;
+    borderWallMaterial.opacity = 0.15;
+    borderWallMaterial.side = THREE.DoubleSide;
+    borderWallMaterial.depthWrite = false;
+
+    // South wall (the main boundary line players cross)
+    const southWallGeom = new THREE.PlaneGeometry(
       wildernessWidth,
-      wildernessHeight,
+      borderHeight,
     );
-    wildernessGeometry.rotateX(-Math.PI / 2); // Make horizontal
+    const southWall = new THREE.Mesh(southWallGeom, borderWallMaterial);
+    southWall.position.set(0, borderHeight / 2, wildernessDepth / 2);
+    southWall.rotation.y = Math.PI;
+    wildernessGroup.add(southWall);
 
-    const wildernessMaterial = new MeshBasicNodeMaterial();
-    wildernessMaterial.color = new THREE.Color(0xff0000);
-    wildernessMaterial.transparent = true;
-    wildernessMaterial.opacity = 0.15;
-    wildernessMaterial.side = THREE.DoubleSide;
-    wildernessMaterial.depthWrite = false;
+    // East wall
+    const eastWallGeom = new THREE.PlaneGeometry(wildernessDepth, borderHeight);
+    const eastWall = new THREE.Mesh(eastWallGeom, borderWallMaterial);
+    eastWall.position.set(wildernessWidth / 2, borderHeight / 2, 0);
+    eastWall.rotation.y = -Math.PI / 2;
+    wildernessGroup.add(eastWall);
 
-    const wildernessOverlay = new THREE.Mesh(
-      wildernessGeometry,
-      wildernessMaterial,
+    // West wall
+    const westWallGeom = new THREE.PlaneGeometry(wildernessDepth, borderHeight);
+    const westWall = new THREE.Mesh(westWallGeom, borderWallMaterial);
+    westWall.position.set(-wildernessWidth / 2, borderHeight / 2, 0);
+    westWall.rotation.y = Math.PI / 2;
+    wildernessGroup.add(westWall);
+
+    // North wall (at z=0, edge of world)
+    const northWallGeom = new THREE.PlaneGeometry(
+      wildernessWidth,
+      borderHeight,
     );
-    // Position at center of wilderness area
-    wildernessOverlay.position.set(
+    const northWall = new THREE.Mesh(northWallGeom, borderWallMaterial);
+    northWall.position.set(0, borderHeight / 2, -wildernessDepth / 2);
+    wildernessGroup.add(northWall);
+
+    // Border edge lines
+    const lineMaterial = new LineBasicNodeMaterial();
+    lineMaterial.color = new THREE.Color(borderColor);
+
+    // Top edge outline
+    const topEdgePoints = [
+      new THREE.Vector3(
+        -wildernessWidth / 2,
+        borderHeight,
+        -wildernessDepth / 2,
+      ),
+      new THREE.Vector3(
+        wildernessWidth / 2,
+        borderHeight,
+        -wildernessDepth / 2,
+      ),
+      new THREE.Vector3(wildernessWidth / 2, borderHeight, wildernessDepth / 2),
+      new THREE.Vector3(
+        -wildernessWidth / 2,
+        borderHeight,
+        wildernessDepth / 2,
+      ),
+      new THREE.Vector3(
+        -wildernessWidth / 2,
+        borderHeight,
+        -wildernessDepth / 2,
+      ),
+    ];
+    const topEdgeGeom = new THREE.BufferGeometry().setFromPoints(topEdgePoints);
+    const topEdgeLine = new THREE.Line(topEdgeGeom, lineMaterial);
+    wildernessGroup.add(topEdgeLine);
+
+    // Position wilderness group at center (lifted 10m above terrain)
+    wildernessGroup.position.set(
       worldCenterForWilderness,
-      2, // Slightly above terrain
-      wildernessHeight / 2, // Center of wilderness zone
+      12,
+      wildernessDepth / 2,
     );
-    scene.add(wildernessOverlay);
-    wildernessOverlayRef.current = wildernessOverlay;
+    scene.add(wildernessGroup);
+
+    // Create floating skull sprite
+    const skullCanvas = document.createElement("canvas");
+    const skullSize = 256;
+    skullCanvas.width = skullSize;
+    skullCanvas.height = skullSize;
+    const skullCtx = skullCanvas.getContext("2d");
+    if (skullCtx) {
+      skullCtx.clearRect(0, 0, skullSize, skullSize);
+      skullCtx.font = `${skullSize * 0.8}px serif`;
+      skullCtx.textAlign = "center";
+      skullCtx.textBaseline = "middle";
+      skullCtx.fillText("💀", skullSize / 2, skullSize / 2);
+      // Add glow
+      skullCtx.shadowColor = "rgba(255, 0, 0, 0.8)";
+      skullCtx.shadowBlur = 20;
+      skullCtx.fillText("💀", skullSize / 2, skullSize / 2);
+    }
+    const skullTexture = new THREE.CanvasTexture(skullCanvas);
+
+    const skullMaterial = new THREE.SpriteMaterial({
+      map: skullTexture,
+      transparent: true,
+      depthWrite: false,
+    });
+    const skullSprite = new THREE.Sprite(skullMaterial);
+    const skullSpriteSize = 30.0;
+    skullSprite.scale.set(skullSpriteSize, skullSpriteSize, 1);
+    skullSprite.position.set(
+      worldCenterForWilderness,
+      50, // High above terrain
+      wildernessDepth / 4, // Centered in wilderness zone
+    );
+    scene.add(skullSprite);
+
+    // Store reference for cleanup (use group as main reference)
+    wildernessOverlayRef.current = wildernessGroup as unknown as THREE.Mesh;
+    // Store skull for animation
+    (
+      wildernessGroup as THREE.Group & { skullSprite?: THREE.Sprite }
+    ).skullSprite = skullSprite;
 
     // Lighting
     const ambient = new THREE.AmbientLight(0xffffff, 0.5);
@@ -1534,6 +1884,18 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
               child.receiveShadow = true;
             }
           });
+
+          // Register building for walkability tracking (unified with game logic)
+          if (generatedBuilding.layout) {
+            buildingWalkabilityService.registerBuilding(
+              building.id,
+              town.id,
+              { x: bx, y: by, z: bz },
+              building.rotation || 0,
+              generatedBuilding.layout,
+              by, // maxGroundY approximation
+            );
+          }
         } else {
           // Fallback to detailed box if generation fails
           const detailGeometry = new THREE.BoxGeometry(
@@ -1611,8 +1973,83 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
       }
     }
 
-    // Generate roads between towns (simple MST-like approach for preview)
-    if (townResult.towns.length >= 2) {
+    // Generate roads using actual road network data
+    if (providedRoads && providedRoads.length > 0) {
+      // Use pre-generated road network with actual pathfinding data
+      const roadMaterial = new MeshBasicNodeMaterial();
+      roadMaterial.color = new THREE.Color(0x6b5344);
+      roadMaterial.side = THREE.DoubleSide;
+
+      const mainRoadMaterial = new MeshBasicNodeMaterial();
+      mainRoadMaterial.color = new THREE.Color(0x5a4536); // Slightly darker for main roads
+      mainRoadMaterial.side = THREE.DoubleSide;
+
+      for (const road of providedRoads) {
+        if (road.path.length < 2) continue;
+
+        // Convert road path points to THREE.Vector3 with terrain sampling
+        const roadPoints: THREE.Vector3[] = road.path.map((point) => {
+          // Get actual terrain height at this point, or use provided y
+          const y =
+            point.y !== undefined
+              ? point.y
+              : generator.getHeightAt(point.x, point.z) + 0.3;
+          return new THREE.Vector3(
+            point.x + worldCenterOffset,
+            y,
+            point.z + worldCenterOffset,
+          );
+        });
+
+        // Create road as a tube/ribbon with appropriate width
+        const roadWidth = road.isMainRoad
+          ? (road.width || 4) * 1.2
+          : road.width || 4;
+        const segments = Math.max(roadPoints.length * 2, 20);
+
+        const roadCurve = new THREE.CatmullRomCurve3(roadPoints);
+        const roadGeometry = new THREE.TubeGeometry(
+          roadCurve,
+          segments,
+          roadWidth / 2, // radius = half width
+          4,
+          false,
+        );
+
+        const material = road.isMainRoad ? mainRoadMaterial : roadMaterial;
+        const roadMesh = new THREE.Mesh(roadGeometry, material);
+        roadMesh.userData = {
+          selectable: true,
+          selectableType: "road",
+          selectableId: road.id,
+          connectedTowns: road.connectedTowns,
+          isMainRoad: road.isMainRoad,
+        };
+
+        townMarkers.add(roadMesh);
+        selectableObjectsRef.current.push(roadMesh);
+      }
+
+      console.log(
+        `[TileBasedTerrain] Created ${providedRoads.length} roads from road network data`,
+      );
+      setRoadCount(providedRoads.length);
+
+      // Populate minimap roads data from actual road paths
+      const minimapRoadData: Array<{ path: Array<{ x: number; z: number }> }> =
+        providedRoads.map((road) => ({
+          path: road.path.map((point) => ({
+            x: point.x + worldCenterOffset,
+            z: point.z + worldCenterOffset,
+          })),
+        }));
+      setMinimapRoads(minimapRoadData);
+    } else if (townResult.towns.length >= 2) {
+      // Fallback: Generate simple MST-like roads for preview when no road data is provided
+      console.warn(
+        "[TileBasedTerrain] No road network data provided, using simplified preview roads",
+      );
+
       const roadMaterial = new MeshBasicNodeMaterial();
       roadMaterial.color = new THREE.Color(0x6b5344);
       roadMaterial.side = THREE.DoubleSide;
@@ -1679,11 +2116,11 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
       }
 
       console.log(
-        `[TileBasedTerrain] Created ${connectedPairs.size} road connections`,
+        `[TileBasedTerrain] Created ${connectedPairs.size} fallback road connections`,
       );
       setRoadCount(connectedPairs.size);
 
-      // Populate minimap roads data
+      // Populate minimap roads data (simplified straight lines)
       const minimapRoadData: Array<{ path: Array<{ x: number; z: number }> }> =
         [];
       const sortedTownsForRoads = [...townResult.towns];
@@ -1929,6 +2366,7 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
         const now = performance.now();
         const deltaTime = Math.min((now - lastTime) / 1000, 0.1); // Cap delta
         lastTime = now;
+        const elapsedSeconds = now / 1000;
 
         updateCamera(deltaTime);
         updateTiles();
@@ -1939,6 +2377,31 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
             child.update(camera);
           }
         });
+
+        // Animate wilderness skull (bobbing and pulsing)
+        if (wildernessOverlayRef.current) {
+          const wildernessGroup =
+            wildernessOverlayRef.current as unknown as THREE.Group & {
+              skullSprite?: THREE.Sprite;
+            };
+          if (wildernessGroup.skullSprite) {
+            // Bob up and down
+            const baseY = 50;
+            const bobAmplitude = 3.0;
+            const bobSpeed = 1.2;
+            wildernessGroup.skullSprite.position.y =
+              baseY + Math.sin(elapsedSeconds * bobSpeed) * bobAmplitude;
+
+            // Subtle scale pulse
+            const skullBaseSize = 30.0;
+            const scalePulse = 1.0 + Math.sin(elapsedSeconds * 0.5) * 0.05;
+            wildernessGroup.skullSprite.scale.set(
+              skullBaseSize * scalePulse,
+              skullBaseSize * scalePulse,
+              1,
+            );
+          }
+        }
 
         // Update camera rotation for minimap (throttle to every 100ms)
         if (now - lastRotationUpdate > 100) {
@@ -2006,6 +2469,9 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
         }
       });
 
+      // Clear building walkability tracking
+      buildingWalkabilityService.clear();
+
       // Dispose vegetation
       vegetationContainer.traverse((child) => {
         if (
@@ -2057,6 +2523,7 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
     waterThreshold,
     config.seed,
     config.towns,
+    providedRoads,
     handleMouseMove,
     handleKeyDown,
     handleKeyUp,
@@ -2087,6 +2554,32 @@ export const TileBasedTerrain: React.FC<TileBasedTerrainProps> = ({
       );
     }
   }, [terrainConfig, tileSize, tileResolution, unloadTile]);
+
+  // Regenerate tiles when roads change (for debugging road influence)
+  // This ensures road colors update when road network is regenerated
+  const prevRoadsRef = useRef<GeneratedRoad[] | undefined>(undefined);
+  useEffect(() => {
+    // Skip initial mount and when roads haven't actually changed
+    if (prevRoadsRef.current === providedRoads) return;
+
+    // Only regenerate if we had previous roads (not initial load)
+    const hadPreviousRoads = prevRoadsRef.current !== undefined;
+    prevRoadsRef.current = providedRoads;
+
+    if (hadPreviousRoads && tilesRef.current.size > 0) {
+      console.log(
+        `[TileBasedTerrain] Roads changed (${providedRoads?.length ?? 0} roads), regenerating tiles for road influence update`,
+      );
+
+      // Clear existing tiles to force regeneration with new road data
+      for (const key of tilesRef.current.keys()) {
+        unloadTile(key);
+      }
+
+      // Reset tile queue to trigger immediate regeneration
+      tileQueueRef.current = [];
+    }
+  }, [providedRoads, unloadTile]);
 
   // Notify parent of tile count changes
   useEffect(() => {

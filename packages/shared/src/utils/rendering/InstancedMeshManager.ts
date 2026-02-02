@@ -81,6 +81,17 @@ import {
 import { isGPUComputeAvailable, getGlobalCullingManager } from "../compute";
 
 // ============================================================================
+// IMPOSTOR CONFIGURATION
+// ============================================================================
+
+/**
+ * TEMPORARY: Disable all mob/character impostors.
+ * When true, mobs use GPU dissolve fade instead of impostor billboards.
+ * Set to false to re-enable impostor system.
+ */
+const DISABLE_IMPOSTORS = true;
+
+// ============================================================================
 // MOB DISSOLVE MATERIAL TYPES
 // ============================================================================
 
@@ -789,7 +800,9 @@ type MobInstanceRegistration = {
   initialState: MobAnimationState;
 };
 
-const MOB_MODEL_SCALE = 100; // GLB models are in centimeters, need cm→m conversion
+// Scale for GLB models - VRM auto-normalizes to 1.6m, GLB uses manifest scale directly
+// Set to 1 since models should be exported at correct scale
+const MOB_MODEL_SCALE = 1;
 const DEFAULT_MOB_VARIANTS = 3; // animation phase buckets per state
 
 // Note: Imposter distances are now dynamic, initialized from shadow quality
@@ -1038,8 +1051,8 @@ export class MobInstancedRenderer {
       variant,
     );
 
-    // VRM avatars are already normalized to ~1.6m (meters), don't apply cm→m scale
-    // GLB models are typically in centimeters and need the 100x scale
+    // VRM avatars are auto-normalized to ~1.6m, GLB models use native scale
+    // Models should be exported at correct scale - no runtime normalization
     const isVRM = registration.modelPath.toLowerCase().endsWith(".vrm");
     const scaleMultiplier = isVRM ? 1 : MOB_MODEL_SCALE;
 
@@ -2430,18 +2443,22 @@ export class MobInstancedRenderer {
    * Create imposter (billboard) data for a model.
    * Uses ImpostorManager for runtime octahedral baking with caching.
    * Returns null initially - the model.imposter is set asynchronously when baking completes.
+   *
+   * NOTE: When DISABLE_IMPOSTORS is true, this function returns null immediately.
    */
   private createModelImposter(
     model: MobInstancedModel,
     scene: THREE.Object3D,
   ): MobImposterModel | null {
-    // Calculate dimensions from bounding box
-    // VRM avatars are already in meters, GLB models are in centimeters
-    const isVRM = model.modelPath.toLowerCase().endsWith(".vrm");
-    const scaleMultiplier = isVRM ? 1 : MOB_MODEL_SCALE;
+    if (DISABLE_IMPOSTORS) return null; // Impostors disabled - using dissolve fade instead
 
+    // Calculate dimensions from bounding box
+    // VRM avatars are auto-normalized to ~1.6m, GLB models use native scale
+    const isVRM = model.modelPath.toLowerCase().endsWith(".vrm");
     const size = new THREE.Vector3();
     model.boundingBox.getSize(size);
+    const scaleMultiplier = isVRM ? 1 : MOB_MODEL_SCALE;
+
     const width = Math.max(size.x, size.z) * scaleMultiplier;
     const height = size.y * scaleMultiplier;
 
@@ -2581,10 +2598,11 @@ export class MobInstancedRenderer {
   ): MobImposterModel {
     const { atlasTexture, gridSizeX, gridSizeY, boundingSphere } = bakeResult;
 
-    // VRM avatars are already in meters, GLB models need cm→m conversion
+    // VRM avatars are auto-normalized to ~1.6m
+    // GLB: use passed width/height (already normalized) or fallback scale for boundingSphere
     const scaleMultiplier = isVRM ? 1 : MOB_MODEL_SCALE;
 
-    // Use bounding sphere for sizing if available
+    // Use bounding sphere for sizing if available (pre-scaled width/height preferred)
     const finalWidth = boundingSphere
       ? boundingSphere.radius * 2 * scaleMultiplier
       : width;

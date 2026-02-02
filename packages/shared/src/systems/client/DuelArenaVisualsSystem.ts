@@ -225,9 +225,85 @@ export class DuelArenaVisualsSystem extends System {
       console.log(
         `[DuelArenaVisualsSystem] Total meshes in group: ${this.arenaGroup.children.length}, geometries: ${this.geometries.length}, materials: ${this.materials.length}`,
       );
+
+      // Register duel areas with grass exclusion manager
+      this.registerGrassExclusions();
     } else {
       console.warn(
         "[DuelArenaVisualsSystem] ⚠️ No stage/scene available, cannot add arena visuals",
+      );
+    }
+  }
+
+  /**
+   * Register all duel arena areas with the grass exclusion manager
+   * to prevent grass from growing through arena floors
+   */
+  private async registerGrassExclusions(): Promise<void> {
+    try {
+      const { getGrassExclusionManager } = await import(
+        "../../systems/shared/world/GrassExclusionManager"
+      );
+      const exclusionManager = getGrassExclusionManager();
+
+      if (!exclusionManager) {
+        console.warn(
+          "[DuelArenaVisualsSystem] GrassExclusionManager not available",
+        );
+        return;
+      }
+
+      const margin = 1.0; // Extra margin around floors
+
+      // Register each arena floor
+      for (let i = 0; i < ARENA_COUNT; i++) {
+        const row = Math.floor(i / 2);
+        const col = i % 2;
+        const centerX =
+          ARENA_BASE_X + col * (ARENA_WIDTH + ARENA_GAP) + ARENA_WIDTH / 2;
+        const centerZ =
+          ARENA_BASE_Z + row * (ARENA_LENGTH + ARENA_GAP) + ARENA_LENGTH / 2;
+
+        exclusionManager.addRectangularBlocker(
+          `duel_arena_${i + 1}`,
+          centerX,
+          centerZ,
+          ARENA_WIDTH + margin * 2,
+          ARENA_LENGTH + margin * 2,
+          0, // No rotation
+          0.5, // Soft fade at edges
+        );
+      }
+
+      // Register lobby floor
+      exclusionManager.addRectangularBlocker(
+        "duel_lobby",
+        LOBBY_CENTER_X,
+        LOBBY_CENTER_Z,
+        LOBBY_WIDTH + margin * 2,
+        LOBBY_LENGTH + margin * 2,
+        0,
+        0.5,
+      );
+
+      // Register hospital floor
+      exclusionManager.addRectangularBlocker(
+        "duel_hospital",
+        HOSPITAL_CENTER_X,
+        HOSPITAL_CENTER_Z,
+        HOSPITAL_WIDTH + margin * 2,
+        HOSPITAL_LENGTH + margin * 2,
+        0,
+        0.5,
+      );
+
+      console.log(
+        `[DuelArenaVisualsSystem] ✅ Registered ${ARENA_COUNT + 2} grass exclusion zones (arenas + lobby + hospital)`,
+      );
+    } catch (error) {
+      console.warn(
+        "[DuelArenaVisualsSystem] Failed to register grass exclusions:",
+        error,
       );
     }
   }

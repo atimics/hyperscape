@@ -278,7 +278,7 @@ export type InstancedLeafOptions = {
   leafSamplingMode?: LeafSamplingMode;
   /** Seed for deterministic sampling (default: 0) */
   leafSamplingSeed?: number;
-  /** Use TSL (WebGPU-compatible) material instead of GLSL ShaderMaterial (default: false) */
+  /** @deprecated TSL is always used now (WebGPU-only). This option is ignored. */
   useTSL?: boolean;
 };
 
@@ -892,327 +892,6 @@ export type ProceduralLeafShape =
   | "needle";
 
 /**
- * Create an instanced leaf material with alpha cutout shader.
- * Uses procedural leaf shapes - no texture needed!
- *
- * @param options - Material options
- * @returns ShaderMaterial for instanced leaves with alpha cutout
- */
-export function createInstancedLeafMaterial(
-  options: {
-    color?: THREE.Color;
-    colorVariation?: number;
-    map?: THREE.Texture;
-    alphaTest?: number;
-    opacity?: number;
-    side?: THREE.Side;
-    leafShape?: ProceduralLeafShape;
-    subsurfaceScatter?: number;
-    windStrength?: number;
-  } = {},
-): THREE.ShaderMaterial {
-  const {
-    color = new THREE.Color(0x3d7a3d),
-    colorVariation = 0.15,
-    map,
-    alphaTest = 0.5,
-    opacity = 1.0,
-    side = THREE.DoubleSide,
-    leafShape = "elliptic",
-    subsurfaceScatter = 0.3,
-    windStrength = 0.0,
-  } = options;
-
-  // Map shape name to shader define
-  const shapeDefines: Record<ProceduralLeafShape, string> = {
-    elliptic: "LEAF_ELLIPTIC",
-    ovate: "LEAF_OVATE",
-    maple: "LEAF_MAPLE",
-    oak: "LEAF_OAK",
-    palm: "LEAF_PALM",
-    needle: "LEAF_NEEDLE",
-  };
-
-  const defines: Record<string, string> = {
-    [shapeDefines[leafShape]]: "",
-  };
-  if (map) {
-    defines["USE_MAP"] = "";
-  }
-
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      uColor: { value: color },
-      uColorVariation: { value: colorVariation },
-      uMap: { value: map },
-      uAlphaTest: { value: alphaTest },
-      uOpacity: { value: opacity },
-      uTime: { value: 0 },
-      uWindStrength: { value: windStrength },
-      uSubsurface: { value: subsurfaceScatter },
-      uBakeMode: { value: 0.0 }, // 0=normal rendering, 1=unlit for impostor baking
-    },
-    vertexShader: /* glsl */ `
-      attribute vec4 instanceOrientation; // quaternion for rotation
-      
-      varying vec2 vUv;
-      varying vec3 vNormal;
-      varying vec3 vWorldPosition;
-      varying float vInstanceId;
-      
-      uniform float uTime;
-      uniform float uWindStrength;
-      
-      // Quaternion rotation
-      vec3 rotateByQuat(vec3 v, vec4 q) {
-        vec3 t = 2.0 * cross(q.xyz, v);
-        return v + q.w * t + cross(q.xyz, t);
-      }
-      
-      // Simple hash for instance variation
-      float hash(float n) {
-        return fract(sin(n) * 43758.5453123);
-      }
-      
-      void main() {
-        vUv = uv;
-        vInstanceId = float(gl_InstanceID);
-        
-        // Apply instance rotation to position and normal
-        vec3 rotatedPosition = rotateByQuat(position, instanceOrientation);
-        vec3 rotatedNormal = rotateByQuat(normal, instanceOrientation);
-        
-        // Wind animation (subtle sway based on height and instance)
-        if (uWindStrength > 0.0) {
-          float windPhase = hash(vInstanceId) * 6.28;
-          float windAmount = uWindStrength * position.y * 0.1;
-          rotatedPosition.x += sin(uTime * 2.0 + windPhase) * windAmount;
-          rotatedPosition.z += cos(uTime * 1.5 + windPhase * 0.7) * windAmount * 0.5;
-        }
-        
-        // Apply instance transform (position from instanceMatrix)
-        vec4 worldPosition = instanceMatrix * vec4(rotatedPosition, 1.0);
-        vWorldPosition = worldPosition.xyz;
-        vNormal = normalMatrix * rotatedNormal;
-        
-        gl_Position = projectionMatrix * viewMatrix * worldPosition;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      uniform vec3 uColor;
-      uniform float uColorVariation;
-      uniform sampler2D uMap;
-      uniform float uAlphaTest;
-      uniform float uOpacity;
-      uniform float uSubsurface;
-      uniform float uBakeMode; // 0=normal, 1=unlit for impostor baking
-      
-      varying vec2 vUv;
-      varying vec3 vNormal;
-      varying vec3 vWorldPosition;
-      varying float vInstanceId;
-      
-      // Hash for color variation per instance
-      float hash(float n) {
-        return fract(sin(n) * 43758.5453123);
-      }
-      
-      vec3 hash3(float n) {
-        return vec3(
-          hash(n),
-          hash(n + 127.1),
-          hash(n + 269.5)
-        );
-      }
-      
-      // Procedural leaf alpha shapes
-      // UV: (0,0) bottom-left, (1,1) top-right
-      // Leaf grows from bottom (0) to top (1)
-      
-      float leafShapeElliptic(vec2 uv) {
-        // Centered UV
-        vec2 p = uv - vec2(0.5, 0.5);
-        // Ellipse equation: (x/a)^2 + (y/b)^2 <= 1
-        float a = 0.35; // width
-        float b = 0.48; // height
-        float d = (p.x * p.x) / (a * a) + (p.y * p.y) / (b * b);
-        // Add slight point at top
-        float pointiness = smoothstep(0.3, 0.5, uv.y) * 0.15;
-        a -= pointiness * abs(p.x);
-        d = (p.x * p.x) / (a * a) + (p.y * p.y) / (b * b);
-        return 1.0 - smoothstep(0.9, 1.0, d);
-      }
-      
-      float leafShapeOvate(vec2 uv) {
-        vec2 p = uv - vec2(0.5, 0.4); // offset center down
-        // Wider at bottom, narrower at top
-        float widthMod = mix(0.4, 0.2, uv.y);
-        float d = length(p / vec2(widthMod, 0.5));
-        // Sharper tip
-        float tip = smoothstep(0.7, 0.95, uv.y);
-        d += tip * 0.5;
-        return 1.0 - smoothstep(0.85, 1.0, d);
-      }
-      
-      float leafShapeMaple(vec2 uv) {
-        vec2 p = (uv - 0.5) * 2.0;
-        float angle = atan(p.y, p.x);
-        float r = length(p);
-        // 5-pointed star-like shape
-        float lobes = 0.5 + 0.3 * cos(angle * 5.0);
-        // Add serration
-        lobes += 0.1 * cos(angle * 15.0);
-        float shape = step(r, lobes * 0.9);
-        // Stem notch at bottom
-        if (uv.y < 0.15 && abs(uv.x - 0.5) < 0.05) shape = 0.0;
-        return shape;
-      }
-      
-      float leafShapeOak(vec2 uv) {
-        vec2 p = uv - vec2(0.5, 0.5);
-        // Base ellipse
-        float base = 1.0 - smoothstep(0.8, 1.0, length(p / vec2(0.35, 0.48)));
-        // Wavy lobed edges
-        float angle = atan(p.y, p.x);
-        float lobeWave = 0.08 * sin(angle * 7.0 + 1.5);
-        float r = length(p);
-        float lobed = step(r, 0.38 + lobeWave);
-        return lobed * base;
-      }
-      
-      float leafShapePalm(vec2 uv) {
-        // Long narrow frond
-        vec2 p = uv - vec2(0.5, 0.5);
-        float width = 0.12 * (1.0 - abs(p.y) * 1.5);
-        width = max(width, 0.02);
-        float d = abs(p.x) / width;
-        // Pointed tips
-        float tip = smoothstep(0.4, 0.5, abs(p.y));
-        d += tip * 2.0;
-        return 1.0 - smoothstep(0.8, 1.0, d);
-      }
-      
-      float leafShapeNeedle(vec2 uv) {
-        // Very thin needle (for conifers)
-        vec2 p = uv - vec2(0.5, 0.5);
-        float width = 0.06 * (1.0 - pow(abs(p.y) * 2.0, 2.0));
-        width = max(width, 0.01);
-        return step(abs(p.x), width);
-      }
-      
-      // Get leaf shape based on defines
-      float getLeafAlpha(vec2 uv) {
-        #ifdef LEAF_ELLIPTIC
-          return leafShapeElliptic(uv);
-        #endif
-        #ifdef LEAF_OVATE
-          return leafShapeOvate(uv);
-        #endif
-        #ifdef LEAF_MAPLE
-          return leafShapeMaple(uv);
-        #endif
-        #ifdef LEAF_OAK
-          return leafShapeOak(uv);
-        #endif
-        #ifdef LEAF_PALM
-          return leafShapePalm(uv);
-        #endif
-        #ifdef LEAF_NEEDLE
-          return leafShapeNeedle(uv);
-        #endif
-        // Default fallback
-        return leafShapeElliptic(uv);
-      }
-      
-      // Add vein pattern
-      float leafVeins(vec2 uv) {
-        vec2 p = uv - vec2(0.5, 0.0);
-        // Central vein
-        float central = 1.0 - smoothstep(0.0, 0.02, abs(p.x));
-        // Side veins
-        float sideAngle = 0.6;
-        float veins = 0.0;
-        for (float i = 0.2; i < 0.9; i += 0.15) {
-          vec2 veinStart = vec2(0.0, i);
-          float veinY = uv.y - i;
-          float veinX = abs(p.x) - veinY * sideAngle;
-          float vein = 1.0 - smoothstep(0.0, 0.015, abs(veinX));
-          vein *= step(0.0, veinY) * step(veinY, 0.2);
-          vein *= step(abs(p.x), 0.4);
-          veins = max(veins, vein * 0.5);
-        }
-        return central * 0.6 + veins;
-      }
-      
-      void main() {
-        // Get procedural leaf alpha
-        float alpha = getLeafAlpha(vUv);
-        
-        // Apply alpha test (cutout)
-        if (alpha < uAlphaTest) discard;
-        
-        // Instance-based color variation
-        vec3 variation = hash3(vInstanceId) * 2.0 - 1.0;
-        vec3 leafColor = uColor + variation * uColorVariation;
-        
-        // Darken edges slightly for depth
-        float edgeDark = smoothstep(0.3, 0.8, alpha) * 0.2 + 0.8;
-        leafColor *= edgeDark;
-        
-        // Add subtle vein pattern (darker)
-        float veins = leafVeins(vUv);
-        leafColor = mix(leafColor, leafColor * 0.7, veins * 0.3);
-        
-        // Texture map if provided
-        #ifdef USE_MAP
-          vec4 texColor = texture2D(uMap, vUv);
-          leafColor *= texColor.rgb;
-          alpha *= texColor.a;
-        #endif
-        
-        // Bake mode: output unlit color for impostor atlas
-        // This preserves procedural details (color variation, edge darkening, veins)
-        // but skips lighting so runtime impostor lighting is the only lighting applied
-        if (uBakeMode > 0.5) {
-          gl_FragColor = vec4(leafColor, alpha * uOpacity);
-          return;
-        }
-        
-        // Normal rendering with lighting
-        vec3 normal = normalize(vNormal);
-        vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
-        
-        // Two-sided lighting for leaves
-        float NdotL = dot(normal, lightDir);
-        float diff = abs(NdotL); // Both sides lit
-        
-        // Subsurface scattering simulation (light through leaf)
-        float subsurface = 0.0;
-        if (NdotL < 0.0) {
-          // Back-lit - add warm subsurface color
-          subsurface = -NdotL * uSubsurface;
-        }
-        
-        float ambient = 0.35;
-        float light = ambient + diff * 0.5 + subsurface;
-        
-        // Subsurface adds warmth
-        vec3 subsurfaceColor = leafColor * vec3(1.2, 1.1, 0.8);
-        vec3 finalColor = mix(leafColor, subsurfaceColor, subsurface);
-        finalColor *= light;
-        
-        gl_FragColor = vec4(finalColor, alpha * uOpacity);
-      }
-    `,
-    side,
-    transparent: true,
-    depthWrite: true,
-    alphaTest: alphaTest,
-    defines,
-  });
-}
-
-/**
  * Map tree leaf shape parameter to procedural shader shape.
  */
 function mapLeafShapeToShader(leafShape: number): ProceduralLeafShape {
@@ -1270,7 +949,6 @@ export function generateInstancedLeaves(
     alphaThreshold = 0.5,
     leafSamplingMode = "spatial",
     leafSamplingSeed = 0,
-    useTSL = false,
   } = options;
 
   // Sample leaves using the specified mode (spatial sampling preserves canopy distribution)
@@ -1295,27 +973,15 @@ export function generateInstancedLeaves(
   const leafShape = mapLeafShapeToShader(params.leafShape);
 
   // Create or use provided material with proper leaf shape
-  // Use TSL (WebGPU) material when useTSL is true, otherwise fall back to GLSL ShaderMaterial
-  let leafMaterial: THREE.Material;
-  if (material) {
-    leafMaterial = material;
-  } else if (useTSL) {
-    // TSL (WebGPU-compatible) material
-    leafMaterial = createInstancedLeafMaterialTSL({
-      alphaTest: alphaTest ? alphaThreshold : 0,
-      leafShape: leafShape as TSLLeafShape,
-      colorVariation: 0.12,
-      subsurfaceScatter: 0.35,
-    });
-  } else {
-    // GLSL ShaderMaterial (WebGL only)
-    leafMaterial = createInstancedLeafMaterial({
-      alphaTest: alphaTest ? alphaThreshold : 0,
-      leafShape,
-      colorVariation: 0.12,
-      subsurfaceScatter: 0.35,
-    });
-  }
+  // Always uses TSL (WebGPU-compatible) material
+  const leafMaterial: THREE.Material = material
+    ? material
+    : createInstancedLeafMaterialTSL({
+        alphaTest: alphaTest ? alphaThreshold : 0,
+        leafShape: leafShape as TSLLeafShape,
+        colorVariation: 0.12,
+        subsurfaceScatter: 0.35,
+      });
 
   // Create instanced mesh
   const instancedMesh = new THREE.InstancedMesh(
@@ -1404,8 +1070,6 @@ export function generateInstancedLeavesAndBlossoms(
   leaves: InstancedLeafResult | null;
   blossoms: InstancedLeafResult | null;
 } {
-  const { useTSL = false } = options;
-
   // Separate leaves and blossoms
   const leafData = leaves.filter((l) => !l.isBlossom);
   const blossomData = leaves.filter((l) => l.isBlossom);
@@ -1426,19 +1090,12 @@ export function generateInstancedLeavesAndBlossoms(
       leafScaleX: 1,
     };
 
-    // Create blossom material - use TSL when requested for WebGPU compatibility
-    let blossomMaterial: THREE.Material | undefined;
-    if (!options.material) {
-      if (useTSL) {
-        blossomMaterial = createInstancedLeafMaterialTSL({
+    // Create blossom material with TSL (WebGPU-compatible)
+    const blossomMaterial: THREE.Material | undefined = options.material
+      ? undefined
+      : createInstancedLeafMaterialTSL({
           color: new THREE.Color(0xffc0cb), // Pink for blossoms
         });
-      } else {
-        blossomMaterial = createInstancedLeafMaterial({
-          color: new THREE.Color(0xffc0cb), // Pink for blossoms
-        });
-      }
-    }
 
     blossomResult = generateInstancedLeaves(
       blossomData,

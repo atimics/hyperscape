@@ -21,6 +21,7 @@ export const BUILDING_RECIPES: Record<string, BuildingRecipe> = {
     carveChance: 0.2,
     carveSizeRange: [1, 1],
     frontSide: "south",
+    wallMaterial: "stucco", // Simple cottages use plain stucco
   },
   "long-house": {
     label: "Long House",
@@ -37,6 +38,7 @@ export const BUILDING_RECIPES: Record<string, BuildingRecipe> = {
     carveChance: 0.1,
     carveSizeRange: [1, 2],
     frontSide: "south",
+    wallMaterial: "wood", // Rustic wood planks
   },
   inn: {
     label: "Inn",
@@ -60,6 +62,7 @@ export const BUILDING_RECIPES: Record<string, BuildingRecipe> = {
     upperInsetRange: [1, 2],
     upperCarveChance: 0.2,
     frontSide: "south",
+    wallMaterial: "timber", // Tudor-style timber frame
   },
   bank: {
     label: "Bank",
@@ -85,6 +88,7 @@ export const BUILDING_RECIPES: Record<string, BuildingRecipe> = {
     upperInsetRange: [1, 2],
     upperCarveChance: 0.1,
     frontSide: "south",
+    wallMaterial: "stone", // Formal stone for banks
   },
   store: {
     label: "Store",
@@ -101,6 +105,7 @@ export const BUILDING_RECIPES: Record<string, BuildingRecipe> = {
     carveChance: 0.3,
     carveSizeRange: [1, 2],
     frontSide: "south",
+    wallMaterial: "timber", // Tudor-style shops
   },
   smithy: {
     label: "Smithy / Forge",
@@ -117,6 +122,7 @@ export const BUILDING_RECIPES: Record<string, BuildingRecipe> = {
     carveChance: 0.2,
     carveSizeRange: [1, 1],
     frontSide: "south",
+    wallMaterial: "brick", // Fire-resistant brick for forges
   },
 
   // ============================================================
@@ -145,6 +151,7 @@ export const BUILDING_RECIPES: Record<string, BuildingRecipe> = {
     upperInsetRange: [1, 2],
     upperCarveChance: 0.2,
     frontSide: "south",
+    wallMaterial: "brick", // Fine brick for mansions
   },
 
   // ============================================================
@@ -171,6 +178,7 @@ export const BUILDING_RECIPES: Record<string, BuildingRecipe> = {
     patioDoorChance: 0.3,
     patioDoorCountRange: [1, 1],
     frontSide: "south",
+    wallMaterial: "stone", // Fortified stone
   },
 
   fortress: {
@@ -193,6 +201,7 @@ export const BUILDING_RECIPES: Record<string, BuildingRecipe> = {
     patioDoorChance: 0.4,
     patioDoorCountRange: [1, 2],
     frontSide: "south",
+    wallMaterial: "stone", // Massive stone walls
   },
 
   // ============================================================
@@ -213,6 +222,7 @@ export const BUILDING_RECIPES: Record<string, BuildingRecipe> = {
     windowChance: 0.8,
     carveChance: 0.0,
     frontSide: "south",
+    wallMaterial: "stone", // Sacred stone
   },
 
   cathedral: {
@@ -236,6 +246,7 @@ export const BUILDING_RECIPES: Record<string, BuildingRecipe> = {
     foyerWidthRange: [2, 3],
     excludeFoyerFromUpper: true,
     frontSide: "south",
+    wallMaterial: "stone", // Grand stone cathedral
   },
 
   // ============================================================
@@ -264,6 +275,7 @@ export const BUILDING_RECIPES: Record<string, BuildingRecipe> = {
     upperInsetRange: [2, 3],
     upperCarveChance: 0.1,
     frontSide: "south",
+    wallMaterial: "timber", // Grand timber frame
   },
 };
 

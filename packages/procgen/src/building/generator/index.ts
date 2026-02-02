@@ -9,3 +9,7 @@ export * from "./constants";
 export * from "./recipes";
 export * from "./rng";
 export * from "./geometry";
+export * from "./uvUtils";
+export * from "./WindowGeometry";
+export * from "./DoorTrimGeometry";
+export * from "./InteriorLighting";

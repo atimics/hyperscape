@@ -130,6 +130,11 @@ export class InstancedAnimatedImpostor extends InstancedMesh<
     this._maxInstances = config.maxInstances;
     // Convert Map to array for indexed access
     this._variants = Array.from(config.atlas.variants.values());
+    if (this._variants.length === 0) {
+      throw new Error(
+        "[InstancedAnimatedImpostor] Atlas must have at least one variant",
+      );
+    }
 
     // Create the TSL material with storage buffers
     this._setupMaterial(config);
@@ -505,9 +510,9 @@ export class InstancedAnimatedImpostor extends InstancedMesh<
 
     for (let i = 0; i < this._maxInstances; i++) {
       const varIdx = Math.floor(variantArr[i]);
-      const variant = this._variants[varIdx] || this._variants[0];
-      const frameCount = variant?.frameCount ?? 1;
-      offsetArr[i] = Math.floor(Math.random() * frameCount);
+      // _variants is guaranteed non-empty by constructor validation
+      const variant = this._variants[varIdx] ?? this._variants[0];
+      offsetArr[i] = Math.floor(Math.random() * variant.frameCount);
     }
 
     this._instanceOffsetStorage.value.needsUpdate = true;

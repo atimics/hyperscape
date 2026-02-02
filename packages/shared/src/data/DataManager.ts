@@ -71,11 +71,13 @@ const getTreasureLocationsByDifficulty = (_difficulty: number) =>
   TREASURE_LOCATIONS;
 
 const NPC_MODEL_ARCHETYPES: Record<NPCModelArchetype, string> = {
-  goblin: "asset://models/goblin/goblin.vrm",
-  human: "asset://avatars/avatar-male-01.vrm",
-  thug: "asset://avatars/avatar-male-01.vrm",
-  troll: "asset://avatars/avatar-male-01.vrm",
-  imp: "asset://models/goblin/goblin.vrm",
+  // Use GLB version (323KB) instead of VRM (8.7MB) to avoid base64 buffer parsing issues
+  goblin: "asset://models/goblin/goblin_rigged.glb",
+  // Use optimized VRM versions to prevent memory/parsing issues with large files
+  human: "asset://avatars/avatar-male-01_optimized.vrm",
+  thug: "asset://avatars/avatar-male-01_optimized.vrm",
+  troll: "asset://avatars/avatar-male-01_optimized.vrm",
+  imp: "asset://models/goblin/goblin_rigged.glb",
 };
 
 import type {
@@ -1332,6 +1334,12 @@ export class DataManager {
       npc.category === "neutral" || npc.category === "quest"
         ? NPC_MODEL_ARCHETYPES.human
         : NPC_MODEL_ARCHETYPES.goblin;
+
+    // NOTE: VRM files are preferred for rigged characters because:
+    // 1. VRM factory auto-normalizes to 1.6m height
+    // 2. VRM handles skeleton binding correctly
+    // 3. GLB rigged models break when scaled (skeleton/animation issues)
+    // If VRM has buffer parsing issues, fix the VRM file (optimize/compress) rather than substituting GLB
     const defaults: Partial<NPCData> = {
       faction: npc.faction || "unknown",
       spawnCategory:

@@ -94,7 +94,9 @@ export type VegetationCategory =
   | "fern"
   | "rock"
   | "plant"
-  | "fallen_tree";
+  | "fallen_tree"
+  | "mushroom"
+  | "ivy";
 
 /**
  * LOD (Level of Detail) configuration for vegetation assets
@@ -298,7 +300,7 @@ export interface BiomeRockConfig {
   presets: string[];
   /** Distribution weights for each preset (higher = more common) */
   distribution?: Record<string, number>;
-  /** Scale range [min, max] multiplier (default: [0.3, 1.5]) */
+  /** Scale range [min, max] multiplier (default: [0.2, 0.9] for realistic ground rocks) */
   scaleRange: [number, number];
   /** Chance (0-1) for rocks to cluster together (default: 0.3) */
   clusterChance: number;

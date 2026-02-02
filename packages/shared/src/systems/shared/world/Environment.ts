@@ -28,10 +28,11 @@ const _sunDirection = new THREE.Vector3(0, -1, 0);
 // A 0.5m character needs ~7-8 pixels to cast a visible shadow
 //
 // SHADOW STABILITY NOTES:
-// - lightMargin: Padding around frustum (50-100 is usually enough)
+// - lightMargin: Higher values (100-200) prevent shadow "swimming" artifacts
 // - shadowBias: Small positive value prevents self-shadowing (0.0001-0.001)
 // - shadowNormalBias: Offsets along normal for curved surfaces (0.005-0.02)
 // - More cascades = better near/far resolution but more draw calls
+// - CSMShadowNode handles texel snapping internally - don't add extra snapping
 //
 // IMPORTANT: Vegetation fade distances should be <= maxFar so trees don't appear unshadowed
 export const csmLevels = {
@@ -42,34 +43,34 @@ export const csmLevels = {
     maxFar: 50,
     shadowBias: 0.0003,
     shadowNormalBias: 0.01,
-    lightMargin: 50,
+    lightMargin: 100,
   },
   low: {
     enabled: true,
     shadowMapSize: 2048,
-    cascades: 2, // 2 cascades: near (~25m high-res) + far (~75m)
-    maxFar: 200, // Reduced from 150 for better resolution
+    cascades: 2, // 2 cascades: near (~15m high-res) + far (~135m)
+    maxFar: 150, // Reduced for better near-cascade resolution
     shadowBias: 0.0002, // Lower bias so small object shadows appear
     shadowNormalBias: 0.01,
-    lightMargin: 50,
+    lightMargin: 150, // Higher margin prevents shadow swimming
   },
   med: {
     enabled: true,
     shadowMapSize: 2048,
     cascades: 3, // 3 cascades for better distribution
-    maxFar: 350, // Reasonable distance
+    maxFar: 300, // Reduced from 350 for better resolution, custom split helps near cascade
     shadowBias: 0.00015,
     shadowNormalBias: 0.008,
-    lightMargin: 60,
+    lightMargin: 150, // Higher margin prevents shadow swimming
   },
   high: {
     enabled: true,
-    shadowMapSize: 2048, // Higher resolution for sharp shadows
+    shadowMapSize: 4096, // Higher resolution for sharp shadows
     cascades: 4, // 4 cascades for excellent near/far balance
-    maxFar: 1000, // Don't need shadows beyond 200m
+    maxFar: 500, // Good distance with 4 cascades
     shadowBias: 0.0001,
     shadowNormalBias: 0.005,
-    lightMargin: 80,
+    lightMargin: 200, // Higher margin for stability
   },
 };
 
@@ -123,8 +124,7 @@ export class Environment extends System {
 
   // Shadow stabilization - prevents flickering/swimming
   private targetLightDirection: THREE.Vector3 = new THREE.Vector3(0, -1, 0);
-  private lastLightAnchor: THREE.Vector3 = new THREE.Vector3(); // Snapped position
-  private shadowTexelSize: number = 0; // For texel snapping calculation
+  private lastLightAnchor: THREE.Vector3 = new THREE.Vector3(); // Camera anchor position
   private readonly LIGHT_DISTANCE = 400; // Distance from target to light
 
   // Auto exposure settings - mimics eye adaptation to different light levels
@@ -144,7 +144,7 @@ export class Environment extends System {
   private csmDeferredLogged: boolean = false; // Only log deferred message once
 
   // Ambient lighting for day/night cycle (non-shadow casting)
-  private hemisphereLight: THREE.HemisphereLight | null = null;
+  public hemisphereLight: THREE.HemisphereLight | null = null;
   private ambientLight: THREE.AmbientLight | null = null;
 
   private isClientWithGraphics: boolean = false;
@@ -584,6 +584,9 @@ export class Environment extends System {
 
       // Update fog color based on day/night cycle
       this.updateFogColor(this.skySystem.dayIntensity);
+
+      // Update grass lighting based on day/night
+      this.updateGrassLighting(this.skySystem.dayIntensity);
     }
 
     // Ensure sky sphere never writes depth (prevents cutting moon)
@@ -602,13 +605,11 @@ export class Environment extends System {
    * Update sun light position to follow camera for consistent shadow coverage.
    *
    * SHADOW STABILIZATION:
-   * Shadow flickering/swimming is caused by the shadow map being rendered from
-   * slightly different positions each frame. To fix this:
+   * CSMShadowNode handles texel snapping internally per cascade in its updateBefore() method.
+   * We only need to position the main light - CSMShadowNode creates internal lights for each
+   * cascade and snaps them to texel boundaries using the correct per-cascade frustum size.
    *
-   * 1. TEXEL SNAPPING: Snap light position to shadow map texel boundaries
-   *    This ensures the shadow map samples the same world positions each frame
-   *
-   * 2. SMOOTH DIRECTION: Light direction is interpolated (in update()), not instant
+   * Light direction is smoothly interpolated in update() to prevent sudden direction changes.
    */
   private updateSunLightPosition(): void {
     if (!this.sunLight) return;
@@ -616,22 +617,11 @@ export class Environment extends System {
     // Get camera position (where shadows should be centered)
     const cameraPos = this.world.camera.position;
 
-    // Calculate shadow texel size for snapping (based on shadow map coverage / resolution)
-    // This needs to match the shadow camera frustum size
-    const shadowMapSize = this.sunLight.shadow.mapSize.x || 2048;
-    const shadowCam = this.sunLight.shadow.camera;
-    const frustumWidth = shadowCam.right - shadowCam.left;
-    this.shadowTexelSize = frustumWidth / shadowMapSize;
+    // Use camera position directly - CSMShadowNode handles texel snapping per cascade
+    // Adding our own snapping here would conflict with CSM's internal snapping
+    this.lastLightAnchor.copy(cameraPos);
 
-    // TEXEL SNAPPING: Round to shadow texel grid to prevent sub-texel swimming
-    // This ensures shadows sample the same world positions regardless of tiny camera movements
-    const texelSize = Math.max(this.shadowTexelSize, 0.1);
-    this.lastLightAnchor.x = Math.round(cameraPos.x / texelSize) * texelSize;
-    this.lastLightAnchor.y = cameraPos.y;
-    this.lastLightAnchor.z = Math.round(cameraPos.z / texelSize) * texelSize;
-
-    // Position light using stabilized anchor, not raw camera position
-    // Light is positioned OPPOSITE to light direction (light comes FROM this position)
+    // Position light OPPOSITE to light direction (light comes FROM this position)
     this.sunLight.position.set(
       this.lastLightAnchor.x - this.lightDirection.x * this.LIGHT_DISTANCE,
       this.lastLightAnchor.y -
@@ -640,7 +630,7 @@ export class Environment extends System {
       this.lastLightAnchor.z - this.lightDirection.z * this.LIGHT_DISTANCE,
     );
 
-    // Target is the stabilized anchor point
+    // Target is where shadows should be centered (camera position)
     this.sunLight.target.position.copy(this.lastLightAnchor);
     this.sunLight.target.updateMatrixWorld();
 
@@ -835,6 +825,41 @@ export class Environment extends System {
     }
   }
 
+  /**
+   * Update grass lighting based on day/night cycle
+   * @param dayIntensity 0-1 (0 = night, 1 = day)
+   */
+  private updateGrassLighting(dayIntensity: number): void {
+    // Get the grass system - registered as "grass" in createClientWorld.ts
+    const grassSystem = this.world.getSystem("grass") as {
+      setDayNightMix?: (mix: number) => void;
+      setSunDirection?: (x: number, y: number, z: number) => void;
+      setTerrainLighting?: (ambient: number, diffuse: number) => void;
+    } | null;
+
+    if (!grassSystem) return;
+
+    // Pass the day/night mix value
+    if (grassSystem.setDayNightMix) {
+      grassSystem.setDayNightMix(dayIntensity);
+    }
+
+    // Pass the sun direction (negated light direction = direction TO sun)
+    if (grassSystem.setSunDirection) {
+      // lightDirection points FROM the light, we need direction TO the light
+      const sunDir = this.lightDirection.clone().negate();
+      grassSystem.setSunDirection(sunDir.x, sunDir.y, sunDir.z);
+    }
+
+    // Adjust terrain lighting based on time of day
+    if (grassSystem.setTerrainLighting) {
+      // More ambient at night, more diffuse during day
+      const ambient = 0.3 + (1 - dayIntensity) * 0.3; // 0.3 day, 0.6 night
+      const diffuse = dayIntensity * 0.7; // 0.7 day, 0 night
+      grassSystem.setTerrainLighting(ambient, diffuse);
+    }
+  }
+
   override lateUpdate(_delta: number) {
     if (!this.isClientWithGraphics) return;
     if (this.skySystem) {
@@ -949,10 +974,30 @@ export class Environment extends System {
 
     // Create CSMShadowNode for cascaded shadows
     // Light direction is derived from sunLight.position and sunLight.target.position
+    //
+    // Custom split callback biases toward logarithmic for sharper near shadows:
+    // - Higher lambda (0.7-0.9) = more logarithmic = smaller near cascade = sharper near shadows
+    // - Lower lambda (0.3-0.5) = more uniform = larger near cascade = blurrier near shadows
+    const customSplitCallback = (
+      cascades: number,
+      near: number,
+      far: number,
+      breaks: number[],
+    ) => {
+      const lambda = 0.8; // Bias toward logarithmic for better near-cascade resolution
+      for (let i = 1; i < cascades; i++) {
+        const log = (near * Math.pow(far / near, i / cascades)) / far;
+        const uniform = (near + ((far - near) * i) / cascades) / far;
+        breaks.push(lambda * log + (1 - lambda) * uniform);
+      }
+      breaks.push(1);
+    };
+
     this.csmShadowNode = new CSMShadowNode(this.sunLight, {
       cascades: csmConfig.cascades,
       maxFar: csmConfig.maxFar,
-      mode: "practical", // Practical split gives good near/far balance
+      mode: "custom",
+      customSplitsCallback: customSplitCallback,
       lightMargin: csmConfig.lightMargin, // Prevents shadow "swimming" artifacts
     });
     // Avoid pre-assigning camera so CSMShadowNode can initialize internally.

@@ -6,6 +6,11 @@
  * N (one per tree type) to 1.
  *
  * @module AtlasedImpostorManager
+ *
+ * @deprecated NOT CURRENTLY USED - Tree impostors are handled by ProcgenTreeInstancer
+ * using TSLImpostorMaterial directly. This class exists for potential future use
+ * but is not integrated into the main rendering pipeline.
+ * For rocks/plants, use AtlasedRockPlantImpostorManager instead.
  */
 
 import THREE, {
@@ -23,6 +28,12 @@ import THREE, {
   uv,
   attribute,
   texture,
+  normalize,
+  dot,
+  clamp,
+  pow,
+  cameraPosition,
+  positionWorld,
   MeshBasicNodeMaterial,
   DataArrayTexture,
 } from "../../../extras/three/three";
@@ -39,11 +50,13 @@ import type { ImpostorBakeResult } from "@hyperscape/impostor";
 // ============================================================================
 
 export const ATLASED_IMPOSTOR_CONFIG = {
+  /** 32 slots for tree presets with LRU eviction */
   MAX_SLOTS: 32,
   ATLAS_SIZE: 1024,
   GRID_SIZE_X: 16,
   GRID_SIZE_Y: 8,
   MAX_INSTANCES: 8000,
+  /** Eviction delay for slot recycling */
   SLOT_EVICTION_DELAY_MS: 5000,
 } as const;
 
@@ -125,6 +138,11 @@ export class AtlasedImpostorManager {
   private uFaceIndices: ReturnType<typeof uniform> | null = null;
   private uFaceWeights: ReturnType<typeof uniform> | null = null;
 
+  // Lighting uniforms (synced from Environment system)
+  private uLightDir: ReturnType<typeof uniform> | null = null;
+  private uLightColor: ReturnType<typeof uniform> | null = null;
+  private uAmbientColor: ReturnType<typeof uniform> | null = null;
+
   // Stats & callbacks
   private stats = {
     slotsUsed: 0,
@@ -187,6 +205,8 @@ export class AtlasedImpostorManager {
     const pixelCount = ATLAS_SIZE * ATLAS_SIZE * 4 * MAX_SLOTS;
 
     // Shared texture config
+    // CRITICAL: Mark all textures as LINEAR to prevent WebGPU auto-decode
+    // The shader handles gamma decode/encode manually for consistent results
     const configureTexture = (tex: THREE.DataArrayTexture) => {
       tex.format = THREE.RGBAFormat;
       tex.type = THREE.UnsignedByteType;
@@ -195,6 +215,7 @@ export class AtlasedImpostorManager {
       tex.wrapS = THREE.ClampToEdgeWrapping;
       tex.wrapT = THREE.ClampToEdgeWrapping;
       tex.generateMipmaps = false;
+      tex.colorSpace = THREE.LinearSRGBColorSpace; // Prevent auto-decode
       tex.needsUpdate = true;
     };
 
@@ -265,8 +286,14 @@ export class AtlasedImpostorManager {
     const uAlphaThreshold = uniform(float(0.5));
     const instanceSlot = attribute("instanceSlot", "float");
     const atlasArrayTex = this.atlasArray!;
+    const normalArrayTex = this.normalAtlasArray!;
 
-    // Convert flat index to grid coords
+    // Lighting uniforms - synced from world Environment system
+    this.uLightDir = uniform(vec3(0.5, 0.8, 0.3));
+    this.uLightColor = uniform(vec3(1, 1, 1));
+    this.uAmbientColor = uniform(vec3(0.4, 0.45, 0.5));
+
+    // Convert flat octahedral index to grid coords
     const flatToCoords = Fn(([idx]: [ReturnType<typeof float>]) => {
       const row = floor(div(idx, uGridSize.x));
       const col = sub(idx, mul(row, uGridSize.x));
@@ -277,33 +304,107 @@ export class AtlasedImpostorManager {
       const billboardUV = uv();
       const slotLayer = floor(instanceSlot);
 
+      // Get the 3 octahedral face cells to blend
       const cellA = flatToCoords(this.uFaceIndices!.x);
       const cellB = flatToCoords(this.uFaceIndices!.y);
       const cellC = flatToCoords(this.uFaceIndices!.z);
 
+      // Compute UVs within atlas grid
       const uvA = div(add(cellA, billboardUV), uGridSize);
       const uvB = div(add(cellB, billboardUV), uGridSize);
       const uvC = div(add(cellC, billboardUV), uGridSize);
 
-      const colorA = texture(atlasArrayTex, vec3(uvA.x, uvA.y, slotLayer));
-      const colorB = texture(atlasArrayTex, vec3(uvB.x, uvB.y, slotLayer));
-      const colorC = texture(atlasArrayTex, vec3(uvC.x, uvC.y, slotLayer));
+      // Sample color atlas (DataArrayTexture - use .depth() for layer)
+      const colorA = texture(atlasArrayTex, uvA).depth(slotLayer);
+      const colorB = texture(atlasArrayTex, uvB).depth(slotLayer);
+      const colorC = texture(atlasArrayTex, uvC).depth(slotLayer);
 
-      // Alpha-weighted blending
+      // Sample normal atlas
+      const normalA = texture(normalArrayTex, uvA).depth(slotLayer);
+      const normalB = texture(normalArrayTex, uvB).depth(slotLayer);
+      const normalC = texture(normalArrayTex, uvC).depth(slotLayer);
+
+      // Alpha-weighted blending for smooth octahedral transitions
       const wA = mul(this.uFaceWeights!.x, colorA.a);
       const wB = mul(this.uFaceWeights!.y, colorB.a);
       const wC = mul(this.uFaceWeights!.z, colorC.a);
-      const total = add(add(wA, wB), wC);
+      const totalWeight = add(add(wA, wB), wC);
 
-      const nA = div(wA, total);
-      const nB = div(wB, total);
-      const nC = div(wC, total);
+      // Normalize weights
+      const nA = div(wA, totalWeight);
+      const nB = div(wB, totalWeight);
+      const nC = div(wC, totalWeight);
 
-      const blended = add(
-        add(mul(colorA, nA), mul(colorB, nB)),
-        mul(colorC, nC),
+      // Blend albedo color (still in sRGB-encoded form)
+      const albedoSRGB = add(
+        add(mul(colorA.xyz, nA), mul(colorB.xyz, nB)),
+        mul(colorC.xyz, nC),
       );
-      return vec4(blended.rgb, total);
+
+      // Decode sRGB to linear for lighting calculations
+      const albedoLinear = pow(albedoSRGB, vec3(2.2, 2.2, 2.2));
+
+      // Blend normals (stored as 0-1, decode to -1 to 1)
+      const blendedNormalEncoded = add(
+        add(mul(normalA.xyz, nA), mul(normalB.xyz, nB)),
+        mul(normalC.xyz, nC),
+      );
+      // Decode: normal = encoded * 2 - 1
+      const viewNormal = normalize(
+        sub(mul(blendedNormalEncoded, float(2)), vec3(1, 1, 1)),
+      );
+
+      // Transform normal from view space to world space
+      // N = view direction (from object toward camera)
+      // T = tangent (right in view) = cross(worldUp, N)
+      // B = bitangent (up in view) = cross(N, T)
+      const N = normalize(sub(cameraPosition, positionWorld));
+      const worldUp = vec3(0, 1, 0);
+      // T = cross(worldUp, N) - right direction in world space
+      const T = normalize(
+        vec3(
+          sub(mul(worldUp.y, N.z), mul(worldUp.z, N.y)),
+          sub(mul(worldUp.z, N.x), mul(worldUp.x, N.z)),
+          sub(mul(worldUp.x, N.y), mul(worldUp.y, N.x)),
+        ),
+      );
+      // B = cross(N, T) - up direction in view space
+      const B = normalize(
+        vec3(
+          sub(mul(N.y, T.z), mul(N.z, T.y)),
+          sub(mul(N.z, T.x), mul(N.x, T.z)),
+          sub(mul(N.x, T.y), mul(N.y, T.x)),
+        ),
+      );
+      // Transform: worldNormal = T * viewNormal.x + B * viewNormal.y + N * viewNormal.z
+      const worldNormal = normalize(
+        add(
+          add(mul(T, viewNormal.x), mul(B, viewNormal.y)),
+          mul(N, viewNormal.z),
+        ),
+      );
+
+      // Simple Lambert diffuse lighting (N dot L)
+      const L = normalize(this.uLightDir!);
+      const NdotL = dot(worldNormal, L);
+      // Half-Lambert for softer look on trees
+      const diffuseFactor = add(mul(NdotL, float(0.5)), float(0.5));
+
+      // Final lighting = ambient + diffuse * lightColor (in linear space)
+      const lighting = add(
+        this.uAmbientColor!,
+        mul(this.uLightColor!, diffuseFactor),
+      );
+
+      // Apply lighting to linear albedo
+      const litColorLinear = mul(albedoLinear, lighting);
+
+      // Clamp to prevent HDR blowout
+      const clampedLinear = clamp(litColorLinear, vec3(0, 0, 0), vec3(1, 1, 1));
+
+      // Output LINEAR values - the renderer handles sRGB encoding automatically
+      // (removing manual pow(0.4545) to avoid double gamma correction)
+      return vec4(clampedLinear, totalWeight);
     })();
 
     material.alphaTestNode = uAlphaThreshold;
@@ -467,41 +568,159 @@ export class AtlasedImpostorManager {
     return oldest.index;
   }
 
+  /**
+   * Check if slots are available for a new preset.
+   */
+  hasAvailableSlot(): boolean {
+    return this.slots.some((s) => s.presetId === null);
+  }
+
+  /**
+   * Get count of used slots.
+   */
+  getUsedSlotCount(): number {
+    return this.slots.filter((s) => s.presetId !== null).length;
+  }
+
   private uploadAtlasToSlot(presetId: string, slotIndex: number): void {
     const preset = this.presets.get(presetId);
-    const renderTarget = preset?.bakeResult?.renderTarget;
-    if (!renderTarget) {
-      console.warn(`[AtlasedImpostorManager] No render target for ${presetId}`);
+    if (!preset?.bakeResult) {
+      console.warn(`[AtlasedImpostorManager] No bake result for ${presetId}`);
       return;
     }
 
-    const graphics = this.world.graphics as
-      | { renderer?: THREE.WebGPURenderer }
-      | undefined;
-    const renderer = graphics?.renderer;
-    if (!renderer) {
-      console.warn(`[AtlasedImpostorManager] No renderer`);
-      return;
-    }
+    const {
+      renderTarget,
+      atlasTexture,
+      normalRenderTarget,
+      normalAtlasTexture,
+    } = preset.bakeResult;
 
-    const normalRT = preset?.bakeResult?.normalRenderTarget;
+    // Diagnostic: log what we have
+    console.log(
+      `[AtlasedImpostorManager] Upload ${presetId} to slot ${slotIndex}: ` +
+        `hasRT=${renderTarget !== null}, hasNormalRT=${normalRenderTarget !== undefined && normalRenderTarget !== null}, ` +
+        `hasTex=${atlasTexture !== undefined}, hasNormalTex=${normalAtlasTexture !== undefined}`,
+    );
 
-    this.readAndUploadAtlas(renderer, renderTarget, slotIndex, "albedo")
-      .then(() =>
-        normalRT
-          ? this.readAndUploadAtlas(renderer, normalRT, slotIndex, "normal")
-          : null,
-      )
-      .then(() => {
-        this.slots[slotIndex].loaded = true;
-        console.log(
-          `[AtlasedImpostorManager] Uploaded slot ${slotIndex} (${presetId})`,
+    // When loaded from IndexedDB cache, renderTarget is null but atlasTexture exists
+    // We need to handle both cases: fresh bake (renderTarget) and cached (atlasTexture)
+    const hasRenderTarget = renderTarget !== null;
+
+    if (hasRenderTarget) {
+      // Fresh bake - read from render targets
+      const graphics = this.world.graphics as
+        | { renderer?: THREE.WebGPURenderer }
+        | undefined;
+      const renderer = graphics?.renderer;
+      if (!renderer) {
+        console.warn(`[AtlasedImpostorManager] No renderer`);
+        return;
+      }
+
+      this.readAndUploadAtlas(renderer, renderTarget, slotIndex, "albedo")
+        .then(() =>
+          normalRenderTarget
+            ? this.readAndUploadAtlas(
+                renderer,
+                normalRenderTarget,
+                slotIndex,
+                "normal",
+              )
+            : null,
+        )
+        .then(() => {
+          this.slots[slotIndex].loaded = true;
+          console.log(
+            `[AtlasedImpostorManager] Uploaded slot ${slotIndex} from render target (${presetId})`,
+          );
+          this.onSlotLoaded?.(slotIndex, presetId);
+        })
+        .catch((err) =>
+          console.error(`[AtlasedImpostorManager] Upload failed:`, err),
         );
-        this.onSlotLoaded?.(slotIndex, presetId);
-      })
-      .catch((err) =>
-        console.error(`[AtlasedImpostorManager] Upload failed:`, err),
+    } else if (atlasTexture) {
+      // Loaded from cache - copy from textures
+      this.uploadTextureToSlot(atlasTexture, slotIndex, "albedo")
+        .then(() =>
+          normalAtlasTexture
+            ? this.uploadTextureToSlot(normalAtlasTexture, slotIndex, "normal")
+            : null,
+        )
+        .then(() => {
+          this.slots[slotIndex].loaded = true;
+          console.log(
+            `[AtlasedImpostorManager] Uploaded slot ${slotIndex} from cached texture (${presetId})`,
+          );
+          this.onSlotLoaded?.(slotIndex, presetId);
+        })
+        .catch((err) =>
+          console.error(`[AtlasedImpostorManager] Texture upload failed:`, err),
+        );
+    } else {
+      console.warn(
+        `[AtlasedImpostorManager] No render target or texture for ${presetId}`,
       );
+    }
+  }
+
+  /**
+   * Upload a cached texture to the atlas array (when loaded from IndexedDB).
+   */
+  private async uploadTextureToSlot(
+    texture: THREE.Texture,
+    slotIndex: number,
+    type: "albedo" | "normal",
+  ): Promise<void> {
+    const { ATLAS_SIZE } = ATLASED_IMPOSTOR_CONFIG;
+    const targetArray =
+      type === "albedo" ? this.atlasArray : this.normalAtlasArray;
+    if (!targetArray) return;
+
+    const data = targetArray.image.data as Uint8Array;
+    const layerOffset = slotIndex * ATLAS_SIZE * ATLAS_SIZE * 4;
+
+    // Get pixel data from texture
+    const canvas = document.createElement("canvas");
+    const texWidth = texture.image?.width ?? ATLAS_SIZE;
+    const texHeight = texture.image?.height ?? ATLAS_SIZE;
+    canvas.width = texWidth;
+    canvas.height = texHeight;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      console.warn(`[AtlasedImpostorManager] Cannot get 2D context`);
+      return;
+    }
+
+    // Draw texture to canvas
+    if (
+      texture.image instanceof HTMLImageElement ||
+      texture.image instanceof HTMLCanvasElement ||
+      texture.image instanceof ImageBitmap
+    ) {
+      ctx.drawImage(texture.image, 0, 0);
+    } else {
+      console.warn(`[AtlasedImpostorManager] Unsupported texture image type`);
+      return;
+    }
+
+    const imageData = ctx.getImageData(0, 0, texWidth, texHeight);
+    const pixels = imageData.data;
+
+    // Copy with Y flip to match render target convention
+    for (let y = 0; y < texHeight && y < ATLAS_SIZE; y++) {
+      for (let x = 0; x < texWidth && x < ATLAS_SIZE; x++) {
+        const srcIdx = ((texHeight - y - 1) * texWidth + x) * 4;
+        const dstIdx = layerOffset + (y * ATLAS_SIZE + x) * 4;
+        data[dstIdx] = pixels[srcIdx];
+        data[dstIdx + 1] = pixels[srcIdx + 1];
+        data[dstIdx + 2] = pixels[srcIdx + 2];
+        data[dstIdx + 3] = pixels[srcIdx + 3];
+      }
+    }
+
+    targetArray.needsUpdate = true;
   }
 
   private async readAndUploadAtlas(
@@ -549,6 +768,36 @@ export class AtlasedImpostorManager {
           Math.max(0, Math.round(Number(result[i]) * 255)),
         );
       }
+    }
+
+    // Diagnostic: count non-zero and non-neutral pixels
+    let nonZeroCount = 0;
+    let nonNeutralNormalCount = 0;
+    const totalPixels = width * height;
+    for (let i = 0; i < pixels.length; i += 4) {
+      const r = pixels[i];
+      const g = pixels[i + 1];
+      const b = pixels[i + 2];
+      const a = pixels[i + 3];
+      if (r > 0 || g > 0 || b > 0 || a > 0) nonZeroCount++;
+      // For normals, check if not neutral (128,128,255)
+      if (type === "normal" && (r !== 128 || g !== 128 || b !== 255)) {
+        nonNeutralNormalCount++;
+      }
+    }
+    const coverage = ((nonZeroCount / totalPixels) * 100).toFixed(1);
+    if (type === "normal") {
+      const normalVariation = (
+        (nonNeutralNormalCount / totalPixels) *
+        100
+      ).toFixed(1);
+      console.log(
+        `[AtlasedImpostorManager] Read ${type} slot ${slotIndex}: ${coverage}% coverage, ${normalVariation}% normal variation`,
+      );
+    } else {
+      console.log(
+        `[AtlasedImpostorManager] Read ${type} slot ${slotIndex}: ${coverage}% coverage`,
+      );
     }
 
     const targetArray =
@@ -691,6 +940,25 @@ export class AtlasedImpostorManager {
     this.stats.instancesVisible = this.instanceCount;
   }
 
+  /**
+   * Update lighting from environment system.
+   */
+  updateLighting(
+    lightDir: THREE.Vector3,
+    lightColor: THREE.Vector3,
+    ambientColor: THREE.Vector3,
+  ): void {
+    // Warn once if uniforms are missing (material not yet created)
+    if (!this.uLightDir || !this.uLightColor || !this.uAmbientColor) {
+      // Uniforms are created when material is created, which happens on init
+      // This is expected early in startup before the instanced mesh exists
+      return;
+    }
+    (this.uLightDir.value as THREE.Vector3).copy(lightDir);
+    (this.uLightColor.value as THREE.Vector3).copy(lightColor);
+    (this.uAmbientColor.value as THREE.Vector3).copy(ambientColor);
+  }
+
   private updateViewSampling(camera: THREE.Camera): void {
     if (!this.raycastMesh || !this.uFaceIndices || !this.uFaceWeights) return;
 
@@ -789,6 +1057,72 @@ export class AtlasedImpostorManager {
       loaded: s.loaded,
       ageMs: Math.round(now - s.lastAccessTime),
     }));
+  }
+
+  /**
+   * Print diagnostic info about atlas state for debugging.
+   */
+  printDiagnostics(): void {
+    const { ATLAS_SIZE } = ATLASED_IMPOSTOR_CONFIG;
+    console.log("=== AtlasedImpostorManager Diagnostics ===");
+    console.log(
+      `Instances: ${this.instanceCount}/${ATLASED_IMPOSTOR_CONFIG.MAX_INSTANCES}`,
+    );
+    console.log(`Presets registered: ${this.presets.size}`);
+    console.log(`Slots used: ${this.stats.slotsUsed}/${this.stats.slotsTotal}`);
+    console.log(
+      `Lighting uniforms: lightDir=${!!this.uLightDir}, lightColor=${!!this.uLightColor}, ambient=${!!this.uAmbientColor}`,
+    );
+
+    // Check atlas array content
+    if (this.atlasArray) {
+      const data = this.atlasArray.image.data as Uint8Array;
+      let nonZeroLayers = 0;
+      for (let layer = 0; layer < ATLASED_IMPOSTOR_CONFIG.MAX_SLOTS; layer++) {
+        const offset = layer * ATLAS_SIZE * ATLAS_SIZE * 4;
+        let hasContent = false;
+        for (
+          let i = 0;
+          i < ATLAS_SIZE * ATLAS_SIZE * 4 && !hasContent;
+          i += 100
+        ) {
+          if (data[offset + i] > 0) hasContent = true;
+        }
+        if (hasContent) nonZeroLayers++;
+      }
+      console.log(`Color atlas: ${nonZeroLayers} layers with content`);
+    }
+
+    if (this.normalAtlasArray) {
+      const data = this.normalAtlasArray.image.data as Uint8Array;
+      let nonNeutralLayers = 0;
+      for (let layer = 0; layer < ATLASED_IMPOSTOR_CONFIG.MAX_SLOTS; layer++) {
+        const offset = layer * ATLAS_SIZE * ATLAS_SIZE * 4;
+        let hasVariation = false;
+        for (
+          let i = 0;
+          i < ATLAS_SIZE * ATLAS_SIZE * 4 && !hasVariation;
+          i += 400
+        ) {
+          const r = data[offset + i];
+          const g = data[offset + i + 1];
+          const b = data[offset + i + 2];
+          // Check if not neutral (128,128,255)
+          if (r !== 128 || g !== 128 || b !== 255) hasVariation = true;
+        }
+        if (hasVariation) nonNeutralLayers++;
+      }
+      console.log(
+        `Normal atlas: ${nonNeutralLayers} layers with normal variation`,
+      );
+    }
+
+    // List loaded slots
+    const loadedSlots = this.slots.filter((s) => s.loaded);
+    console.log(
+      `Loaded slots: ${loadedSlots.map((s) => `${s.index}:${s.presetId}`).join(", ") || "none"}`,
+    );
+    console.log("==========================================");
   }
 
   dispose(): void {

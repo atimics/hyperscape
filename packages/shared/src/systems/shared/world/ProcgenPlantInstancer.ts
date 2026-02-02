@@ -8,22 +8,18 @@
  * - LOD0 (0-30m): Full detail plant
  * - LOD1 (30-60m): Simplified plant
  * - LOD2 (60-100m): Cross-billboard cards
- * - Impostor (100-150m): Octahedral billboard
+ * - Impostor (100-150m): Atlased octahedral billboard (16 shared slots with rocks)
  * - Culled (150m+): Not rendered
  *
  * Features:
  * - Cross-fade LOD transitions with screen-space dithering
  * - Per-preset instanced meshes
- * - Automatic impostor generation
+ * - Atlased impostor system (16 slots shared with rocks - if exceeded, no impostor)
  */
 
 import THREE from "../../../extras/three/three";
 import type { World } from "../../../core/World";
-import { ImpostorManager, BakePriority } from "../rendering/ImpostorManager";
-import {
-  createTSLImpostorMaterial,
-  type TSLImpostorMaterial,
-} from "@hyperscape/impostor";
+import { AtlasedRockPlantImpostorManager } from "../rendering/AtlasedRockPlantImpostorManager";
 import {
   getPlantVariant,
   ensurePlantVariantsLoaded,
@@ -33,11 +29,17 @@ import {
 // CONFIGURATION
 // ============================================================================
 
+/**
+ * TEMPORARY: Disable all plant impostors.
+ * When true, plants use GPU dissolve fade instead of impostor billboards.
+ * Set to false to re-enable impostor system.
+ */
+const DISABLE_IMPOSTORS = true;
+
 const MAX_INSTANCES_PER_PRESET = 300;
 const LOD_FADE_MS = 200;
 const LOD_UPDATE_MS = 100;
 const LOD_UPDATES_PER_FRAME = 40;
-const IMPOSTOR_SIZE = 256;
 const HYSTERESIS_SQ = 9; // 3m buffer
 
 const LOD_DIST = { lod1: 30, lod2: 60, impostor: 100, cull: 150 };
@@ -59,7 +61,8 @@ interface PlantInstance {
   rotation: number;
   scale: number;
   currentLOD: number;
-  lodIndices: [number, number, number, number];
+  lodIndices: [number, number, number]; // LOD0, LOD1, LOD2 (impostor handled by atlas)
+  hasImpostorSlot: boolean; // Whether this preset got an impostor slot
   transition: { from: number; to: number; start: number } | null;
   radius: number;
 }
@@ -76,24 +79,12 @@ interface MeshData {
   dirty: boolean;
 }
 
-interface ImpostorMeshData {
-  geometry: THREE.BufferGeometry;
-  material: TSLImpostorMaterial;
-  mesh: THREE.InstancedMesh;
-  idxToId: Map<number, string>;
-  freeIndices: number[]; // Recycled indices available for reuse
-  nextIdx: number;
-  count: number;
-  dirty: boolean;
-  width: number;
-  height: number;
-}
-
 interface PresetMeshes {
   lod0: MeshData | null;
   lod1: MeshData | null;
   lod2: MeshData | null;
-  impostor: ImpostorMeshData | null;
+  /** Whether this preset has an impostor slot in the atlased manager */
+  hasImpostorSlot: boolean;
   dimensions: { width: number; height: number; depth: number };
   leafColor: THREE.Color;
 }
@@ -113,7 +104,7 @@ export class ProcgenPlantInstancer {
   private world: World;
   private scene: THREE.Scene;
   private camera: THREE.Camera;
-  private impostorManager: ImpostorManager;
+  private atlasedImpostorManager: AtlasedRockPlantImpostorManager;
 
   private instances: Map<string, PlantInstance> = new Map();
   private presetMeshes: Map<string, PresetMeshes> = new Map();
@@ -127,11 +118,21 @@ export class ProcgenPlantInstancer {
   private tempQuat = new THREE.Quaternion();
   private tempScale = new THREE.Vector3();
 
+  // Lighting sync for impostors
+  private _lastLightUpdate = 0;
+  private _lightDir = new THREE.Vector3(0.5, 0.8, 0.3);
+  private _lightColor = new THREE.Vector3(1, 1, 1);
+  private _ambientColor = new THREE.Vector3(0.3, 0.35, 0.4);
+  private _lightingLoggedOnce = false;
+
   private constructor(world: World) {
     this.world = world;
     this.scene = world.stage?.scene as THREE.Scene;
     this.camera = world.camera;
-    this.impostorManager = ImpostorManager.getInstance(world);
+    this.atlasedImpostorManager =
+      AtlasedRockPlantImpostorManager.getInstance(world);
+    // Initialize the atlased manager
+    void this.atlasedImpostorManager.init();
   }
 
   /**
@@ -175,7 +176,8 @@ export class ProcgenPlantInstancer {
       rotation,
       scale,
       currentLOD: 4,
-      lodIndices: [-1, -1, -1, -1],
+      lodIndices: [-1, -1, -1], // LOD0, LOD1, LOD2 (impostor handled by atlas)
+      hasImpostorSlot: presetData.hasImpostorSlot,
       transition: null,
       radius,
     };
@@ -183,7 +185,7 @@ export class ProcgenPlantInstancer {
     this.instances.set(id, instance);
 
     const distSq = this.camera.position.distanceToSquared(position);
-    const targetLOD = this.getLODForDistance(distSq);
+    const targetLOD = this.getLODForDistance(distSq, instance.hasImpostorSlot);
 
     await this.setInstanceLOD(instance, targetLOD, false);
     this.updateQueue.push(id);
@@ -200,7 +202,11 @@ export class ProcgenPlantInstancer {
     this.removeFromLODMesh(instance, 0);
     this.removeFromLODMesh(instance, 1);
     this.removeFromLODMesh(instance, 2);
-    this.removeFromImpostorMesh(instance);
+
+    // Remove from atlased impostor manager
+    if (instance.hasImpostorSlot && instance.currentLOD === 3) {
+      this.atlasedImpostorManager.removeInstance(id);
+    }
 
     this.instances.delete(id);
 
@@ -217,6 +223,11 @@ export class ProcgenPlantInstancer {
    */
   update(_deltaTime: number): void {
     if (!this.camera) return;
+
+    // Always update atlased impostor manager (billboarding, view sampling)
+    // and sync lighting - these must happen every frame
+    this.atlasedImpostorManager.update(this.camera);
+    this.syncImpostorLighting();
 
     const now = performance.now();
 
@@ -253,6 +264,9 @@ export class ProcgenPlantInstancer {
       (this.updateIndex + batchSize) % Math.max(1, this.updateQueue.length);
     this.updateTransitions(now);
     this.commitDirtyMeshes();
+
+    // Update atlased impostor manager (handles billboarding and view sampling)
+    this.atlasedImpostorManager.update(this.camera);
   }
 
   /**
@@ -275,7 +289,7 @@ export class ProcgenPlantInstancer {
       lod0: null,
       lod1: null,
       lod2: null,
-      impostor: null,
+      hasImpostorSlot: false,
       dimensions: variant.dimensions,
       leafColor: variant.leafColor,
     };
@@ -317,9 +331,21 @@ export class ProcgenPlantInstancer {
       }
     }
 
-    // Bake impostor
-    if (lod0Mesh) {
-      await this.bakeImpostor(presetName, lod0Mesh, presetData);
+    // Register with atlased impostor manager (may fail if all 16 slots full)
+    // Skip when DISABLE_IMPOSTORS is true - plants fade out via GPU dissolve shader
+    if (!DISABLE_IMPOSTORS && lod0Mesh) {
+      presetData.hasImpostorSlot =
+        await this.atlasedImpostorManager.registerPreset(
+          presetName,
+          "plant",
+          lod0Mesh,
+        );
+
+      if (!presetData.hasImpostorSlot) {
+        console.warn(
+          `[ProcgenPlantInstancer] No impostor slot for ${presetName} - will cull at impostor distance`,
+        );
+      }
     }
 
     this.presetMeshes.set(presetName, presetData);
@@ -386,83 +412,30 @@ export class ProcgenPlantInstancer {
   }
 
   /**
-   * Bake an impostor for a preset.
+   * Get target LOD for distance squared.
+   * Forces impostor mode (LOD 3) when rendering for reflection camera.
+   * If no impostor slot, culls at impostor distance.
+   *
+   * NOTE: When DISABLE_IMPOSTORS is true, skip impostor LOD - plants fade out via GPU dissolve shader.
    */
-  private async bakeImpostor(
-    presetName: string,
-    mesh: THREE.Mesh,
-    presetData: PresetMeshes,
-  ): Promise<void> {
-    const impostorKey = `plant_${presetName}`;
-
-    const result = await this.impostorManager.getOrCreate(impostorKey, mesh, {
-      atlasSize: IMPOSTOR_SIZE,
-      gridSizeX: 8,
-      gridSizeY: 8,
-      hemisphere: true,
-      category: "plant",
-      priority: BakePriority.LOW,
-    });
-
-    if (!result || !result.atlasTexture) {
-      console.warn(
-        `[ProcgenPlantInstancer] Failed to bake impostor for ${presetName}`,
-      );
-      return;
+  private getLODForDistance(distSq: number, hasImpostorSlot: boolean): number {
+    // When DISABLE_IMPOSTORS is true, skip impostor stage - use dissolve fade instead
+    if (DISABLE_IMPOSTORS) {
+      if (distSq >= LOD_DIST_SQ.impostor) return 4; // Cull at impostor distance
+      if (distSq >= LOD_DIST_SQ.lod2) return 2;
+      if (distSq >= LOD_DIST_SQ.lod1) return 1;
+      return 0;
     }
 
-    const material = createTSLImpostorMaterial({
-      atlasTexture: result.atlasTexture,
-      gridSizeX: result.gridSizeX,
-      gridSizeY: result.gridSizeY,
-      transparent: true,
-      depthWrite: true,
-    });
-
-    const bbox = new THREE.Box3().setFromObject(mesh);
-    const size = new THREE.Vector3();
-    bbox.getSize(size);
-
-    const impostorWidth = Math.max(size.x, size.z);
-    const impostorHeight = size.y;
-
-    const geo = new THREE.PlaneGeometry(impostorWidth, impostorHeight);
-    geo.translate(0, impostorHeight / 2, 0);
-
-    const impostorMesh = new THREE.InstancedMesh(
-      geo,
-      material,
-      MAX_INSTANCES_PER_PRESET,
-    );
-    impostorMesh.name = `Plant_${presetName}_Impostor`;
-    impostorMesh.count = 0;
-    impostorMesh.frustumCulled = false;
-    impostorMesh.castShadow = false;
-    impostorMesh.receiveShadow = false;
-    impostorMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-
-    this.scene.add(impostorMesh);
-
-    presetData.impostor = {
-      geometry: geo,
-      material,
-      mesh: impostorMesh,
-      idxToId: new Map(),
-      freeIndices: [],
-      nextIdx: 0,
-      count: 0,
-      dirty: false,
-      width: impostorWidth,
-      height: impostorHeight,
-    };
-  }
-
-  /**
-   * Get target LOD for distance squared.
-   */
-  private getLODForDistance(distSq: number): number {
+    // Force impostor mode when rendering for reflection camera (performance)
+    if (this.world.isRenderingReflection) {
+      return hasImpostorSlot ? 3 : 4; // Cull if no impostor slot
+    }
     if (distSq >= LOD_DIST_SQ.cull) return 4;
-    if (distSq >= LOD_DIST_SQ.impostor) return 3;
+    if (distSq >= LOD_DIST_SQ.impostor) {
+      // If no impostor slot, cull instead of showing impostor
+      return hasImpostorSlot ? 3 : 4;
+    }
     if (distSq >= LOD_DIST_SQ.lod2) return 2;
     if (distSq >= LOD_DIST_SQ.lod1) return 1;
     return 0;
@@ -475,7 +448,7 @@ export class ProcgenPlantInstancer {
     instance: PlantInstance,
     distSq: number,
   ): number {
-    const targetLOD = this.getLODForDistance(distSq);
+    const targetLOD = this.getLODForDistance(distSq, instance.hasImpostorSlot);
     const currentLOD = instance.currentLOD;
 
     if (targetLOD < currentLOD) return targetLOD;
@@ -527,12 +500,28 @@ export class ProcgenPlantInstancer {
       const progress = Math.min(1, elapsed / LOD_FADE_MS);
 
       if (progress >= 1) {
-        this.removeFromLODMesh(instance, instance.transition.from);
+        // Transition complete - remove from old LOD
+        const fromLOD = instance.transition.from;
+        if (fromLOD < 3) {
+          this.removeFromLODMesh(instance, fromLOD);
+        } else if (fromLOD === 3 && instance.hasImpostorSlot) {
+          // Remove from atlased impostor manager
+          this.atlasedImpostorManager.removeInstance(instance.id);
+        }
         this.setInstanceFade(instance, instance.currentLOD, 1);
         instance.transition = null;
       } else {
-        this.setInstanceFade(instance, instance.transition.from, 1 - progress);
-        this.setInstanceFade(instance, instance.transition.to, progress);
+        // Update fades (only for LOD0-2, impostor doesn't support fade)
+        if (instance.transition.from < 3) {
+          this.setInstanceFade(
+            instance,
+            instance.transition.from,
+            1 - progress,
+          );
+        }
+        if (instance.transition.to < 3) {
+          this.setInstanceFade(instance, instance.transition.to, progress);
+        }
       }
     }
   }
@@ -580,21 +569,15 @@ export class ProcgenPlantInstancer {
         meshData.mesh.instanceMatrix.needsUpdate = true;
         meshData.dirty = true;
       }
-    } else if (lod === 3 && presetData.impostor) {
-      const idx = this.addToImpostorMesh(presetData.impostor, instance.id);
-      instance.lodIndices[3] = idx;
-
-      this.tempPosition.copy(instance.position);
-      this.tempQuat.setFromAxisAngle(
-        new THREE.Vector3(0, 1, 0),
+    } else if (lod === 3 && instance.hasImpostorSlot) {
+      // Impostor - add to atlased manager
+      this.atlasedImpostorManager.addInstance(
+        instance.presetName,
+        instance.id,
+        instance.position,
         instance.rotation,
+        instance.scale,
       );
-      this.tempScale.set(instance.scale, instance.scale, instance.scale);
-      this.tempMatrix.compose(this.tempPosition, this.tempQuat, this.tempScale);
-
-      presetData.impostor.mesh.setMatrixAt(idx, this.tempMatrix);
-      presetData.impostor.mesh.instanceMatrix.needsUpdate = true;
-      presetData.impostor.dirty = true;
     }
   }
 
@@ -606,19 +589,18 @@ export class ProcgenPlantInstancer {
     lod: number,
     fade: number,
   ): void {
+    if (lod >= 3) return; // Impostor handled by atlased manager
     const presetData = this.presetMeshes.get(instance.presetName);
     if (!presetData) return;
 
     const idx = instance.lodIndices[lod];
     if (idx < 0) return;
 
-    if (lod < 3) {
-      const meshData = presetData[LOD_KEYS[lod]];
-      if (meshData && idx < meshData.fadeAttr.count) {
-        meshData.fadeAttr.setX(idx, fade);
-        meshData.fadeAttr.needsUpdate = true;
-        meshData.dirty = true;
-      }
+    const meshData = presetData[LOD_KEYS[lod]];
+    if (meshData && idx < meshData.fadeAttr.count) {
+      meshData.fadeAttr.setX(idx, fade);
+      meshData.fadeAttr.needsUpdate = true;
+      meshData.dirty = true;
     }
   }
 
@@ -638,63 +620,27 @@ export class ProcgenPlantInstancer {
   }
 
   /**
-   * Add instance to impostor mesh, reusing freed indices when available.
-   */
-  private addToImpostorMesh(meshData: ImpostorMeshData, id: string): number {
-    const idx =
-      meshData.freeIndices.length > 0
-        ? meshData.freeIndices.pop()!
-        : meshData.nextIdx++;
-
-    meshData.idxToId.set(idx, id);
-    meshData.count = Math.max(meshData.count, idx + 1);
-    meshData.mesh.count = meshData.count;
-    return idx;
-  }
-
-  /**
    * Remove instance from a LOD mesh, recycling its index.
    */
   private removeFromLODMesh(instance: PlantInstance, lod: number): void {
+    if (lod >= 3) return; // Impostor handled by atlased manager
     const idx = instance.lodIndices[lod];
     if (idx < 0) return;
 
     const presetData = this.presetMeshes.get(instance.presetName);
     if (!presetData) return;
 
-    if (lod < 3) {
-      const meshData = presetData[LOD_KEYS[lod]];
-      if (meshData) {
-        this.tempMatrix.makeScale(0, 0, 0);
-        meshData.mesh.setMatrixAt(idx, this.tempMatrix);
-        meshData.mesh.instanceMatrix.needsUpdate = true;
-        meshData.idxToId.delete(idx);
-        meshData.freeIndices.push(idx); // Recycle the index
-        meshData.dirty = true;
-      }
+    const meshData = presetData[LOD_KEYS[lod]];
+    if (meshData) {
+      this.tempMatrix.makeScale(0, 0, 0);
+      meshData.mesh.setMatrixAt(idx, this.tempMatrix);
+      meshData.mesh.instanceMatrix.needsUpdate = true;
+      meshData.idxToId.delete(idx);
+      meshData.freeIndices.push(idx); // Recycle the index
+      meshData.dirty = true;
     }
 
     instance.lodIndices[lod] = -1;
-  }
-
-  /**
-   * Remove instance from impostor mesh, recycling its index.
-   */
-  private removeFromImpostorMesh(instance: PlantInstance): void {
-    const idx = instance.lodIndices[3];
-    if (idx < 0) return;
-
-    const presetData = this.presetMeshes.get(instance.presetName);
-    if (!presetData?.impostor) return;
-
-    this.tempMatrix.makeScale(0, 0, 0);
-    presetData.impostor.mesh.setMatrixAt(idx, this.tempMatrix);
-    presetData.impostor.mesh.instanceMatrix.needsUpdate = true;
-    presetData.impostor.idxToId.delete(idx);
-    presetData.impostor.freeIndices.push(idx); // Recycle the index
-    presetData.impostor.dirty = true;
-
-    instance.lodIndices[3] = -1;
   }
 
   /**
@@ -714,10 +660,7 @@ export class ProcgenPlantInstancer {
         presetData.lod2.mesh.instanceMatrix.needsUpdate = true;
         presetData.lod2.dirty = false;
       }
-      if (presetData.impostor?.dirty) {
-        presetData.impostor.mesh.instanceMatrix.needsUpdate = true;
-        presetData.impostor.dirty = false;
-      }
+      // Note: Impostor rendering handled by AtlasedRockPlantImpostorManager
     }
   }
 
@@ -729,40 +672,68 @@ export class ProcgenPlantInstancer {
   }
 
   /**
-   * Pre-warm the impostor cache from IndexedDB for known presets.
-   * Call this on startup to avoid rebaking cached impostors.
+   * Sync impostor lighting with scene's sun light.
    */
-  async preWarmImpostorCache(presets: string[]): Promise<number> {
-    let loadedCount = 0;
-    const startTime = performance.now();
+  private syncImpostorLighting(): void {
+    const now = performance.now();
+    // Only update lighting once per frame (~16ms)
+    if (now - this._lastLightUpdate < 16) return;
+    this._lastLightUpdate = now;
 
-    console.log(
-      `[ProcgenPlantInstancer] Pre-warming impostor cache for ${presets.length} presets...`,
-    );
+    // Get environment system for sun light and hemisphere light
+    const env = this.world.getSystem("environment") as {
+      sunLight?: THREE.DirectionalLight;
+      lightDirection?: THREE.Vector3;
+      hemisphereLight?: THREE.HemisphereLight;
+    } | null;
 
-    for (const presetName of presets) {
-      const impostorKey = `plant_${presetName}`;
-      const cached = await this.impostorManager.preload(impostorKey, {
-        atlasSize: IMPOSTOR_SIZE,
-        gridSizeX: 8,
-        gridSizeY: 8,
-        hemisphere: true,
-      });
+    if (!env?.sunLight) return;
 
-      if (cached) {
-        loadedCount++;
-        console.log(
-          `[ProcgenPlantInstancer] ✅ Loaded cached impostor: ${presetName}`,
-        );
-      }
+    const sun = env.sunLight;
+    // Light direction is negated (light goes FROM direction TO target)
+    if (env.lightDirection) {
+      this._lightDir.copy(env.lightDirection).negate();
+    } else {
+      this._lightDir.set(0.5, 0.8, 0.3);
     }
 
-    const elapsed = Math.round(performance.now() - startTime);
-    console.log(
-      `[ProcgenPlantInstancer] Pre-warm complete: ${loadedCount}/${presets.length} impostors loaded from cache in ${elapsed}ms`,
+    // Scale light color by intensity but clamp to reasonable range
+    // MeshBasicNodeMaterial doesn't do tone mapping, so HDR values cause white blowout
+    const sunIntensity = Math.min(sun.intensity, 1.5);
+    this._lightColor.set(
+      Math.min(sun.color.r * sunIntensity, 1.0),
+      Math.min(sun.color.g * sunIntensity, 1.0),
+      Math.min(sun.color.b * sunIntensity, 1.0),
     );
 
-    return loadedCount;
+    // Get ambient from hemisphere light for proper world lighting sync
+    if (env.hemisphereLight) {
+      const hemi = env.hemisphereLight;
+      const hemiIntensity = Math.min(hemi.intensity, 1.0) * 0.5;
+      this._ambientColor.set(
+        Math.min(hemi.color.r * hemiIntensity, 0.5),
+        Math.min(hemi.color.g * hemiIntensity, 0.5),
+        Math.min(hemi.color.b * hemiIntensity, 0.5),
+      );
+    } else {
+      this._ambientColor.set(0.3, 0.35, 0.4);
+    }
+
+    // Diagnostic: log once when lighting is connected
+    if (!this._lightingLoggedOnce) {
+      console.log(
+        `[ProcgenPlantInstancer] Lighting connected: dir=(${this._lightDir.x.toFixed(2)}, ${this._lightDir.y.toFixed(2)}, ${this._lightDir.z.toFixed(2)}), ` +
+          `color=(${this._lightColor.x.toFixed(2)}, ${this._lightColor.y.toFixed(2)}, ${this._lightColor.z.toFixed(2)})`,
+      );
+      this._lightingLoggedOnce = true;
+    }
+
+    // Update atlased impostor manager lighting
+    this.atlasedImpostorManager.updateLighting(
+      this._lightDir,
+      this._lightColor,
+      this._ambientColor,
+    );
   }
 
   /**
@@ -803,12 +774,7 @@ export class ProcgenPlantInstancer {
         this.scene.remove(presetData.lod2.mesh);
         presetData.lod2.mesh.dispose();
       }
-      if (presetData.impostor) {
-        this.scene.remove(presetData.impostor.mesh);
-        presetData.impostor.mesh.dispose();
-        presetData.impostor.geometry.dispose();
-        presetData.impostor.material.dispose();
-      }
+      // Note: Impostor cleanup handled by AtlasedRockPlantImpostorManager
     }
 
     this.presetMeshes.clear();

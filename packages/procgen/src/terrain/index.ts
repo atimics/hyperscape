@@ -90,3 +90,21 @@ export type {
   // Preset types
   TerrainPreset,
 } from "./types";
+
+// Terrain Shader (TSL material - same as game engine)
+export type {
+  TerrainUniforms,
+  TerrainMaterialOptions,
+} from "./TerrainShaderTSL";
+
+export {
+  TERRAIN_CONSTANTS,
+  generateNoiseTexture,
+  getNoiseTexture,
+  sampleNoiseAtPosition,
+  getGrassiness,
+  calculateSlope,
+  createTerrainMaterial,
+  updateTerrainFog,
+  setTerrainFogEnabled,
+} from "./TerrainShaderTSL";

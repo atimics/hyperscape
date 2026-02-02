@@ -21,6 +21,9 @@ import {
   Download,
   Trash2,
   Upload,
+  Leaf,
+  Sun,
+  Moon,
 } from "lucide-react";
 import React, { useState, useCallback, useMemo, useEffect } from "react";
 
@@ -57,6 +60,14 @@ export const TerrainGenPage: React.FC = () => {
   const [showTowns, setShowTowns] = useState(true);
   const [wireframe, setWireframe] = useState(false);
 
+  // Grass state
+  const [showGrass, setShowGrass] = useState(false);
+  const [grassDensity, setGrassDensity] = useState(5);
+  const [grassHeight, setGrassHeight] = useState(0.4);
+
+  // Time of day (0-24, 12 = noon)
+  const [timeOfDay, setTimeOfDay] = useState(12);
+
   // Saved presets state
   const [savedPresets, setSavedPresets] = useState<TerrainPreset[]>([]);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
@@ -77,6 +88,10 @@ export const TerrainGenPage: React.FC = () => {
       showTowns,
       wireframe,
       showVegetation: false,
+      showGrass,
+      grassDensity,
+      grassHeight,
+      timeOfDay,
     }),
     [
       seed,
@@ -90,6 +105,10 @@ export const TerrainGenPage: React.FC = () => {
       showGrid,
       showTowns,
       wireframe,
+      showGrass,
+      grassDensity,
+      grassHeight,
+      timeOfDay,
     ],
   );
 
@@ -607,6 +626,121 @@ export const TerrainGenPage: React.FC = () => {
                   Wireframe Mode
                 </label>
               </div>
+            </div>
+          </div>
+
+          {/* Time of Day */}
+          <div className="bg-bg-secondary rounded-lg p-4 border border-border-primary">
+            <h3 className="font-semibold text-text-primary mb-4 flex items-center gap-2">
+              {timeOfDay >= 6 && timeOfDay < 18 ? (
+                <Sun size={18} />
+              ) : (
+                <Moon size={18} />
+              )}
+              Time of Day
+            </h3>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-text-secondary mb-2">
+                  Time: {timeOfDay.toFixed(1)}:00 (
+                  {timeOfDay >= 6 && timeOfDay < 18 ? "Day" : "Night"})
+                </label>
+                <input
+                  type="range"
+                  min={0}
+                  max={24}
+                  step={0.5}
+                  value={timeOfDay}
+                  onChange={(e) => setTimeOfDay(parseFloat(e.target.value))}
+                  className="w-full"
+                />
+                <div className="flex justify-between text-xs text-text-secondary mt-1">
+                  <span>Midnight</span>
+                  <span>Noon</span>
+                  <span>Midnight</span>
+                </div>
+              </div>
+
+              {/* Quick time presets */}
+              <div className="flex gap-2 flex-wrap">
+                {[
+                  { label: "🌅 Dawn", time: 6 },
+                  { label: "☀️ Noon", time: 12 },
+                  { label: "🌇 Dusk", time: 18 },
+                  { label: "🌙 Night", time: 0 },
+                ].map(({ label, time }) => (
+                  <button
+                    key={time}
+                    onClick={() => setTimeOfDay(time)}
+                    className={`px-2 py-1 text-xs rounded transition-colors ${
+                      Math.abs(timeOfDay - time) < 2
+                        ? "bg-primary text-white"
+                        : "bg-bg-tertiary text-text-secondary hover:text-text-primary"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Grass Settings */}
+          <div className="bg-bg-secondary rounded-lg p-4 border border-border-primary">
+            <h3 className="font-semibold text-text-primary mb-4 flex items-center gap-2">
+              <Leaf size={18} />
+              Grass
+            </h3>
+
+            <div className="space-y-4">
+              <label className="flex items-center gap-2 text-sm text-text-primary cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showGrass}
+                  onChange={(e) => setShowGrass(e.target.checked)}
+                  className="rounded"
+                />
+                Show Grass
+              </label>
+
+              {showGrass && (
+                <>
+                  <div>
+                    <label className="block text-sm text-text-secondary mb-2">
+                      Density: {grassDensity} per m²
+                    </label>
+                    <input
+                      type="range"
+                      min={1}
+                      max={15}
+                      step={1}
+                      value={grassDensity}
+                      onChange={(e) =>
+                        setGrassDensity(parseInt(e.target.value))
+                      }
+                      className="w-full"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm text-text-secondary mb-2">
+                      Height: {grassHeight.toFixed(2)}m
+                    </label>
+                    <input
+                      type="range"
+                      min={0.1}
+                      max={1.0}
+                      step={0.05}
+                      value={grassHeight}
+                      onChange={(e) =>
+                        setGrassHeight(parseFloat(e.target.value))
+                      }
+                      className="w-full"
+                    />
+                  </div>
+                </>
+              )}
             </div>
           </div>
 

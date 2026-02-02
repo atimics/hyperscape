@@ -100,8 +100,10 @@ export class MobNPCSpawnerSystem extends SystemBase {
     // NPCs like bank clerks, shopkeepers should be available from the start
     if (this.world.isServer) {
       await this.spawnAllNPCsFromManifest();
+      // Spawn a default test goblin near origin for testing combat
+      await this.spawnDefaultMob();
     }
-    // Mobs are spawned reactively as terrain tiles generate via world-areas.json
+    // Additional mobs are spawned reactively as terrain tiles generate via biomes.json
   }
 
   /**
@@ -202,7 +204,8 @@ export class MobNPCSpawnerSystem extends SystemBase {
   }
 
   /**
-   * Spawn a default test mob for initial world content
+   * Spawn default test mobs for initial world content
+   * Spawns multiple goblins around the spawn area for testing
    */
   private async spawnDefaultMob(): Promise<void> {
     // Wait for EntityManager to be ready
@@ -222,95 +225,115 @@ export class MobNPCSpawnerSystem extends SystemBase {
       return;
     }
 
-    // Use reasonable Y position (server will adjust to terrain)
-    const y = 40;
-    const spawnPosition = { x: 2, y: y, z: 2 };
-
     // Get goblin data from manifest - fail fast if not found
     const goblinData = getNPCById("goblin");
 
     if (!goblinData) {
-      throw new Error(
-        `[MobNPCSpawnerSystem] NPC manifest not found for 'goblin'. ` +
+      console.error(
+        `[MobNPCSpawnerSystem] ❌ NPC manifest not found for 'goblin'. ` +
           `Ensure npcs.json is loaded and contains this NPC type.`,
       );
+      return;
     }
 
     if (!goblinData.appearance?.modelPath) {
-      throw new Error(
-        `[MobNPCSpawnerSystem] NPC 'goblin' has no modelPath defined in manifest.`,
-      );
-    }
-
-    // Build mob config from manifest data
-    const mobConfig = {
-      id: "default_goblin_1",
-      type: EntityType.MOB,
-      name: goblinData.name,
-      position: spawnPosition,
-      rotation: { x: 0, y: 0, z: 0, w: 1 },
-      scale: {
-        x: goblinData.appearance.scale ?? 1,
-        y: goblinData.appearance.scale ?? 1,
-        z: goblinData.appearance.scale ?? 1,
-      },
-      visible: true,
-      interactable: true,
-      interactionType: InteractionType.ATTACK,
-      interactionDistance: 10,
-      description: goblinData.description,
-      model: goblinData.appearance.modelPath,
-      properties: {
-        movementComponent: null,
-        combatComponent: null,
-        healthComponent: null,
-        visualComponent: null,
-        health: {
-          current: goblinData.stats.health,
-          max: goblinData.stats.health,
-        },
-        level: goblinData.stats.level,
-      },
-      // MobEntity specific - from manifest
-      mobType: goblinData.id,
-      level: goblinData.stats.level,
-      currentHealth: goblinData.stats.health,
-      maxHealth: goblinData.stats.health,
-      attack: goblinData.stats.attack,
-      attackPower: goblinData.stats.strength,
-      defense: goblinData.stats.defense,
-      attackSpeedTicks: goblinData.combat.attackSpeedTicks,
-      moveSpeed: goblinData.movement.speed,
-      xpReward: goblinData.combat.xpReward,
-      lootTable: goblinData.drops.common.map((drop) => ({
-        itemId: drop.itemId,
-        minQuantity: drop.minQuantity,
-        maxQuantity: drop.maxQuantity,
-        chance: drop.chance,
-      })),
-      spawnPoint: spawnPosition,
-      aggressive: goblinData.combat.aggressive,
-      retaliates: goblinData.combat.retaliates,
-      attackable: goblinData.combat.attackable ?? true,
-      movementType: goblinData.movement.type,
-      aggroRange: goblinData.combat.aggroRange,
-      combatRange: goblinData.combat.combatRange,
-      wanderRadius: goblinData.movement.wanderRadius,
-      aiState: "idle",
-      targetPlayerId: null,
-      lastAttackTime: 0,
-      deathTime: null,
-      respawnTime: goblinData.combat.respawnTime,
-    };
-
-    try {
-      await entityManager.spawnEntity(mobConfig);
-    } catch (err) {
       console.error(
-        "[MobNPCSpawnerSystem] ❌ Error spawning default goblin:",
-        err,
+        `[MobNPCSpawnerSystem] ❌ NPC 'goblin' has no modelPath defined in manifest.`,
       );
+      return;
     }
+
+    // Spawn multiple test goblins around the spawn area
+    const testPositions = [
+      { x: 8, z: 8 }, // Near spawn, north-east
+      { x: -8, z: 8 }, // Near spawn, north-west
+      { x: 12, z: -5 }, // East of spawn
+      { x: -12, z: -5 }, // West of spawn
+      { x: 15, z: 15 }, // Further north-east
+    ];
+
+    let spawnedCount = 0;
+    for (let i = 0; i < testPositions.length; i++) {
+      const pos = testPositions[i];
+      // Get terrain height at position
+      const terrainHeight = this.terrainSystem.getHeightAt(pos.x, pos.z);
+      const spawnPosition = { x: pos.x, y: terrainHeight, z: pos.z };
+
+      // Build mob config from manifest data
+      const mobConfig = {
+        id: `default_goblin_${i + 1}`,
+        type: EntityType.MOB,
+        name: goblinData.name,
+        position: spawnPosition,
+        rotation: { x: 0, y: 0, z: 0, w: 1 },
+        scale: {
+          x: goblinData.appearance.scale ?? 1,
+          y: goblinData.appearance.scale ?? 1,
+          z: goblinData.appearance.scale ?? 1,
+        },
+        visible: true,
+        interactable: true,
+        interactionType: InteractionType.ATTACK,
+        interactionDistance: 10,
+        description: goblinData.description,
+        model: goblinData.appearance.modelPath,
+        properties: {
+          movementComponent: null,
+          combatComponent: null,
+          healthComponent: null,
+          visualComponent: null,
+          health: {
+            current: goblinData.stats.health,
+            max: goblinData.stats.health,
+          },
+          level: goblinData.stats.level,
+        },
+        // MobEntity specific - from manifest
+        mobType: goblinData.id,
+        level: goblinData.stats.level,
+        currentHealth: goblinData.stats.health,
+        maxHealth: goblinData.stats.health,
+        attack: goblinData.stats.attack,
+        attackPower: goblinData.stats.strength,
+        defense: goblinData.stats.defense,
+        attackSpeedTicks: goblinData.combat.attackSpeedTicks,
+        moveSpeed: goblinData.movement.speed,
+        xpReward: goblinData.combat.xpReward,
+        lootTable: goblinData.drops.common.map((drop) => ({
+          itemId: drop.itemId,
+          minQuantity: drop.minQuantity,
+          maxQuantity: drop.maxQuantity,
+          chance: drop.chance,
+        })),
+        spawnPoint: spawnPosition,
+        aggressive: goblinData.combat.aggressive,
+        retaliates: goblinData.combat.retaliates,
+        attackable: goblinData.combat.attackable ?? true,
+        movementType: goblinData.movement.type,
+        aggroRange: goblinData.combat.aggroRange,
+        combatRange: goblinData.combat.combatRange,
+        wanderRadius: goblinData.movement.wanderRadius,
+        aiState: "idle",
+        targetPlayerId: null,
+        lastAttackTime: 0,
+        deathTime: null,
+        respawnTime: goblinData.combat.respawnTime,
+      };
+
+      try {
+        await entityManager.spawnEntity(mobConfig);
+        spawnedCount++;
+      } catch (err) {
+        console.error(
+          `[MobNPCSpawnerSystem] ❌ Error spawning goblin ${i + 1}:`,
+          err,
+        );
+      }
+    }
+
+    console.log(
+      `[MobNPCSpawnerSystem] ✅ Spawned ${spawnedCount} test goblins around spawn area`,
+    );
   }
 
   private getMobLevelRange(mobData: NPCData): LevelRange {

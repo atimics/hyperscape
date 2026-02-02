@@ -57,7 +57,10 @@
  * @public
  */
 
-import THREE from "../../extras/three/three";
+import THREE, {
+  MeshBasicNodeMaterial,
+  MeshStandardNodeMaterial,
+} from "../../extras/three/three";
 import type { World } from "../../core/World";
 import { Entity } from "../Entity";
 import type {
@@ -74,14 +77,8 @@ import { EventType } from "../../types/events";
 import { Emotes } from "../../data/playerEmotes";
 import {
   AnimationLOD,
-  ANIMATION_LOD_PRESETS,
   getCameraPosition,
 } from "../../utils/rendering/AnimationLOD";
-import {
-  DistanceFadeController,
-  ENTITY_FADE_CONFIGS,
-  FadeState,
-} from "../../utils/rendering/DistanceFade";
 import { RAYCAST_PROXY } from "../../systems/client/interaction/constants";
 
 // Re-export types for external use
@@ -100,12 +97,12 @@ export class NPCEntity extends Entity {
   private _raycastProxy: THREE.Mesh | null = null;
 
   /** Animation LOD controller - throttles animation updates for distant NPCs */
-  private readonly _animationLOD = new AnimationLOD(ANIMATION_LOD_PRESETS.NPC);
-  /** Track if idle pose has been applied at least once - prevents T-pose at frozen distances */
-  private _hasAppliedIdlePose = false;
-
-  /** Distance fade controller - dissolve effect for entities near render distance */
-  private _distanceFade: DistanceFadeController | null = null;
+  private readonly _animationLOD = new AnimationLOD({
+    fullDistance: 25, // Full 60fps animation within 25m (NPCs need close-up detail)
+    halfDistance: 50, // 30fps animation at 25-50m
+    quarterDistance: 80, // 15fps animation at 50-80m
+    pauseDistance: 120, // No animation beyond 120m (bind pose)
+  });
 
   async init(): Promise<void> {
     await super.init();
@@ -255,16 +252,6 @@ export class NPCEntity extends Entity {
       action.setLoop(THREE.LoopRepeat, Infinity);
       action.play();
 
-      // CRITICAL: Apply first frame IMMEDIATELY to prevent T-pose flash
-      // Without this, the skeleton stays in bind pose until the next clientUpdate()
-      mixer.update(0);
-
-      // Force skeleton bone matrices to update after animation is applied
-      const mesh = skinnedMesh as THREE.SkinnedMesh;
-      if (mesh.skeleton) {
-        mesh.skeleton.bones.forEach((bone) => bone.updateMatrixWorld(true));
-      }
-
       // Store mixer on entity for update in clientUpdate
       (this as { mixer?: THREE.AnimationMixer }).mixer = mixer;
     } else {
@@ -361,18 +348,19 @@ export class NPCEntity extends Entity {
       vrmHooks,
     );
 
+    // Set initial emote to idle (service NPCs should stand still)
+    this._currentEmote = Emotes.IDLE;
+    this._avatarInstance.setEmote(this._currentEmote);
+
     // Set up userData for interaction detection on the avatar
     // Get the VRM scene from the instance
     const instanceWithRaw = this._avatarInstance as {
       raw?: { scene?: THREE.Object3D };
     };
     if (instanceWithRaw?.raw?.scene) {
-      // Set mesh reference for HLOD system
+      // Set mesh reference for proper entity tracking (required for animation to work)
       this.mesh = instanceWithRaw.raw.scene;
-
-      // CRITICAL: Hide VRM mesh immediately to prevent T-pose flash
-      // The mesh will be shown only after idle animation is loaded and applied
-      this.mesh.visible = false;
+      this.mesh.name = `NPC_VRM_${this.config.npcType}_${this.id}`;
 
       const userData = {
         type: "npc",
@@ -396,72 +384,6 @@ export class NPCEntity extends Entity {
         // must transform every vertex by bone weights. The capsule proxy is instant.
         child.raycast = () => {};
       });
-
-      // CRITICAL: Load and apply idle emote BEFORE making VRM visible
-      // This prevents T-pose flash on spawn - NPCs should NEVER appear in T-pose
-      const avatarWithEmote = this._avatarInstance as {
-        setEmote?: (emote: string) => void;
-        setEmoteAndWait?: (emote: string, timeoutMs?: number) => Promise<void>;
-        update: (delta: number) => void;
-      };
-
-      // Set initial emote to idle and WAIT for it to load (service NPCs should stand still)
-      this._currentEmote = Emotes.IDLE;
-      if (avatarWithEmote.setEmoteAndWait) {
-        try {
-          await avatarWithEmote.setEmoteAndWait(Emotes.IDLE, 3000);
-        } catch {
-          // Timeout is okay - the rest pose fallback will handle it
-          avatarWithEmote.setEmote?.(Emotes.IDLE);
-        }
-      } else if (avatarWithEmote.setEmote) {
-        avatarWithEmote.setEmote(Emotes.IDLE);
-      }
-
-      // Apply first frame of animation to skeleton before showing
-      this._avatarInstance.update(0);
-      this.mesh.updateMatrixWorld(true);
-
-      // NOW make VRM visible - idle animation is guaranteed to be playing (or rest pose fallback)
-      this.mesh.visible = true;
-
-      // Initialize HLOD impostor support for VRM NPCs
-      // VRM models use a different rendering path (avatarInstance.move()) but we can still use impostors.
-      // The key is that this.node.position is kept in sync with the VRM's world position,
-      // so the impostor (parented to this.node) will be at the correct position.
-      await this.initHLOD(
-        `vrm_npc_${this.config.npcType}_${this.config.model}`,
-        {
-          category: "npc",
-          atlasSize: 512, // Smaller for NPCs
-          hemisphere: true,
-          freezeAnimationAtLOD1: true, // AAA LOD: Freeze animation at medium distance
-          prepareForBake: async () => {
-            // AAA LOD: Prepare VRM mesh for impostor baking at local origin
-            if (this.mesh && this._avatarInstance) {
-              const savedPosition = this.mesh.position.clone();
-              const savedQuaternion = this.mesh.quaternion.clone();
-
-              // Move mesh to local origin for baking
-              this.mesh.position.set(0, 0, 0);
-              this.mesh.quaternion.identity();
-
-              // Update the animation to ensure idle pose at frame 0
-              this._avatarInstance.update(0);
-              this.mesh.updateMatrixWorld(true);
-
-              // Restore position after baking (microtask)
-              Promise.resolve().then(() => {
-                if (this.mesh) {
-                  this.mesh.position.copy(savedPosition);
-                  this.mesh.quaternion.copy(savedQuaternion);
-                  this.mesh.updateMatrixWorld(true);
-                }
-              });
-            }
-          },
-        },
-      );
     }
   }
 
@@ -492,9 +414,9 @@ export class NPCEntity extends Entity {
       RAYCAST_PROXY.CAP_SEGMENTS,
       RAYCAST_PROXY.HEIGHT_SEGMENTS,
     );
-    const material = new THREE.MeshBasicMaterial({
-      visible: false, // Invisible but raycastable
-    });
+    // WebGPU-compatible invisible material for raycasting
+    const material = new MeshBasicNodeMaterial();
+    material.visible = false; // Invisible but raycastable
 
     this._raycastProxy = new THREE.Mesh(geometry, material);
     this._raycastProxy.name = `NPC_RaycastProxy_${this.config.npcType}_${this.id}`;
@@ -549,9 +471,9 @@ export class NPCEntity extends Entity {
         this.mesh = scene;
         this.mesh.name = `NPC_${this.config.npcType}_${this.id}`;
 
-        // CRITICAL: Scale the root mesh transform, then bind skeleton
-        const modelScale = 100; // cm to meters
-        this.mesh.scale.set(modelScale, modelScale, modelScale);
+        // GLB models: Don't manually scale - it breaks skeleton/animations
+        // The model should be exported at the correct scale
+        this.mesh.scale.set(1, 1, 1);
         this.mesh.updateMatrix();
         this.mesh.updateMatrixWorld(true);
 
@@ -603,56 +525,6 @@ export class NPCEntity extends Entity {
           this.setupIdleAnimation(animations);
         }
 
-        // Initialize HLOD impostor support for NPCs
-        // AAA LOD: Bake in idle pose (not T-pose), freeze animations at LOD1
-        await this.initHLOD(`npc_${this.config.npcType}_${this.config.model}`, {
-          category: "npc",
-          atlasSize: 512,
-          hemisphere: true,
-          freezeAnimationAtLOD1: true, // AAA LOD: Freeze animation at medium distance
-          prepareForBake: async () => {
-            // AAA LOD: Ensure GLB mesh is in idle pose before baking impostor
-            // This captures the idle animation frame 0, not T-pose
-            const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
-            if (mixer && this.mesh) {
-              // Reset current action to frame 0 to ensure consistent idle pose
-              // NPCs don't store currentAction, but we can get it from mixer
-              const root = mixer.getRoot();
-              const animations =
-                root && "animations" in root
-                  ? (root as THREE.Object3D).animations
-                  : undefined;
-              if (animations && animations.length > 0) {
-                const action = mixer.clipAction(animations[0]);
-                if (action) {
-                  action.time = 0;
-                }
-              }
-
-              // Apply frame 0 to skeleton (delta=0 applies current time position)
-              mixer.update(0);
-
-              // Force complete skeleton matrix update
-              this.mesh.traverse((child) => {
-                if ((child as THREE.SkinnedMesh).isSkinnedMesh) {
-                  const skinnedMesh = child as THREE.SkinnedMesh;
-                  if (skinnedMesh.skeleton) {
-                    // Update each bone's world matrix
-                    skinnedMesh.skeleton.bones.forEach((bone) =>
-                      bone.updateMatrixWorld(true),
-                    );
-                    // Recompute skeleton's bone matrices
-                    skinnedMesh.skeleton.update();
-                  }
-                }
-              });
-
-              // Update entire mesh hierarchy
-              this.mesh.updateMatrixWorld(true);
-            }
-          },
-        });
-
         return;
       } catch (error) {
         console.warn(
@@ -664,12 +536,11 @@ export class NPCEntity extends Entity {
     }
 
     const geometry = new THREE.CapsuleGeometry(0.35, 1.4, 4, 8);
-    // Use MeshStandardMaterial for proper lighting (responds to sun, moon, and environment maps)
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x6b4423,
-      roughness: 0.8,
-      metalness: 0.0,
-    });
+    // Use MeshStandardNodeMaterial for proper WebGPU lighting (responds to sun, moon, and environment maps)
+    const material = new MeshStandardNodeMaterial();
+    material.color = new THREE.Color(0x6b4423);
+    material.roughness = 0.8;
+    material.metalness = 0.0;
     this.mesh = new THREE.Mesh(geometry, material);
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
@@ -732,36 +603,9 @@ export class NPCEntity extends Entity {
       this._raycastProxy.position.y += RAYCAST_PROXY.Y_OFFSET;
     }
 
-    // DISTANCE FADE: Apply dissolve effect and cull distant NPCs
-    const cameraPos = getCameraPosition(this.world);
-    if (cameraPos) {
-      // Initialize DistanceFadeController once we have a node
-      if (!this._distanceFade && this.node) {
-        this._distanceFade = new DistanceFadeController(
-          this.node,
-          ENTITY_FADE_CONFIGS.NPC,
-          true, // Enable shader-based dissolve
-        );
-      }
-
-      // Update fade and check if culled
-      if (this._distanceFade) {
-        const fadeResult = this._distanceFade.update(
-          cameraPos.x,
-          cameraPos.z,
-          this.node.position.x,
-          this.node.position.z,
-        );
-
-        // If culled, skip all further updates (animation, etc.)
-        if (fadeResult.state === FadeState.CULLED) {
-          return;
-        }
-      }
-    }
-
     // ANIMATION LOD: Calculate distance to camera once and throttle animation updates
     // This reduces CPU/GPU load for distant NPCs significantly
+    const cameraPos = getCameraPosition(this.world);
     const animLODResult = cameraPos
       ? this._animationLOD.updateFromPosition(
           this.node.position.x,
@@ -775,68 +619,22 @@ export class NPCEntity extends Entity {
           effectiveDelta: deltaTime,
           lodLevel: 0,
           distanceSq: 0,
-          shouldApplyRestPose: false,
         };
-
-    // T-POSE FIX: When entering frozen state (or never applied idle), apply idle pose once
-    // This ensures NPCs at frozen/culled distances show idle pose instead of T-pose
-    // The shouldApplyRestPose flag is true when transitioning INTO frozen state
-    const needsIdlePoseApplication =
-      animLODResult.shouldApplyRestPose || !this._hasAppliedIdlePose;
-
-    if (needsIdlePoseApplication) {
-      // VRM path: Apply idle pose
-      if (this._avatarInstance) {
-        const avatarWithEmote = this._avatarInstance as {
-          setEmote?: (emote: string) => void;
-        };
-        // Ensure idle emote is set
-        if (avatarWithEmote.setEmote && this._currentEmote !== Emotes.IDLE) {
-          this._currentEmote = Emotes.IDLE;
-          avatarWithEmote.setEmote(Emotes.IDLE);
-        }
-        // Apply frame 0 to bake idle pose into skeleton
-        this._avatarInstance.update(0);
-        this._hasAppliedIdlePose = true;
-      }
-      // GLB path: Apply idle pose via mixer
-      else {
-        const mixer = (this as { mixer?: THREE.AnimationMixer }).mixer;
-        if (mixer) {
-          mixer.update(0);
-          // Force skeleton update
-          if (this.mesh) {
-            this.mesh.traverse((child) => {
-              if (child instanceof THREE.SkinnedMesh && child.skeleton) {
-                child.skeleton.bones.forEach((bone) =>
-                  bone.updateMatrixWorld(),
-                );
-              }
-            });
-          }
-          this._hasAppliedIdlePose = true;
-        }
-      }
-    }
 
     // VRM avatar path: Update avatar instance
     if (this._avatarInstance) {
       // Update avatar position to follow node (always, for proper positioning)
       this._avatarInstance.move(this.node.matrixWorld);
 
-      // AAA LOD + ANIMATION LOD: Only update VRM animation when both allow
-      // - animLODResult.shouldUpdate: Throttles based on distance (frame skipping)
-      // - shouldUpdateAnimationsForLOD(): Freezes completely at LOD1+ (HLOD system)
-      // At medium distance (LOD1), NPC shows frozen in idle pose (no animation CPU cost)
-      if (animLODResult.shouldUpdate && this.shouldUpdateAnimationsForLOD()) {
+      // ANIMATION LOD: Only update VRM animation when LOD allows
+      if (animLODResult.shouldUpdate) {
         this._avatarInstance.update(animLODResult.effectiveDelta);
       }
       return;
     }
 
-    // GLB mesh path: Update animation mixer (only when both LOD systems allow)
-    // AAA LOD + ANIMATION LOD: Freeze at medium distance, throttle at far distance
-    if (animLODResult.shouldUpdate && this.shouldUpdateAnimationsForLOD()) {
+    // GLB mesh path: Update animation mixer (only when LOD allows)
+    if (animLODResult.shouldUpdate) {
       this.updateAnimationsWithDelta(animLODResult.effectiveDelta);
     }
   }
@@ -921,12 +719,6 @@ export class NPCEntity extends Entity {
       this._raycastProxy.geometry.dispose();
       (this._raycastProxy.material as THREE.Material).dispose();
       this._raycastProxy = null;
-    }
-
-    // Clean up distance fade controller
-    if (this._distanceFade) {
-      this._distanceFade.dispose();
-      this._distanceFade = null;
     }
 
     // Clean up VRM avatar instance

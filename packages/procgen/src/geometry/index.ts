@@ -57,16 +57,27 @@ export {
 
 export {
   LeafClusterBaker,
-  createClusterAtlasMaterial,
+  // NOTE: createClusterAtlasMaterial removed - GLSL not WebGPU compatible
+  // Use GlobalLeafClusterInstancer TSL material from ProcgenTreeInstancer instead
   type BakedCluster,
   type ClusterAtlas,
   type ClusterBakeOptions,
 } from "./LeafClusterBaker.js";
 
+// ============================================================================
+// BRANCH-AWARE CLUSTERING (SpeedTree Style)
+// ============================================================================
+
 export {
-  LeafClusterInstancer,
-  type ClusterInstancerOptions,
-} from "./LeafClusterInstancer.js";
+  BranchClusterGenerator,
+  type BranchLeafData,
+  type BranchCluster,
+  type BranchClusterResult,
+  type BranchClusterOptions,
+} from "./BranchClusterGenerator.js";
+
+// NOTE: LeafClusterInstancer removed - GLSL not WebGPU compatible
+// Use GlobalLeafClusterInstancer from packages/shared/src/systems/shared/world/ProcgenTreeInstancer.ts instead
 
 // ============================================================================
 // LEAF VISIBILITY CULLING (View-Dependent Optimization)

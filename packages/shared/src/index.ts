@@ -59,6 +59,17 @@
 // Export world factories from runtime/
 export * from "./runtime";
 
+// Export terrain shader for unified rendering (used by Asset Forge)
+export {
+  createTerrainMaterial,
+  generateNoiseTexture,
+  getNoiseTexture,
+  sampleNoiseAtPosition,
+  getGrassiness,
+  calculateSlope,
+  type TerrainUniforms,
+} from "./systems/shared/world/TerrainShader";
+
 // Export core classes
 export * from "./core";
 
@@ -953,6 +964,27 @@ export { TownSystem } from "./systems/shared";
 export { POISystem } from "./systems/shared";
 export { RoadNetworkSystem } from "./systems/shared";
 export { BuildingCollisionService } from "./systems/shared/world/BuildingCollisionService";
+
+// Building collision types (for navigation systems)
+export type {
+  WallDirection,
+  WallSegment,
+  StairTile,
+  StepTile,
+  FloorCollisionData,
+  BuildingCollisionData,
+  PlayerBuildingState,
+  BuildingCollisionResult,
+  BuildingLayoutInput,
+  CellCoord,
+} from "./types/world/building-collision-types";
+export {
+  cellToWorldTile,
+  rotateWallDirection,
+  getOppositeDirection,
+  toWallDirection,
+  tileKey as buildingTileKey,
+} from "./types/world/building-collision-types";
 
 // Export tile movement system (RuneScape-style)
 export {

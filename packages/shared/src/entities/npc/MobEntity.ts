@@ -69,7 +69,10 @@
  * @public
  */
 
-import THREE from "../../extras/three/three";
+import THREE, {
+  MeshBasicNodeMaterial,
+  MeshStandardNodeMaterial,
+} from "../../extras/three/three";
 import type {
   EntityData,
   MeshUserData,
@@ -1054,11 +1057,11 @@ export class MobEntity extends CombatantEntity {
       RAYCAST_PROXY.CAP_SEGMENTS,
       RAYCAST_PROXY.HEIGHT_SEGMENTS,
     );
-    const material = new THREE.MeshBasicMaterial({
-      visible: false, // Invisible - only for click detection
-      transparent: true,
-      opacity: 0,
-    });
+    // WebGPU-compatible invisible material for click detection
+    const material = new MeshBasicNodeMaterial();
+    material.visible = false; // Invisible - only for click detection
+    material.transparent = true;
+    material.opacity = 0;
 
     const hitbox = new THREE.Mesh(geometry, material);
     hitbox.name = `Mob_Hitbox_${this.config.mobType}_${this.id}`;
@@ -1141,14 +1144,11 @@ export class MobEntity extends CombatantEntity {
         this.mesh = scene;
         this.mesh.name = `Mob_${this.config.mobType}_${this.id}`;
 
-        // Scale root mesh (cm to meters) and apply manifest scale
-        const modelScale = 100; // cm to meters
+        // GLB models: Don't manually scale - it breaks skeleton/animations
+        // The model should be exported at the correct scale
+        // Config scale from manifest can still be applied
         const configScale = this.config.scale;
-        this.mesh.scale.set(
-          modelScale * configScale.x,
-          modelScale * configScale.y,
-          modelScale * configScale.z,
-        );
+        this.mesh.scale.set(configScale.x, configScale.y, configScale.z);
         this.mesh.updateMatrix();
         this.mesh.updateMatrixWorld(true);
 
@@ -1236,16 +1236,15 @@ export class MobEntity extends CombatantEntity {
       4,
       8,
     );
-    // Use MeshStandardMaterial for proper lighting (responds to sun, moon, and environment maps)
+    // Use MeshStandardNodeMaterial for proper WebGPU lighting (responds to sun, moon, and environment maps)
     // Add subtle emissive so mobs pop at night (matches player rendering)
     const emissiveColor = color.clone();
-    const material = new THREE.MeshStandardMaterial({
-      color: color.getHex(),
-      emissive: emissiveColor,
-      emissiveIntensity: 0.3, // Subtle glow - matches PlayerEntity and VRM avatars
-      roughness: 0.8,
-      metalness: 0.0,
-    });
+    const material = new MeshStandardNodeMaterial();
+    material.color = new THREE.Color(color.getHex());
+    material.emissive = emissiveColor;
+    material.emissiveIntensity = 0.3; // Subtle glow - matches PlayerEntity and VRM avatars
+    material.roughness = 0.8;
+    material.metalness = 0.0;
 
     this.mesh = new THREE.Mesh(geometry, material);
     this.mesh.name = `Mob_${this.config.mobType}_${this.id}`;
