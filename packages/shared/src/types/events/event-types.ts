@@ -417,6 +417,7 @@ export enum EventType {
 
   // Fire System
   FIRE_LIGHTING_STARTED = "fire:lighting:started",
+  FIRE_LIGHTING_CANCELLED = "fire:lighting:cancelled",
   FIRE_EXTINGUISHED = "fire:extinguished",
   FIRE_CREATED = "fire:created",
 

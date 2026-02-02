@@ -128,6 +128,7 @@ const names = [
   'fireCreated',          // Server -> Client: fire entity created
   'fireExtinguished',     // Server -> Client: fire entity expired/removed
   'fireLightingStarted',  // Server -> Client: fire lighting begun (show model)
+  'fireLightingCancelled', // Server -> Client: fire lighting cancelled (remove preloaded model)
   // Smelting/Smithing packets
   'smeltingSourceInteract', // Client -> Server: player clicked furnace to smelt
   'smithingSourceInteract', // Client -> Server: player clicked anvil to smith
