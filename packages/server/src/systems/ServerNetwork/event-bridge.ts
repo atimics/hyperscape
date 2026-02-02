@@ -1092,6 +1092,13 @@ export class EventBridge {
         this.broadcast.sendToAll("fireLightingStarted", data);
       });
 
+      // Broadcast fire lighting cancelled to all clients (remove preloaded model)
+      this.world.on(EventType.FIRE_LIGHTING_CANCELLED, (payload: unknown) => {
+        const data = payload as { playerId: string };
+
+        this.broadcast.sendToAll("fireLightingCancelled", data);
+      });
+
       // Broadcast fire creation to all clients for visual rendering
       this.world.on(EventType.FIRE_CREATED, (payload: unknown) => {
         const data = payload as {

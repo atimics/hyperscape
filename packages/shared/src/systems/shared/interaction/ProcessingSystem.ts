@@ -179,6 +179,7 @@ export class ProcessingSystem extends SystemBase {
       action.playerId = "";
       action.targetItem = undefined;
       action.targetFire = undefined;
+      action.startPosition = undefined;
       this.actionPool.push(action);
     }
   }
@@ -325,6 +326,18 @@ export class ProcessingSystem extends SystemBase {
           position: { x: number; y: number; z: number };
         }) => {
           this.loadFireModelForLighting(data.playerId, data.position);
+        },
+      );
+
+      // Clean up preloaded fire model when lighting is cancelled (player moved)
+      this.subscribe(
+        EventType.FIRE_LIGHTING_CANCELLED,
+        (data: { playerId: string }) => {
+          const pendingModel = this.pendingFireModels.get(data.playerId);
+          if (pendingModel) {
+            this.world.stage.scene.remove(pendingModel);
+            this.pendingFireModels.delete(data.playerId);
+          }
         },
       );
     }
@@ -488,18 +501,27 @@ export class ProcessingSystem extends SystemBase {
     // OSRS: Player squats/crouches while lighting fire
     this.setProcessingEmote(playerId);
 
-    // Notify clients to show fire model during lighting animation
+    // Cache player start position for movement detection and fire placement
     const player = this.world.getPlayer(playerId);
-    if (player?.node?.position) {
-      this.emitTypedEvent(EventType.FIRE_LIGHTING_STARTED, {
-        playerId,
-        position: {
-          x: player.node.position.x,
-          y: player.node.position.y,
-          z: player.node.position.z,
-        },
-      });
+    if (!player?.node?.position) {
+      this.activeProcessing.delete(playerId);
+      this.releaseAction(processingAction);
+      this.resetPlayerEmote(playerId);
+      return;
     }
+
+    const startPosition = {
+      x: player.node.position.x,
+      y: player.node.position.y,
+      z: player.node.position.z,
+    };
+    processingAction.startPosition = startPosition;
+
+    // Notify clients to show fire model during lighting animation
+    this.emitTypedEvent(EventType.FIRE_LIGHTING_STARTED, {
+      playerId,
+      position: startPosition,
+    });
 
     // Complete after duration
     setTimeout(() => {
@@ -527,12 +549,27 @@ export class ProcessingSystem extends SystemBase {
         return;
       }
 
-      this.completeFiremaking(playerId, processingAction, {
-        x: currentPlayer.node.position.x,
-        y: currentPlayer.node.position.y,
-        z: currentPlayer.node.position.z,
-      });
+      // Use cached start position - fire spawns where lighting began
+      this.completeFiremaking(playerId, processingAction, startPosition);
     }, this.FIREMAKING_TIME);
+  }
+
+  /**
+   * Cancel firemaking when the player moves during the lighting animation.
+   * Cleans up the active action, resets emote, and notifies clients.
+   */
+  private cancelFiremaking(playerId: string, action: ProcessingAction): void {
+    this.activeProcessing.delete(playerId);
+    this.releaseAction(action);
+    this.resetPlayerEmote(playerId);
+
+    this.emitTypedEvent(EventType.FIRE_LIGHTING_CANCELLED, { playerId });
+
+    this.emitTypedEvent(EventType.UI_MESSAGE, {
+      playerId,
+      message: "You move and stop trying to light the fire.",
+      type: "info",
+    });
   }
 
   private completeFiremaking(
@@ -1628,15 +1665,32 @@ export class ProcessingSystem extends SystemBase {
     this.fireCleanupTimers.clear();
   }
 
+  // Movement threshold squared (0.5 units) for cancelling firemaking
+  private static readonly FIREMAKING_MOVE_THRESHOLD_SQ = 0.25;
+
   // Required System lifecycle methods
   update(_dt: number): void {
-    // Check for expired processing actions
+    // Check for expired processing actions and movement cancellation
     const now = Date.now();
     for (const [playerId, action] of this.activeProcessing.entries()) {
       if (now - action.startTime > action.duration + 1000) {
         // 1 second grace period - release action back to pool
         this.activeProcessing.delete(playerId);
         this.releaseAction(action);
+        continue;
+      }
+
+      // Cancel firemaking if player moved from start position
+      if (action.actionType === "firemaking" && action.startPosition) {
+        const player = this.world.getPlayer(playerId);
+        if (player?.node?.position) {
+          const dx = player.node.position.x - action.startPosition.x;
+          const dz = player.node.position.z - action.startPosition.z;
+          const distSq = dx * dx + dz * dz;
+          if (distSq > ProcessingSystem.FIREMAKING_MOVE_THRESHOLD_SQ) {
+            this.cancelFiremaking(playerId, action);
+          }
+        }
       }
     }
   }

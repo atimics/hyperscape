@@ -1457,6 +1457,9 @@ export class ServerNetwork extends System implements NetworkWithSocket {
         return;
       }
 
+      // Stop player movement before lighting fire (OSRS: player stands still to light)
+      this.tileMovementManager.stopPlayer(player.id);
+
       // Emit event for ProcessingSystem to handle
       this.world.emit(EventType.PROCESSING_FIREMAKING_REQUEST, {
         playerId: player.id,

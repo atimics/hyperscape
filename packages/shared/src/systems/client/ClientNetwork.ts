@@ -1782,6 +1782,10 @@ export class ClientNetwork extends SystemBase {
     this.world.emit(EventType.FIRE_LIGHTING_STARTED, data);
   };
 
+  onFireLightingCancelled = (data: { playerId: string }) => {
+    this.world.emit(EventType.FIRE_LIGHTING_CANCELLED, data);
+  };
+
   onFishingSpotMoved = (data: {
     resourceId: string;
     oldPosition: { x: number; y: number; z: number };
