@@ -503,7 +503,12 @@ export class ProcessingSystem extends SystemBase {
 
     // Cache player start position for movement detection and fire placement
     const player = this.world.getPlayer(playerId);
-    if (!player?.node?.position) return;
+    if (!player?.node?.position) {
+      this.activeProcessing.delete(playerId);
+      this.releaseAction(processingAction);
+      this.resetPlayerEmote(playerId);
+      return;
+    }
 
     const startPosition = {
       x: player.node.position.x,
