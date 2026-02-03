@@ -34,10 +34,6 @@ import { DeathState } from "../../../types/entities";
 export class InventorySystem extends SystemBase {
   protected playerInventories = new Map<PlayerID, PlayerInventory>();
   private readonly MAX_INVENTORY_SLOTS = 28;
-  private persistTimers = new Map<string, NodeJS.Timeout>();
-  private saveInterval?: NodeJS.Timeout;
-  private readonly AUTO_SAVE_INTERVAL = 5000; // 5 seconds - reduced for minimal data loss
-
   // Pickup locks to prevent race conditions when multiple players try to pickup same item
   private pickupLocks = new Set<string>();
 
@@ -50,7 +46,6 @@ export class InventorySystem extends SystemBase {
    * Transaction locks for critical operations (bank, store, trade).
    * While locked:
    * - addItem() rejects new items (pickups blocked)
-   * - performAutoSave() skips this player
    * - Only the lock holder can modify inventory
    *
    * This prevents race conditions between in-memory InventorySystem and
@@ -230,51 +225,7 @@ export class InventorySystem extends SystemBase {
   }
 
   start(): void {
-    // Start periodic auto-save on server only
-    if (this.world.isServer) {
-      this.startAutoSave();
-    }
-  }
-
-  private startAutoSave(): void {
-    this.saveInterval = this.createInterval(() => {
-      this.performAutoSave();
-    }, this.AUTO_SAVE_INTERVAL)!;
-  }
-
-  private async performAutoSave(): Promise<void> {
-    const db = this.getDatabase();
-    if (!db) return;
-
-    // savedCount and totalItems tracking removed - not needed
-
-    for (const playerId of this.playerInventories.keys()) {
-      // Skip players locked for transaction - their inventory is being
-      // modified by bank/store/trade and will be reloaded after
-      if (this.transactionLocks.has(playerId)) {
-        continue;
-      }
-
-      // Only persist inventories for real characters that exist in DB
-      try {
-        const playerRow = await db.getPlayerAsync(playerId);
-        if (!playerRow) {
-          continue;
-        }
-        const inv = this.getOrCreateInventory(playerId);
-        const saveItems = inv.items.map((i) => ({
-          itemId: i.itemId,
-          quantity: i.quantity,
-          slotIndex: i.slot,
-          metadata: null as null,
-        }));
-        db.savePlayerInventory(playerId, saveItems);
-        // NOTE: Coins are now persisted by CoinPouchSystem
-        // savedCount and totalItems tracking removed - not needed
-      } catch {
-        // Skip on DB errors during autosave
-      }
-    }
+    // Write-through persistence: no auto-save needed, all mutations persist immediately
   }
 
   private initializeInventory(playerData: { id: string }): void {
@@ -1272,8 +1223,7 @@ export class InventorySystem extends SystemBase {
    *
    * While locked:
    * - addItem() will reject new items (pickups blocked)
-   * - performAutoSave() will skip this player
-   * - Pending debounced saves are cancelled
+   * - Only the lock holder can modify inventory
    *
    * CRITICAL: Always release with unlockTransaction() in a finally block!
    *
@@ -1290,13 +1240,6 @@ export class InventorySystem extends SystemBase {
     }
 
     this.transactionLocks.add(playerId);
-
-    // Cancel any pending debounced save (we'll flush explicitly)
-    const existing = this.persistTimers.get(playerId);
-    if (existing) {
-      clearTimeout(existing);
-      this.persistTimers.delete(playerId);
-    }
 
     return true;
   }
@@ -2117,31 +2060,6 @@ export class InventorySystem extends SystemBase {
     return false;
   }
 
-  private scheduleInventoryPersist(playerId: string): void {
-    const db = this.getDatabase();
-    if (!db) return;
-    const existing = this.persistTimers.get(playerId);
-    if (existing) clearTimeout(existing);
-    const timer = setTimeout(() => {
-      // Only persist if player is a real character in DB
-      db.getPlayerAsync(playerId)
-        .then((row) => {
-          if (!row) return;
-          const inv = this.getOrCreateInventory(playerId);
-          const saveItems = inv.items.map((i) => ({
-            itemId: i.itemId,
-            quantity: i.quantity,
-            slotIndex: i.slot,
-            metadata: null as null,
-          }));
-          db.savePlayerInventory(playerId, saveItems);
-          // NOTE: Coins are now persisted by CoinPouchSystem
-        })
-        .catch(() => {});
-    }, 300);
-    this.persistTimers.set(playerId, timer);
-  }
-
   /**
    * Persist inventory immediately without debounce
    * CRITICAL for death system to prevent duplication exploits
@@ -2153,13 +2071,6 @@ export class InventorySystem extends SystemBase {
         `[InventorySystem] Cannot persist inventory for ${playerId}: no database`,
       );
       return;
-    }
-
-    // Clear any pending debounced persist
-    const existing = this.persistTimers.get(playerId);
-    if (existing) {
-      clearTimeout(existing);
-      this.persistTimers.delete(playerId);
     }
 
     // Check if player exists in database
@@ -2387,19 +2298,7 @@ export class InventorySystem extends SystemBase {
    * Call this for graceful shutdown to prevent data loss.
    */
   async destroyAsync(): Promise<void> {
-    // Stop auto-save interval first
-    if (this.saveInterval) {
-      clearInterval(this.saveInterval);
-      this.saveInterval = undefined;
-    }
-
-    // Clear all pending persist timers
-    for (const timer of this.persistTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.persistTimers.clear();
-
-    // Await all final saves before shutdown
+    // Await all final saves before shutdown (belt-and-suspenders for any in-flight writes)
     if (this.world.isServer) {
       const db = this.getDatabase();
       if (db) {
