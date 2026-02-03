@@ -977,7 +977,7 @@ export class EquipmentSystem extends SystemBase {
 
       // Now add back to inventory - use direct method for better error handling
       // For stackable items like arrows, return the FULL quantity
-      const added = inventorySystem?.addItemDirect(data.playerId, {
+      const added = await inventorySystem?.addItemDirect(data.playerId, {
         itemId: itemIdToAdd,
         quantity: quantityToReturn,
       });

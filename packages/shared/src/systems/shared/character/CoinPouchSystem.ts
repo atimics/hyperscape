@@ -395,7 +395,7 @@ export class CoinPouchSystem extends SystemBase {
     }
   }
 
-  private persistCoinsImmediate(playerId: string): void {
+  private async persistCoinsImmediate(playerId: string): Promise<void> {
     const db = this.getDatabase();
     if (!db) return;
 
@@ -406,15 +406,11 @@ export class CoinPouchSystem extends SystemBase {
       this.persistTimers.delete(playerId);
     }
 
-    // Sync persist
-    db.getPlayerAsync(playerId)
-      .then((row) => {
-        if (row) {
-          const coins = this.getCoins(playerId);
-          db.savePlayer(playerId, { coins });
-        }
-      })
-      .catch(() => {});
+    const row = await db.getPlayerAsync(playerId);
+    if (row) {
+      const coins = this.getCoins(playerId);
+      await db.savePlayerAsync(playerId, { coins });
+    }
   }
 
   private startAutoSave(): void {
@@ -536,7 +532,7 @@ export class CoinPouchSystem extends SystemBase {
             const row = await db.getPlayerAsync(playerId);
             if (row) {
               const coins = this.getCoins(playerId);
-              db.savePlayer(playerId, { coins });
+              await db.savePlayerAsync(playerId, { coins });
             }
           })();
 
