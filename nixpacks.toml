@@ -27,12 +27,11 @@ cmds = ["bun install"]
 
 [phases.build]
 # Build only shared and server packages (frontend is on Cloudflare Pages)
+# Uses Turbo for caching - Railway preserves node_modules and .turbo between builds
 dependsOn = ["install"]
 cmds = [
-  "echo '=== Building shared package ==='",
-  "bun run build:shared",
-  "echo '=== Building server package ==='",
-  "bun run build:server",
+  "echo '=== Building with Turbo cache ==='",
+  "bunx turbo run build --filter=@hyperscape/shared --filter=@hyperscape/server --cache-dir=.turbo",
   "echo '=== Creating manifests directory ==='",
   "mkdir -p packages/server/world/assets/manifests",
   "echo '=== Build complete ==='",
@@ -46,5 +45,10 @@ cmd = "cd packages/server && bun dist/index.js"
 CI = "true"
 SKIP_ASSETS = "true"
 NODE_ENV = "production"
-# Disable Turbo caching to force fresh builds
-TURBO_FORCE = "true"
+
+# Cache directories between builds for faster rebuilds
+[caches]
+node_modules = true
+".turbo" = true
+"packages/shared/build" = true
+"packages/server/dist" = true

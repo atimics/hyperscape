@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - staging
     paths:
       - 'packages/shared/**'
       - 'packages/client/**'
@@ -16,80 +15,60 @@ on:
       - 'railway.server.json'
       - 'Dockerfile.server'
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Deployment environment'
-        required: true
-        default: 'production'
-        type: choice
-        options:
-          - production
-          - staging
 
-# Railway environment IDs
-# Production: api.hyperscape.club
-# Staging: staging-api.hyperscape.club
+# Required GitHub Secrets:
+#   RAILWAY_TOKEN        - Your Railway API token (https://railway.app/account/tokens)
+#   RAILWAY_PROJECT_ID   - Project ID from Railway dashboard URL
+#   RAILWAY_SERVICE_ID   - Service ID from Service Settings
+#   RAILWAY_ENVIRONMENT_ID - Environment ID from Project Settings > Environments
 
 jobs:
   deploy:
-    name: Deploy to Railway (${{ github.ref_name == 'staging' && 'staging' || 'production' }})
+    name: Deploy to Railway
     runs-on: ubuntu-latest
-    environment: ${{ github.ref_name == 'staging' && 'staging' || 'production' }}
-    env:
-      # Production environment
-      RAILWAY_PROJECT_ID: e5f5ba11-0380-4d71-aa0b-343d89a58c0d
-      RAILWAY_PRODUCTION_SERVICE_ID: f0b42e3b-3001-4ef1-926f-af6c3c138777
-      RAILWAY_PRODUCTION_ENVIRONMENT_ID: 194f3565-ba2f-4c98-87d2-85dfc3a5110b
-      # Staging environment (set these after creating staging environment in Railway)
-      RAILWAY_STAGING_SERVICE_ID: ${{ vars.RAILWAY_STAGING_SERVICE_ID }}
-      RAILWAY_STAGING_ENVIRONMENT_ID: ${{ vars.RAILWAY_STAGING_ENVIRONMENT_ID }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Determine deployment target
-        id: target
+      - name: Validate Railway configuration
         run: |
-          if [ "${{ github.ref_name }}" = "staging" ] || [ "${{ inputs.environment }}" = "staging" ]; then
-            echo "environment=staging" >> $GITHUB_OUTPUT
-            echo "service_id=${{ env.RAILWAY_STAGING_SERVICE_ID }}" >> $GITHUB_OUTPUT
-            echo "environment_id=${{ env.RAILWAY_STAGING_ENVIRONMENT_ID }}" >> $GITHUB_OUTPUT
-            echo "🎭 Deploying to STAGING (staging-api.hyperscape.club)"
-          else
-            echo "environment=production" >> $GITHUB_OUTPUT
-            echo "service_id=${{ env.RAILWAY_PRODUCTION_SERVICE_ID }}" >> $GITHUB_OUTPUT
-            echo "environment_id=${{ env.RAILWAY_PRODUCTION_ENVIRONMENT_ID }}" >> $GITHUB_OUTPUT
-            echo "🚀 Deploying to PRODUCTION (api.hyperscape.club)"
-          fi
-
-      - name: Validate staging configuration
-        if: steps.target.outputs.environment == 'staging'
-        run: |
-          if [ -z "${{ env.RAILWAY_STAGING_SERVICE_ID }}" ] || [ -z "${{ env.RAILWAY_STAGING_ENVIRONMENT_ID }}" ]; then
-            echo "❌ Staging environment not configured!"
+          if [ -z "${{ secrets.RAILWAY_TOKEN }}" ]; then
+            echo "❌ RAILWAY_TOKEN secret not set"
             echo ""
-            echo "To set up staging deployment:"
-            echo "1. Create a new environment in Railway called 'staging'"
-            echo "2. Add repository variables in GitHub:"
-            echo "   - RAILWAY_STAGING_SERVICE_ID"
-            echo "   - RAILWAY_STAGING_ENVIRONMENT_ID"
-            echo ""
-            echo "Get these IDs from Railway dashboard or API."
+            echo "To set up Railway deployment:"
+            echo "1. Get your token from https://railway.app/account/tokens"
+            echo "2. Add it as a repository secret: gh secret set RAILWAY_TOKEN"
             exit 1
           fi
+          if [ -z "${{ secrets.RAILWAY_PROJECT_ID }}" ] || [ -z "${{ secrets.RAILWAY_SERVICE_ID }}" ] || [ -z "${{ secrets.RAILWAY_ENVIRONMENT_ID }}" ]; then
+            echo "❌ Railway IDs not configured"
+            echo ""
+            echo "Required secrets:"
+            echo "  RAILWAY_PROJECT_ID      - From Railway dashboard URL"
+            echo "  RAILWAY_SERVICE_ID      - From Service > Settings"
+            echo "  RAILWAY_ENVIRONMENT_ID  - From Project > Settings > Environments"
+            echo ""
+            echo "Set them with:"
+            echo "  gh secret set RAILWAY_PROJECT_ID"
+            echo "  gh secret set RAILWAY_SERVICE_ID"
+            echo "  gh secret set RAILWAY_ENVIRONMENT_ID"
+            exit 1
+          fi
+          echo "✅ Railway configuration valid"
 
       - name: Trigger Railway Deployment
         run: |
-          echo "📦 Triggering deployment to ${{ steps.target.outputs.environment }}..."
+          echo "📦 Triggering deployment..."
           RESPONSE=$(curl -s -X POST https://backboard.railway.com/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
-            -d '{"query":"mutation { serviceInstanceRedeploy(environmentId: \"${{ steps.target.outputs.environment_id }}\", serviceId: \"${{ steps.target.outputs.service_id }}\") }"}')
+            -d '{"query":"mutation { serviceInstanceRedeploy(environmentId: \"${{ secrets.RAILWAY_ENVIRONMENT_ID }}\", serviceId: \"${{ secrets.RAILWAY_SERVICE_ID }}\") }"}')
           echo "Response: $RESPONSE"
           if echo "$RESPONSE" | grep -q '"serviceInstanceRedeploy":true'; then
             echo "✅ Deployment triggered successfully"
           else
             echo "❌ Failed to trigger deployment"
+            echo "Check your Railway IDs and token permissions"
             exit 1
           fi
 
@@ -102,8 +81,8 @@ jobs:
             RESPONSE=$(curl -s -X POST https://backboard.railway.com/graphql/v2 \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
-              -d '{"query":"query { project(id: \"${{ env.RAILWAY_PROJECT_ID }}\") { services { edges { node { name serviceInstances { edges { node { latestDeployment { status } } } } } } } } }"}')
-            STATUS=$(echo "$RESPONSE" | jq -r '.data.project.services.edges[] | select(.node.name=="hyperscape") | .node.serviceInstances.edges[0].node.latestDeployment.status')
+              -d '{"query":"query { project(id: \"${{ secrets.RAILWAY_PROJECT_ID }}\") { services { edges { node { name serviceInstances { edges { node { latestDeployment { status } } } } } } } } }"}')
+            STATUS=$(echo "$RESPONSE" | jq -r '.data.project.services.edges[0].node.serviceInstances.edges[0].node.latestDeployment.status')
             echo "Deployment status: $STATUS"
             if [ "$STATUS" = "SUCCESS" ]; then
               echo "✅ Deployment succeeded"
@@ -116,4 +95,3 @@ jobs:
             sleep 30
           done
           echo "⏳ Deployment still in progress (will complete in background)"
-

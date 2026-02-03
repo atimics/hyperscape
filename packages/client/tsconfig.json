@@ -4,6 +4,8 @@
     "lib": ["ES2021", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "incremental": true,
+    "tsBuildInfoFile": "./tsconfig.tsbuildinfo",
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
     "strict": true,

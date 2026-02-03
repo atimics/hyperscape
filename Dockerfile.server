@@ -49,24 +49,11 @@ COPY tsconfig.json ./
 # Note: Assets are served from CDN - no local clone needed
 # Manifests are fetched at server startup from PUBLIC_CDN_URL
 
-# Build packages in correct order
-# 1. PhysX (copies prebuilt files)
-WORKDIR /app/packages/physx-js-webidl
-RUN bun run build || echo "PhysX build skipped"
+# Build all packages using Turbo (respects dependency graph + caching)
+WORKDIR /app
+RUN bunx turbo run build --filter=@hyperscape/shared --filter=@hyperscape/server --filter=@hyperscape/client --concurrency=10
 
-# 2. Shared (core engine)
-WORKDIR /app/packages/shared
-RUN bun run build
-
-# 3. Client (frontend - depends on shared)
-WORKDIR /app/packages/client
-RUN bun run build
-
-# 4. Server (game server)
-WORKDIR /app/packages/server
-RUN bun run build
-
-# 5. Copy client build to server public directory
+# Copy client build to server public directory
 RUN mkdir -p /app/packages/server/public && \
     cp -r /app/packages/client/dist/* /app/packages/server/public/
 
