@@ -476,7 +476,7 @@ export class InventorySystem extends SystemBase {
     if (itemId === "coins") {
       const coinPouchSystem = this.getCoinPouchSystem();
       if (coinPouchSystem) {
-        coinPouchSystem.addCoins(playerId, data.quantity);
+        await coinPouchSystem.addCoins(playerId, data.quantity);
       } else {
         // Fallback: emit event for CoinPouchSystem to handle
         this.emitTypedEvent(EventType.INVENTORY_ADD_COINS, {
@@ -684,7 +684,10 @@ export class InventorySystem extends SystemBase {
     if (itemId === "coins") {
       const coinPouchSystem = this.getCoinPouchSystem();
       if (coinPouchSystem) {
-        const newBalance = coinPouchSystem.removeCoins(playerId, data.quantity);
+        const newBalance = await coinPouchSystem.removeCoins(
+          playerId,
+          data.quantity,
+        );
         return newBalance >= 0; // -1 means insufficient funds
       } else {
         // Fallback: emit event for CoinPouchSystem to handle

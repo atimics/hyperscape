@@ -93,20 +93,20 @@ export class CoinPouchSystem extends SystemBase {
     // Subscribe to coin operation events
     this.subscribe<{ playerId: string; amount: number }>(
       EventType.INVENTORY_ADD_COINS,
-      (data) => {
-        this.addCoins(data.playerId, data.amount);
+      async (data) => {
+        await this.addCoins(data.playerId, data.amount);
       },
     );
 
-    this.subscribe(EventType.INVENTORY_REMOVE_COINS, (data) => {
-      this.removeCoins(data.playerId, data.amount);
+    this.subscribe(EventType.INVENTORY_REMOVE_COINS, async (data) => {
+      await this.removeCoins(data.playerId, data.amount);
     });
 
     this.subscribe(
       EventType.INVENTORY_UPDATE_COINS,
-      (data: { playerId: string; coins: number }) => {
+      async (data: { playerId: string; coins: number }) => {
         // Update coins sets absolute value (used for sync)
-        this.setCoins(data.playerId, data.coins);
+        await this.setCoins(data.playerId, data.coins);
       },
     );
 
@@ -202,7 +202,7 @@ export class CoinPouchSystem extends SystemBase {
    * @param amount - Amount to add (must be positive)
    * @returns New balance, or -1 if failed
    */
-  addCoins(playerId: string, amount: number): number {
+  async addCoins(playerId: string, amount: number): Promise<number> {
     if (!isValidPlayerID(playerId)) {
       Logger.systemError(
         "CoinPouchSystem",
@@ -236,8 +236,8 @@ export class CoinPouchSystem extends SystemBase {
       coins: newBalance,
     });
 
-    // Schedule database persist
-    this.schedulePersist(playerId);
+    // Write-through: persist immediately before returning
+    await this.persistCoinsImmediate(playerId);
 
     Logger.system(
       "CoinPouchSystem",
@@ -254,7 +254,7 @@ export class CoinPouchSystem extends SystemBase {
    * @param amount - Amount to remove (must be positive)
    * @returns New balance, or -1 if failed (insufficient funds or invalid)
    */
-  removeCoins(playerId: string, amount: number): number {
+  async removeCoins(playerId: string, amount: number): Promise<number> {
     if (!isValidPlayerID(playerId)) {
       Logger.systemError(
         "CoinPouchSystem",
@@ -296,8 +296,8 @@ export class CoinPouchSystem extends SystemBase {
       coins: newBalance,
     });
 
-    // Schedule database persist
-    this.schedulePersist(playerId);
+    // Write-through: persist immediately before returning
+    await this.persistCoinsImmediate(playerId);
 
     Logger.system(
       "CoinPouchSystem",
@@ -310,7 +310,7 @@ export class CoinPouchSystem extends SystemBase {
   /**
    * Set coins to an absolute value (used for sync/initialization)
    */
-  private setCoins(playerId: string, coins: number): void {
+  private async setCoins(playerId: string, coins: number): Promise<void> {
     const playerIdKey = toPlayerID(playerId);
     if (!playerIdKey) return;
 
@@ -322,7 +322,8 @@ export class CoinPouchSystem extends SystemBase {
       coins: clampedCoins,
     });
 
-    this.schedulePersist(playerId);
+    // Write-through: persist immediately before returning
+    await this.persistCoinsImmediate(playerId);
   }
 
   /**
