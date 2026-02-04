@@ -19,6 +19,7 @@ import { System } from "../../shared/infrastructure/System";
 import type { World } from "../../../core/World";
 import type { InteractableEntityType, ContextMenuAction } from "./types";
 import type { Position3D } from "../../../types/core/base-types";
+import type { PostProcessingComposer } from "../../../utils/rendering/PostProcessingFactory";
 import { INPUT, TIMING, MESSAGE_TYPES, DEBUG_INTERACTIONS } from "./constants";
 import { EventType } from "../../../types/events/event-types";
 import { worldToTile, tileToWorld } from "../../shared/movement/TileSystem";
@@ -27,6 +28,7 @@ import { worldToTile, tileToWorld } from "../../shared/movement/TileSystem";
 import { ActionQueueService } from "./services/ActionQueueService";
 import { RaycastService } from "./services/RaycastService";
 import { VisualFeedbackService } from "./services/VisualFeedbackService";
+import { EntityHighlightService } from "./services/EntityHighlightService";
 import { ContextMenuController } from "./ContextMenuController";
 
 // Handlers
@@ -63,6 +65,7 @@ export class InteractionRouter extends System {
   private actionQueue: ActionQueueService;
   private raycastService: RaycastService;
   private visualFeedback: VisualFeedbackService;
+  private highlightService: EntityHighlightService;
   private contextMenu: ContextMenuController;
 
   // Handlers by entity type
@@ -74,6 +77,10 @@ export class InteractionRouter extends System {
   private mouseDownClientPos: { x: number; y: number } | null = null;
   private touchStart: { x: number; y: number; time: number } | null = null;
   private longPressTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Hover highlight throttle
+  private lastHoverTime = 0;
+  private static readonly HOVER_THROTTLE_MS = 50;
 
   // Targeting mode state (OSRS "Use X on Y")
   private targetingMode: TargetingModeState = {
@@ -90,6 +97,7 @@ export class InteractionRouter extends System {
     this.actionQueue = new ActionQueueService(world);
     this.raycastService = new RaycastService(world);
     this.visualFeedback = new VisualFeedbackService(world);
+    this.highlightService = new EntityHighlightService(world);
     this.contextMenu = new ContextMenuController();
 
     // Register handlers
@@ -194,6 +202,14 @@ export class InteractionRouter extends System {
 
     // Initialize visual feedback
     this.visualFeedback.initialize();
+
+    // Wire highlight service to post-processing composer
+    const graphics = this.world.graphics as
+      | { composer?: PostProcessingComposer | null }
+      | undefined;
+    if (graphics?.composer) {
+      this.highlightService.setComposer(graphics.composer);
+    }
 
     // Bind event handlers
     this.onCanvasClick = this.onCanvasClick.bind(this);
@@ -439,6 +455,9 @@ export class InteractionRouter extends System {
       this.contextMenu.closeMenu();
     }
 
+    // Clear hover highlight while mouse is down
+    this.highlightService.clearHover();
+
     this.isDragging = false;
     this.mouseDownButton = event.button;
     this.mouseDownClientPos = { x: event.clientX, y: event.clientY };
@@ -451,19 +470,44 @@ export class InteractionRouter extends System {
   };
 
   private onMouseMove = (event: MouseEvent): void => {
-    if (this.mouseDownButton === null || !this.mouseDownClientPos) return;
+    // Drag detection
+    if (this.mouseDownButton !== null && this.mouseDownClientPos) {
+      const dx = event.clientX - this.mouseDownClientPos.x;
+      const dy = event.clientY - this.mouseDownClientPos.y;
 
-    const dx = event.clientX - this.mouseDownClientPos.x;
-    const dy = event.clientY - this.mouseDownClientPos.y;
+      if (
+        !this.isDragging &&
+        (Math.abs(dx) > INPUT.DRAG_THRESHOLD_PX ||
+          Math.abs(dy) > INPUT.DRAG_THRESHOLD_PX)
+      ) {
+        this.isDragging = true;
+      }
+    }
 
-    if (
-      !this.isDragging &&
-      (Math.abs(dx) > INPUT.DRAG_THRESHOLD_PX ||
-        Math.abs(dy) > INPUT.DRAG_THRESHOLD_PX)
-    ) {
-      this.isDragging = true;
+    // Hover highlighting (skip while dragging)
+    if (!this.isDragging && this.areControlsEnabled()) {
+      this.updateHoverHighlight(event.clientX, event.clientY);
     }
   };
+
+  /**
+   * Throttled hover highlight update via raycast
+   */
+  private updateHoverHighlight(screenX: number, screenY: number): void {
+    const now = performance.now();
+    if (now - this.lastHoverTime < InteractionRouter.HOVER_THROTTLE_MS) return;
+    this.lastHoverTime = now;
+
+    if (!this.canvas) return;
+
+    const target = this.raycastService.getEntityAtPosition(
+      screenX,
+      screenY,
+      this.canvas,
+    );
+
+    this.highlightService.setHoverTarget(target);
+  }
 
   private onTouchStart = (event: TouchEvent): void => {
     if (!this.areControlsEnabled()) return;
