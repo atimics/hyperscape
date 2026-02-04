@@ -142,6 +142,18 @@ export class ResourceEntity extends InteractableEntity {
   private static particleGeometry: THREE.CircleGeometry | null = null;
   /** Cache for DataTextures keyed by generation parameters to avoid duplicates */
   private static textureCache = new Map<string, THREE.DataTexture>();
+  /** Dispose shared static resources (geometry + texture cache). Call on world teardown. */
+  static disposeSharedResources(): void {
+    if (ResourceEntity.particleGeometry) {
+      ResourceEntity.particleGeometry.dispose();
+      ResourceEntity.particleGeometry = null;
+    }
+    for (const tex of ResourceEntity.textureCache.values()) {
+      tex.dispose();
+    }
+    ResourceEntity.textureCache.clear();
+  }
+
   /** Tiles this resource occupies for collision (cached for cleanup) */
   private collisionTiles: TileCoord[] = [];
 
