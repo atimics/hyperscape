@@ -616,6 +616,9 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
   const [colorGradingIntensity, setColorGradingIntensity] = useState(
     prefs?.colorGradingIntensity ?? 1,
   );
+  const [entityHighlighting, setEntityHighlighting] = useState(
+    prefs?.entityHighlighting ?? true,
+  );
   const [music, setMusic] = useState(prefs?.music || 0.5);
   const [sfx, setSFX] = useState(prefs?.sfx || 0.5);
   const [voice, setVoice] = useState(prefs?.voice || 1);
@@ -760,6 +763,8 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
         setColorGrading(changes.colorGrading.value as string);
       if (changes.colorGradingIntensity)
         setColorGradingIntensity(changes.colorGradingIntensity.value as number);
+      if (changes.entityHighlighting)
+        setEntityHighlighting(changes.entityHighlighting.value as boolean);
       if (changes.music) setMusic(changes.music.value as number);
       if (changes.sfx) setSFX(changes.sfx.value as number);
       if (changes.voice) setVoice(changes.voice.value as number);
@@ -925,6 +930,14 @@ export function SettingsPanel({ world }: SettingsPanelProps) {
                   onChange={(v) => {
                     setBloom(v);
                     prefs?.setBloom?.(v);
+                  }}
+                />
+                <ToggleSwitch
+                  label="Entity Highlighting"
+                  checked={entityHighlighting}
+                  onChange={(v) => {
+                    setEntityHighlighting(v);
+                    prefs?.setEntityHighlighting?.(v);
                   }}
                 />
               </div>

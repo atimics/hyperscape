@@ -4,6 +4,7 @@
  * Provides WebGPU-compatible post-processing effects including:
  * - 3D LUT color grading for cinematic looks
  * - Tone mapping control
+ * - Entity outline highlighting (RS3-style hover effect)
  *
  * Uses Three.js TSL (Three Shading Language) for GPU-accelerated effects.
  */
@@ -31,6 +32,28 @@ type LUTLoaderResult = {
 
 type LUTLoader = {
   loadAsync: (url: string) => Promise<LUTLoaderResult>;
+};
+
+// Outline node types (dynamically loaded from three/addons/tsl/display/OutlineNode.js)
+type OutlineFunction = (
+  scene: THREE.Scene,
+  camera: THREE.Camera,
+  params: {
+    selectedObjects: THREE.Object3D[];
+    edgeGlow: unknown;
+    edgeThickness: unknown;
+  },
+) => OutlineNodeResult;
+
+type OutlineNodeResult = {
+  visibleEdge: { mul: (color: unknown) => ShaderNodeLike };
+  hiddenEdge: { mul: (color: unknown) => ShaderNodeLike };
+  selectedObjects: THREE.Object3D[];
+};
+
+type ShaderNodeLike = {
+  add: (other: unknown) => ShaderNodeLike;
+  mul: (other: unknown) => ShaderNodeLike;
 };
 
 /**
@@ -75,6 +98,10 @@ export type PostProcessingComposer = {
   setLUTIntensity: (intensity: number) => void;
   getCurrentLUT: () => LUTPresetName;
   isLUTEnabled: () => boolean;
+  // Outline highlighting
+  setOutlineObjects: (objects: THREE.Object3D[]) => void;
+  setOutlineColor: (visible: THREE.Color, hidden?: THREE.Color) => void;
+  setOutlineStrength: (strength: number) => void;
 };
 
 export interface PostProcessingOptions {
@@ -96,6 +123,18 @@ let lut3DModule: { lut3D: LUT3DFunction } | null = null;
 let lutCubeLoaderModule: { LUTCubeLoader: new () => LUTLoader } | null = null;
 let lut3dlLoaderModule: { LUT3dlLoader: new () => LUTLoader } | null = null;
 let lutImageLoaderModule: { LUTImageLoader: new () => LUTLoader } | null = null;
+let outlineModule: { outline: OutlineFunction } | null = null;
+
+/**
+ * Load outline module dynamically
+ */
+async function loadOutlineModule(): Promise<void> {
+  if (!outlineModule) {
+    outlineModule = (await import(
+      "three/examples/jsm/tsl/display/OutlineNode.js"
+    )) as unknown as { outline: OutlineFunction };
+  }
+}
 
 /**
  * Load required LUT modules dynamically
@@ -283,8 +322,35 @@ export async function createPostProcessing(
     intensityNode: { value: number };
   };
 
-  // Use the LUT pass as output
-  postProcessing.outputNode = lutPassNode as unknown as ReturnType<typeof pass>;
+  // === Outline highlighting ===
+  await loadOutlineModule();
+  const outlineFn = outlineModule!.outline;
+
+  const selectedObjects: THREE.Object3D[] = [];
+  const edgeStrengthUniform = uniform(3.0);
+  const edgeThicknessUniform = uniform(1.0);
+  const edgeGlowUniform = uniform(0.0);
+  const visibleEdgeColorUniform = uniform(new THREE.Color(0xffffff));
+  const hiddenEdgeColorUniform = uniform(new THREE.Color(0x190a05));
+
+  const outlineNode = outlineFn(scene, camera, {
+    selectedObjects,
+    edgeGlow: edgeGlowUniform,
+    edgeThickness: edgeThicknessUniform,
+  });
+
+  const outlineColor = outlineNode.visibleEdge
+    .mul(visibleEdgeColorUniform)
+    .add(outlineNode.hiddenEdge.mul(hiddenEdgeColorUniform))
+    .mul(edgeStrengthUniform);
+
+  // Track whether outline has objects (to decide if post-processing is needed)
+  let outlineActive = false;
+
+  // Chain: scene → tone mapping → LUT → + outline → final output
+  postProcessing.outputNode = outlineColor.add(
+    lutPassNode as unknown as ShaderNodeLike,
+  ) as unknown as ReturnType<typeof pass>;
 
   // Track if LUT is currently enabled (for performance bypass)
   let lutEnabled = false;
@@ -317,8 +383,8 @@ export async function createPostProcessing(
 
   const composer: PostProcessingComposer = {
     render: () => {
-      if (lutEnabled) {
-        // Use post-processing with LUT
+      if (lutEnabled || outlineActive) {
+        // Use post-processing with LUT and/or outline
         postProcessing.render();
       } else {
         // Bypass post-processing entirely for better performance
@@ -326,7 +392,7 @@ export async function createPostProcessing(
       }
     },
     renderAsync: async () => {
-      if (lutEnabled) {
+      if (lutEnabled || outlineActive) {
         await postProcessing.renderAsync();
       } else {
         await renderer.renderAsync(scene, camera);
@@ -379,6 +445,26 @@ export async function createPostProcessing(
     },
     getCurrentLUT: () => currentLUT,
     isLUTEnabled: () => lutEnabled,
+    // Outline highlighting
+    setOutlineObjects: (objects: THREE.Object3D[]) => {
+      selectedObjects.length = 0;
+      if (objects.length > 0) {
+        selectedObjects.push(...objects);
+        outlineActive = true;
+      } else {
+        outlineActive = false;
+      }
+      outlineNode.selectedObjects = selectedObjects;
+    },
+    setOutlineColor: (visible: THREE.Color, hidden?: THREE.Color) => {
+      visibleEdgeColorUniform.value.copy(visible);
+      if (hidden) {
+        hiddenEdgeColorUniform.value.copy(hidden);
+      }
+    },
+    setOutlineStrength: (strength: number) => {
+      edgeStrengthUniform.value = Math.max(0, Math.min(10, strength));
+    },
   };
 
   return composer;

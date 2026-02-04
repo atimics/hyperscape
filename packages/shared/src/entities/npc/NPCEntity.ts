@@ -355,6 +355,9 @@ export class NPCEntity extends Entity {
       raw?: { scene?: THREE.Object3D };
     };
     if (instanceWithRaw?.raw?.scene) {
+      this.mesh = instanceWithRaw.raw.scene;
+      this.mesh.name = `NPC_VRM_${this.config.npcType}_${this.id}`;
+
       const userData = {
         type: "npc",
         entityId: this.id,
@@ -364,12 +367,12 @@ export class NPCEntity extends Entity {
         npcType: this.config.npcType,
         services: this.config.services,
       };
-      instanceWithRaw.raw.scene.userData = userData;
+      this.mesh.userData = userData;
 
       // PERFORMANCE: Set VRM mesh to layer 1 (main camera only, not minimap)
       // Minimap only renders terrain and uses 2D dots for entities
-      instanceWithRaw.raw.scene.layers.set(1);
-      instanceWithRaw.raw.scene.traverse((child) => {
+      this.mesh.layers.set(1);
+      this.mesh.traverse((child) => {
         child.userData = { ...userData };
         child.layers.set(1);
         // PERFORMANCE: Disable raycasting on VRM meshes - use _raycastProxy instead

@@ -42,6 +42,7 @@ export interface ClientPrefsData {
   bloom?: boolean;
   colorGrading?: string;
   colorGradingIntensity?: number;
+  entityHighlighting?: boolean;
   music?: number;
   sfx?: number;
   voice?: number;
@@ -78,6 +79,7 @@ export class ClientInterface extends SystemBase {
   bloom: boolean = true;
   colorGrading: string = "cinematic";
   colorGradingIntensity: number = 1;
+  entityHighlighting: boolean = true;
   music: number = 1;
   sfx: number = 1;
   voice: number = 1;
@@ -150,6 +152,8 @@ export class ClientInterface extends SystemBase {
         this.colorGrading = parsed.colorGrading;
       if (parsed.colorGradingIntensity !== undefined)
         this.colorGradingIntensity = parsed.colorGradingIntensity;
+      if (parsed.entityHighlighting !== undefined)
+        this.entityHighlighting = parsed.entityHighlighting;
 
       if (parsed.chatVisible !== undefined)
         this.chatVisible = parsed.chatVisible;
@@ -458,6 +462,7 @@ export class ClientInterface extends SystemBase {
       bloom: this.bloom,
       colorGrading: this.colorGrading,
       colorGradingIntensity: this.colorGradingIntensity,
+      entityHighlighting: this.entityHighlighting,
 
       music: this.music,
       sfx: this.sfx,
@@ -497,6 +502,9 @@ export class ClientInterface extends SystemBase {
   }
   setColorGradingIntensity(value: number) {
     this.modify("colorGradingIntensity", value);
+  }
+  setEntityHighlighting(value: boolean) {
+    this.modify("entityHighlighting", value);
   }
   setMusic(value: number) {
     this.modify("music", value);
