@@ -5,7 +5,7 @@
  * - Level requirements for equipment tiers
  * - Stat bonuses from equipped items
  * - Right-click equip/unequip functionality
- * - Database persistence and auto-save
+ * - Write-through database persistence
  */
 
 import { EventType, type EquipmentSyncData } from "../../../types/events";
