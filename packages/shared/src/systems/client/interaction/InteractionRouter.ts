@@ -224,7 +224,7 @@ export class InteractionRouter extends System {
     this.canvas.addEventListener("click", this.onCanvasClick, false);
     this.canvas.addEventListener("contextmenu", this.onContextMenu, true);
     this.canvas.addEventListener("mousedown", this.onMouseDown, true);
-    this.canvas.addEventListener("mouseup", this.onMouseUp, false);
+    window.addEventListener("mouseup", this.onMouseUp, false);
     this.canvas.addEventListener("mousemove", this.onMouseMove, false);
     this.canvas.addEventListener("touchstart", this.onTouchStart, true);
     this.canvas.addEventListener("touchend", this.onTouchEnd, true);
@@ -264,7 +264,7 @@ export class InteractionRouter extends System {
       this.canvas.removeEventListener("click", this.onCanvasClick);
       this.canvas.removeEventListener("contextmenu", this.onContextMenu);
       this.canvas.removeEventListener("mousedown", this.onMouseDown);
-      this.canvas.removeEventListener("mouseup", this.onMouseUp);
+      window.removeEventListener("mouseup", this.onMouseUp);
       this.canvas.removeEventListener("mousemove", this.onMouseMove);
       this.canvas.removeEventListener("touchstart", this.onTouchStart);
       this.canvas.removeEventListener("touchend", this.onTouchEnd);
@@ -473,6 +473,14 @@ export class InteractionRouter extends System {
   };
 
   private onMouseMove = (event: MouseEvent): void => {
+    // Recover from stale drag state: if no buttons are held but we think one is,
+    // the mouseup was lost (e.g. released over a UI overlay outside the canvas)
+    if (this.mouseDownButton !== null && event.buttons === 0) {
+      this.isDragging = false;
+      this.mouseDownButton = null;
+      this.mouseDownClientPos = null;
+    }
+
     // Drag detection
     if (this.mouseDownButton !== null && this.mouseDownClientPos) {
       const dx = event.clientX - this.mouseDownClientPos.x;
