@@ -268,7 +268,10 @@ export class InteractionRouter extends System {
       this.canvas.removeEventListener("mousemove", this.onMouseMove);
       this.canvas.removeEventListener("touchstart", this.onTouchStart);
       this.canvas.removeEventListener("touchend", this.onTouchEnd);
+      this.canvas.style.cursor = "default";
     }
+
+    this.highlightService.clearHover();
 
     this.world.off(EventType.CAMERA_TAP, this.onCameraTap);
     this.world.off(EventType.ENTITY_MODIFIED, this.onEntityModified);
@@ -507,6 +510,13 @@ export class InteractionRouter extends System {
     );
 
     this.highlightService.setHoverTarget(target);
+
+    // Update cursor to indicate interactability
+    if (target && target.entityType) {
+      this.canvas.style.cursor = "pointer";
+    } else {
+      this.canvas.style.cursor = "default";
+    }
   }
 
   private onTouchStart = (event: TouchEvent): void => {
