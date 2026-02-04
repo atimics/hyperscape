@@ -353,10 +353,18 @@ export class CoinPouchSystem extends SystemBase {
     const db = this.getDatabase();
     if (!db) return;
 
-    const row = await db.getPlayerAsync(playerId);
-    if (row) {
-      const coins = this.getCoins(playerId);
-      await db.savePlayerAsync(playerId, { coins });
+    try {
+      const row = await db.getPlayerAsync(playerId);
+      if (row) {
+        const coins = this.getCoins(playerId);
+        await db.savePlayerAsync(playerId, { coins });
+      }
+    } catch (error) {
+      Logger.systemError(
+        "CoinPouchSystem",
+        `Failed to persist coins for ${playerId}`,
+        error instanceof Error ? error : new Error(String(error)),
+      );
     }
   }
 
@@ -433,7 +441,7 @@ export class CoinPouchSystem extends SystemBase {
       this.verificationInterval = undefined;
     }
 
-    // Await all final saves before shutdown (belt-and-suspenders for any in-flight writes)
+    // Final save pass for all connected players before shutdown
     if (this.world.isServer) {
       const db = this.getDatabase();
       if (db) {

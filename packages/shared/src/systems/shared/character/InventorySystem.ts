@@ -2298,7 +2298,7 @@ export class InventorySystem extends SystemBase {
    * Call this for graceful shutdown to prevent data loss.
    */
   async destroyAsync(): Promise<void> {
-    // Await all final saves before shutdown (belt-and-suspenders for any in-flight writes)
+    // Final save pass for all connected players before shutdown
     if (this.world.isServer) {
       const db = this.getDatabase();
       if (db) {
