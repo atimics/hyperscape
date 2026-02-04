@@ -5,12 +5,11 @@
  * Maps entity types to highlight colors and drives the post-processing
  * outline pass via the PostProcessingComposer.
  *
- * Color scheme:
- * - Red: Items, lootable corpses/headstones
- * - Yellow: Hostile mobs
- * - Cyan: Friendly NPCs
- * - White: Other players
- * - Green: Resources, stations, interactable objects
+ * Color scheme (RS3 defaults):
+ * - Yellow: Friendly NPCs
+ * - Red: Attackable/hostile mobs
+ * - Cyan: Interactable objects, resources, stations
+ * - White: Loot (items, corpses, headstones), other players
  */
 
 import * as THREE from "three";
@@ -20,35 +19,31 @@ import type { RaycastTarget, InteractableEntityType } from "../types";
 
 // Pre-allocated color objects to avoid per-hover allocations
 const HIGHLIGHT_COLORS: Record<string, THREE.Color> = {
-  // Items — most important to spot
-  item: new THREE.Color(0xff0000),
+  // Friendly NPCs — yellow
+  npc: new THREE.Color(0xffff00),
 
-  // Hostile mobs
-  mob: new THREE.Color(0xffff00),
+  // Attackable/hostile mobs — red
+  mob: new THREE.Color(0xff0000),
 
-  // Friendly NPCs
-  npc: new THREE.Color(0x00ffff),
-
-  // Other players
+  // Other players — white
   player: new THREE.Color(0xffffff),
 
-  // Gatherable resources (trees, rocks, fishing spots)
-  resource: new THREE.Color(0x00ff00),
+  // Loot — white
+  item: new THREE.Color(0xffffff),
+  corpse: new THREE.Color(0xffffff),
+  headstone: new THREE.Color(0xffffff),
 
-  // Interactable stations/objects
-  bank: new THREE.Color(0x00ff00),
-  furnace: new THREE.Color(0x00ff00),
-  anvil: new THREE.Color(0x00ff00),
-  altar: new THREE.Color(0x00ff00),
-  runecrafting_altar: new THREE.Color(0x00ff00),
-  fire: new THREE.Color(0x00ff00),
-  range: new THREE.Color(0x00ff00),
-  starter_chest: new THREE.Color(0x00ff00),
-  forfeit_pillar: new THREE.Color(0x00ff00),
-
-  // Lootable
-  corpse: new THREE.Color(0xff0000),
-  headstone: new THREE.Color(0xff0000),
+  // Interactable objects — cyan
+  resource: new THREE.Color(0x00ffff),
+  bank: new THREE.Color(0x00ffff),
+  furnace: new THREE.Color(0x00ffff),
+  anvil: new THREE.Color(0x00ffff),
+  altar: new THREE.Color(0x00ffff),
+  runecrafting_altar: new THREE.Color(0x00ffff),
+  fire: new THREE.Color(0x00ffff),
+  range: new THREE.Color(0x00ffff),
+  starter_chest: new THREE.Color(0x00ffff),
+  forfeit_pillar: new THREE.Color(0x00ffff),
 };
 
 const DEFAULT_COLOR = new THREE.Color(0xffffff);
@@ -95,17 +90,11 @@ export class EntityHighlightService {
       return;
     }
 
-    // Check interactability via userData
+    // Get the visual root for mesh collection
     const mesh = target.entity.mesh;
     const node = target.entity.node;
     const root = mesh ?? node;
     if (!root) {
-      this.composer.setOutlineObjects([]);
-      return;
-    }
-
-    const userData = root.userData;
-    if (userData && userData.interactable === false) {
       this.composer.setOutlineObjects([]);
       return;
     }
