@@ -79,6 +79,13 @@ const FISHING_LAYER_SHIMMER = 2;
 const FISHING_PARTICLE_SIZE = 0.055;
 const FISHING_BUBBLE_SIZE = 0.09;
 
+// Splash arc animation: y = peakHeight * PARABOLIC_SCALE * t * (1-t), peaks at t=0.5
+const SPLASH_PARABOLIC_SCALE = 4;
+// How fast splash particles pop in (higher = snappier)
+const SPLASH_FADE_IN_RATE = 12;
+// Bubble lateral wobble frequency multiplier
+const BUBBLE_WOBBLE_FREQ = 4.0;
+
 interface FishingParticleState {
   types: Uint8Array;
   ages: Float32Array;
@@ -86,7 +93,6 @@ interface FishingParticleState {
   angles: Float32Array;
   speeds: Float32Array;
   radii: Float32Array;
-  baseScales: Float32Array;
   directions: Int8Array;
   peakHeights: Float32Array;
   worldX: number;
@@ -134,6 +140,8 @@ export class ResourceEntity extends InteractableEntity {
   private fishingRippleSpeed = 1.0;
   /** Shared billboard geometry for fishing particles */
   private static particleGeometry: THREE.CircleGeometry | null = null;
+  /** Cache for DataTextures keyed by generation parameters to avoid duplicates */
+  private static textureCache = new Map<string, THREE.DataTexture>();
   /** Tiles this resource occupies for collision (cached for cleanup) */
   private collisionTiles: TileCoord[] = [];
 
@@ -666,6 +674,10 @@ export class ResourceEntity extends InteractableEntity {
     size: number,
     sharpness: number,
   ): THREE.DataTexture {
+    const key = `glow:${colorHex}:${size}:${sharpness}`;
+    const cached = ResourceEntity.textureCache.get(key);
+    if (cached) return cached;
+
     const r = (colorHex >> 16) & 0xff;
     const g = (colorHex >> 8) & 0xff;
     const b = colorHex & 0xff;
@@ -691,6 +703,7 @@ export class ResourceEntity extends InteractableEntity {
     tex.magFilter = THREE.LinearFilter;
     tex.minFilter = THREE.LinearFilter;
     tex.needsUpdate = true;
+    ResourceEntity.textureCache.set(key, tex);
     return tex;
   }
 
@@ -705,6 +718,10 @@ export class ResourceEntity extends InteractableEntity {
     ringRadius: number,
     ringWidth: number,
   ): THREE.DataTexture {
+    const key = `ring:${colorHex}:${size}:${ringRadius}:${ringWidth}`;
+    const cached = ResourceEntity.textureCache.get(key);
+    if (cached) return cached;
+
     const r = (colorHex >> 16) & 0xff;
     const g = (colorHex >> 8) & 0xff;
     const b = colorHex & 0xff;
@@ -737,6 +754,7 @@ export class ResourceEntity extends InteractableEntity {
     tex.magFilter = THREE.LinearFilter;
     tex.minFilter = THREE.LinearFilter;
     tex.needsUpdate = true;
+    ResourceEntity.textureCache.set(key, tex);
     return tex;
   }
 
@@ -795,7 +813,6 @@ export class ResourceEntity extends InteractableEntity {
     const angles = new Float32Array(total);
     const speeds = new Float32Array(total);
     const radii = new Float32Array(total);
-    const baseScales = new Float32Array(total);
     const directions = new Int8Array(total);
     const peakHeights = new Float32Array(total);
 
@@ -821,7 +838,6 @@ export class ResourceEntity extends InteractableEntity {
       angles[idx] = Math.random() * Math.PI * 2;
       speeds[idx] = 0.3 + Math.random() * 0.4;
       radii[idx] = 0.05 + Math.random() * 0.3;
-      baseScales[idx] = FISHING_PARTICLE_SIZE;
       directions[idx] = Math.random() > 0.5 ? 1 : -1;
       peakHeights[idx] = 0.12 + Math.random() * 0.2;
 
@@ -847,7 +863,6 @@ export class ResourceEntity extends InteractableEntity {
       angles[idx] = Math.random() * Math.PI * 2;
       speeds[idx] = 0.15 + Math.random() * 0.2;
       radii[idx] = 0.04 + Math.random() * 0.2;
-      baseScales[idx] = FISHING_BUBBLE_SIZE;
       directions[idx] = Math.random() > 0.5 ? 1 : -1;
       peakHeights[idx] = 0.3 + Math.random() * 0.25;
 
@@ -872,7 +887,6 @@ export class ResourceEntity extends InteractableEntity {
       angles[idx] = Math.random() * Math.PI * 2;
       speeds[idx] = 0.1 + Math.random() * 0.15;
       radii[idx] = 0.15 + Math.random() * 0.45;
-      baseScales[idx] = FISHING_PARTICLE_SIZE;
       directions[idx] = Math.random() > 0.5 ? 1 : -1;
       peakHeights[idx] = 0;
 
@@ -896,7 +910,6 @@ export class ResourceEntity extends InteractableEntity {
       angles,
       speeds,
       radii,
-      baseScales,
       directions,
       peakHeights,
       worldX,
@@ -969,7 +982,6 @@ export class ResourceEntity extends InteractableEntity {
       angles,
       speeds,
       radii,
-      baseScales,
       directions,
       peakHeights,
       worldX,
@@ -1050,8 +1062,7 @@ export class ResourceEntity extends InteractableEntity {
       const t = ages[i] / lifetimes[i];
 
       if (layer === FISHING_LAYER_SPLASH) {
-        // Parabolic arc: y = peakHeight * 4t(1-t), peaks at t=0.5
-        const arcY = peakHeights[i] * 4 * t * (1 - t);
+        const arcY = peakHeights[i] * SPLASH_PARABOLIC_SCALE * t * (1 - t);
         const offsetX = Math.cos(angles[i]) * radii[i];
         const offsetZ = Math.sin(angles[i]) * radii[i];
         particle.position.set(
@@ -1065,13 +1076,13 @@ export class ResourceEntity extends InteractableEntity {
           FISHING_PARTICLE_SIZE,
         );
         // Snappy pop-in, smooth fade as it arcs down
-        const fadeIn = Math.min(t * 12, 1);
+        const fadeIn = Math.min(t * SPLASH_FADE_IN_RATE, 1);
         const fadeOut = Math.pow(1 - t, 1.2);
         mat.opacity = 0.9 * fadeIn * fadeOut;
       } else if (layer === FISHING_LAYER_BUBBLE) {
         // Rise gently with wobbly lateral drift
         const riseY = t * peakHeights[i];
-        const wobbleFreq = directions[i] * 4.0;
+        const wobbleFreq = directions[i] * BUBBLE_WOBBLE_FREQ;
         const drift = Math.sin(angles[i] + t * wobbleFreq) * radii[i];
         const driftZ = Math.cos(angles[i] + t * 2.5) * radii[i] * 0.6;
         particle.position.set(
@@ -1168,11 +1179,11 @@ export class ResourceEntity extends InteractableEntity {
     }
 
     // Clean up fishing spot particles (world-space billboard meshes)
+    // Note: textures are not disposed here — they are shared via textureCache
     if (this.particleMeshes.length > 0) {
       const scene = this.world.stage?.scene;
       for (const mesh of this.particleMeshes) {
         if (scene) scene.remove(mesh);
-        (mesh.material as THREE.MeshBasicMaterial).map?.dispose();
         (mesh.material as THREE.Material).dispose();
       }
       this.particleMeshes = [];
@@ -1183,7 +1194,6 @@ export class ResourceEntity extends InteractableEntity {
     if (this.rippleRings) {
       for (const ring of this.rippleRings) {
         ring.geometry.dispose();
-        (ring.material as THREE.MeshBasicMaterial).map?.dispose();
         (ring.material as THREE.Material).dispose();
         this.node.remove(ring);
       }
@@ -1193,7 +1203,6 @@ export class ResourceEntity extends InteractableEntity {
     // Clean up glow mesh (fishing spots, node-local)
     if (this.glowMesh) {
       this.glowMesh.geometry.dispose();
-      (this.glowMesh.material as THREE.MeshBasicMaterial).map?.dispose();
       (this.glowMesh.material as THREE.Material).dispose();
       this.node.remove(this.glowMesh);
       this.glowMesh = undefined;
