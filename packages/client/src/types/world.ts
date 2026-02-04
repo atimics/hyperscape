@@ -100,6 +100,7 @@ export interface WorldPreferences {
   bloom: boolean;
   colorGrading: string;
   colorGradingIntensity: number;
+  entityHighlighting: boolean;
   music: number;
   sfx: number;
   voice: number;
@@ -115,6 +116,7 @@ export interface WorldPreferences {
   setBloom: (value: boolean) => void;
   setColorGrading: (value: string) => void;
   setColorGradingIntensity: (value: number) => void;
+  setEntityHighlighting: (value: boolean) => void;
   setMusic: (value: number) => void;
   setSFX: (value: number) => void;
   setVoice: (value: number) => void;

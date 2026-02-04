@@ -503,6 +503,16 @@ export class InteractionRouter extends System {
 
     if (!this.canvas) return;
 
+    // Check if entity highlighting is disabled in preferences
+    const prefs = this.world.prefs as
+      | { entityHighlighting?: boolean }
+      | undefined;
+    if (prefs?.entityHighlighting === false) {
+      this.highlightService.clearHover();
+      this.canvas.style.cursor = "default";
+      return;
+    }
+
     const target = this.raycastService.getEntityAtPosition(
       screenX,
       screenY,
