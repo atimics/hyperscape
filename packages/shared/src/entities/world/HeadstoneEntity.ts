@@ -166,20 +166,40 @@ export class HeadstoneEntity extends InteractableEntity {
 
   /**
    * Check if player can loot this gravestone
-   * Enforces time-based and owner-based loot protection
+   * Enforces owner-based and time-based loot protection (OSRS-style)
+   *
+   * Rules:
+   * - Owner can always loot their own gravestone
+   * - Safe area deaths (no protection timer): owner-only, no expiration
+   * - Wilderness/PvP deaths: protectedFor (killer) can loot during protection period
+   * - After protection expires: anyone can loot (wilderness only)
    */
   private canPlayerLoot(playerId: string): boolean {
-    const now = Date.now();
+    const ownerId = this.headstoneData.playerId;
 
-    // Check if loot protection is active
-    if (this.lootProtectionUntil && now < this.lootProtectionUntil) {
-      // Loot is protected
-      if (this.protectedFor && this.protectedFor !== playerId) {
-        return false;
-      }
+    // Owner can always loot their own gravestone
+    if (playerId === ownerId) {
+      return true;
     }
 
-    // Player can loot
+    // Safe area deaths have no protection timer (lootProtectionUntil: 0)
+    // Only owner can loot — no expiration
+    if (!this.lootProtectionUntil || this.lootProtectionUntil === 0) {
+      return false;
+    }
+
+    const now = Date.now();
+
+    // Check if loot protection is still active
+    if (now < this.lootProtectionUntil) {
+      // During protection: only the designated player (killer in PvP) can loot
+      if (this.protectedFor && this.protectedFor === playerId) {
+        return true;
+      }
+      return false;
+    }
+
+    // Protection expired — anyone can loot (wilderness behavior)
     return true;
   }
 
