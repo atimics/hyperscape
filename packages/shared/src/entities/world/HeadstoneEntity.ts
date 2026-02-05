@@ -213,8 +213,13 @@ export class HeadstoneEntity extends InteractableEntity {
     }
   }
 
-  // --- Data Access (used by GravestoneLootSystem) ---
+  // --- Data Access (used exclusively by GravestoneLootSystem) ---
 
+  /**
+   * Remove an item from the gravestone loot.
+   * Access controlled: only GravestoneLootSystem should call this
+   * via the LootableEntity interface (loot queue, permissions, rate limiting enforced there).
+   */
   public removeItem(itemId: string, quantity: number): boolean {
     const itemIndex = this.lootItems.findIndex(
       (item) => item.itemId === itemId,
@@ -265,6 +270,15 @@ export class HeadstoneEntity extends InteractableEntity {
     return this.lootItems.length > 0;
   }
 
+  /** Atomically consume all remaining items (e.g., for gravestone expiration to ground items). Server-only. */
+  public consumeAllItems(): InventoryItem[] {
+    if (!this.world.isServer) return [];
+    const items = [...this.lootItems];
+    this.lootItems.length = 0;
+    this.markNetworkDirty();
+    return items;
+  }
+
   // --- Network ---
 
   getNetworkData(): Record<string, unknown> {
@@ -273,12 +287,10 @@ export class HeadstoneEntity extends InteractableEntity {
     return {
       ...baseData,
       lootItemCount: this.lootItems.length,
-      lootItems: this.lootItems,
       despawnTime: hd.despawnTime,
       playerId: hd.playerId,
       deathMessage: hd.deathMessage,
       lootProtectionUntil: this.lootProtectionUntil,
-      protectedFor: this.protectedFor,
     };
   }
 
@@ -299,10 +311,8 @@ export class HeadstoneEntity extends InteractableEntity {
         lootProtectionUntil: this.lootProtectionUntil,
         protectedFor: this.protectedFor,
       },
-      lootItems: this.lootItems,
       lootItemCount: this.lootItems.length,
       lootProtectionUntil: this.lootProtectionUntil,
-      protectedFor: this.protectedFor,
     } as unknown as EntityData;
   }
 

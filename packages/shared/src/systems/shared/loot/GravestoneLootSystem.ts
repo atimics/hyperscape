@@ -46,6 +46,44 @@ type LootContext = {
   ownerId: string;
 };
 
+// --- Runtime Payload Validators ---
+
+function isValidLootRequest(data: unknown): data is {
+  corpseId: string;
+  playerId: string;
+  itemId: string;
+  quantity: number;
+  slot?: number;
+  transactionId?: string;
+} {
+  if (!data || typeof data !== "object") return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.corpseId === "string" &&
+    d.corpseId.length > 0 &&
+    typeof d.playerId === "string" &&
+    d.playerId.length > 0 &&
+    typeof d.itemId === "string" &&
+    d.itemId.length > 0 &&
+    typeof d.quantity === "number" &&
+    d.quantity > 0 &&
+    Number.isFinite(d.quantity)
+  );
+}
+
+function isValidLootAllRequest(
+  data: unknown,
+): data is { corpseId: string; playerId: string; transactionId?: string } {
+  if (!data || typeof data !== "object") return false;
+  const d = data as Record<string, unknown>;
+  return (
+    typeof d.corpseId === "string" &&
+    d.corpseId.length > 0 &&
+    typeof d.playerId === "string" &&
+    d.playerId.length > 0
+  );
+}
+
 export class GravestoneLootSystem extends SystemBase {
   private lootQueues = new Map<string, Promise<void>>();
   private lootRateLimiter = new Map<string, number>();
@@ -63,30 +101,31 @@ export class GravestoneLootSystem extends SystemBase {
   }
 
   async init(): Promise<void> {
-    this.subscribe(
-      EventType.CORPSE_LOOT_REQUEST,
-      (data: {
-        corpseId: string;
-        playerId: string;
-        itemId: string;
-        quantity: number;
-        slot?: number;
-        transactionId?: string;
-      }) =>
-        this.validateAndQueueLoot(data, (d) =>
-          this.processLootRequest(d as typeof data & { transactionId: string }),
-        ),
-    );
+    this.subscribe(EventType.CORPSE_LOOT_REQUEST, (data: unknown) => {
+      if (!isValidLootRequest(data)) {
+        console.warn(
+          `[GravestoneLootSystem] Rejected malformed CORPSE_LOOT_REQUEST`,
+        );
+        return;
+      }
+      this.validateAndQueueLoot(data, (d) =>
+        this.processLootRequest(d as typeof data & { transactionId: string }),
+      );
+    });
 
-    this.subscribe(
-      EventType.CORPSE_LOOT_ALL_REQUEST,
-      (data: { corpseId: string; playerId: string; transactionId?: string }) =>
-        this.validateAndQueueLoot(data, (d) =>
-          this.processLootAllRequest(
-            d as { corpseId: string; playerId: string; transactionId: string },
-          ),
+    this.subscribe(EventType.CORPSE_LOOT_ALL_REQUEST, (data: unknown) => {
+      if (!isValidLootAllRequest(data)) {
+        console.warn(
+          `[GravestoneLootSystem] Rejected malformed CORPSE_LOOT_ALL_REQUEST`,
+        );
+        return;
+      }
+      this.validateAndQueueLoot(data, (d) =>
+        this.processLootAllRequest(
+          d as { corpseId: string; playerId: string; transactionId: string },
         ),
-    );
+      );
+    });
   }
 
   // --- Shared Validation ---
