@@ -193,9 +193,10 @@ export class SafeAreaDeathHandler {
         items: items,
         itemCount: items.length,
         despawnTime: despawnTime,
-        // Safe area - no loot protection (anyone can loot immediately)
+        // Safe area gravestone: owner-only loot (no expiration until despawn)
+        // lootProtectionUntil: 0 signals permanent owner-only protection
         lootProtectionUntil: 0,
-        protectedFor: undefined,
+        protectedFor: playerId,
       },
       properties: {
         movementComponent: null,
