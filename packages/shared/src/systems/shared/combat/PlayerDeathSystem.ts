@@ -1298,8 +1298,10 @@ export class PlayerDeathSystem extends SystemBase {
         items: items,
         itemCount: items.length,
         despawnTime: despawnTime,
-        lootProtectionUntil: 0, // No loot protection (anyone can loot)
-        protectedFor: undefined,
+        // Owner-only loot protection (no expiration until despawn)
+        // lootProtectionUntil: 0 signals permanent owner-only protection
+        lootProtectionUntil: 0,
+        protectedFor: playerId,
       },
       properties: {
         movementComponent: null,
