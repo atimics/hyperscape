@@ -83,6 +83,11 @@ export class HeadstoneEntity extends InteractableEntity {
     return this.headstoneData.playerId;
   }
 
+  /** Get the death zone type for audit logging */
+  public getZoneType(): string {
+    return this.headstoneData.zoneType || "safe_area";
+  }
+
   // --- Rendering ---
 
   protected async createMesh(): Promise<void> {

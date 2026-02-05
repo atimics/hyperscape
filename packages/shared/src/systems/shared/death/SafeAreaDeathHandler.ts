@@ -205,6 +205,7 @@ export class SafeAreaDeathHandler {
         // lootProtectionUntil: 0 signals permanent owner-only protection
         lootProtectionUntil: 0,
         protectedFor: playerId,
+        zoneType: "safe_area",
       },
       properties: {
         movementComponent: null,

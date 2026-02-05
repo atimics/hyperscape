@@ -365,7 +365,7 @@ export type ModalPanelsResult = ModalPanelsState;
  * - Dialogue start/end (DIALOGUE_START, DIALOGUE_END)
  * - Smelting open/close (SMELTING_INTERFACE_OPEN, network smeltingClose)
  * - Smithing open/close (SMITHING_INTERFACE_OPEN, network smithingClose)
- * - Loot window (network lootWindow)
+ * - Loot window (CORPSE_CLICK)
  * - Quest start/complete (QUEST_START_CONFIRM, QUEST_COMPLETED)
  * - XP lamp (XP_LAMP_USE_REQUEST)
  *

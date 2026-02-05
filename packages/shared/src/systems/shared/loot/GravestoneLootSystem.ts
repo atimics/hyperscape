@@ -31,6 +31,7 @@ type LootableEntity = {
   hasLoot: () => boolean;
   getPosition: () => { x: number; y: number; z: number };
   getOwnerId: () => string;
+  getZoneType: () => string;
 };
 
 /** Type for inventory system access */
@@ -44,6 +45,7 @@ type InventorySystemAccess = {
 type LootContext = {
   entity: LootableEntity;
   ownerId: string;
+  zoneType: string;
 };
 
 // --- Runtime Payload Validators ---
@@ -191,6 +193,7 @@ export class GravestoneLootSystem extends SystemBase {
     if (!entity) return null;
 
     const ownerId = entity.getOwnerId();
+    const zoneType = entity.getZoneType();
 
     if (!entity.canPlayerLoot(playerId)) {
       this.emitLootResult(
@@ -200,6 +203,9 @@ export class GravestoneLootSystem extends SystemBase {
         corpseId,
         ownerId,
         "PROTECTED",
+        undefined,
+        undefined,
+        zoneType,
       );
       return null;
     }
@@ -212,11 +218,14 @@ export class GravestoneLootSystem extends SystemBase {
         corpseId,
         ownerId,
         "PLAYER_DYING",
+        undefined,
+        undefined,
+        zoneType,
       );
       return null;
     }
 
-    return { entity, ownerId };
+    return { entity, ownerId, zoneType };
   }
 
   // --- Helpers ---
@@ -228,7 +237,8 @@ export class GravestoneLootSystem extends SystemBase {
       !("canPlayerLoot" in entity) ||
       !("removeItem" in entity) ||
       !("getLootItems" in entity) ||
-      !("getOwnerId" in entity)
+      !("getOwnerId" in entity) ||
+      !("getZoneType" in entity)
     ) {
       return null;
     }
@@ -295,6 +305,7 @@ export class GravestoneLootSystem extends SystemBase {
     reason?: LootFailureReason,
     itemId?: string,
     quantity?: number,
+    zoneType: string = "safe_area",
   ): void {
     const result = {
       transactionId,
@@ -322,7 +333,7 @@ export class GravestoneLootSystem extends SystemBase {
         actorId: playerId,
         entityId,
         items: itemId ? [{ itemId, quantity: quantity || 1 }] : undefined,
-        zoneType: "safe_area",
+        zoneType,
         position: undefined,
         success: false,
         failureReason: reason,
@@ -346,7 +357,7 @@ export class GravestoneLootSystem extends SystemBase {
 
     const ctx = this.validateLootPermissions(corpseId, playerId, transactionId);
     if (!ctx) return;
-    const { entity, ownerId } = ctx;
+    const { entity, ownerId, zoneType } = ctx;
 
     const lootItems = entity.getLootItems();
     const item = lootItems.find((i) => i.itemId === itemId);
@@ -358,6 +369,9 @@ export class GravestoneLootSystem extends SystemBase {
         corpseId,
         ownerId,
         "ITEM_NOT_FOUND",
+        undefined,
+        undefined,
+        zoneType,
       );
       return;
     }
@@ -371,6 +385,9 @@ export class GravestoneLootSystem extends SystemBase {
         corpseId,
         ownerId,
         "INVALID_REQUEST",
+        undefined,
+        undefined,
+        zoneType,
       );
       return;
     }
@@ -391,6 +408,9 @@ export class GravestoneLootSystem extends SystemBase {
         corpseId,
         ownerId,
         "INVENTORY_FULL",
+        undefined,
+        undefined,
+        zoneType,
       );
       return;
     }
@@ -404,6 +424,9 @@ export class GravestoneLootSystem extends SystemBase {
         corpseId,
         ownerId,
         "ITEM_NOT_FOUND",
+        undefined,
+        undefined,
+        zoneType,
       );
       return;
     }
@@ -418,6 +441,9 @@ export class GravestoneLootSystem extends SystemBase {
         corpseId,
         ownerId,
         "INVENTORY_FULL",
+        undefined,
+        undefined,
+        zoneType,
       );
       return;
     }
@@ -442,6 +468,7 @@ export class GravestoneLootSystem extends SystemBase {
       undefined,
       itemId,
       quantityToLoot,
+      zoneType,
     );
 
     this.world.emit(EventType.AUDIT_LOG, {
@@ -450,7 +477,7 @@ export class GravestoneLootSystem extends SystemBase {
       actorId: playerId,
       entityId: corpseId,
       items: [{ itemId, quantity: quantityToLoot }],
-      zoneType: "safe_area",
+      zoneType,
       position: entity.getPosition(),
       success: true,
       transactionId,
@@ -469,7 +496,7 @@ export class GravestoneLootSystem extends SystemBase {
 
     const ctx = this.validateLootPermissions(corpseId, playerId, transactionId);
     if (!ctx) return;
-    const { entity, ownerId } = ctx;
+    const { entity, ownerId, zoneType } = ctx;
 
     const lootItems = entity.getLootItems();
     if (lootItems.length === 0) {
@@ -488,6 +515,9 @@ export class GravestoneLootSystem extends SystemBase {
         corpseId,
         ownerId,
         "INVALID_REQUEST",
+        undefined,
+        undefined,
+        zoneType,
       );
       return;
     }
@@ -501,6 +531,9 @@ export class GravestoneLootSystem extends SystemBase {
         corpseId,
         ownerId,
         "INVALID_REQUEST",
+        undefined,
+        undefined,
+        zoneType,
       );
       return;
     }
@@ -556,6 +589,7 @@ export class GravestoneLootSystem extends SystemBase {
       undefined,
       undefined,
       successfullyLooted.length,
+      zoneType,
     );
 
     if (successfullyLooted.length > 0) {
@@ -565,7 +599,7 @@ export class GravestoneLootSystem extends SystemBase {
         actorId: playerId,
         entityId: corpseId,
         items: successfullyLooted,
-        zoneType: "safe_area",
+        zoneType,
         position: entity.getPosition(),
         success: true,
         transactionId,

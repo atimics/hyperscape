@@ -427,6 +427,7 @@ export interface HeadstoneData {
   // Loot protection (for wilderness/PvP deaths)
   lootProtectionUntil?: number; // Timestamp when loot protection expires
   protectedFor?: string; // Player ID who has loot protection (killer in PvP)
+  zoneType?: string; // Death zone type for audit logging (e.g., "safe_area", "wilderness")
 }
 
 export interface LocalHeadstoneData extends Omit<HeadstoneData, "deathTime"> {
