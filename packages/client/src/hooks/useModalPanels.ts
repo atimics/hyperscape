@@ -14,7 +14,6 @@ import type { ClientWorld } from "../types";
 
 /** Network event names for UI interactions */
 const NetworkEvents = {
-  LOOT_WINDOW: "lootWindow",
   SMELTING_CLOSE: "smeltingClose",
   SMITHING_CLOSE: "smithingClose",
   CRAFTING_CLOSE: "craftingClose",
@@ -366,7 +365,7 @@ export type ModalPanelsResult = ModalPanelsState;
  * - Dialogue start/end (DIALOGUE_START, DIALOGUE_END)
  * - Smelting open/close (SMELTING_INTERFACE_OPEN, network smeltingClose)
  * - Smithing open/close (SMITHING_INTERFACE_OPEN, network smithingClose)
- * - Loot window (network lootWindow)
+ * - Loot window (CORPSE_CLICK)
  * - Quest start/complete (QUEST_START_CONFIRM, QUEST_COMPLETED)
  * - XP lamp (XP_LAMP_USE_REQUEST)
  *
@@ -481,17 +480,7 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
 
     const handleTanningClose = () => setTanningData(null);
 
-    // Loot window handler
-    const handleLootWindow = (data: unknown) => {
-      const d = data as {
-        corpseId: string;
-        corpseName: string;
-        lootItems: InventoryItem[];
-      };
-      setLootWindowData({ visible: true, ...d });
-    };
-
-    // Corpse click handler (alternative loot window trigger)
+    // Corpse click handler (loot window trigger)
     const handleCorpseClick = (data: unknown) => {
       const d = data as {
         corpseId: string;
@@ -909,7 +898,6 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
 
     // Register network event listeners
     if (world.network) {
-      world.network.on(NetworkEvents.LOOT_WINDOW, handleLootWindow);
       world.network.on(NetworkEvents.SMELTING_CLOSE, handleSmeltingClose);
       world.network.on(NetworkEvents.SMITHING_CLOSE, handleSmithingClose);
       world.network.on(NetworkEvents.CRAFTING_CLOSE, handleCraftingClose);
@@ -993,7 +981,6 @@ export function useModalPanels(world: ClientWorld | null): ModalPanelsState {
 
       // Unregister network event listeners
       if (world.network) {
-        world.network.off(NetworkEvents.LOOT_WINDOW, handleLootWindow);
         world.network.off(NetworkEvents.SMELTING_CLOSE, handleSmeltingClose);
         world.network.off(NetworkEvents.SMITHING_CLOSE, handleSmithingClose);
         world.network.off(NetworkEvents.CRAFTING_CLOSE, handleCraftingClose);

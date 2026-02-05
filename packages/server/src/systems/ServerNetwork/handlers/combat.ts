@@ -15,7 +15,11 @@
  */
 
 import type { ServerSocket } from "../../../shared/types";
-import { EventType, World } from "@hyperscape/shared";
+import {
+  EventType,
+  World,
+  isPositionInsideCombatArena,
+} from "@hyperscape/shared";
 import {
   isValidNpcId,
   validateRequestTimestamp,
@@ -203,6 +207,23 @@ export function handleAttackPlayer(
     } else if (targetInDuel) {
       // Non-duelist attacking a duelist — block this
       sendCombatError(socket, "That player is in a duel.");
+      return;
+    }
+  }
+
+  // Block combat inside duel arena combat zones without an active duel
+  // This prevents exploits where players end up in the arena without a duel session
+  if (!isDuelCombat) {
+    const attackerPos = playerEntity.position;
+    const targetPos = targetPlayer.position;
+
+    const attackerInArena =
+      attackerPos && isPositionInsideCombatArena(attackerPos.x, attackerPos.z);
+    const targetInArena =
+      targetPos && isPositionInsideCombatArena(targetPos.x, targetPos.z);
+
+    if (attackerInArena || targetInArena) {
+      sendCombatError(socket, "Combat in the arena requires an active duel.");
       return;
     }
   }

@@ -111,6 +111,7 @@ import { StoreSystem } from "..";
 // New MMO-style Systems
 import { InteractionRouter } from "../../client";
 import { LootSystem } from "..";
+import { GravestoneLootSystem } from "..";
 import { GroundItemSystem } from "../economy/GroundItemSystem";
 import { generateKillToken } from "../../../utils/game/KillTokenUtils";
 // Movement now handled by physics in PlayerLocal
@@ -359,6 +360,9 @@ export async function registerSystems(world: World): Promise<void> {
 
   // 19. Player death system - Player death and respawn mechanics (depends on player system)
   world.register("player-death", PlayerDeathSystem);
+
+  // 19b. Gravestone loot system - Handles loot processing from gravestones (ECS-style)
+  world.register("gravestone-loot", GravestoneLootSystem);
 
   // 20. Mob death system - Mob death handling (depends on mob system)
   world.register("mob-death", MobDeathSystem);
