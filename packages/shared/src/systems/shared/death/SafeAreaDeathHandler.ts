@@ -393,18 +393,6 @@ export class SafeAreaDeathHandler {
   }
 
   /**
-   * Get ticks until gravestone expires (TICK-BASED)
-   * @param gravestoneId - Gravestone entity ID
-   * @param currentTick - Current server tick
-   * @returns Ticks until expiration, or -1 if not found
-   */
-  getTicksUntilExpiration(gravestoneId: string, currentTick: number): number {
-    const gravestoneData = this.gravestones.get(gravestoneId);
-    if (!gravestoneData) return -1;
-    return Math.max(0, gravestoneData.expirationTick - currentTick);
-  }
-
-  /**
    * Clean up all gravestone tracking
    */
   destroy(): void {

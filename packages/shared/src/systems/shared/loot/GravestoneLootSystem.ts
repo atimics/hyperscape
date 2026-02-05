@@ -21,6 +21,7 @@ import type { InventoryItem } from "../../../types/core/core";
 import type { LootFailureReason } from "../../../types/death";
 import { generateTransactionId } from "../../../utils/IdGenerator";
 import { DeathState } from "../../../types/entities";
+import { getItem } from "../../../data/items";
 
 /** Interface for entities that can be looted (HeadstoneEntity) */
 type LootableEntity = {
@@ -41,7 +42,7 @@ type LootableEntity = {
 
 /** Type for inventory system access */
 type InventorySystemAccess = {
-  getInventory?: (
+  getInventory: (
     playerId: string,
   ) => { items: Array<{ itemId: string }> } | null;
 };
@@ -235,6 +236,13 @@ export class GravestoneLootSystem extends SystemBase {
 
   // --- Helpers ---
 
+  private getInventorySystem(): InventorySystemAccess | null {
+    const sys = this.world.getSystem("inventory") as unknown as {
+      getInventory?: InventorySystemAccess["getInventory"];
+    };
+    return sys?.getInventory ? (sys as InventorySystemAccess) : null;
+  }
+
   private getLootableEntity(entityId: string): LootableEntity | null {
     const entity = this.world.entities?.get?.(entityId);
     if (
@@ -276,10 +284,8 @@ export class GravestoneLootSystem extends SystemBase {
     playerId: string,
     itemId: string,
   ): { hasSpace: boolean; reason?: string } {
-    const inventorySystem = this.world.getSystem(
-      "inventory",
-    ) as unknown as InventorySystemAccess;
-    if (!inventorySystem?.getInventory) {
+    const inventorySystem = this.getInventorySystem();
+    if (!inventorySystem) {
       return { hasSpace: false, reason: "InventorySystem not available" };
     }
 
@@ -290,11 +296,15 @@ export class GravestoneLootSystem extends SystemBase {
 
     const isFull = inventory.items.length >= 28;
     if (isFull) {
-      const existingItem = inventory.items.find(
-        (item: { itemId: string }) => item.itemId === itemId,
-      );
-      if (existingItem) {
-        return { hasSpace: true };
+      const itemDef = getItem(itemId);
+      const isStackable = itemDef?.stackable === true;
+      if (isStackable) {
+        const existingItem = inventory.items.find(
+          (item: { itemId: string }) => item.itemId === itemId,
+        );
+        if (existingItem) {
+          return { hasSpace: true };
+        }
       }
       return { hasSpace: false, reason: "INVENTORY_FULL" };
     }
@@ -519,10 +529,8 @@ export class GravestoneLootSystem extends SystemBase {
       return;
     }
 
-    const inventorySystem = this.world.getSystem(
-      "inventory",
-    ) as unknown as InventorySystemAccess;
-    if (!inventorySystem?.getInventory) {
+    const inventorySystem = this.getInventorySystem();
+    if (!inventorySystem) {
       this.emitLootResult(
         playerId,
         transactionId,
@@ -560,7 +568,9 @@ export class GravestoneLootSystem extends SystemBase {
     const itemsToLoot: Array<{ itemId: string; quantity: number }> = [];
 
     for (const item of lootItems) {
-      const canStack = existingItemIds.has(item.itemId);
+      const itemDef = getItem(item.itemId);
+      const canStack =
+        itemDef?.stackable === true && existingItemIds.has(item.itemId);
       const hasSpace = usedSlots < maxSlots || canStack;
 
       if (!hasSpace) break;

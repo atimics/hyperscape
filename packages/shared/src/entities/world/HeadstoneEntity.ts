@@ -89,6 +89,15 @@ export class HeadstoneEntity extends InteractableEntity {
     return this.headstoneData.zoneType || "safe_area";
   }
 
+  private getEntityManager(): { destroyEntity: (id: string) => void } | null {
+    const sys = this.world.getSystem("entity-manager") as unknown as {
+      destroyEntity?: (id: string) => void;
+    };
+    return sys?.destroyEntity
+      ? (sys as { destroyEntity: (id: string) => void })
+      : null;
+  }
+
   // --- Rendering ---
 
   protected async createMesh(): Promise<void> {
@@ -254,10 +263,8 @@ export class HeadstoneEntity extends InteractableEntity {
       });
 
       setTimeout(() => {
-        const entityManager = this.world.getSystem(
-          "entity-manager",
-        ) as unknown as { destroyEntity?: (id: string) => void };
-        if (entityManager?.destroyEntity) {
+        const entityManager = this.getEntityManager();
+        if (entityManager) {
           entityManager.destroyEntity(this.id);
         } else {
           this.world.entities.remove(this.id);

@@ -7,16 +7,8 @@ import type {
   InventoryItem,
   DeathLocationData,
 } from "../../../types/core/core";
-import {
-  calculateDistance,
-  groundToTerrain,
-} from "../../../utils/game/EntityUtils";
-import {
-  EntityType,
-  InteractionType,
-  DeathState,
-} from "../../../types/entities";
-import type { HeadstoneEntityConfig } from "../../../types/entities";
+import { calculateDistance } from "../../../utils/game/EntityUtils";
+import { DeathState } from "../../../types/entities";
 import type { EntityManager } from "..";
 import { ZoneDetectionSystem } from "../death/ZoneDetectionSystem";
 import type { GroundItemSystem } from "../economy/GroundItemSystem";
@@ -1010,97 +1002,6 @@ export class PlayerDeathSystem extends SystemBase {
         damageDealt: maxHealth, // Use max health as damage (same as MobEntity)
         attackStyle: attackStyle,
       });
-    }
-  }
-
-  private async createHeadstoneEntity(
-    playerId: string,
-    position: { x: number; y: number; z: number },
-    items: InventoryItem[],
-    killedBy: string,
-  ): Promise<void> {
-    const headstoneId = `headstone_${playerId}_${Date.now()}`;
-
-    // Get player's name from multiple sources
-    const playerFromWorld = this.world.getPlayer?.(playerId) as {
-      playerName?: string;
-      name?: string;
-    } | null;
-    const playerEntity = this.world.entities?.get?.(playerId);
-    const typedEntity = playerEntity as PlayerEntityLike | undefined;
-    const playerName =
-      playerFromWorld?.playerName ||
-      playerFromWorld?.name ||
-      typedEntity?.data?.name ||
-      (playerEntity as { playerName?: string } | undefined)?.playerName ||
-      playerId;
-
-    // Get EntityManager to spawn headstone
-    const entityManager = this.world.getSystem<EntityManager>("entity-manager");
-    if (!entityManager) {
-      console.error(
-        "[PlayerDeathSystem] EntityManager not found, cannot spawn headstone",
-      );
-      return;
-    }
-
-    // Ground headstone to terrain (same as LootSystem does)
-    const groundedPosition = groundToTerrain(
-      this.world,
-      position,
-      0.2,
-      Infinity,
-    );
-
-    // Create headstone entity config (same format as LootSystem uses for mob corpses)
-    const headstoneConfig: HeadstoneEntityConfig = {
-      id: headstoneId,
-      name: `${playerName}'s Grave`,
-      type: EntityType.HEADSTONE,
-      position: groundedPosition,
-      rotation: { x: 0, y: 0, z: 0, w: 1 },
-      scale: { x: 1, y: 1, z: 1 },
-      visible: true,
-      interactable: true,
-      interactionType: InteractionType.LOOT,
-      interactionDistance: 2,
-      description: `${playerName}'s grave`,
-      model: null,
-      headstoneData: {
-        playerId,
-        playerName,
-        deathTime: Date.now(),
-        deathMessage: `Killed by ${killedBy}`,
-        position: groundedPosition,
-        items: [...items],
-        itemCount: items.length,
-        despawnTime: Date.now() + ticksToMs(COMBAT_CONSTANTS.GRAVESTONE_TICKS), // 5 minutes for player graves
-      },
-      properties: {
-        movementComponent: null,
-        combatComponent: null,
-        healthComponent: null,
-        visualComponent: null,
-        health: { current: 1, max: 1 },
-        level: 1,
-      },
-    };
-
-    // Spawn the headstone entity
-    const headstoneEntity = await entityManager.spawnEntity(headstoneConfig);
-    if (!headstoneEntity) {
-      console.error(
-        "[PlayerDeathSystem] Failed to spawn headstone entity for player",
-        playerId,
-      );
-      return;
-    }
-
-    const deathData = this.deathLocations.get(playerId) as
-      | DeathLocationDataWithHeadstone
-      | undefined;
-    if (deathData) {
-      deathData.headstoneId = headstoneId;
     }
   }
 
