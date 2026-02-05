@@ -21,6 +21,8 @@ import {
   acceleratedRaycast,
 } from "three-mesh-bvh";
 
+import "./webgpu-polyfills";
+
 // Import WebGPU build of Three.js
 import * as THREE_NAMESPACE from "three/webgpu";
 
