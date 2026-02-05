@@ -1544,6 +1544,7 @@ export class PlayerDeathSystem extends SystemBase {
     this.clearDeathLocation(playerId);
     this.playerPositions.delete(playerId);
     this.lastDeathTime.delete(playerId);
+    this.pendingGravestones.delete(playerId);
   }
 
   private handleHeadstoneExpired(data: {

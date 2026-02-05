@@ -513,10 +513,7 @@ export class DeathStateManager {
    * Removes from memory AND database (server only)
    */
   async clearDeathLock(playerId: string): Promise<void> {
-    // Remove from in-memory cache
-    this.activeDeaths.delete(playerId);
-
-    // Remove from database (server only)
+    // Delete from database FIRST (server only) to prevent recovery of stale locks on restart
     if (this.world.isServer && this.databaseSystem) {
       try {
         await this.databaseSystem.deleteDeathLockAsync(playerId);
@@ -525,13 +522,16 @@ export class DeathStateManager {
         );
       } catch (error) {
         console.error(
-          `[DeathStateManager] ❌ Failed to delete death lock for ${playerId}:`,
+          `[DeathStateManager] ❌ Failed to delete death lock for ${playerId}, keeping in-memory state consistent:`,
           error,
         );
-        // Continue anyway - in-memory tracking cleared
+        // Do NOT clear in-memory — keeps state consistent with DB for retry
+        return;
       }
     }
 
+    // Only clear in-memory after DB delete succeeds (or if no DB)
+    this.activeDeaths.delete(playerId);
     console.log(`[DeathStateManager] ✓ Cleared death tracking for ${playerId}`);
   }
 
