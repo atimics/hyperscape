@@ -61,7 +61,6 @@ interface GlobalWithPolyfills {
   self: GlobalWithPolyfills;
   URL: typeof URL;
   webkitURL: typeof URL;
-  window: GlobalWithPolyfills;
   location: {
     origin: string;
     href: string;
@@ -100,10 +99,11 @@ if (!globalWithPolyfills.URL) {
   globalWithPolyfills.URL = URL;
 }
 
-// Set up window global
-globalWithPolyfills.window = globalWithPolyfills;
+// NOTE: We intentionally do NOT set `window` globally because libraries like
+// @privy-io/server-auth check `typeof window !== 'undefined'` to detect browsers.
+// Three.js uses `self` for most feature detection, which we already set above.
 
-// Add location object needed by PhysX loader
+// Add location object needed by PhysX loader (on self, not window)
 // Use env vars for server URL, fallback to localhost for local dev
 const serverPort = process.env.PORT || "5555";
 const serverHost = process.env.SERVER_HOST || "localhost";
@@ -111,7 +111,7 @@ const serverProtocol = process.env.SERVER_PROTOCOL || "http:";
 const serverOrigin =
   process.env.SERVER_URL || `http://${serverHost}:${serverPort}`;
 
-globalWithPolyfills.window.location = {
+globalWithPolyfills.location = {
   origin: serverOrigin,
   href: serverOrigin,
   protocol: serverProtocol,
