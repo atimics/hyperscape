@@ -127,6 +127,11 @@ export class HeadstoneEntity extends InteractableEntity {
     this.config = config;
     this.lootItems = [...(config.headstoneData.items || [])];
 
+    // Always derive display name from headstoneData.playerName (canonical source)
+    if (config.headstoneData.playerName) {
+      this.name = `${config.headstoneData.playerName}'s Gravestone`;
+    }
+
     // Initialize loot protection from config
     this.lootProtectionUntil = config.headstoneData.lootProtectionUntil || 0;
     this.protectedFor = config.headstoneData.protectedFor;
@@ -774,6 +779,32 @@ export class HeadstoneEntity extends InteractableEntity {
    * Handle corpse interaction - shows loot interface
    */
   public async handleInteraction(data: EntityInteractionData): Promise<void> {
+    // Block non-owners from opening the loot panel
+    if (!this.canPlayerLoot(data.playerId)) {
+      // Client-side: show game message in chat
+      if (!this.world.isServer && this.world.chat?.add) {
+        this.world.chat.add(
+          {
+            id: `grave_${Date.now()}`,
+            from: "",
+            body: "This isn't your gravestone.",
+            createdAt: new Date().toISOString(),
+            timestamp: Date.now(),
+          },
+          false,
+        );
+      }
+      // Server-side: send system message via event bridge
+      if (this.world.isServer) {
+        this.world.emit(EventType.UI_MESSAGE, {
+          playerId: data.playerId,
+          message: "This isn't your gravestone.",
+          type: "error",
+        });
+      }
+      return;
+    }
+
     const lootData = {
       corpseId: this.id,
       playerId: data.playerId,

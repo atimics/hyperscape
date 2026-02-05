@@ -980,10 +980,19 @@ export class PlayerDeathSystem extends SystemBase {
   ): Promise<void> {
     const headstoneId = `headstone_${playerId}_${Date.now()}`;
 
-    // Get player's name from entity or use playerId
+    // Get player's name from multiple sources
+    const playerFromWorld = this.world.getPlayer?.(playerId) as {
+      playerName?: string;
+      name?: string;
+    } | null;
     const playerEntity = this.world.entities?.get?.(playerId);
     const typedEntity = playerEntity as PlayerEntityLike | undefined;
-    const playerName = typedEntity?.data?.name || playerId;
+    const playerName =
+      playerFromWorld?.playerName ||
+      playerFromWorld?.name ||
+      typedEntity?.data?.name ||
+      (playerEntity as { playerName?: string } | undefined)?.playerName ||
+      playerId;
 
     // Get EntityManager to spawn headstone
     const entityManager = this.world.getSystem<EntityManager>("entity-manager");
@@ -1253,7 +1262,11 @@ export class PlayerDeathSystem extends SystemBase {
     const GRAVESTONE_DURATION = ticksToMs(COMBAT_CONSTANTS.GRAVESTONE_TICKS);
     const despawnTime = Date.now() + GRAVESTONE_DURATION;
 
-    // Get the player's display name from PlayerSystem
+    // Get the player's display name from multiple sources
+    const playerFromWorld = this.world.getPlayer?.(playerId) as {
+      playerName?: string;
+      name?: string;
+    } | null;
     const playerSystem = this.world.getSystem("player") as
       | { getPlayer: (id: string) => { name?: string } | undefined }
       | undefined;
@@ -1262,6 +1275,8 @@ export class PlayerDeathSystem extends SystemBase {
       | { playerName?: string; name?: string }
       | undefined;
     const playerName =
+      playerFromWorld?.playerName ||
+      playerFromWorld?.name ||
       playerFromSystem?.name ||
       playerEntity?.playerName ||
       playerEntity?.name ||

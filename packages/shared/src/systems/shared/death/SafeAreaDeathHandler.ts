@@ -158,12 +158,20 @@ export class SafeAreaDeathHandler {
       return "";
     }
 
-    // Get the player's display name (fallback to playerId if not found)
+    // Get the player's display name from multiple sources
+    const playerFromWorld = this.world.getPlayer?.(playerId) as {
+      playerName?: string;
+      name?: string;
+    } | null;
     const playerEntity = this.world.entities?.get?.(playerId) as
       | { playerName?: string; name?: string }
       | undefined;
     const playerName =
-      playerEntity?.playerName || playerEntity?.name || playerId;
+      playerFromWorld?.playerName ||
+      playerFromWorld?.name ||
+      playerEntity?.playerName ||
+      playerEntity?.name ||
+      playerId;
 
     const gravestoneId = `gravestone_${playerId}_${Date.now()}`;
     // Calculate despawnTime in ms for entity config (backwards compatible)
