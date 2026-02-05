@@ -22,6 +22,7 @@ import type { LootFailureReason } from "../../../types/death";
 import { generateTransactionId } from "../../../utils/IdGenerator";
 import { DeathState } from "../../../types/entities";
 import { getItem } from "../../../data/items";
+import { INVENTORY_CONSTANTS } from "../../../constants/GameConstants";
 
 /** Interface for entities that can be looted (HeadstoneEntity) */
 type LootableEntity = {
@@ -75,7 +76,7 @@ function isValidLootRequest(data: unknown): data is {
     d.itemId.length > 0 &&
     typeof d.quantity === "number" &&
     d.quantity > 0 &&
-    Number.isFinite(d.quantity)
+    Number.isInteger(d.quantity)
   );
 }
 
@@ -96,6 +97,8 @@ export class GravestoneLootSystem extends SystemBase {
   private lootQueues = new Map<string, Promise<void>>();
   private lootRateLimiter = new Map<string, number>();
   private readonly LOOT_RATE_LIMIT_MS = 100;
+  private rateLimiterLastPruned = 0;
+  private readonly RATE_LIMITER_PRUNE_INTERVAL_MS = 60_000;
 
   constructor(world: World) {
     super(world, {
@@ -182,6 +185,12 @@ export class GravestoneLootSystem extends SystemBase {
           "",
           "INVALID_REQUEST",
         );
+      })
+      .finally(() => {
+        // Clean up stale queue entry if this is still the latest in the chain
+        if (this.lootQueues.get(data.corpseId) === newQueue) {
+          this.lootQueues.delete(data.corpseId);
+        }
       });
     this.lootQueues.set(data.corpseId, newQueue);
   }
@@ -261,6 +270,20 @@ export class GravestoneLootSystem extends SystemBase {
 
   private isRateLimited(playerId: string): boolean {
     const now = Date.now();
+
+    // Periodically prune stale entries to prevent unbounded growth
+    if (
+      now - this.rateLimiterLastPruned >
+      this.RATE_LIMITER_PRUNE_INTERVAL_MS
+    ) {
+      this.rateLimiterLastPruned = now;
+      for (const [id, timestamp] of this.lootRateLimiter) {
+        if (now - timestamp > this.RATE_LIMITER_PRUNE_INTERVAL_MS) {
+          this.lootRateLimiter.delete(id);
+        }
+      }
+    }
+
     const lastRequest = this.lootRateLimiter.get(playerId) || 0;
     if (now - lastRequest < this.LOOT_RATE_LIMIT_MS) {
       return true;
@@ -294,7 +317,8 @@ export class GravestoneLootSystem extends SystemBase {
       return { hasSpace: false, reason: "No inventory" };
     }
 
-    const isFull = inventory.items.length >= 28;
+    const isFull =
+      inventory.items.length >= INVENTORY_CONSTANTS.MAX_INVENTORY_SLOTS;
     if (isFull) {
       const itemDef = getItem(itemId);
       const isStackable = itemDef?.stackable === true;
@@ -561,7 +585,7 @@ export class GravestoneLootSystem extends SystemBase {
       return;
     }
 
-    const maxSlots = 28;
+    const maxSlots = INVENTORY_CONSTANTS.MAX_INVENTORY_SLOTS;
     let usedSlots = inventory.items.length;
     const existingItemIds = new Set(inventory.items.map((i) => i.itemId));
 
@@ -583,26 +607,46 @@ export class GravestoneLootSystem extends SystemBase {
       }
     }
 
-    const successfullyLooted: Array<{ itemId: string; quantity: number }> = [];
+    // Snapshot item positions before mutations for rollback
+    const preRemovalItems = entity.getLootItems();
 
-    for (const item of itemsToLoot) {
+    const successfullyLooted: Array<{ itemId: string; quantity: number }> = [];
+    const batchTimestamp = Date.now();
+
+    for (let i = 0; i < itemsToLoot.length; i++) {
+      const item = itemsToLoot[i];
       const spaceCheck = this.checkInventorySpace(playerId, item.itemId);
       if (!spaceCheck.hasSpace) break;
 
+      const originalIndex = preRemovalItems.findIndex(
+        (pi) => pi.itemId === item.itemId,
+      );
+
       const removed = entity.removeItem(item.itemId, item.quantity);
-      if (removed) {
-        this.world.emit(EventType.INVENTORY_ITEM_ADDED, {
-          playerId,
-          item: {
-            id: `loot_${playerId}_${Date.now()}_${item.itemId}`,
-            itemId: item.itemId,
-            quantity: item.quantity,
-            slot: -1,
-            metadata: null,
-          },
-        });
-        successfullyLooted.push(item);
+      if (!removed) continue;
+
+      // Defensive re-check: if space disappeared after removal, rollback this item
+      const recheck = this.checkInventorySpace(playerId, item.itemId);
+      if (!recheck.hasSpace) {
+        entity.restoreItem(
+          item.itemId,
+          item.quantity,
+          originalIndex >= 0 ? originalIndex : 0,
+        );
+        break;
       }
+
+      this.world.emit(EventType.INVENTORY_ITEM_ADDED, {
+        playerId,
+        item: {
+          id: `loot_${playerId}_${batchTimestamp}_${i}_${item.itemId}`,
+          itemId: item.itemId,
+          quantity: item.quantity,
+          slot: -1,
+          metadata: null,
+        },
+      });
+      successfullyLooted.push(item);
     }
 
     this.emitLootResult(

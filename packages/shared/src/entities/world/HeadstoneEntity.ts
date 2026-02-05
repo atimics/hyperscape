@@ -212,7 +212,7 @@ export class HeadstoneEntity extends InteractableEntity {
     const lootData = {
       corpseId: this.id,
       playerId: data.playerId,
-      lootItems: this.lootItems,
+      lootItems: [...this.lootItems],
       position: this.getPosition(),
     };
 
@@ -362,10 +362,8 @@ export class HeadstoneEntity extends InteractableEntity {
 
   protected serverUpdate(deltaTime: number): void {
     super.serverUpdate(deltaTime);
-
-    if (Date.now() > this.headstoneData.despawnTime) {
-      this.world.entities.remove(this.id);
-    }
+    // Gravestone expiration is handled by SafeAreaDeathHandler.processTick (tick-based).
+    // No wall-clock despawn here — tick-based timing is authoritative.
   }
 
   protected clientUpdate(deltaTime: number): void {
