@@ -4297,11 +4297,9 @@ export class ClientNetwork extends SystemBase {
     reason?: string;
     timestamp: number;
   }) => {
-    // Emit event for LootWindowPanel to handle transaction result
-    this.world.emit(EventType.UI_UPDATE, {
-      component: "lootResult",
-      data,
-    });
+    // Emit on ClientNetwork EventEmitter (Pattern A) so LootWindowPanel
+    // can receive it via world.network.on("lootResult", ...)
+    this.emit("lootResult", data);
   };
 
   // --- Smelting Close Handler ---

@@ -243,6 +243,7 @@ export class PlayerDeathSystem extends SystemBase {
   >();
 
   private lastDeathTime = new Map<string, number>();
+  private gravestoneTimers = new Map<string, NodeJS.Timeout>();
   private readonly DEATH_COOLDOWN = ticksToMs(
     COMBAT_CONSTANTS.DEATH.COOLDOWN_TICKS,
   );
@@ -343,6 +344,18 @@ export class PlayerDeathSystem extends SystemBase {
       this.handlePlayerReconnect(data),
     );
 
+    // Crash recovery: when server restarts and finds unrecovered deaths for offline players
+    this.subscribe(
+      EventType.DEATH_RECOVERED,
+      (data: {
+        playerId: string;
+        position: { x: number; y: number; z: number };
+        items: InventoryItem[];
+        killedBy: string;
+        zoneType: ZoneType;
+      }) => this.handleDeathRecovered(data),
+    );
+
     this.subscribe(
       EventType.PLAYER_POSITION_UPDATED,
       (data: {
@@ -408,9 +421,13 @@ export class PlayerDeathSystem extends SystemBase {
     for (const timer of this.respawnTimers.values()) {
       clearTimeout(timer);
     }
+    for (const timer of this.gravestoneTimers.values()) {
+      clearTimeout(timer);
+    }
 
     // Clean up all Maps to prevent memory leaks
     this.respawnTimers.clear();
+    this.gravestoneTimers.clear();
     this.deathLocations.clear();
     this.playerPositions.clear();
     this.playerInventories.clear();
@@ -418,12 +435,12 @@ export class PlayerDeathSystem extends SystemBase {
     this.lastDeathTime.clear();
   }
 
-  private handlePlayerDeath(data: {
+  private async handlePlayerDeath(data: {
     entityId: string;
     killedBy: string;
     entityType: "player" | "mob";
     deathPosition?: { x: number; y: number; z: number };
-  }): void {
+  }): Promise<void> {
     // Only handle player deaths - mob deaths are handled by MobDeathSystem
     if (data.entityType !== "player") {
       // Fallback: Check if entityId looks like a player (fixes rare bug if entityType missing)
@@ -546,7 +563,32 @@ export class PlayerDeathSystem extends SystemBase {
       position = { x: 0, y: 10, z: 0 };
     }
 
-    this.processPlayerDeath(playerId, position, data.killedBy);
+    try {
+      await this.processPlayerDeath(playerId, position, data.killedBy);
+    } catch (error) {
+      console.error(
+        `[PlayerDeathSystem] Death processing failed for ${playerId}, resetting to alive:`,
+        error,
+      );
+      // Reset player to alive state so they aren't stuck dead
+      const playerEntity = this.world.entities?.get?.(playerId);
+      if (playerEntity && "data" in playerEntity) {
+        const typedPlayerEntity = playerEntity as PlayerEntityLike;
+        if (typedPlayerEntity.data) {
+          typedPlayerEntity.data.deathState = DeathState.ALIVE;
+          typedPlayerEntity.data.deathPosition = undefined;
+          typedPlayerEntity.data.respawnTick = undefined;
+        }
+        if ("markNetworkDirty" in playerEntity) {
+          (playerEntity as { markNetworkDirty: () => void }).markNetworkDirty();
+        }
+      }
+      this.emitTypedEvent(EventType.PLAYER_SET_DEAD, {
+        playerId,
+        isDead: false,
+      });
+      this.lastDeathTime.delete(playerId);
+    }
   }
 
   private convertEquipmentToInventoryItems(
@@ -774,8 +816,9 @@ export class PlayerDeathSystem extends SystemBase {
             );
           }
 
-          // Clear inventory (equipment already cleared atomically above)
-          await inventorySystem.clearInventoryImmediate(playerId);
+          // Clear inventory in memory only (skipPersist=true) to maintain transaction
+          // atomicity — we persist after the transaction commits successfully
+          await inventorySystem.clearInventoryImmediate(playerId, true);
 
           // Only call old clearEquipmentImmediate if atomic method wasn't used
           if (
@@ -787,6 +830,9 @@ export class PlayerDeathSystem extends SystemBase {
           }
         },
       );
+
+      // Transaction committed — now persist the cleared inventory to DB
+      await inventorySystem.persistInventoryImmediate(playerId);
 
       this.postDeathCleanup(playerId, deathPosition, itemsToDrop, killedBy);
     } catch (error) {
@@ -1337,7 +1383,8 @@ export class PlayerDeathSystem extends SystemBase {
       return;
     }
 
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      this.gravestoneTimers.delete(gravestoneId);
       this.handleGravestoneExpire(
         playerId,
         gravestoneId,
@@ -1345,6 +1392,7 @@ export class PlayerDeathSystem extends SystemBase {
         items,
       );
     }, GRAVESTONE_DURATION);
+    this.gravestoneTimers.set(gravestoneId, timer);
   }
 
   private async handleGravestoneExpire(
@@ -1353,6 +1401,15 @@ export class PlayerDeathSystem extends SystemBase {
     position: { x: number; y: number; z: number },
     items: InventoryItem[],
   ): Promise<void> {
+    // Guard: if the gravestone was already fully looted and destroyed, skip
+    const entity = this.world.entities?.get?.(gravestoneId);
+    if (!entity) {
+      console.log(
+        `[PlayerDeathSystem] Gravestone ${gravestoneId} already destroyed, skipping expiration`,
+      );
+      return;
+    }
+
     console.log(
       `[PlayerDeathSystem] Gravestone ${gravestoneId} expired for ${playerId}, transitioning to ground items`,
     );
@@ -1500,6 +1557,54 @@ export class PlayerDeathSystem extends SystemBase {
     return { blockInventoryLoad: false };
   }
 
+  /**
+   * Handle crash recovery for offline players.
+   * Called when DeathStateManager finds unrecovered deaths on server restart
+   * where items exist but no gravestone/ground items are in the world.
+   * Spawns a new gravestone with the recovered items.
+   */
+  private handleDeathRecovered(data: {
+    playerId: string;
+    position: { x: number; y: number; z: number };
+    items: InventoryItem[];
+    killedBy: string;
+    zoneType: ZoneType;
+  }): void {
+    if (!this.world.isServer) return;
+
+    // Guard against double-recovery
+    if (this.pendingGravestones.has(data.playerId)) {
+      console.warn(
+        `[PlayerDeathSystem] Skipping death recovery for ${data.playerId} - already has pending gravestone`,
+      );
+      return;
+    }
+
+    if (data.items.length === 0) {
+      console.log(
+        `[PlayerDeathSystem] No items to recover for ${data.playerId}, skipping`,
+      );
+      return;
+    }
+
+    console.log(
+      `[PlayerDeathSystem] Recovering death for offline player ${data.playerId}: ${data.items.length} items`,
+    );
+
+    // Spawn gravestone directly for the recovered items
+    this.spawnGravestoneAfterRespawn(
+      data.playerId,
+      data.position,
+      data.items,
+      data.killedBy,
+    ).catch((err) => {
+      console.error(
+        `[PlayerDeathSystem] Failed to spawn recovery gravestone for ${data.playerId}:`,
+        err,
+      );
+    });
+  }
+
   private handleLootCollection(data: { playerId: string }): void {
     const deathData = this.deathLocations.get(data.playerId);
     if (!deathData) {
@@ -1614,6 +1719,17 @@ export class PlayerDeathSystem extends SystemBase {
     console.log(
       `[PlayerDeathSystem] All items looted from ${data.corpseId}, clearing death lock for ${data.playerId}`,
     );
+
+    // Cancel the gravestone expiration timer to prevent duplicate ground item spawns
+    const timer = this.gravestoneTimers.get(data.corpseId);
+    if (timer) {
+      clearTimeout(timer);
+      this.gravestoneTimers.delete(data.corpseId);
+      console.log(
+        `[PlayerDeathSystem] Cancelled gravestone expiration timer for ${data.corpseId}`,
+      );
+    }
+
     await this.deathStateManager.clearDeathLock(data.playerId);
   }
 
