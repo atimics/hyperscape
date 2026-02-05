@@ -365,15 +365,22 @@ export async function loadConfig(): Promise<ServerConfig> {
   // Environment variables with defaults
   const WORLD = process.env["WORLD"] || "world";
   const PORT = parseInt(process.env["PORT"] || "5555", 10);
-  const USE_LOCAL_POSTGRES =
-    (process.env["USE_LOCAL_POSTGRES"] || "true") === "true";
+  const NODE_ENV = process.env["NODE_ENV"] || "development";
   const DATABASE_URL = process.env["DATABASE_URL"];
+
+  // Default DB strategy:
+  // - Production: prefer explicit DATABASE_URL; never try Docker-managed Postgres unless explicitly requested.
+  // - Development: default to local Docker Postgres if DATABASE_URL isn't set.
+  const USE_LOCAL_POSTGRES_ENV = process.env["USE_LOCAL_POSTGRES"];
+  const USE_LOCAL_POSTGRES =
+    USE_LOCAL_POSTGRES_ENV !== undefined
+      ? USE_LOCAL_POSTGRES_ENV === "true"
+      : NODE_ENV !== "production" && !DATABASE_URL;
   const CDN_URL = process.env["PUBLIC_CDN_URL"] || "http://localhost:8080";
   const SYSTEMS_PATH = process.env["SYSTEMS_PATH"];
   const ADMIN_CODE = process.env["ADMIN_CODE"];
   const JWT_SECRET = process.env["JWT_SECRET"];
   const SAVE_INTERVAL = parseInt(process.env["SAVE_INTERVAL"] || "60", 10);
-  const NODE_ENV = process.env["NODE_ENV"] || "development";
   const COMMIT_HASH = process.env["COMMIT_HASH"];
 
   // Resolve world and assets directories
