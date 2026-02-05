@@ -474,6 +474,41 @@ export class DeathStateManager {
   }
 
   /**
+   * Update the gravestone ID for an existing death lock.
+   * Used when a gravestone is spawned after the death lock was already created
+   * (e.g., post-respawn gravestone spawning, crash recovery).
+   */
+  async updateGravestoneId(
+    playerId: string,
+    gravestoneId: string,
+  ): Promise<void> {
+    const deathData = this.activeDeaths.get(playerId);
+    if (deathData) {
+      deathData.gravestoneId = gravestoneId;
+      this.activeDeaths.set(playerId, deathData);
+    }
+
+    // Update database (server only)
+    if (this.world.isServer && this.databaseSystem) {
+      try {
+        const dbData = await this.databaseSystem.getDeathLockAsync(playerId);
+        if (dbData) {
+          dbData.gravestoneId = gravestoneId;
+          await this.databaseSystem.saveDeathLockAsync(dbData);
+          console.log(
+            `[DeathStateManager] ✓ Updated gravestone ID for ${playerId}: ${gravestoneId}`,
+          );
+        }
+      } catch (error) {
+        console.error(
+          `[DeathStateManager] ❌ Failed to update gravestone ID for ${playerId}:`,
+          error,
+        );
+      }
+    }
+  }
+
+  /**
    * Clear death tracking (items have been looted or despawned)
    * Removes from memory AND database (server only)
    */

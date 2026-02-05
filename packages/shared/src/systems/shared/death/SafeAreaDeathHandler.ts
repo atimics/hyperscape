@@ -312,6 +312,66 @@ export class SafeAreaDeathHandler {
   }
 
   /**
+   * Spawn a gravestone and track it for tick-based expiration.
+   * Unlike handleDeath(), this does NOT create a death lock — the caller
+   * is responsible for the death lock (it already exists by this point).
+   * Used by PlayerDeathSystem for post-respawn gravestone spawning and crash recovery.
+   */
+  async spawnAndTrackGravestone(
+    playerId: string,
+    position: { x: number; y: number; z: number },
+    items: InventoryItem[],
+    killedBy: string,
+  ): Promise<string> {
+    if (!this.world.isServer) {
+      console.error(
+        `[SafeAreaDeathHandler] Client attempted server-only gravestone spawn for ${playerId} - BLOCKED`,
+      );
+      return "";
+    }
+
+    if (items.length === 0) {
+      console.log(
+        `[SafeAreaDeathHandler] No items to drop for ${playerId}, skipping gravestone`,
+      );
+      return "";
+    }
+
+    const gravestoneId = await this.spawnGravestone(
+      playerId,
+      position,
+      items,
+      killedBy,
+    );
+
+    if (!gravestoneId) {
+      console.error(
+        `[SafeAreaDeathHandler] Failed to spawn gravestone for ${playerId}`,
+      );
+      return "";
+    }
+
+    // Track for tick-based expiration
+    const currentTick: number = this.world.currentTick ?? 0;
+    const gravestoneTicks: number = COMBAT_CONSTANTS.GRAVESTONE_TICKS;
+    const expirationTick: number = currentTick + gravestoneTicks;
+
+    this.gravestones.set(gravestoneId, {
+      gravestoneId,
+      playerId,
+      position: { ...position },
+      items: items.map((item) => ({ ...item })),
+      expirationTick,
+    });
+
+    console.log(
+      `[SafeAreaDeathHandler] Gravestone ${gravestoneId} tracked for expiration at tick ${expirationTick} (${COMBAT_CONSTANTS.GRAVESTONE_TICKS} ticks = ${(ticksToMs(COMBAT_CONSTANTS.GRAVESTONE_TICKS) / 1000).toFixed(1)}s)`,
+    );
+
+    return gravestoneId;
+  }
+
+  /**
    * Handle item looted from gravestone
    * Called when player interacts with gravestone and takes an item
    */

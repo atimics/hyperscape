@@ -243,7 +243,6 @@ export class PlayerDeathSystem extends SystemBase {
   >();
 
   private lastDeathTime = new Map<string, number>();
-  private gravestoneTimers = new Map<string, NodeJS.Timeout>();
   private readonly DEATH_COOLDOWN = ticksToMs(
     COMBAT_CONSTANTS.DEATH.COOLDOWN_TICKS,
   );
@@ -421,13 +420,9 @@ export class PlayerDeathSystem extends SystemBase {
     for (const timer of this.respawnTimers.values()) {
       clearTimeout(timer);
     }
-    for (const timer of this.gravestoneTimers.values()) {
-      clearTimeout(timer);
-    }
 
     // Clean up all Maps to prevent memory leaks
     this.respawnTimers.clear();
-    this.gravestoneTimers.clear();
     this.deathLocations.clear();
     this.playerPositions.clear();
     this.playerInventories.clear();
@@ -1140,12 +1135,15 @@ export class PlayerDeathSystem extends SystemBase {
       console.log(
         `[PlayerDeathSystem] ✓ Spawning gravestone for ${playerId} with ${gravestoneData.items.length} items at (${gravestoneData.position.x.toFixed(1)}, ${gravestoneData.position.y.toFixed(1)}, ${gravestoneData.position.z.toFixed(1)})`,
       );
-      this.spawnGravestoneAfterRespawn(
+      const gravestoneId = await this.safeAreaHandler.spawnAndTrackGravestone(
         playerId,
         gravestoneData.position,
         gravestoneData.items,
         gravestoneData.killedBy,
       );
+      if (gravestoneId) {
+        await this.deathStateManager.updateGravestoneId(playerId, gravestoneId);
+      }
       this.pendingGravestones.delete(playerId);
     } else {
       console.log(
@@ -1288,173 +1286,6 @@ export class PlayerDeathSystem extends SystemBase {
     this.lastDeathTime.delete(playerId);
   }
 
-  private async spawnGravestoneAfterRespawn(
-    playerId: string,
-    position: { x: number; y: number; z: number },
-    items: InventoryItem[],
-    killedBy: string,
-  ): Promise<void> {
-    const entityManager = this.world.getSystem(
-      "entity-manager",
-    ) as EntityManager | null;
-    if (!entityManager) {
-      console.error(
-        "[PlayerDeathSystem] EntityManager not available, cannot spawn gravestone",
-      );
-      return;
-    }
-
-    const gravestoneId = `gravestone_${playerId}_${Date.now()}`;
-    const GRAVESTONE_DURATION = ticksToMs(COMBAT_CONSTANTS.GRAVESTONE_TICKS);
-    const despawnTime = Date.now() + GRAVESTONE_DURATION;
-
-    // Get the player's display name from multiple sources
-    const playerFromWorld = this.world.getPlayer?.(playerId) as {
-      playerName?: string;
-      name?: string;
-    } | null;
-    const playerSystem = this.world.getSystem("player") as
-      | { getPlayer: (id: string) => { name?: string } | undefined }
-      | undefined;
-    const playerFromSystem = playerSystem?.getPlayer?.(playerId);
-    const playerEntity = this.world.entities?.get?.(playerId) as
-      | { playerName?: string; name?: string }
-      | undefined;
-    const playerName =
-      playerFromWorld?.playerName ||
-      playerFromWorld?.name ||
-      playerFromSystem?.name ||
-      playerEntity?.playerName ||
-      playerEntity?.name ||
-      playerId;
-
-    // Ground to terrain
-    const groundedPosition = groundToTerrain(
-      this.world,
-      position,
-      0.2,
-      Infinity,
-    );
-
-    // Create gravestone entity config
-    const gravestoneConfig: HeadstoneEntityConfig = {
-      id: gravestoneId,
-      name: `${playerName}'s Gravestone`,
-      type: EntityType.HEADSTONE,
-      position: groundedPosition,
-      rotation: { x: 0, y: 0, z: 0, w: 1 },
-      scale: { x: 1, y: 1, z: 1 },
-      visible: true,
-      interactable: true,
-      interactionType: InteractionType.LOOT,
-      interactionDistance: 2,
-      description: `Gravestone of ${playerName} (killed by ${killedBy})`,
-      model: "models/environment/gravestone.glb",
-      headstoneData: {
-        playerId: playerId,
-        playerName: playerName,
-        deathTime: Date.now(),
-        deathMessage: `Slain by ${killedBy}`,
-        position: groundedPosition,
-        items: items,
-        itemCount: items.length,
-        despawnTime: despawnTime,
-        // Owner-only loot protection (no expiration until despawn)
-        // lootProtectionUntil: 0 signals permanent owner-only protection
-        lootProtectionUntil: 0,
-        protectedFor: playerId,
-      },
-      properties: {
-        movementComponent: null,
-        combatComponent: null,
-        healthComponent: null,
-        visualComponent: null,
-        health: { current: 1, max: 1 },
-        level: 1,
-      },
-    };
-
-    const gravestoneEntity = await entityManager.spawnEntity(gravestoneConfig);
-
-    if (!gravestoneEntity) {
-      console.error(
-        `[PlayerDeathSystem] Failed to spawn gravestone entity: ${gravestoneId}`,
-      );
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      this.gravestoneTimers.delete(gravestoneId);
-      this.handleGravestoneExpire(
-        playerId,
-        gravestoneId,
-        groundedPosition,
-        items,
-      );
-    }, GRAVESTONE_DURATION);
-    this.gravestoneTimers.set(gravestoneId, timer);
-  }
-
-  private async handleGravestoneExpire(
-    playerId: string,
-    gravestoneId: string,
-    position: { x: number; y: number; z: number },
-    items: InventoryItem[],
-  ): Promise<void> {
-    // Guard: if the gravestone was already fully looted and destroyed, skip
-    const entity = this.world.entities?.get?.(gravestoneId);
-    if (!entity) {
-      console.log(
-        `[PlayerDeathSystem] Gravestone ${gravestoneId} already destroyed, skipping expiration`,
-      );
-      return;
-    }
-
-    console.log(
-      `[PlayerDeathSystem] Gravestone ${gravestoneId} expired for ${playerId}, transitioning to ground items`,
-    );
-
-    // Destroy gravestone entity
-    const entityManager = this.world.getSystem(
-      "entity-manager",
-    ) as EntityManager | null;
-    if (entityManager) {
-      entityManager.destroyEntity(gravestoneId);
-    }
-
-    // Spawn ground items (60 minute despawn timer)
-    const GROUND_ITEM_DURATION = ticksToMs(
-      COMBAT_CONSTANTS.GROUND_ITEM_DESPAWN_TICKS,
-    );
-    const groundItemIds = await this.groundItemSystem.spawnGroundItems(
-      items,
-      position,
-      {
-        despawnTime: GROUND_ITEM_DURATION,
-        droppedBy: playerId,
-        lootProtection: 0,
-        scatter: true,
-        scatterRadius: 2.0,
-      },
-    );
-
-    // Update death lock to track ground items instead of gravestone
-    await this.deathStateManager.onGravestoneExpired(playerId, groundItemIds);
-
-    // Schedule death lock cleanup when ground items despawn
-    // This ensures the death lock is cleared even if items aren't looted
-    setTimeout(async () => {
-      // Only clear if the player still has this death lock (hasn't died again)
-      const currentLock = await this.deathStateManager.getDeathLock(playerId);
-      if (currentLock && !currentLock.gravestoneId) {
-        console.log(
-          `[PlayerDeathSystem] Ground items despawned for ${playerId}, clearing death lock`,
-        );
-        await this.deathStateManager.clearDeathLock(playerId);
-      }
-    }, GROUND_ITEM_DURATION + 1000); // Add 1 second buffer
-  }
-
   private handleRespawnRequest(data: { playerId: string }): void {
     // Allow immediate respawn if timer is still active (e.g., clicked respawn button)
     const timer = this.respawnTimers.get(data.playerId);
@@ -1591,18 +1422,28 @@ export class PlayerDeathSystem extends SystemBase {
       `[PlayerDeathSystem] Recovering death for offline player ${data.playerId}: ${data.items.length} items`,
     );
 
-    // Spawn gravestone directly for the recovered items
-    this.spawnGravestoneAfterRespawn(
-      data.playerId,
-      data.position,
-      data.items,
-      data.killedBy,
-    ).catch((err) => {
-      console.error(
-        `[PlayerDeathSystem] Failed to spawn recovery gravestone for ${data.playerId}:`,
-        err,
-      );
-    });
+    // Spawn gravestone via SafeAreaDeathHandler (tick-based expiration)
+    this.safeAreaHandler
+      .spawnAndTrackGravestone(
+        data.playerId,
+        data.position,
+        data.items,
+        data.killedBy,
+      )
+      .then(async (gravestoneId) => {
+        if (gravestoneId) {
+          await this.deathStateManager.updateGravestoneId(
+            data.playerId,
+            gravestoneId,
+          );
+        }
+      })
+      .catch((err) => {
+        console.error(
+          `[PlayerDeathSystem] Failed to spawn recovery gravestone for ${data.playerId}:`,
+          err,
+        );
+      });
   }
 
   private handleLootCollection(data: { playerId: string }): void {
@@ -1720,15 +1561,8 @@ export class PlayerDeathSystem extends SystemBase {
       `[PlayerDeathSystem] All items looted from ${data.corpseId}, clearing death lock for ${data.playerId}`,
     );
 
-    // Cancel the gravestone expiration timer to prevent duplicate ground item spawns
-    const timer = this.gravestoneTimers.get(data.corpseId);
-    if (timer) {
-      clearTimeout(timer);
-      this.gravestoneTimers.delete(data.corpseId);
-      console.log(
-        `[PlayerDeathSystem] Cancelled gravestone expiration timer for ${data.corpseId}`,
-      );
-    }
+    // Cancel tick-based gravestone expiration to prevent duplicate ground item spawns
+    this.safeAreaHandler.cancelGravestoneTimer(data.corpseId);
 
     await this.deathStateManager.clearDeathLock(data.playerId);
   }
