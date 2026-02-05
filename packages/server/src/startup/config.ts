@@ -368,12 +368,19 @@ export async function loadConfig(): Promise<ServerConfig> {
   const USE_LOCAL_POSTGRES =
     (process.env["USE_LOCAL_POSTGRES"] || "true") === "true";
   const DATABASE_URL = process.env["DATABASE_URL"];
-  const CDN_URL = process.env["PUBLIC_CDN_URL"] || "http://localhost:8080";
+  const NODE_ENV = process.env["NODE_ENV"] || "development";
+  // CDN base URL
+  // - In production, default to the public assets CDN so Railway can boot without extra env.
+  // - In development, default to local server assets route (dev scripts usually set PUBLIC_CDN_URL explicitly).
+  const DEFAULT_CDN_URL =
+    NODE_ENV === "production"
+      ? "https://assets.hyperscape.club"
+      : `http://localhost:${PORT}/game-assets`;
+  const CDN_URL = process.env["PUBLIC_CDN_URL"] || DEFAULT_CDN_URL;
   const SYSTEMS_PATH = process.env["SYSTEMS_PATH"];
   const ADMIN_CODE = process.env["ADMIN_CODE"];
   const JWT_SECRET = process.env["JWT_SECRET"];
   const SAVE_INTERVAL = parseInt(process.env["SAVE_INTERVAL"] || "60", 10);
-  const NODE_ENV = process.env["NODE_ENV"] || "development";
   const COMMIT_HASH = process.env["COMMIT_HASH"];
 
   // Resolve world and assets directories
