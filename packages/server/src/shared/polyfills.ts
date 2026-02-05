@@ -123,6 +123,53 @@ globalWithPolyfills.window.location = {
   hash: "",
 };
 
+// Minimal WebGPU constants to prevent `three/webgpu` from crashing in Bun/Node.
+// Some runtimes expose these keys but leave them as `undefined`, so we must
+// check the value (not just `key in globalThis`).
+{
+  const g = globalThis as unknown as Record<string, unknown>;
+
+  if (g.GPUShaderStage == null || typeof g.GPUShaderStage !== "object") {
+    g.GPUShaderStage = {
+      VERTEX: 1,
+      FRAGMENT: 2,
+      COMPUTE: 4,
+    };
+  }
+
+  if (g.GPUBufferUsage == null || typeof g.GPUBufferUsage !== "object") {
+    g.GPUBufferUsage = {
+      MAP_READ: 1,
+      MAP_WRITE: 2,
+      COPY_SRC: 4,
+      COPY_DST: 8,
+      INDEX: 16,
+      VERTEX: 32,
+      UNIFORM: 64,
+      STORAGE: 128,
+      INDIRECT: 256,
+      QUERY_RESOLVE: 512,
+    };
+  }
+
+  if (g.GPUTextureUsage == null || typeof g.GPUTextureUsage !== "object") {
+    g.GPUTextureUsage = {
+      COPY_SRC: 1,
+      COPY_DST: 2,
+      TEXTURE_BINDING: 4,
+      STORAGE_BINDING: 8,
+      RENDER_ATTACHMENT: 16,
+    };
+  }
+
+  if (g.GPUMapMode == null || typeof g.GPUMapMode !== "object") {
+    g.GPUMapMode = {
+      READ: 1,
+      WRITE: 2,
+    };
+  }
+}
+
 // Basic document mock for loaders that check for it
 globalWithPolyfills.document = {
   createElement: (tag: string) => {
