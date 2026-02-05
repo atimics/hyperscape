@@ -98,6 +98,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
   // Check for Anthropic API key
   if (process.env.ANTHROPIC_API_KEY) {
     try {
+      // @ts-ignore - optional plugin, may not be installed
       const mod = await import("@elizaos/plugin-anthropic");
       console.log("[AgentManager] Using Anthropic model provider");
       return (mod.anthropicPlugin ?? mod.default) as Plugin;
@@ -112,6 +113,7 @@ async function getModelProviderPlugin(): Promise<Plugin | null> {
   // Check for OpenRouter API key
   if (process.env.OPENROUTER_API_KEY) {
     try {
+      // @ts-ignore - optional plugin, may not be installed
       const mod = await import("@elizaos/plugin-openrouter");
       console.log("[AgentManager] Using OpenRouter model provider");
       return (mod.openrouterPlugin ?? mod.default) as Plugin;
