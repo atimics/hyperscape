@@ -215,7 +215,7 @@ export function handleAttackPlayer(
   // This prevents exploits where players end up in the arena without a duel session
   if (!isDuelCombat) {
     const attackerPos = playerEntity.position;
-    const targetPos = targetPlayerEntity.position;
+    const targetPos = targetPlayer.position;
 
     const attackerInArena =
       attackerPos && isPositionInsideCombatArena(attackerPos.x, attackerPos.z);
