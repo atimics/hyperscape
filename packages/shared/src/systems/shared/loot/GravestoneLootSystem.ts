@@ -27,6 +27,11 @@ type LootableEntity = {
   id: string;
   canPlayerLoot: (playerId: string) => boolean;
   removeItem: (itemId: string, quantity: number) => boolean;
+  restoreItem: (
+    itemId: string,
+    quantity: number,
+    originalIndex: number,
+  ) => void;
   getLootItems: () => InventoryItem[];
   hasLoot: () => boolean;
   getPosition: () => { x: number; y: number; z: number };
@@ -236,6 +241,7 @@ export class GravestoneLootSystem extends SystemBase {
       !entity ||
       !("canPlayerLoot" in entity) ||
       !("removeItem" in entity) ||
+      !("restoreItem" in entity) ||
       !("getLootItems" in entity) ||
       !("getOwnerId" in entity) ||
       !("getZoneType" in entity)
@@ -415,6 +421,10 @@ export class GravestoneLootSystem extends SystemBase {
       return;
     }
 
+    // Snapshot item index before removal for rollback
+    const preRemovalItems = entity.getLootItems();
+    const originalIndex = preRemovalItems.findIndex((i) => i.itemId === itemId);
+
     const removed = entity.removeItem(itemId, quantityToLoot);
     if (!removed) {
       this.emitLootResult(
@@ -431,9 +441,14 @@ export class GravestoneLootSystem extends SystemBase {
       return;
     }
 
-    // Defensive re-check (Phase 5.1 will improve rollback)
+    // Defensive re-check: if inventory space disappeared after removal, rollback
     const recheck = this.checkInventorySpace(playerId, itemId);
     if (!recheck.hasSpace) {
+      entity.restoreItem(
+        itemId,
+        quantityToLoot,
+        originalIndex >= 0 ? originalIndex : 0,
+      );
       this.emitLootResult(
         playerId,
         transactionId,

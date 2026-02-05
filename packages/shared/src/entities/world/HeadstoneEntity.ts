@@ -35,6 +35,7 @@ export class HeadstoneEntity extends InteractableEntity {
 
   private lootProtectionUntil: number = 0;
   private protectedFor?: string;
+  private despawnScheduled = false;
 
   constructor(world: World, config: HeadstoneEntityConfig) {
     const interactableConfig: InteractableConfig = {
@@ -245,7 +246,8 @@ export class HeadstoneEntity extends InteractableEntity {
       this.mesh.userData.corpseData.itemCount = this.lootItems.length;
     }
 
-    if (this.lootItems.length === 0) {
+    if (this.lootItems.length === 0 && !this.despawnScheduled) {
+      this.despawnScheduled = true;
       this.world.emit(EventType.CORPSE_EMPTY, {
         corpseId: this.id,
         playerId: this.headstoneData.playerId,
@@ -265,6 +267,34 @@ export class HeadstoneEntity extends InteractableEntity {
 
     this.markNetworkDirty();
     return true;
+  }
+
+  /**
+   * Restore an item to the gravestone (rollback after failed inventory add).
+   * Finds existing stack and increments, or re-inserts at the given index.
+   */
+  public restoreItem(
+    itemId: string,
+    quantity: number,
+    originalIndex: number,
+  ): void {
+    const existing = this.lootItems.find((i) => i.itemId === itemId);
+    if (existing) {
+      existing.quantity += quantity;
+    } else {
+      const insertAt = Math.min(originalIndex, this.lootItems.length);
+      this.lootItems.splice(insertAt, 0, {
+        id: `restored_${itemId}_${Date.now()}`,
+        itemId,
+        quantity,
+        slot: insertAt,
+        metadata: null,
+      });
+    }
+    if (this.mesh?.userData?.corpseData) {
+      this.mesh.userData.corpseData.itemCount = this.lootItems.length;
+    }
+    this.markNetworkDirty();
   }
 
   public getLootItems(): InventoryItem[] {
