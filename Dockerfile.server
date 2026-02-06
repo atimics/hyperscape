@@ -30,6 +30,9 @@ COPY packages/server/package.json ./packages/server/
 COPY packages/client/package.json ./packages/client/
 COPY packages/plugin-hyperscape/package.json ./packages/plugin-hyperscape/
 
+# Copy scripts directory (needed for postinstall: ensure-assets.mjs)
+COPY scripts ./scripts
+
 # Set CI environment to skip asset download in postinstall
 ENV CI=true
 ENV SKIP_ASSETS=true
