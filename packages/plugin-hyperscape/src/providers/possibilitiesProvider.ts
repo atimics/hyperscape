@@ -901,7 +901,7 @@ export const possibilitiesProvider: Provider = {
         // Include full data in values so it's accessible in composed state
         possibilitiesData: data,
       },
-      data,
+      data: data as Record<string, unknown>,
     };
   },
 };

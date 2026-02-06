@@ -39,7 +39,7 @@ cmds = [
 ]
 
 [start]
-cmd = "cd packages/server && bun dist/index.js"
+cmd = "cd packages/server && bun --preload ./webgpu-polyfill.js dist/index.js"
 
 [variables]
 # Skip asset download in CI - assets are served from Cloudflare R2 CDN

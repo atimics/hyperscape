@@ -512,7 +512,7 @@ export const guardrailsProvider: Provider = {
         // Include full data in values so it's accessible in composed state
         guardrailsData: data,
       },
-      data,
+      data: data as Record<string, unknown>,
     };
   },
 };
