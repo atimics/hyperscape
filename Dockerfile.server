@@ -110,7 +110,6 @@ COPY --from=builder /app/node_modules ./node_modules
 
 # Copy built artifacts from builder
 COPY --from=builder /app/packages/physx-js-webidl/dist ./packages/physx-js-webidl/dist
-COPY --from=builder /app/packages/physx-js-webidl/wasm ./packages/physx-js-webidl/wasm
 COPY --from=builder /app/packages/shared/build ./packages/shared/build
 COPY --from=builder /app/packages/server/dist ./packages/server/dist
 COPY --from=builder /app/packages/server/public ./packages/server/public
