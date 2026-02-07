@@ -38,10 +38,17 @@ export function registerHealthRoutes(
   fastify.get(
     "/health",
     async (_request: FastifyRequest, reply: FastifyReply) => {
+      const mem = process.memoryUsage();
       const health = {
         status: "ok",
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
+        memory: {
+          rss: Math.round(mem.rss / 1024 / 1024),
+          heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
+          heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
+          external: Math.round(mem.external / 1024 / 1024),
+        },
       };
 
       return reply.code(200).send(health);
@@ -52,6 +59,7 @@ export function registerHealthRoutes(
   fastify.get(
     "/status",
     async (_request: FastifyRequest, reply: FastifyReply) => {
+      const mem = process.memoryUsage();
       const status = {
         uptime: Math.round(world.time),
         protected: config.adminCode !== undefined,
@@ -61,6 +69,11 @@ export function registerHealthRoutes(
           name: string;
         }>,
         commitHash: config.commitHash,
+        memory: {
+          rss: Math.round(mem.rss / 1024 / 1024),
+          heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
+          heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
+        },
       };
 
       // Import type from our local types

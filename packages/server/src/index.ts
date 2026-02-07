@@ -149,6 +149,7 @@ async function startServer() {
   // Register shutdown handlers
   registerShutdownHandlers(fastify, world, dbContext);
 
+  const mem = process.memoryUsage();
   console.log("=".repeat(60));
   console.log("✅ Hyperscape Server Ready");
   console.log("=".repeat(60));
@@ -157,10 +158,21 @@ async function startServer() {
   console.log(`   World:       ${config.worldDir}`);
   console.log(`   Assets:      ${config.assetsDir}`);
   console.log(`   CDN:         ${config.cdnUrl}`);
+  console.log(
+    `   Memory:      RSS ${Math.round(mem.rss / 1024 / 1024)}MB | Heap ${Math.round(mem.heapUsed / 1024 / 1024)}/${Math.round(mem.heapTotal / 1024 / 1024)}MB`,
+  );
   if (config.commitHash) {
     console.log(`   Commit:      ${config.commitHash}`);
   }
   console.log("=".repeat(60));
+
+  // Log memory usage every 30 seconds to track growth / detect leaks
+  setInterval(() => {
+    const m = process.memoryUsage();
+    console.log(
+      `[Memory] RSS: ${Math.round(m.rss / 1024 / 1024)}MB | Heap: ${Math.round(m.heapUsed / 1024 / 1024)}/${Math.round(m.heapTotal / 1024 / 1024)}MB | External: ${Math.round(m.external / 1024 / 1024)}MB`,
+    );
+  }, 30_000);
 }
 
 // Start the server with error handling
