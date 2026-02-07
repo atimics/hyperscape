@@ -59,11 +59,20 @@ const MANIFEST_FILES = [
   "gathering/fishing.json",
   "gathering/mining.json",
   "gathering/woodcutting.json",
+  // Root-level extra manifests
+  "ammunition.json",
+  "combat-spells.json",
+  "duel-arenas.json",
+  "runes.json",
   // Recipes directory
   "recipes/cooking.json",
+  "recipes/crafting.json",
   "recipes/firemaking.json",
+  "recipes/fletching.json",
+  "recipes/runecrafting.json",
   "recipes/smelting.json",
   "recipes/smithing.json",
+  "recipes/tanning.json",
 ];
 
 /**
