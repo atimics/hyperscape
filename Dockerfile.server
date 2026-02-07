@@ -118,8 +118,10 @@ COPY --from=builder /app/packages/plugin-hyperscape ./packages/plugin-hyperscape
 # Copy server source files needed at runtime (for paths, configs, etc.)
 COPY --from=builder /app/packages/server/src ./packages/server/src
 
-# Copy WebGPU polyfill for server-side Three.js loading
+# Copy WebGPU polyfill and entrypoint for server-side Three.js loading
 COPY packages/server/webgpu-polyfill.js ./packages/server/webgpu-polyfill.js
+COPY packages/server/entrypoint.sh ./packages/server/entrypoint.sh
+RUN chmod +x ./packages/server/entrypoint.sh
 
 # Create manifests directory - manifests are fetched from CDN at startup
 RUN mkdir -p ./packages/server/world/assets/manifests
@@ -135,4 +137,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
   CMD curl -f http://localhost:${PORT:-5555}/status || exit 1
 
 # Run the server with WebGPU polyfill (three/webgpu needs browser globals stubbed)
-CMD ["bun", "--preload", "./webgpu-polyfill.js", "dist/index.js"]
+# Use ENTRYPOINT so Railway's startCommand override doesn't bypass the polyfill
+ENTRYPOINT ["./entrypoint.sh"]
