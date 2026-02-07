@@ -12,7 +12,6 @@
     ]
   },
   "deploy": {
-    "startCommand": "bun --preload ./webgpu-polyfill.js dist/index.js",
     "healthcheckPath": "/status",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",
