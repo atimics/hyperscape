@@ -12,7 +12,7 @@
     ]
   },
   "deploy": {
-    "startCommand": "cd packages/server && bun --preload ./webgpu-polyfill.js dist/index.js",
+    "startCommand": "bun --preload ./webgpu-polyfill.js dist/index.js",
     "healthcheckPath": "/status",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",
