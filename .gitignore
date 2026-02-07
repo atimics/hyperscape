@@ -97,7 +97,7 @@ clear-users.sql
 
 logs/
 
-eliza/
+/eliza/
 
 # Server world assets - ignore large binaries, keep manifests
 # The manifests/ directory contains essential JSON data and MUST be tracked
