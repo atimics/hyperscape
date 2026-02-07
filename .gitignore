@@ -3,8 +3,7 @@ node_modules/
 package-lock.json
 yarn.lock
 
-# Build outputs
-dist/
+# Build outputs (each package has its own dist/ ignore; root-level removed to allow physx-js-webidl/dist/)
 build/
 *.tsbuildinfo
 
@@ -68,11 +67,6 @@ tmp/
 !packages/asset-forge/src/components/Assets/
 
 # 3D Models and Avatars - downloaded from separate assets repo
-# Ignore large binary assets (models, textures) but keep manifests JSON
-packages/server/world/assets/models/
-packages/server/world/assets/textures/
-packages/server/world/assets/audio/
-# manifests/ directory IS tracked (essential JSON data for server startup)
 packages/client/src/public/models/
 packages/client/dist/models/
 packages/client/packages/
@@ -101,5 +95,15 @@ logs/
 
 # Server world assets - ignore large binaries, keep manifests
 # The manifests/ directory contains essential JSON data and MUST be tracked
-packages/server/world/assets/
+packages/server/world/assets/*
+!packages/server/world/assets/manifests/
+!packages/server/world/assets/README.md
+
+# Server data (elizaos etc.)
+packages/server/data/
+
+# Generated/installed packages (no source, only dist + node_modules)
+packages/decimation/
+packages/impostors/
+packages/procgen/
 .wrangler/
