@@ -47,9 +47,12 @@ const MANIFEST_FILES = [
   "vegetation.json",
   "world-areas.json",
   // Items directory
+  "items/ammunition.json",
+  "items/armor.json",
   "items/food.json",
   "items/misc.json",
   "items/resources.json",
+  "items/runes.json",
   "items/tools.json",
   "items/weapons.json",
   // Gathering directory
