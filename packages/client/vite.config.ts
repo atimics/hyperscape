@@ -316,13 +316,13 @@ export default defineConfig(({ mode }) => {
       "import.meta.env.PUBLIC_API_URL": JSON.stringify(
         env.PUBLIC_API_URL ||
           (mode === "production"
-            ? "https://hyperscape-production.up.railway.app"
+            ? "https://rativerse-production.up.railway.app"
             : "http://localhost:5555"),
       ),
       "import.meta.env.PUBLIC_WS_URL": JSON.stringify(
         env.PUBLIC_WS_URL ||
           (mode === "production"
-            ? "wss://hyperscape-production.up.railway.app/ws"
+            ? "wss://rativerse-production.up.railway.app/ws"
             : "ws://localhost:5555/ws"),
       ),
       // CDN URL - Cloudflare R2 with custom domain

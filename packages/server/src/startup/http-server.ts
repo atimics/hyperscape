@@ -60,12 +60,12 @@ export async function createHttpServer(
 
   // Configure CORS for development and production
   // Frontend: Cloudflare Pages (hyperscape.club)
-  // Backend: Railway (hyperscape-production.up.railway.app)
+  // Backend: Railway (rativerse-production.up.railway.app)
   const elizaOSUrl =
     process.env.ELIZAOS_URL ||
     process.env.ELIZAOS_API_URL ||
     (process.env.NODE_ENV === "production"
-      ? "https://hyperscape-production.up.railway.app"
+      ? "https://rativerse-production.up.railway.app"
       : "http://localhost:4001");
   const clientUrl =
     process.env.CLIENT_URL ||
@@ -77,8 +77,11 @@ export async function createHttpServer(
     // Production domains (HTTPS)
     "https://hyperscape.club",
     "https://www.hyperscape.club",
+    "https://rati.world",
+    "https://www.rati.world",
     "https://hyperscape.pages.dev",
     "https://hyperscape-production.up.railway.app",
+    "https://rativerse-production.up.railway.app",
     // Production domains (HTTP for legacy/testing)
     "http://hyperscape.pages.dev",
     // Development (from env vars or defaults)
@@ -92,6 +95,7 @@ export async function createHttpServer(
     /^https:\/\/.+\.warpcast\.com$/,
     /^https:\/\/.+\.privy\.io$/,
     /^https:\/\/.+\.up\.railway\.app$/,
+    /^https:\/\/.+\.rati\.world$/,
   ];
 
   // Add custom domain from env if set

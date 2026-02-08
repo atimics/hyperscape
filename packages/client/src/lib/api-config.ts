@@ -25,7 +25,7 @@ export const ELIZAOS_URL =
   import.meta.env.PUBLIC_ELIZAOS_URL ||
   import.meta.env.PUBLIC_API_URL ||
   (import.meta.env.PROD
-    ? "https://hyperscape-production.up.railway.app"
+    ? "https://rativerse-production.up.railway.app"
     : "http://localhost:5555");
 
 export const ELIZAOS_API = `${ELIZAOS_URL}/api`;
