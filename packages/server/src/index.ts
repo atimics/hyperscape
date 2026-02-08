@@ -159,7 +159,7 @@ async function startServer() {
   console.log(`   Assets:      ${config.assetsDir}`);
   console.log(`   CDN:         ${config.cdnUrl}`);
   console.log(
-    `   Memory:      RSS ${Math.round(mem.rss / 1024 / 1024)}MB | Heap ${Math.round(mem.heapUsed / 1024 / 1024)}/${Math.round(mem.heapTotal / 1024 / 1024)}MB`,
+    `   Memory:      RSS ${Math.round(mem.rss / 1024 / 1024)}MB | Heap ${Math.round(mem.heapUsed / 1024 / 1024)}/${Math.round(mem.heapTotal / 1024 / 1024)}MB | External: ${Math.round(mem.external / 1024 / 1024)}MB`,
   );
   if (config.commitHash) {
     console.log(`   Commit:      ${config.commitHash}`);

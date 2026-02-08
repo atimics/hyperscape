@@ -777,15 +777,32 @@ export class Physics extends SystemBase implements IPhysics {
       DefaultFilterShader(): PhysX.PxSimulationFilterShader;
     };
     sceneDesc.filterShader = physxWithTopLevel.DefaultFilterShader();
-    (
-      sceneDesc.flags as { raise: (flag: number, value: boolean) => void }
-    ).raise(PHYSX.PxSceneFlagEnum.eENABLE_CCD, true);
-    (
-      sceneDesc.flags as { raise: (flag: number, value: boolean) => void }
-    ).raise(PHYSX.PxSceneFlagEnum.eENABLE_ACTIVE_ACTORS, true);
-    sceneDesc.solverType = PHYSX.PxSolverTypeEnum.eTGS;
     sceneDesc.simulationEventCallback = simulationEventCallback;
-    sceneDesc.broadPhaseType = PHYSX.PxBroadPhaseTypeEnum.eGPU;
+
+    const isServer = this.world.isServer;
+    if (isServer) {
+      // Server: use lightweight CPU-only settings to minimize WASM heap usage
+      // eABP (Automatic Box Pruning) is the best CPU broadphase — eGPU allocates
+      // massive internal buffers for GPU acceleration that are useless in WASM
+      sceneDesc.broadPhaseType = PHYSX.PxBroadPhaseTypeEnum.eABP;
+      // PGS solver uses significantly less memory than TGS
+      sceneDesc.solverType = PHYSX.PxSolverTypeEnum.ePGS;
+      // Skip CCD on server — discrete collision is sufficient for authoritative physics
+      (
+        sceneDesc.flags as { raise: (flag: number, value: boolean) => void }
+      ).raise(PHYSX.PxSceneFlagEnum.eENABLE_ACTIVE_ACTORS, true);
+    } else {
+      // Client: full-quality settings for best visual/interaction fidelity
+      sceneDesc.broadPhaseType = PHYSX.PxBroadPhaseTypeEnum.eGPU;
+      sceneDesc.solverType = PHYSX.PxSolverTypeEnum.eTGS;
+      (
+        sceneDesc.flags as { raise: (flag: number, value: boolean) => void }
+      ).raise(PHYSX.PxSceneFlagEnum.eENABLE_CCD, true);
+      (
+        sceneDesc.flags as { raise: (flag: number, value: boolean) => void }
+      ).raise(PHYSX.PxSceneFlagEnum.eENABLE_ACTIVE_ACTORS, true);
+    }
+
     this.scene = this.physics.createScene(sceneDesc);
   }
 
