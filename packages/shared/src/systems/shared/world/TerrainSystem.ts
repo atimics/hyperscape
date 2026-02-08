@@ -312,7 +312,11 @@ export class TerrainSystem extends System {
     const tile = this.terrainTiles.get(key);
     if (!tile || tile.collision) return;
 
-    const geometry = tile.mesh.geometry;
+    // Server tiles use lightweight Object3D (no geometry) — they already have
+    // box colliders from createTilePhysicsCollider(), so skip mesh-based collision.
+    const geometry = (tile.mesh as THREE.Mesh).geometry;
+    if (!geometry) return;
+
     const transformedGeometry = geometry.clone();
     transformedGeometry.translate(
       tile.x * this.CONFIG.TILE_SIZE,
@@ -749,6 +753,199 @@ export class TerrainSystem extends System {
     this._initialTilesReady = true;
   }
 
+  /**
+   * Server-optimized tile generation: compute only heightmap + PhysX collider.
+   * Skips Three.js geometry, materials, vertex colors, normals — saves ~300KB/tile.
+   */
+  private generateServerTile(
+    tileX: number,
+    tileZ: number,
+    generateContent = true,
+  ): TerrainTile {
+    const key = `${tileX}_${tileZ}`;
+    if (this.terrainTiles.has(key)) {
+      return this.terrainTiles.get(key)!;
+    }
+
+    // Compute heightmap data directly (no Three.js geometry)
+    const res = this.CONFIG.TILE_RESOLUTION;
+    const heightData: number[] = [];
+    let minY = Infinity;
+    let maxY = -Infinity;
+    let avgY = 0;
+    const step = this.CONFIG.TILE_SIZE / (res - 1);
+
+    for (let iz = 0; iz < res; iz++) {
+      for (let ix = 0; ix < res; ix++) {
+        const x = tileX * this.CONFIG.TILE_SIZE + ix * step;
+        const z = tileZ * this.CONFIG.TILE_SIZE + iz * step;
+        const height = this.getHeightAt(x, z);
+        heightData.push(height);
+        avgY += height;
+        minY = Math.min(minY, height);
+        maxY = Math.max(maxY, height);
+      }
+    }
+    avgY /= heightData.length;
+
+    // Store height data for persistence
+    this.storeHeightData(tileX, tileZ, heightData);
+
+    // Lightweight placeholder mesh (no geometry/material allocated)
+    const mesh = new THREE.Object3D() as unknown as THREE.Mesh;
+    mesh.position.set(
+      tileX * this.CONFIG.TILE_SIZE,
+      0,
+      tileZ * this.CONFIG.TILE_SIZE,
+    );
+    mesh.name = `Terrain_${key}`;
+
+    const tile: TerrainTile = {
+      key,
+      x: tileX,
+      z: tileZ,
+      mesh,
+      collision: null,
+      biome: this.getBiomeAt(tileX, tileZ) as TerrainTile["biome"],
+      resources: [],
+      roads: [],
+      generated: true,
+      lastActiveTime: new Date(),
+      playerCount: 0,
+      needsSave: true,
+      waterMeshes: [],
+      heightData,
+      chunkSeed: 0,
+      heightMap: new Float32Array(heightData),
+      collider: null,
+      lastUpdate: Date.now(),
+    };
+
+    // Create PhysX collider from computed height bounds
+    this.createTilePhysicsCollider(tile, tileX, tileZ, minY, maxY, avgY);
+
+    if (generateContent) {
+      this.generateTileResources(tile);
+
+      // Emit events
+      const originX = tile.x * this.CONFIG.TILE_SIZE;
+      const originZ = tile.z * this.CONFIG.TILE_SIZE;
+      const resourcesPayload = tile.resources.map((r) => {
+        const pos = {
+          x: originX + r.position.x,
+          y: r.position.y,
+          z: originZ + r.position.z,
+        };
+        return { id: r.id, type: r.type, position: pos };
+      });
+      const genericBiome = this.mapBiomeToGeneric(tile.biome as string);
+      this.world.emit(EventType.TERRAIN_TILE_GENERATED, {
+        tileId: `${tileX},${tileZ}`,
+        position: { x: originX, z: originZ },
+        biome: genericBiome,
+        tileX,
+        tileZ,
+        resources: resourcesPayload,
+      });
+
+      if (tile.resources.length > 0) {
+        const spawnPoints = tile.resources.map((r) => {
+          const worldPos = {
+            x: originX + r.position.x,
+            y: r.position.y,
+            z: originZ + r.position.z,
+          };
+          return {
+            id: r.id,
+            type: r.type,
+            subType: r.type === "tree" ? "normal" : r.type,
+            position: worldPos,
+          };
+        });
+        this.world.emit(EventType.RESOURCE_SPAWN_POINTS_REGISTERED, {
+          spawnPoints,
+        });
+      }
+    }
+
+    this.terrainTiles.set(key, tile);
+    this.activeChunks.add(key);
+    return tile;
+  }
+
+  /**
+   * Create a PhysX box collider for a terrain tile from height bounds.
+   * Shared between server and client tile generation paths.
+   */
+  private createTilePhysicsCollider(
+    tile: TerrainTile,
+    tileX: number,
+    tileZ: number,
+    minY: number,
+    maxY: number,
+    avgY: number,
+  ): void {
+    const physics = this.world.physics;
+    const PHYSX = getPhysX();
+
+    const heightRange = maxY - minY;
+    const boxThickness = Math.max(5, heightRange * 0.5);
+    const halfExtents = {
+      x: this.CONFIG.TILE_SIZE / 2,
+      y: boxThickness / 2,
+      z: this.CONFIG.TILE_SIZE / 2,
+    };
+    const boxGeometry = new PHYSX!.PxBoxGeometry(
+      halfExtents.x,
+      halfExtents.y,
+      halfExtents.z,
+    );
+
+    const physicsMaterial = physics.physics.createMaterial(0.5, 0.5, 0.1);
+    const shape = physics.physics.createShape(
+      boxGeometry,
+      physicsMaterial,
+      true,
+    );
+
+    const terrainLayer = Layers.terrain;
+    if (terrainLayer) {
+      const filterData = new PHYSX!.PxFilterData(
+        terrainLayer.group,
+        0xffffffff,
+        0,
+        0,
+      );
+      shape.setQueryFilterData(filterData);
+
+      const simFilterData = new PHYSX!.PxFilterData(
+        terrainLayer.group,
+        terrainLayer.mask,
+        0,
+        0,
+      );
+      shape.setSimulationFilterData(simFilterData);
+    }
+
+    const transform = new PHYSX!.PxTransform(
+      new PHYSX!.PxVec3(
+        tileX * this.CONFIG.TILE_SIZE + this.CONFIG.TILE_SIZE / 2,
+        avgY,
+        tileZ * this.CONFIG.TILE_SIZE + this.CONFIG.TILE_SIZE / 2,
+      ),
+      new PHYSX!.PxQuat(0, 0, 0, 1),
+    );
+    const actor = physics.physics.createRigidStatic(transform);
+    actor.attachShape(shape);
+
+    const handle: PhysicsHandle = {
+      tag: `terrain_${tile.key}`,
+      contactedHandles: new Set<PhysicsHandle>(),
+      triggeredHandles: new Set<PhysicsHandle>(),
+    };
+    tile.collider = physics.addActor(actor, handle);
+  }
+
   private generateTile(
     tileX: number,
     tileZ: number,
@@ -759,6 +956,11 @@ export class TerrainSystem extends System {
     // Check if tile already exists
     if (this.terrainTiles.has(key)) {
       return this.terrainTiles.get(key)!;
+    }
+
+    // SERVER OPTIMIZATION: skip Three.js geometry entirely
+    if (this.world.isServer) {
+      return this.generateServerTile(tileX, tileZ, generateContent);
     }
 
     // Create geometry for this tile
@@ -794,24 +996,13 @@ export class TerrainSystem extends System {
       tileZ: tileZ,
     };
 
-    // Generate collision only on server to avoid client-side heavy work
-    const collision: PMeshHandle | null = null;
-    const isServer = this.world.network?.isServer || false;
-    if (isServer) {
-      const collisionKey = `${tileX}_${tileZ}`;
-      if (!this.pendingCollisionSet.has(collisionKey)) {
-        this.pendingCollisionSet.add(collisionKey);
-        this.pendingCollisionKeys.push(collisionKey);
-      }
-    }
-
     // Create tile object
     const tile: TerrainTile = {
       key,
       x: tileX,
       z: tileZ,
       mesh,
-      collision: collision || null,
+      collision: null,
       biome: this.getBiomeAt(tileX, tileZ) as TerrainTile["biome"],
       resources: [],
       roads: [],
@@ -827,98 +1018,24 @@ export class TerrainSystem extends System {
       lastUpdate: Date.now(),
     };
 
-    // Add simple physics plane for the terrain tile (for raycasting)
-    // Create on both client and server for click-to-move raycasting
-    const physics = this.world.physics;
-    const PHYSX = getPhysX();
-
-    // Create a simple plane at the average height of the terrain
-    // This is sufficient for click-to-move raycasting
+    // Create PhysX collider from geometry
     const positionAttribute = geometry.attributes.position;
     const vertices = positionAttribute.array as Float32Array;
-
-    // Calculate average height and bounds
     let minY = Infinity;
     let maxY = -Infinity;
     let avgY = 0;
     const vertexCount = positionAttribute.count;
-
     for (let i = 0; i < vertexCount; i++) {
-      const y = vertices[i * 3 + 1]; // Y is at index 1 in each vertex
+      const y = vertices[i * 3 + 1];
       avgY += y;
       minY = Math.min(minY, y);
       maxY = Math.max(maxY, y);
     }
     avgY /= vertexCount;
 
-    // Create a box shape that covers the terrain tile
-    // Use a thicker box to ensure proper collision
-    const heightRange = maxY - minY;
-    const boxThickness = Math.max(5, heightRange * 0.5); // At least 5 units thick or half the height range
-    const halfExtents = {
-      x: this.CONFIG.TILE_SIZE / 2, // Half width
-      y: boxThickness / 2, // Half thickness of the collision box
-      z: this.CONFIG.TILE_SIZE / 2, // Half depth
-    };
-    const boxGeometry = new PHYSX!.PxBoxGeometry(
-      halfExtents.x,
-      halfExtents.y,
-      halfExtents.z,
-    );
+    this.createTilePhysicsCollider(tile, tileX, tileZ, minY, maxY, avgY);
 
-    // Create material and shape
-    const physicsMaterial = physics.physics.createMaterial(0.5, 0.5, 0.1);
-    const shape = physics.physics.createShape(
-      boxGeometry,
-      physicsMaterial,
-      true,
-    );
-
-    // Set the terrain to the 'terrain' layer
-    const terrainLayer = Layers.terrain;
-    if (terrainLayer) {
-      // For filter data:
-      // word0 = what group this shape belongs to (terrain.group)
-      // word1 = what groups can query/hit this shape (0xFFFFFFFF allows all)
-      // This allows raycasts with any layer mask to hit terrain
-      const filterData = new PHYSX!.PxFilterData(
-        terrainLayer.group,
-        0xffffffff,
-        0,
-        0,
-      );
-      shape.setQueryFilterData(filterData);
-
-      // For simulation, use the terrain's actual collision mask
-      const simFilterData = new PHYSX!.PxFilterData(
-        terrainLayer.group,
-        terrainLayer.mask,
-        0,
-        0,
-      );
-      shape.setSimulationFilterData(simFilterData);
-    }
-
-    // Create actor at tile position with average height
-    const transform = new PHYSX!.PxTransform(
-      new PHYSX!.PxVec3(
-        mesh.position.x + this.CONFIG.TILE_SIZE / 2, // Center of tile
-        avgY, // Average terrain height
-        mesh.position.z + this.CONFIG.TILE_SIZE / 2, // Center of tile
-      ),
-      new PHYSX!.PxQuat(0, 0, 0, 1),
-    );
-    const actor = physics.physics.createRigidStatic(transform);
-    actor.attachShape(shape);
-
-    const handle: PhysicsHandle = {
-      tag: `terrain_${tile.key}`,
-      contactedHandles: new Set<PhysicsHandle>(),
-      triggeredHandles: new Set<PhysicsHandle>(),
-    };
-    tile.collider = physics.addActor(actor, handle);
-
-    // Add to scene if client-side
+    // Add to scene
     if (this.terrainContainer) {
       this.terrainContainer.add(mesh);
     }
@@ -2495,9 +2612,12 @@ export class TerrainSystem extends System {
     // Remove main tile mesh from scene
     if (this.terrainContainer && tile.mesh.parent) {
       this.terrainContainer.remove(tile.mesh);
-      tile.mesh.geometry.dispose();
-      if (tile.mesh.material instanceof THREE.Material) {
-        tile.mesh.material.dispose();
+    }
+    const meshWithGeometry = tile.mesh as THREE.Mesh;
+    if (meshWithGeometry.geometry) {
+      meshWithGeometry.geometry.dispose();
+      if (meshWithGeometry.material instanceof THREE.Material) {
+        meshWithGeometry.material.dispose();
       }
     }
 
@@ -3165,9 +3285,16 @@ export class TerrainSystem extends System {
    * Initialize chunk loading system with 9 core + ring strategy
    */
   private initializeChunkLoadingSystem(): void {
-    // Balanced load radius to reduce generation spikes when moving
-    this.coreChunkRange = 2; // 5x5 core grid
-    this.ringChunkRange = 3; // Preload ring up to ~7x7
+    if (this.world.isServer) {
+      // Server: smaller range — only need collision/resource tiles near players
+      this.coreChunkRange = 1; // 3x3 core grid
+      this.ringChunkRange = 2; // Preload ring up to ~5x5
+      this.terrainOnlyChunkRange = 3; // Furthest ring (7x7 max)
+    } else {
+      // Client: full visual range
+      this.coreChunkRange = 2; // 5x5 core grid
+      this.ringChunkRange = 3; // Preload ring up to ~7x7
+    }
 
     // Initialize tracking maps
     this.playerChunks.clear();
@@ -3484,7 +3611,7 @@ export class TerrainSystem extends System {
       // Calculate bounding box for this tile
       const box = this._tempBox3;
 
-      if (tile.mesh && tile.mesh.geometry) {
+      if (tile.mesh && (tile.mesh as THREE.Mesh).geometry) {
         box.setFromObject(tile.mesh);
 
         // Verify tile is within expected size bounds
