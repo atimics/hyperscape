@@ -872,7 +872,9 @@ export class ClientNetwork extends SystemBase {
             entity.data?.type === "player" &&
             entity.data?.owner === this.id
           ) {
-            const url = entity.data.sessionAvatar || entity.data.avatar;
+            const url = (entity.data.sessionAvatar || entity.data.avatar) as
+              | string
+              | undefined;
             if (url) {
               loader.preload("avatar", url);
               playerAvatarPreloaded = true;

@@ -17,11 +17,11 @@ export function patchTextureLoader() {
   // Override the load method to handle blob URLs
   THREE.TextureLoader.prototype.load = function (
     url: string,
-    onLoad?: (data: THREE.Texture) => void,
+    onLoad?: (data: THREE.Texture<HTMLImageElement>) => void,
     onProgress?: (event: ProgressEvent) => void,
     onError?: (err: unknown) => void,
-  ): THREE.Texture {
-    const texture = new THREE.Texture();
+  ): THREE.Texture<HTMLImageElement> {
+    const texture = new THREE.Texture() as THREE.Texture<HTMLImageElement>;
 
     if (typeof url === "string" && url.startsWith("blob:")) {
       // Handle blob URLs
@@ -34,7 +34,7 @@ export function patchTextureLoader() {
       const handleLoad = () => {
         texture.image = image;
         texture.needsUpdate = true;
-        if (onLoad) onLoad(texture as THREE.Texture<HTMLImageElement>);
+        if (onLoad) onLoad(texture);
         cleanup();
       };
 

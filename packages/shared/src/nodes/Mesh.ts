@@ -103,7 +103,7 @@ export class Mesh extends Node {
 
     const ctx = getMountedContext(this);
 
-    let geometry;
+    let geometry: THREE.BufferGeometry | undefined;
     if (this._type === "box") {
       geometry = getBox(this._width, this._height, this._depth);
     } else if (this._type === "sphere") {
@@ -111,6 +111,7 @@ export class Mesh extends Node {
     } else if (this._type === "geometry") {
       geometry = this._geometry;
     }
+    if (!geometry) return;
     if (this._visible) {
       this.handle = ctx.stage.insert({
         geometry,
