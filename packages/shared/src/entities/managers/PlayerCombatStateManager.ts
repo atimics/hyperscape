@@ -51,7 +51,6 @@ export class PlayerCombatStateManager {
 
   // Combat timeout tracking
   // @see COMBAT_CONSTANTS.COMBAT_TIMEOUT_TICKS (8 ticks / 4.8 seconds)
-  private combatStartTick = -Infinity;
   private lastCombatActivityTick = -Infinity;
 
   // Callbacks
@@ -77,7 +76,6 @@ export class PlayerCombatStateManager {
     }
 
     if (!wasInCombat) {
-      this.combatStartTick = this.lastActionTick;
       if (this.onCombatStartCallback) {
         this.onCombatStartCallback();
       }
@@ -380,7 +378,6 @@ export class PlayerCombatStateManager {
     this.lastAttackerId = null;
     this.lastDamageTakenTick = -Infinity;
     this.lastCombatActivityTick = -Infinity;
-    this.combatStartTick = -Infinity;
     // Keep auto-retaliate setting across resets
   }
 

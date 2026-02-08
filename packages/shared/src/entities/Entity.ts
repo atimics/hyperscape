@@ -706,19 +706,6 @@ export class Entity implements IEntity {
     // Implementation depends on mesh management
   }
 
-  private isDefaultRotation(): boolean {
-    return (
-      this.rotation.x === 0 &&
-      this.rotation.y === 0 &&
-      this.rotation.z === 0 &&
-      this.rotation.w === 1
-    );
-  }
-
-  private isDefaultScale(): boolean {
-    return this.scale.x === 1 && this.scale.y === 1 && this.scale.z === 1;
-  }
-
   /**
    * Convert EntityType enum to string for MeshUserData
    */
@@ -1272,19 +1259,6 @@ export class Entity implements IEntity {
         `Loaded model is too small to see! Size: ${size.x}x${size.y}x${size.z}m`,
       );
     }
-  }
-
-  /**
-   * Validate that a scene has actual geometry (not just empty groups)
-   */
-  private validateSceneHasGeometry(scene: THREE.Object3D): boolean {
-    let hasMesh = false;
-    scene.traverse((child) => {
-      if (child instanceof THREE.Mesh || child instanceof THREE.SkinnedMesh) {
-        hasMesh = true;
-      }
-    });
-    return hasMesh;
   }
 
   protected collectNodes(node: THREE.Object3D): void {

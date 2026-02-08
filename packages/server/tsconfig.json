@@ -27,7 +27,11 @@
     "checkJs": false,
 
     "noImplicitAny": true,
-    
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+
     // Interop Constraints
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,

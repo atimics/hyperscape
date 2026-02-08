@@ -188,11 +188,7 @@ function getCameraSystem(world: World): CameraSystem | null {
 
 // PhysX is available via getPhysX() from PhysXManager
 
-const _UP = new THREE.Vector3(0, 1, 0);
-const _DOWN = new THREE.Vector3(0, -1, 0);
-const _FORWARD = new THREE.Vector3(0, 0, -1);
-// Removed unused constant: BACKWARD
-const _SCALE_IDENTITY = new THREE.Vector3(1, 1, 1);
+// Removed unused constants: _UP, _DOWN, _FORWARD, _SCALE_IDENTITY
 // Removed unused constant: POINTER_LOOK_SPEED
 // Removed unused constant: PAN_LOOK_SPEED
 // Removed unused constant: ZOOM_SPEED
@@ -208,7 +204,7 @@ function hasRole(roles: string[], role: string): boolean {
 
 // Constants for common game values
 const DEG2RAD = Math.PI / 180;
-const _RAD2DEG = 180 / Math.PI;
+// Removed unused constant: _RAD2DEG
 
 // Constants for control priorities
 const ControlPriorities = {
@@ -217,99 +213,9 @@ const ControlPriorities = {
 
 // Removed unused constant: Emotes
 
-// Physics layers utility
-function _getPhysicsLayers() {
-  return {
-    environment: { group: 1, mask: 0xffffffff },
-    player: { group: 2, mask: 0xffffffff },
-    prop: { group: 4, mask: 0xffffffff },
-  };
-}
+// Removed unused function: _getPhysicsLayers
 
-// Utility functions for PhysX transform operations
-function _safePhysXTransformPosition(
-  vector: THREE.Vector3,
-  transform: PhysX.PxTransform,
-): void {
-  // Strong type assumption - transform has p property
-  const p = transform.p;
-  p.x = vector.x;
-  p.y = vector.y;
-  p.z = vector.z;
-}
-
-// Temp variables for matrix operations - allocated once
-const _tempComposePos = new THREE.Vector3();
-const _tempComposeQuat = new THREE.Quaternion();
-const _tempComposeScale = new THREE.Vector3();
-const _tempDecomposePos = new THREE.Vector3();
-const _tempDecomposeQuat = new THREE.Quaternion();
-const _tempDecomposeScale = new THREE.Vector3();
-
-function _safePhysXTransformQuaternion(
-  quat: THREE.Quaternion,
-  transform: PhysX.PxTransform,
-): void {
-  // Strong type assumption - transform has q property
-  const q = transform.q;
-  q.x = quat.x;
-  q.y = quat.y;
-  q.z = quat.z;
-  q.w = quat.w;
-}
-
-// Matrix composition utility - no longer allocates
-function _safeMatrixCompose(
-  matrix: THREE.Matrix4,
-  position: THREE.Vector3,
-  quaternion: THREE.Quaternion,
-  scale: THREE.Vector3,
-): void {
-  // Reuse temp vectors instead of creating new ones
-  _tempComposePos.copy(position);
-  _tempComposeQuat.copy(quaternion);
-  _tempComposeScale.copy(scale);
-
-  // Use proper THREE.js method
-  matrix.compose(_tempComposePos, _tempComposeQuat, _tempComposeScale);
-}
-
-// Matrix decomposition utility - no longer allocates
-function _safeMatrixDecompose(
-  matrix: THREE.Matrix4,
-  position: Vector3Like,
-  quaternion: QuaternionLike,
-  scale: Vector3Like,
-): void {
-  // Use pre-allocated temp variables
-  matrix.decompose(_tempDecomposePos, _tempDecomposeQuat, _tempDecomposeScale);
-
-  // Copy values back
-  if (position.copy) {
-    position.copy(_tempDecomposePos);
-  } else {
-    position.x = _tempDecomposePos.x;
-    position.y = _tempDecomposePos.y;
-    position.z = _tempDecomposePos.z;
-  }
-
-  if (quaternion.copy) {
-    quaternion.copy(_tempDecomposeQuat);
-  } else {
-    quaternion.x = _tempDecomposeQuat.x;
-    quaternion.y = _tempDecomposeQuat.y;
-    quaternion.z = _tempDecomposeQuat.z;
-    quaternion.w = _tempDecomposeQuat.w;
-  }
-
-  if (scale.copy) {
-    scale.copy(_tempDecomposeScale);
-  } else {
-    scale.x = _tempDecomposeScale.x;
-    scale.y = _tempDecomposeScale.y;
-    scale.z = _tempDecomposeScale.z;
-  }
-}
+// Removed unused functions: _safePhysXTransformPosition, _safePhysXTransformQuaternion, _safeMatrixCompose, _safeMatrixDecompose
 
 // Removed unused function: clamp
 
@@ -324,19 +230,7 @@ function bindRotations(quaternion: THREE.Quaternion, euler: THREE.Euler): void {
 // Removed unused interface: CapsuleHandle
 
 const v1 = new THREE.Vector3();
-const _v2 = new THREE.Vector3();
-const _v3 = new THREE.Vector3();
-const _v4 = new THREE.Vector3();
-const _v5 = new THREE.Vector3();
-const _v6 = new THREE.Vector3();
-const _e1 = new THREE.Euler(0, 0, 0, "YXZ");
 const q1 = new THREE.Quaternion();
-const _q2 = new THREE.Quaternion();
-const _q3 = new THREE.Quaternion();
-const _q4 = new THREE.Quaternion();
-const _m1 = new THREE.Matrix4();
-const _m2 = new THREE.Matrix4();
-const _m3 = new THREE.Matrix4();
 
 // Pre-allocated temps for update/lateUpdate to avoid per-frame allocations
 const _combatQuat = new THREE.Quaternion();
@@ -346,7 +240,6 @@ const _healthBarMatrix = new THREE.Matrix4();
 // Removed unused interface: PlayerState
 
 export class PlayerLocal extends Entity implements HotReloadable {
-  private avatarDebugLogged: boolean = false;
   // RS3-style run energy
   public stamina: number = 100;
   // Tunable RS-style stamina rates (percent per second). Adjust to match desired feel exactly.
@@ -587,8 +480,6 @@ export class PlayerLocal extends Entity implements HotReloadable {
     q?: THREE.Quaternion;
     e?: string;
   } = {};
-  // Track last interpolation frame to avoid duplicate transform writes per frame
-  private lastInterpolatedFrame: number = -1;
   emote?: string;
   effect?: string;
   running: boolean = false;
@@ -597,8 +488,6 @@ export class PlayerLocal extends Entity implements HotReloadable {
   serverPosition: THREE.Vector3; // Track server's authoritative position - NEVER undefined
   lastServerUpdate: number = 0; // Time of last server position update
   private positionValidationInterval?: NodeJS.Timeout;
-  // Add pendingMoves array
-  private pendingMoves: { seq: number; pos: THREE.Vector3 }[] = [];
   private _tempVec3 = new THREE.Vector3();
 
   // Avatar retry mechanism
@@ -1293,7 +1182,6 @@ export class PlayerLocal extends Entity implements HotReloadable {
 
     // Retry camera initialization after a delay in case systems aren't ready yet
     setTimeout(() => {
-      const _cameraSystem = getSystem(this.world, "client-camera-system");
       this.world.emit(EventType.CAMERA_SET_TARGET, { target: this });
     }, 1000);
 
@@ -1543,7 +1431,6 @@ export class PlayerLocal extends Entity implements HotReloadable {
     }
 
     // Emit camera follow event using core camera system
-    const _cameraSystem = getCameraSystem(this.world);
     this.world.emit(EventType.CAMERA_FOLLOW_PLAYER, {
       playerId: this.data.id,
       entity: { id: this.data.id, mesh: this.mesh as object | null },
@@ -1802,15 +1689,11 @@ export class PlayerLocal extends Entity implements HotReloadable {
     }
 
     // Initialize camera controls
-    const _cameraSystem = getSystem(this.world, "client-camera-system");
     // Set ourselves as the camera target
     this.world.emit(EventType.CAMERA_SET_TARGET, { target: this });
   }
 
   initCameraSystem(): void {
-    // Register with camera system
-    const _cameraSystem = getSystem(this.world, "client-camera-system");
-
     // The camera target expects an object with a THREE.Vector3 position; the Entity already has node.position
     this.world.emit(EventType.CAMERA_SET_TARGET, { target: this });
 

@@ -603,24 +603,6 @@ export class AggroSystem extends SystemBase {
   }
 
   /**
-   * Clean up tolerance data for a player (on disconnect)
-   */
-  private removePlayerTolerance(playerId: string): void {
-    // Remove from region index first
-    const existing = this.playerTolerance.get(playerId);
-    if (existing) {
-      const regionPlayers = this.playersByRegion.get(existing.regionId);
-      if (regionPlayers) {
-        regionPlayers.delete(playerId);
-        if (regionPlayers.size === 0) {
-          this.playersByRegion.delete(existing.regionId);
-        }
-      }
-    }
-    this.playerTolerance.delete(playerId);
-  }
-
-  /**
    * Get remaining tolerance time in ticks for a player
    * Useful for debugging and UI display
    *
@@ -967,25 +949,6 @@ export class AggroSystem extends SystemBase {
       // If mob is the attacker, set target
       if (mobState.mobId === data.attackerId) {
         mobState.currentTarget = data.targetId;
-      }
-    }
-  }
-
-  private onCombatEnded(data: {
-    attackerId: string;
-    targetId: string;
-    reason?: string;
-  }): void {
-    // Handle combat session ended - update mob AI state
-    const mobState =
-      this.mobStates.get(data.attackerId) || this.mobStates.get(data.targetId);
-    if (mobState) {
-      mobState.isInCombat = false;
-
-      // Clear target if combat ended
-      if (data.reason === "death" || data.reason === "flee") {
-        mobState.currentTarget = null;
-        mobState.aggroTargets.clear();
       }
     }
   }

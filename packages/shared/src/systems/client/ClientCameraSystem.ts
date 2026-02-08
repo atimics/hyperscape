@@ -50,7 +50,6 @@ export class ClientCameraSystem extends SystemBase {
   private effectiveRadius = 6;
   // Zoom handling flags to make zoom move instantly with no easing
   private zoomDirty = false;
-  private lastDesiredRadius = this.spherical.radius;
 
   // Control settings
   private readonly settings = {
@@ -101,7 +100,6 @@ export class ClientCameraSystem extends SystemBase {
   };
   // Orbit state to prevent press-down snap until actual drag movement
   private orbitingActive = false;
-  private orbitingPrimed = false;
 
   // Bound event handlers for cleanup
   private boundHandlers = {
@@ -350,7 +348,7 @@ export class ClientCameraSystem extends SystemBase {
       this.targetSpherical.theta = this.spherical.theta;
       this.targetSpherical.phi = this.spherical.phi;
       // Prime orbiting; activate only after passing small drag threshold
-      this.orbitingPrimed = true;
+
       this.orbitingActive = false;
 
       this.canvas!.style.cursor = "grabbing";
@@ -380,7 +378,7 @@ export class ClientCameraSystem extends SystemBase {
           Math.abs(this.mouseState.delta.x) + Math.abs(this.mouseState.delta.y);
         if (drag > 3) {
           this.orbitingActive = true;
-          this.orbitingPrimed = false;
+
           this.canvas!.style.cursor = "grabbing";
         }
       }
@@ -423,7 +421,7 @@ export class ClientCameraSystem extends SystemBase {
       event.stopPropagation();
       this.mouseState.middleDown = false;
       this.orbitingActive = false;
-      this.orbitingPrimed = false;
+
       this.canvas!.style.cursor = "default";
     }
 
@@ -465,7 +463,6 @@ export class ClientCameraSystem extends SystemBase {
     this.spherical.radius = this.targetSpherical.radius;
     this.effectiveRadius = this.targetSpherical.radius;
     this.zoomDirty = true;
-    this.lastDesiredRadius = this.spherical.radius;
   }
 
   private onMouseLeave(_event: MouseEvent): void {
@@ -473,7 +470,7 @@ export class ClientCameraSystem extends SystemBase {
     this.mouseState.middleDown = false;
     this.mouseState.leftDown = false;
     this.orbitingActive = false;
-    this.orbitingPrimed = false;
+
     if (this.canvas) {
       this.canvas.style.cursor = "default";
     }
@@ -571,7 +568,7 @@ export class ClientCameraSystem extends SystemBase {
       // Deactivate single-touch rotation when pinching
       this.touchState.active = false;
       this.orbitingActive = false;
-      this.orbitingPrimed = false;
+
       return;
     }
 
@@ -610,7 +607,6 @@ export class ClientCameraSystem extends SystemBase {
       );
       if (!this.orbitingActive && totalDragDistance > 10) {
         this.orbitingActive = true;
-        this.orbitingPrimed = false;
       }
 
       if (this.orbitingActive) {
@@ -647,7 +643,7 @@ export class ClientCameraSystem extends SystemBase {
       this.spherical.radius = this.targetSpherical.radius;
       this.effectiveRadius = this.targetSpherical.radius;
       this.zoomDirty = true;
-      this.lastDesiredRadius = this.spherical.radius;
+
       this.pinchState.lastDistance = distance;
     }
   }
@@ -676,32 +672,7 @@ export class ClientCameraSystem extends SystemBase {
       this.touchState.active = false;
       this.touchState.touchId = -1;
       this.orbitingActive = false;
-      this.orbitingPrimed = false;
     }
-  }
-
-  private panCamera(deltaX: number, deltaY: number): void {
-    if (!this.camera || !this.target) return;
-
-    // Simple pan: move the camera offset in world space based on current camera orientation
-    const cameraRight = _v3_1;
-    const cameraForward = _v3_2;
-
-    // Get camera right vector
-    cameraRight.setFromMatrixColumn(this.camera.matrix, 0).normalize();
-
-    // Get camera forward vector projected on XZ plane
-    this.camera.getWorldDirection(cameraForward);
-    cameraForward.y = 0;
-    cameraForward.normalize();
-
-    const panSpeed = this.settings.panSpeed * 0.01;
-
-    // Apply pan to camera offset
-    this.cameraOffset.x -=
-      deltaX * panSpeed * cameraRight.x + deltaY * panSpeed * cameraForward.x;
-    this.cameraOffset.z -=
-      deltaX * panSpeed * cameraRight.z + deltaY * panSpeed * cameraForward.z;
   }
 
   private resetCamera(): void {
@@ -949,60 +920,6 @@ export class ClientCameraSystem extends SystemBase {
     if (delta > Math.PI) delta -= Math.PI * 2;
     if (delta < -Math.PI) delta += Math.PI * 2;
     return delta;
-  }
-
-  private validatePlayerOnTerrain(
-    playerPos: THREE.Vector3 | { x: number; y: number; z: number },
-  ): void {
-    // Get terrain system
-    const terrainSystem = this.world.getSystem<TerrainSystem>("terrain");
-    if (!terrainSystem) {
-      // No terrain system available
-      return;
-    }
-
-    // Get player coordinates
-    const px = "x" in playerPos ? playerPos.x : (playerPos as THREE.Vector3).x;
-    const py = "y" in playerPos ? playerPos.y : (playerPos as THREE.Vector3).y;
-    const pz = "z" in playerPos ? playerPos.z : (playerPos as THREE.Vector3).z;
-
-    // Get terrain height at player position
-    const terrainHeight = terrainSystem.getHeightAt(px, pz);
-
-    // Check if terrain height is valid
-    if (!isFinite(terrainHeight) || isNaN(terrainHeight)) {
-      const errorMsg = `[CRITICAL] Invalid terrain height at player position: x=${px}, z=${pz}, terrainHeight=${terrainHeight}`;
-      console.error(errorMsg);
-      throw new Error(errorMsg);
-    }
-
-    // Check if player is properly positioned on terrain
-    // Allow some tolerance for player height above terrain (0.0 to 5.0 units)
-    const heightDifference = py - terrainHeight;
-
-    if (heightDifference < -0.5) {
-      const errorMsg = `[CRITICAL] Player is BELOW terrain! Player Y: ${py}, Terrain Height: ${terrainHeight}, Difference: ${heightDifference}`;
-      console.error(errorMsg);
-      throw new Error(errorMsg);
-    }
-
-    if (heightDifference > 10.0) {
-      const errorMsg = `[CRITICAL] Player is FLOATING above terrain! Player Y: ${py}, Terrain Height: ${terrainHeight}, Difference: ${heightDifference}`;
-      console.error(errorMsg);
-      throw new Error(errorMsg);
-    }
-
-    // Additional check: if player Y is exactly 0 or very close to 0, might indicate spawn issue
-    if (Math.abs(py) < 0.01 && Math.abs(terrainHeight) > 1.0) {
-      const errorMsg = `[CRITICAL] Player Y position is near zero (${py}) but terrain height is ${terrainHeight} - likely spawn failure!`;
-      console.error(errorMsg);
-      throw new Error(errorMsg);
-    }
-
-    // Log successful validation periodically (every 60 frames)
-    if (Math.random() < 0.0167) {
-      // ~1/60 chance
-    }
   }
 
   // Public API methods for testing and external access

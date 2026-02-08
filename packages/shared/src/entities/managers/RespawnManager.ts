@@ -120,15 +120,6 @@ export class RespawnManager {
   }
 
   /**
-   * Calculate 2D distance between two points
-   */
-  private calculateDistance(a: Position3D, b: Position3D): number {
-    const dx = a.x - b.x;
-    const dz = a.z - b.z;
-    return Math.sqrt(dx * dx + dz * dz);
-  }
-
-  /**
    * Update respawn timer (TICK-BASED)
    * Call this on each tick to check if respawn time has elapsed
    *

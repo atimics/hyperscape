@@ -2054,12 +2054,6 @@ export class InventorySystem extends SystemBase {
     }
   }
 
-  private loadPersistedInventory(_playerId: string): boolean {
-    // This is now a sync wrapper that always returns false to trigger async load
-    // The actual loading happens in the async init flow
-    return false;
-  }
-
   /**
    * Persist inventory immediately without debounce
    * CRITICAL for death system to prevent duplication exploits

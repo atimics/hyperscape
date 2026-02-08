@@ -173,8 +173,6 @@ export class MobEntity extends CombatantEntity {
   private _serverEmote: string | null = null; // Server-forced one-shot emote (e.g., combat)
   private _pendingServerEmote: string | null = null; // Emote received before VRM loaded - apply when ready
   private _manualEmoteOverrideUntil: number = 0; // Timestamp until which manual emote override is active
-  private _tempMatrix = new THREE.Matrix4();
-  private _tempScale = new THREE.Vector3(1, 1, 1);
   // Pre-allocated temps for update/lateUpdate to avoid per-frame allocations
   private _healthBarMatrix = new THREE.Matrix4();
   private _combatQuat = new THREE.Quaternion();
@@ -197,7 +195,6 @@ export class MobEntity extends CombatantEntity {
   private _pendingRespawnRestore = false;
 
   private patrolPoints: Array<{ x: number; z: number }> = [];
-  private currentPatrolIndex = 0;
 
   private _wanderTarget: { x: number; z: number } | null = null;
   private _lastPosition: THREE.Vector3 = new THREE.Vector3();
@@ -216,19 +213,8 @@ export class MobEntity extends CombatantEntity {
     () => ({ x: 0, z: 0 }),
   );
 
-  /** Reusable buffer for cardinal step-out tiles */
-  private readonly _cardinalBuffer: TileCoord[] = [
-    { x: 0, z: 0 },
-    { x: 0, z: 0 },
-    { x: 0, z: 0 },
-    { x: 0, z: 0 },
-  ];
-
   /** Pre-allocated tile for current position */
   private readonly _currentTile: TileCoord = { x: 0, z: 0 };
-
-  /** Shuffle indices for random cardinal selection (avoids array allocation) */
-  private readonly _shuffleIndices: number[] = [0, 1, 2, 3];
 
   /** Cached NPC size (avoid repeated lookups) */
   private _cachedNPCSize: { width: number; depth: number } | null = null;
@@ -512,7 +498,6 @@ export class MobEntity extends CombatantEntity {
 
   private _healthBarHandle: HealthBarHandle | null = null; // Handle to HealthBars system
   private _healthBarVisibleUntil: number = 0; // Timestamp when health bar should hide
-  private _lastKnownHealth: number = 0; // Track previous health to detect damage
 
   async init(): Promise<void> {
     await super.init();
@@ -538,8 +523,6 @@ export class MobEntity extends CombatantEntity {
         // Health bar starts hidden (RuneScape pattern: only show during combat)
       }
     }
-
-    this._lastKnownHealth = this.config.currentHealth;
 
     // TODO: Server-side validation disabled due to ProgressEvent polyfill issues
     // Validation happens on client side instead (see clientUpdate)
@@ -2254,17 +2237,6 @@ export class MobEntity extends CombatantEntity {
   };
 
   /**
-   * Calculate 2D horizontal distance (XZ plane only, ignoring Y)
-   * @deprecated Use getSpawnDistanceTiles() for leash/spawn checks - OSRS uses Chebyshev distance
-   */
-  private getDistance2D(point: Position3D): number {
-    const pos = this.getPosition();
-    const dx = pos.x - point.x;
-    const dz = pos.z - point.z;
-    return Math.sqrt(dx * dx + dz * dz);
-  }
-
-  /**
    * Calculate tile-based Chebyshev distance from spawn point (OSRS-accurate)
    *
    * OSRS uses Chebyshev distance (max of dx, dz) for tile-based checks.
@@ -2948,7 +2920,6 @@ export class MobEntity extends CombatantEntity {
 
             // Reset health to full on respawn (server will send correct value)
             this.config.currentHealth = this.config.maxHealth;
-            this._lastKnownHealth = this.config.maxHealth;
 
             // Reset health bar visibility timeout so bar stays hidden until combat
             this._healthBarVisibleUntil = 0;
@@ -2978,7 +2949,6 @@ export class MobEntity extends CombatantEntity {
     // Update health from server
     if ("currentHealth" in data) {
       const newHealth = data.currentHealth as number;
-      this._lastKnownHealth = newHealth;
       this.config.currentHealth = newHealth;
       this.setHealth(newHealth);
     }

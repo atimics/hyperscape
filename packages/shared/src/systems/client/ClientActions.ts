@@ -43,13 +43,7 @@ import { SystemBase } from "../shared/infrastructure/SystemBase";
 /** Max vertices per canvas batch draw */
 const BATCH_SIZE = 500;
 
-const _v1 = new THREE.Vector3();
-const _v2 = new THREE.Vector3();
 const v3 = new THREE.Vector3();
-const _v4 = new THREE.Vector3();
-const _v5 = new THREE.Vector3();
-const _q1 = new THREE.Quaternion();
-const _m1 = new THREE.Matrix4();
 
 // Use Action class from core/nodes/Action.ts directly
 
@@ -175,11 +169,6 @@ export class ClientActions extends SystemBase {
     if (actionsSystem) {
       actionsSystem.btnDown = false;
     }
-
-    // Update action UI - Desktop mode action rendering
-    const _graphicsSystem = this.world.findSystem("ClientGraphics") as
-      | GraphicsSystem
-      | undefined;
 
     if (actionsSystem?.btnDown) {
       // Action trigger UI feedback handled in createAction.update when btnDown is true
@@ -380,10 +369,10 @@ function createBoard(
       ctx.fill();
     },
     measureText(
-      x: number,
-      y: number,
+      _x: number,
+      _y: number,
       text: string,
-      color: string,
+      _color: string,
       fontSize = 16,
       fontWeight = 400,
       font = "Rubik",

@@ -685,8 +685,8 @@ export class SkillsSystem extends SystemBase {
   }
 
   private calculateModifiedXP(
-    entity: Entity,
-    skill: keyof Skills,
+    _entity: Entity,
+    _skill: keyof Skills,
     baseXP: number,
   ): number {
     const modifier = 1.0;

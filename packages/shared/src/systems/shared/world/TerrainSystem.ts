@@ -66,10 +66,8 @@ export class TerrainSystem extends System {
   private flatZones = new Map<string, FlatZone>();
   private flatZonesByTile = new Map<string, FlatZone[]>(); // Spatial index by terrain tile
   public instancedMeshManager!: InstancedMeshManager;
-  private _terrainInitialized = false;
   private _initialTilesReady = false; // Track when initial tiles are loaded
   private lastPlayerTile = { x: 0, z: 0 };
-  private updateTimer = 0;
   private terrainTime = 0; // For animated caustics
   private noise!: NoiseGenerator;
   private biomeCenters: BiomeCenter[] = [];
@@ -103,7 +101,6 @@ export class TerrainSystem extends System {
   private maxTilesPerFrame = 2; // cap tiles generated per frame
   private generationBudgetMsPerFrame = 6; // time budget per frame (ms)
   private _tempVec3 = new THREE.Vector3();
-  private _tempVec3_2 = new THREE.Vector3();
   private _tempVec2 = new THREE.Vector2();
   private _tempVec2_2 = new THREE.Vector2();
   private _tempBox3 = new THREE.Box3();
@@ -112,8 +109,6 @@ export class TerrainSystem extends System {
 
   // PERFORMANCE: Template geometry and pre-allocated buffers for tile creation
   private templateGeometry: THREE.PlaneGeometry | null = null;
-  private templateColors: Float32Array | null = null;
-  private templateBiomeIds: Float32Array | null = null;
   private _tempColor = new THREE.Color();
 
   // Serialization system
@@ -718,8 +713,6 @@ export class TerrainSystem extends System {
   }
 
   private loadInitialTiles(): void {
-    const _startTime = performance.now();
-    let _tilesGenerated = 0;
     let minHeight = Infinity;
     let maxHeight = -Infinity;
 
@@ -728,7 +721,6 @@ export class TerrainSystem extends System {
     for (let dx = -initialRange; dx <= initialRange; dx++) {
       for (let dz = -initialRange; dz <= initialRange; dz++) {
         const tile = this.generateTile(dx, dz);
-        _tilesGenerated++;
 
         // Sample heights to check variation
         for (let i = 0; i < 10; i++) {
@@ -744,8 +736,6 @@ export class TerrainSystem extends System {
         }
       }
     }
-
-    const _endTime = performance.now();
 
     // Debug: Log flat zone statistics
     console.log(
@@ -2012,17 +2002,6 @@ export class TerrainSystem extends System {
     return normal;
   }
 
-  private generateNoise(x: number, z: number): number {
-    const sin1 = Math.sin(x * 2.1 + z * 1.7);
-    const cos1 = Math.cos(x * 1.3 - z * 2.4);
-    const sin2 = Math.sin(x * 3.7 - z * 4.1);
-    const cos2 = Math.cos(x * 5.2 + z * 3.8);
-
-    const result = (sin1 * cos1 + sin2 * cos2 * 0.5) * 0.5;
-
-    return result;
-  }
-
   private getBiomeAt(tileX: number, tileZ: number): string {
     // Get world coordinates for center of tile
     const worldX = tileX * this.CONFIG.TILE_SIZE + this.CONFIG.TILE_SIZE / 2;
@@ -2129,15 +2108,6 @@ export class TerrainSystem extends System {
   private getBiomeAtWorldPosition(worldX: number, worldZ: number): string {
     const influences = this.getBiomeInfluencesAtPosition(worldX, worldZ);
     return influences.length > 0 ? influences[0].type : "plains";
-  }
-
-  private getBiomeNoise(x: number, z: number): number {
-    // Simple noise function for biome determination
-    return (
-      Math.sin(x * 2.1 + z * 1.7) * Math.cos(x * 1.3 - z * 2.4) * 0.5 +
-      Math.sin(x * 4.2 + z * 3.8) * Math.cos(x * 2.7 - z * 4.1) * 0.3 +
-      Math.sin(x * 8.1 - z * 6.2) * Math.cos(x * 5.9 + z * 7.3) * 0.2
-    );
   }
 
   // Map internal biome keys to generic TerrainTileData biome set
@@ -2269,87 +2239,6 @@ export class TerrainSystem extends System {
         tile.resources.push(resource);
       }
     }
-  }
-
-  // DEPRECATED: Roads are now generated using noise patterns instead of segments
-  private generateRoadsForTile(_tile: TerrainTile): void {
-    // No longer generating road segments - using noise-based paths instead
-  }
-
-  /**
-   * Calculate road influence for vertex coloring
-   */
-  private calculateRoadVertexInfluence(
-    tileX: number,
-    tileZ: number,
-  ): Map<string, number> {
-    const roadMap = new Map<string, number>();
-
-    // Generate temporary tile to get road data
-    const tempTile: TerrainTile = {
-      key: `temp_${tileX}_${tileZ}`,
-      x: tileX,
-      z: tileZ,
-      mesh: null as unknown as THREE.Mesh,
-      biome: this.getBiomeAt(tileX, tileZ) as TerrainTile["biome"],
-      resources: [],
-      roads: [],
-      generated: false,
-      playerCount: 0,
-      needsSave: false,
-      collision: null,
-      waterMeshes: [],
-      heightData: [],
-      lastActiveTime: new Date(),
-      chunkSeed: 0,
-      heightMap: new Float32Array(0),
-      collider: null,
-      lastUpdate: Date.now(),
-    };
-
-    // Roads are now generated using noise patterns
-
-    // Calculate influence for each vertex position
-    const resolution = this.CONFIG.TILE_RESOLUTION;
-    const step = this.CONFIG.TILE_SIZE / (resolution - 1);
-
-    for (let i = 0; i < resolution; i++) {
-      for (let j = 0; j < resolution; j++) {
-        const localX = (i - (resolution - 1) / 2) * step;
-        const localZ = (j - (resolution - 1) / 2) * step;
-
-        let maxInfluence = 0;
-
-        // Check distance to each road segment
-        for (const road of tempTile.roads) {
-          const distanceToRoad = this.distanceToLineSegment(
-            new THREE.Vector2(localX, localZ),
-            road.start instanceof THREE.Vector2
-              ? road.start
-              : new THREE.Vector2(road.start.x, road.start.z),
-            road.end instanceof THREE.Vector2
-              ? road.end
-              : new THREE.Vector2(road.end.x, road.end.z),
-          );
-
-          // Calculate influence based on distance (closer = more influence)
-          const halfWidth = road.width * 0.5;
-          if (distanceToRoad <= halfWidth) {
-            const influence = 1 - distanceToRoad / halfWidth;
-            maxInfluence = Math.max(maxInfluence, influence);
-          }
-        }
-
-        if (maxInfluence > 0) {
-          roadMap.set(
-            `${localX.toFixed(1)},${localZ.toFixed(1)}`,
-            maxInfluence,
-          );
-        }
-      }
-    }
-
-    return roadMap;
   }
 
   /**
