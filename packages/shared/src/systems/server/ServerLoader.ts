@@ -171,7 +171,7 @@ export class ServerLoader extends System {
             (glb: unknown) => {
               const factory = createEmoteFactory(glb as GLBData, url);
               const emote = {
-                toClip(options) {
+                toClip(options: Parameters<typeof factory.toClip>[0]) {
                   return factory.toClip(options);
                 },
               };

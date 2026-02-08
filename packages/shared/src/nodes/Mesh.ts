@@ -10,7 +10,7 @@ import type { MeshData } from "../types/rendering/nodes";
 
 import { getTextureBytesFromMaterial } from "../extras/three/getTextureBytesFromMaterial";
 import { getTrianglesFromGeometry } from "../extras/three/getTrianglesFromGeometry";
-import { Node } from "./Node";
+import { Node, type NodeStats } from "./Node";
 import { getMountedContext } from "./NodeContext";
 
 // OctreeItem interface for stage operations
@@ -34,8 +34,8 @@ const defaults = {
   height: 1,
   depth: 1,
   radius: 0.5,
-  geometry: null,
-  material: null,
+  geometry: null as THREE.BufferGeometry | null,
+  material: null as THREE.Material | null,
   linked: true,
   castShadow: true,
   receiveShadow: true,
@@ -44,8 +44,8 @@ const defaults = {
 
 const types = ["box", "sphere", "geometry"];
 
-const boxes = {};
-const getBox = (width, height, depth) => {
+const boxes: Record<string, THREE.BoxGeometry> = {};
+const getBox = (width: number, height: number, depth: number) => {
   const key = `${width},${height},${depth}`;
   if (!boxes[key]) {
     boxes[key] = new THREE.BoxGeometry(width, height, depth);
@@ -53,8 +53,8 @@ const getBox = (width, height, depth) => {
   return boxes[key];
 };
 
-const spheres = {};
-const getSphere = (radius) => {
+const spheres: Record<number, THREE.SphereGeometry> = {};
+const getSphere = (radius: number) => {
   const key = radius;
   if (!spheres[key]) {
     spheres[key] = new THREE.SphereGeometry(radius, 16, 12);
@@ -133,7 +133,7 @@ export class Mesh extends Node {
     }
   }
 
-  commit(didMove) {
+  commit(didMove: boolean) {
     if (this.needsRebuild) {
       this.unmount();
       this.mount();
@@ -162,30 +162,37 @@ export class Mesh extends Node {
     this.handle = null;
   }
 
-  copy(source, recursive) {
+  copy(source: Node, recursive?: boolean) {
     super.copy(source, recursive);
-    this._type = source._type;
-    this._width = source._width;
-    this._height = source._height;
-    this._depth = source._depth;
-    this._radius = source._radius;
-    this._geometry = source._geometry;
-    this._material = source._material;
-    this._linked = source._linked;
-    this._castShadow = source._castShadow;
-    this._receiveShadow = source._receiveShadow;
-    this._visible = source._visible;
+    const meshSource = source as Mesh;
+    this._type = meshSource._type;
+    this._width = meshSource._width;
+    this._height = meshSource._height;
+    this._depth = meshSource._depth;
+    this._radius = meshSource._radius;
+    this._geometry = meshSource._geometry;
+    this._material = meshSource._material;
+    this._linked = meshSource._linked;
+    this._castShadow = meshSource._castShadow;
+    this._receiveShadow = meshSource._receiveShadow;
+    this._visible = meshSource._visible;
     return this;
   }
 
-  applyStats(stats) {
-    if (this._geometry && !stats.geometries.has(this._geometry.uuid)) {
-      stats.geometries.add(this._geometry.uuid);
-      stats.triangles += getTrianglesFromGeometry(this._geometry);
+  applyStats(stats: NodeStats) {
+    const meshStats = stats as NodeStats & {
+      geometries: Set<string>;
+      materials: Set<string>;
+      textureBytes: number;
+    };
+    if (this._geometry && !meshStats.geometries.has(this._geometry.uuid)) {
+      meshStats.geometries.add(this._geometry.uuid);
+      meshStats.triangles =
+        (meshStats.triangles || 0) + getTrianglesFromGeometry(this._geometry);
     }
-    if (this._material && !stats.materials.has(this._material.uuid)) {
-      stats.materials.add(this._material.uuid);
-      stats.textureBytes += getTextureBytesFromMaterial(this._material);
+    if (this._material && !meshStats.materials.has(this._material.uuid)) {
+      meshStats.materials.add(this._material.uuid);
+      meshStats.textureBytes += getTextureBytesFromMaterial(this._material);
     }
   }
 
@@ -251,7 +258,7 @@ export class Mesh extends Node {
     }
   }
 
-  setSize(width, height, depth) {
+  setSize(width: number, height: number, depth: number) {
     this.width = width;
     this.height = height;
     this.depth = depth;
@@ -381,7 +388,7 @@ export class Mesh extends Node {
         set depth(value) {
           self.depth = value;
         },
-        setSize(width, height, depth) {
+        setSize(width: number, height: number, depth: number) {
           self.setSize(width, height, depth);
         },
         get radius() {
@@ -443,6 +450,6 @@ export class Mesh extends Node {
   }
 }
 
-function isType(value) {
+function isType(value: string) {
   return types.includes(value);
 }

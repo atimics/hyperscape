@@ -41,6 +41,31 @@ import type {
 import { World } from "../../core/World";
 import THREE from "./three";
 
+/** PhysX mesh descriptor buffer reference */
+interface PxMeshDescBuffer {
+  count: number;
+  stride: number;
+  data: number;
+}
+
+/** PhysX descriptor flags */
+interface PxMeshDescFlags {
+  raise: (flag: number) => void;
+}
+
+/** PhysX convex mesh descriptor */
+interface PxConvexMeshDesc {
+  points: PxMeshDescBuffer;
+  flags: PxMeshDescFlags;
+}
+
+/** PhysX triangle mesh descriptor */
+interface PxTriangleMeshDesc {
+  points: PxMeshDescBuffer;
+  triangles: PxMeshDescBuffer;
+  flags: PxMeshDescFlags;
+}
+
 /** Global PHYSX module declaration for WASM heap access */
 declare const PHYSX:
   | {
@@ -49,12 +74,18 @@ declare const PHYSX:
       HEAPF32: { set: (data: Float32Array, offset: number) => void };
       HEAPU16: { set: (data: Uint16Array, offset: number) => void };
       HEAPU32: { set: (data: Uint32Array, offset: number) => void };
-      PxConvexMeshDesc: new () => unknown;
-      PxTriangleMeshDesc: new () => unknown;
+      PxConvexMeshDesc: new () => PxConvexMeshDesc;
+      PxTriangleMeshDesc: new () => PxTriangleMeshDesc;
       PxConvexFlagEnum: { eCOMPUTE_CONVEX: number };
       PxTriangleMeshFlagEnum: { e16_BIT_INDICES: number };
-      CreateConvexMesh: (params: unknown, desc: unknown) => PhysXMesh | null;
-      CreateTriangleMesh: (params: unknown, desc: unknown) => PhysXMesh | null;
+      CreateConvexMesh: (
+        params: unknown,
+        desc: PxConvexMeshDesc,
+      ) => PhysXMesh | null;
+      CreateTriangleMesh: (
+        params: unknown,
+        desc: PxTriangleMeshDesc,
+      ) => PhysXMesh | null;
       destroy: (obj: unknown) => void;
     }
   | undefined;

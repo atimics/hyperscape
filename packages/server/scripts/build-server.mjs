@@ -10,6 +10,23 @@ const rootDir = path.join(__dirname, '../')
 // which runs before this build script with proper caching based on GLB file changes.
 // See turbo.json: server#extract-bounds
 
+/**
+ * Plugin to redirect @hyperscape/shared → @hyperscape/shared/server
+ * so the server uses framework.server.js (no WebGPU, no client systems)
+ * instead of framework.js (full bundle with WebGPU renderer).
+ * This saves ~150MB+ heap memory at runtime.
+ */
+const redirectSharedPlugin = {
+  name: 'redirect-shared-to-server',
+  setup(build) {
+    // Redirect bare @hyperscape/shared imports to the server entry point
+    build.onResolve({ filter: /^@hyperscape\/shared$/ }, () => ({
+      path: '@hyperscape/shared/server',
+      external: true,
+    }))
+  },
+}
+
 // Build the server
 const serverCtx = await esbuild.context({
   entryPoints: ['src/index.ts'],
@@ -21,11 +38,12 @@ const serverCtx = await esbuild.context({
   minify: false,
   sourcemap: true,
   packages: 'external',
-  external: ['@hyperscape/shared'],
+  external: ['@hyperscape/shared', '@hyperscape/shared/server'],
   target: 'node22',
   loader: {
     '.ts': 'ts',
   },
+  plugins: [redirectSharedPlugin],
 })
 
 await serverCtx.rebuild()

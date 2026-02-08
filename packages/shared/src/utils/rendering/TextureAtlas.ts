@@ -166,6 +166,7 @@ export class TextureAtlas {
       this.ctx.drawImage(image, x, y, size, size);
     } else if (
       image &&
+      typeof image === "object" &&
       "data" in image &&
       "width" in image &&
       "height" in image

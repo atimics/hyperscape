@@ -44,6 +44,130 @@ async function runTypeCheck() {
 }
 
 /**
+ * Plugin to redirect three/webgpu → three for server builds.
+ * The server only needs THREE for math (Vector3, Quaternion, etc.),
+ * not the WebGPU renderer. This saves ~150MB+ heap at runtime.
+ *
+ * Also redirects the local three.ts wrapper to three.server.ts
+ * which doesn't destructure WebGPU-only TSL functions.
+ */
+const threeServerPlugin = {
+  name: 'three-server-redirect',
+  setup(build) {
+    // Redirect ALL imports of extras/three/three → extras/three/three.server
+    // This catches both:
+    // - index.server.ts importing "./extras/three/three"
+    // - TerrainSystem.ts importing "../../../extras/three/three"
+    // The filter matches the unresolved path string from the source.
+    // Redirect ALL relative imports of our three.ts wrapper → three.server.ts
+    // The canonical file is: src/extras/three/three.ts
+    // Import patterns vary widely:
+    //   - "./extras/three/three"      (from index.server.ts)
+    //   - "../../../extras/three/three" (from deep shared systems)
+    //   - "../three/three"            (from extras/animation/)
+    //   - "./three"                   (from extras/three/ siblings like geometryToPxMesh.ts)
+    // We use a broad filter and resolve to absolute path to check against the canonical file.
+    const canonicalThreeTs = path.join(rootDir, 'src', 'extras', 'three', 'three')
+    build.onResolve({ filter: /\/three(?:\.ts)?$/ }, (args) => {
+      // Don't redirect if it's already the server version
+      if (args.path.includes('three.server')) return null
+      // Only redirect relative imports (not npm package 'three')
+      if (!args.path.startsWith('.')) return null
+      const resolved = path.resolve(args.resolveDir, args.path)
+      // Strip .ts extension for comparison
+      const resolvedBase = resolved.replace(/\.ts$/, '')
+      if (resolvedBase === canonicalThreeTs) {
+        return { path: canonicalThreeTs + '.server.ts' }
+      }
+      return null
+    })
+    // Redirect three/webgpu → three (for any direct imports in shared source)
+    build.onResolve({ filter: /^three\/webgpu$/ }, () => ({
+      path: 'three',
+      external: true,
+    }))
+    // Redirect three/tsl → three (type-only, but just in case)
+    build.onResolve({ filter: /^three\/tsl$/ }, () => ({
+      path: 'three',
+      external: true,
+    }))
+    
+    // Stub out the client barrel export (systems/client/index.ts) that is pulled
+    // in by SystemLoader.ts at top-level. The actual registration is guarded by
+    // world.isClient but ESM imports are static, so esbuild would bundle
+    // everything the barrel re-exports (ClientGraphics, ClientLiveKit, etc.)
+    // which pulls in three/webgpu, livekit-client, and other heavy deps.
+    // We ONLY stub the barrel — individual file imports (like interaction/constants.ts)
+    // are allowed through since shared code needs those constants.
+    build.onResolve({ filter: /.*/ }, (args) => {
+      if (!args.path.startsWith('.')) return null
+      const resolved = path.resolve(args.resolveDir, args.path)
+      const clientIndex = path.join(rootDir, 'src', 'systems', 'client')
+      // Only intercept the barrel import (resolves to client/ or client/index.ts)
+      if (resolved === clientIndex || resolved === clientIndex + '/index' || resolved === clientIndex + '/index.ts') {
+        return {
+          path: 'client-systems-stub',
+          namespace: 'client-stub',
+        }
+      }
+      return null
+    })
+    build.onLoad({ filter: /.*/, namespace: 'client-stub' }, () => {
+      return {
+        contents: `
+          // Stub for client-only systems on server build
+          const noop = () => {};
+          class StubSystem {
+            constructor() {}
+            getDependencies() { return {} }
+            async init() {}
+            start() {}
+            destroy() {}
+            update() {}
+            preTick() {}
+            preFixedUpdate() {}
+            fixedUpdate() {}
+            postFixedUpdate() {}
+            preUpdate() {}
+            postUpdate() {}
+            lateUpdate() {}
+            postLateUpdate() {}
+            commit() {}
+            postTick() {}
+            isInitialized() { return false }
+            isStarted() { return false }
+            on() { return this }
+            off() { return this }
+            emit() { return false }
+          }
+          export const InteractionRouter = StubSystem;
+          export const DamageSplatSystem = StubSystem;
+          export const DuelCountdownSplatSystem = StubSystem;
+          export const ProjectileRenderer = StubSystem;
+          export const SocialSystem = StubSystem;
+          export const DuelArenaVisualsSystem = StubSystem;
+          export const ClientInterface = StubSystem;
+          export const ClientLoader = StubSystem;
+          export const ClientNetwork = StubSystem;
+          export const ClientGraphics = StubSystem;
+          export const ClientRuntime = StubSystem;
+          export const ClientAudio = StubSystem;
+          export const ClientLiveKit = StubSystem;
+          export const ClientInput = StubSystem;
+          export const ClientActions = StubSystem;
+          export const ClientCameraSystem = StubSystem;
+          export const DevStats = StubSystem;
+          export const NodeClient = StubSystem;
+          export const ControlPriorities = {};
+          export const TileInterpolator = StubSystem;
+        `,
+        loader: 'js',
+      }
+    })
+  },
+}
+
+/**
  * Build Library
  */
 async function buildLibrary() {
@@ -80,6 +204,36 @@ async function buildLibrary() {
   await ctxFull.rebuild()
   await ctxFull.dispose()
   console.log('✓ framework.js built successfully')
+  
+  // Build server-only library (no WebGPU renderer, no client systems)
+  console.log('Building framework.server.js (server-only)...')
+  const ctxServer = await esbuild.context({
+    entryPoints: ['src/index.server.ts'],
+    outfile: 'build/framework.server.js',
+    platform: 'node',
+    format: 'esm',
+    bundle: true,
+    treeShaking: true,
+    minify: false,
+    sourcemap: true,
+    packages: 'external',
+    target: 'esnext',
+    loader: {
+      '.ts': 'ts',
+      '.tsx': 'tsx',
+    },
+    external: [
+      './PhysXManager.server',
+      './PhysXManager.server.js',
+      './storage.server',
+      './storage.server.js',
+    ],
+    plugins: [threeServerPlugin, typescriptPlugin],
+  })
+  
+  await ctxServer.rebuild()
+  await ctxServer.dispose()
+  console.log('✓ framework.server.js built successfully')
   
   // Build server-specific modules separately
   console.log('Building server-specific modules...')

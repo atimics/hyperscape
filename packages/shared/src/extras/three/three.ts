@@ -150,7 +150,8 @@ export * from "three/webgpu";
  * For function parameters that accept any shader node, use ShaderNodeInput instead.
  */
 import type { Node } from "three/webgpu";
-import type { ShaderNodeObject } from "three/tsl";
+// ShaderNodeObject was removed from @types/three; Node is augmented with Swizzable via declaration merging
+type ShaderNodeObject<T> = T;
 export type ShaderNode = ShaderNodeObject<Node>;
 
 /**

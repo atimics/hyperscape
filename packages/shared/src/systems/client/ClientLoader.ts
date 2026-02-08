@@ -287,17 +287,17 @@ export class ClientLoader extends SystemBase {
     };
   }
 
-  has(type, url) {
+  has(type: string, url: string) {
     const key = `${type}/${url}`;
     return this.promises.has(key);
   }
 
-  get(type, url) {
+  get(type: string, url: string) {
     const key = `${type}/${url}`;
     return this.results.get(key);
   }
 
-  preload(type, url) {
+  preload(type: string, url: string) {
     this.preloadItems.push({ type, url });
   }
 
@@ -386,7 +386,7 @@ export class ClientLoader extends SystemBase {
     });
   }
 
-  setFile(url, file) {
+  setFile(url: string, file: File) {
     this.files.set(url, file);
   }
 
@@ -753,10 +753,10 @@ export class ClientLoader extends SystemBase {
     return promise;
   }
 
-  insert(type, url, file) {
+  insert(type: string, url: string, file: File) {
     const key = `${type}/${url}`;
     const localUrl = URL.createObjectURL(file);
-    let promise;
+    let promise: Promise<LoaderResult> | undefined;
     if (type === "hdr") {
       promise = this.hdrLoader
         .loadAsync(localUrl)
@@ -769,7 +769,7 @@ export class ClientLoader extends SystemBase {
         });
     }
     if (type === "image") {
-      promise = new Promise((resolve) => {
+      promise = new Promise<LoaderResult>((resolve) => {
         const img = new Image();
         img.onload = () => {
           this.results.set(key, img);
@@ -783,7 +783,7 @@ export class ClientLoader extends SystemBase {
       });
     }
     if (type === "video") {
-      promise = new Promise((resolve) => {
+      promise = new Promise<LoaderResult>((resolve) => {
         const factory = createVideoFactory(this.world, localUrl);
         resolve(factory);
       });
@@ -981,7 +981,9 @@ export class ClientLoader extends SystemBase {
         return audioBuffer;
       })();
     }
-    this.promises.set(key, promise);
+    if (promise) {
+      this.promises.set(key, promise);
+    }
   }
 
   destroy() {
@@ -1035,15 +1037,37 @@ export class ClientLoader extends SystemBase {
   }
 }
 
-function createVideoFactory(world, url) {
+interface VideoHandle {
+  elem: HTMLVideoElement;
+  audio: MediaElementAudioSourceNode;
+  texture: THREE.VideoTexture;
+  prepare: Promise<void> | undefined;
+  readonly ready: boolean;
+  readonly width: number | undefined;
+  readonly height: number | undefined;
+  readonly duration: number | undefined;
+  loop: boolean;
+  readonly isPlaying: boolean;
+  currentTime: number;
+  play: (restartIfPlaying?: boolean) => void;
+  pause: () => void;
+  stop: () => void;
+  release: () => void;
+}
+
+interface VideoSourceEntry {
+  createHandle: () => VideoHandle;
+}
+
+function createVideoFactory(world: World, url: string): VideoFactory {
   const isHLS = url?.endsWith(".m3u8");
-  const sources = {};
-  let width;
-  let height;
-  let duration;
+  const sources: Record<string, VideoSourceEntry> = {};
+  let width: number | undefined;
+  let height: number | undefined;
+  let duration: number | undefined;
   let ready = false;
-  let prepare;
-  function createSource(key) {
+  let prepare: Promise<void> | undefined;
+  function createSource(key: string): VideoSourceEntry {
     const elem = document.createElement("video");
     elem.crossOrigin = "anonymous";
     elem.playsInline = true;
@@ -1067,10 +1091,10 @@ function createVideoFactory(world, url) {
     } else {
       elem.src = url;
     }
-    const audio = world.audio.ctx.createMediaElementSource(elem);
+    const audio = world.audio!.ctx.createMediaElementSource(elem);
     let n = 0;
-    let dead;
-    world.audio.ready(() => {
+    let dead: boolean | undefined;
+    world.audio!.ready(() => {
       if (dead) return;
       elem.muted = false;
     });
@@ -1079,7 +1103,7 @@ function createVideoFactory(world, url) {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
-    texture.anisotropy = world.graphics.maxAnisotropy;
+    texture.anisotropy = world.graphics!.maxAnisotropy;
     if (!prepare) {
       prepare = (function () {
         /**
@@ -1205,7 +1229,7 @@ function createVideoFactory(world, url) {
     };
   }
   return {
-    get(key) {
+    get(key: string) {
       let source = sources[key];
       if (!source) {
         source = createSource(key);
@@ -1213,5 +1237,5 @@ function createVideoFactory(world, url) {
       }
       return source.createHandle();
     },
-  };
+  } as unknown as VideoFactory;
 }
