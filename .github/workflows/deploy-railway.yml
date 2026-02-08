@@ -27,8 +27,8 @@ on:
           - staging
 
 # Railway environment IDs
-# Production: api.hyperscape.club
-# Staging: staging-api.hyperscape.club
+# Production: rativerse-production.up.railway.app
+# Staging: staging
 
 jobs:
   deploy:
@@ -36,10 +36,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ github.ref_name == 'staging' && 'staging' || 'production' }}
     env:
-      # Production environment
-      RAILWAY_PROJECT_ID: e5f5ba11-0380-4d71-aa0b-343d89a58c0d
-      RAILWAY_PRODUCTION_SERVICE_ID: f0b42e3b-3001-4ef1-926f-af6c3c138777
-      RAILWAY_PRODUCTION_ENVIRONMENT_ID: 194f3565-ba2f-4c98-87d2-85dfc3a5110b
+      # Production environment (rativerse project)
+      RAILWAY_PROJECT_ID: d4c282c9-e4d5-4931-bea4-1ac4e5aba4a7
+      RAILWAY_PRODUCTION_SERVICE_ID: 40a7b8f8-03b2-4397-aa8a-40fee26cd476
+      RAILWAY_PRODUCTION_ENVIRONMENT_ID: 0375e915-e618-4bd5-a5e1-2ff584fdec12
       # Staging environment (set these after creating staging environment in Railway)
       RAILWAY_STAGING_SERVICE_ID: ${{ vars.RAILWAY_STAGING_SERVICE_ID }}
       RAILWAY_STAGING_ENVIRONMENT_ID: ${{ vars.RAILWAY_STAGING_ENVIRONMENT_ID }}
@@ -103,7 +103,7 @@ jobs:
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
               -d '{"query":"query { project(id: \"${{ env.RAILWAY_PROJECT_ID }}\") { services { edges { node { name serviceInstances { edges { node { latestDeployment { status } } } } } } } } }"}')
-            STATUS=$(echo "$RESPONSE" | jq -r '.data.project.services.edges[] | select(.node.name=="hyperscape") | .node.serviceInstances.edges[0].node.latestDeployment.status')
+            STATUS=$(echo "$RESPONSE" | jq -r '.data.project.services.edges[] | select(.node.name=="rativerse") | .node.serviceInstances.edges[0].node.latestDeployment.status')
             echo "Deployment status: $STATUS"
             if [ "$STATUS" = "SUCCESS" ]; then
               echo "✅ Deployment succeeded"
