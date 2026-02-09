@@ -307,43 +307,51 @@ export default defineConfig(({ mode }) => {
       "process.env.VITEST": "undefined", // Not in browser
 
       // Production API URLs - explicitly defined for production builds
-      // These ALWAYS use production URLs when mode is "production", ignoring .env files
-      // NOTE: mode is passed from Vite - "production" for `vite build`, "development" for `vite dev`
-      // Use environment variables if set, otherwise use defaults
+      // In production mode, ALWAYS use hardcoded production URLs unless
+      // a non-localhost env var is set (e.g. from Cloudflare Pages dashboard).
+      // This prevents local .env files from leaking localhost into prod builds.
       //
-      // Production: Frontend on Cloudflare Pages (hyperscape.club)
-      //             Server on Railway (hyperscape-production.up.railway.app)
+      // Production: Frontend on Cloudflare Pages (rati.world)
+      //             Server on Railway (rativerse-production.up.railway.app)
+      //             CDN on Cloudflare R2 (assets.rati.world)
       "import.meta.env.PUBLIC_API_URL": JSON.stringify(
-        env.PUBLIC_API_URL ||
-          (mode === "production"
-            ? "https://rativerse-production.up.railway.app"
-            : "http://localhost:5555"),
+        mode === "production"
+          ? env.PUBLIC_API_URL && !env.PUBLIC_API_URL.includes("localhost")
+            ? env.PUBLIC_API_URL
+            : "https://rativerse-production.up.railway.app"
+          : env.PUBLIC_API_URL || "http://localhost:5555",
       ),
       "import.meta.env.PUBLIC_WS_URL": JSON.stringify(
-        env.PUBLIC_WS_URL ||
-          (mode === "production"
-            ? "wss://rativerse-production.up.railway.app/ws"
-            : "ws://localhost:5555/ws"),
+        mode === "production"
+          ? env.PUBLIC_WS_URL && !env.PUBLIC_WS_URL.includes("localhost")
+            ? env.PUBLIC_WS_URL
+            : "wss://rativerse-production.up.railway.app/ws"
+          : env.PUBLIC_WS_URL || "ws://localhost:5555/ws",
       ),
       // CDN URL - Cloudflare R2 with custom domain
-      // In development without PUBLIC_CDN_URL, use game server which serves manifests/assets
       "import.meta.env.PUBLIC_CDN_URL": JSON.stringify(
-        env.PUBLIC_CDN_URL ||
-          (mode === "production"
-            ? "https://assets.hyperscape.club"
-            : "http://localhost:5555"),
+        mode === "production"
+          ? env.PUBLIC_CDN_URL && !env.PUBLIC_CDN_URL.includes("localhost")
+            ? env.PUBLIC_CDN_URL
+            : "https://assets.rati.world"
+          : env.PUBLIC_CDN_URL || "http://localhost:5555",
       ),
       "import.meta.env.PUBLIC_APP_URL": JSON.stringify(
-        env.PUBLIC_APP_URL ||
-          (mode === "production"
-            ? "https://hyperscape.club"
-            : "http://localhost:3333"),
+        mode === "production"
+          ? env.PUBLIC_APP_URL && !env.PUBLIC_APP_URL.includes("localhost")
+            ? env.PUBLIC_APP_URL
+            : "https://rati.world"
+          : env.PUBLIC_APP_URL || "http://localhost:3333",
       ),
       "import.meta.env.PUBLIC_ELIZAOS_URL": JSON.stringify(
-        env.PUBLIC_ELIZAOS_URL ||
-          (mode === "production"
-            ? "https://hyperscape-production.up.railway.app"
-            : env.PUBLIC_API_URL || "http://localhost:5555"),
+        mode === "production"
+          ? env.PUBLIC_ELIZAOS_URL &&
+            !env.PUBLIC_ELIZAOS_URL.includes("localhost")
+            ? env.PUBLIC_ELIZAOS_URL
+            : "https://rativerse-production.up.railway.app"
+          : env.PUBLIC_ELIZAOS_URL ||
+              env.PUBLIC_API_URL ||
+              "http://localhost:5555",
       ),
       "import.meta.env.PUBLIC_PRIVY_APP_ID": JSON.stringify(
         env.PUBLIC_PRIVY_APP_ID || "",
