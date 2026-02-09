@@ -363,6 +363,18 @@ class PhysXManager extends EventEmitter {
       };
     }
 
+    // Memory profiling helper (server-only, no-op in browser)
+    const logMem = (label: string) => {
+      if (isServer && typeof process !== "undefined" && process.memoryUsage) {
+        const m = process.memoryUsage();
+        console.log(
+          `[PhysX:mem] ${label} — RSS: ${Math.round(m.rss / 1024 / 1024)}MB, Heap: ${Math.round(m.heapUsed / 1024 / 1024)}/${Math.round(m.heapTotal / 1024 / 1024)}MB, External: ${Math.round(m.external / 1024 / 1024)}MB`,
+        );
+      }
+    };
+
+    logMem("before WASM load");
+
     // Use appropriate loader based on environment (use isBrowser defined at the top of function)
     let PHYSX: PhysXModule;
 
@@ -381,6 +393,8 @@ class PhysXManager extends EventEmitter {
         ) => Promise<PhysXModule>
       )(moduleOptions);
     }
+
+    logMem("after WASM load (module instantiated)");
 
     // Set global PHYSX for compatibility
     Object.defineProperty(globalThis, "PHYSX", {
@@ -415,6 +429,8 @@ class PhysXManager extends EventEmitter {
       errorCb,
     );
 
+    logMem("after CreateFoundation");
+
     // Create physics instance for general use
     const tolerances = new PHYSX.PxTolerancesScale();
     const physics = physxWithConstants.CreatePhysics(
@@ -422,6 +438,8 @@ class PhysXManager extends EventEmitter {
       foundation,
       tolerances,
     );
+
+    logMem("after CreatePhysics");
 
     return { version, allocator, errorCb, foundation, physics };
   }

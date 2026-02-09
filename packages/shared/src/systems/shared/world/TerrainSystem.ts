@@ -577,7 +577,19 @@ export class TerrainSystem extends System {
     }
 
     // Load initial tiles
+    if (isServer && typeof process !== "undefined" && process.memoryUsage) {
+      const m = process.memoryUsage();
+      console.log(
+        `[Terrain:mem] before loadInitialTiles — RSS: ${Math.round(m.rss / 1024 / 1024)}MB, External: ${Math.round(m.external / 1024 / 1024)}MB`,
+      );
+    }
     this.loadInitialTiles();
+    if (isServer && typeof process !== "undefined" && process.memoryUsage) {
+      const m = process.memoryUsage();
+      console.log(
+        `[Terrain:mem] after loadInitialTiles (${this.terrainTiles.size} tiles, ${this._colliderCount} colliders) — RSS: ${Math.round(m.rss / 1024 / 1024)}MB, External: ${Math.round(m.external / 1024 / 1024)}MB`,
+      );
+    }
 
     // Get road network system reference (may not be available yet if roads depend on terrain)
     // Roads will be applied when tiles are regenerated after road system initializes
@@ -877,6 +889,7 @@ export class TerrainSystem extends System {
    * Create a PhysX box collider for a terrain tile from height bounds.
    * Shared between server and client tile generation paths.
    */
+  private _colliderCount = 0;
   private createTilePhysicsCollider(
     tile: TerrainTile,
     tileX: number,
@@ -944,6 +957,19 @@ export class TerrainSystem extends System {
       triggeredHandles: new Set<PhysicsHandle>(),
     };
     tile.collider = physics.addActor(actor, handle);
+
+    this._colliderCount++;
+    if (
+      this.world.isServer &&
+      typeof process !== "undefined" &&
+      process.memoryUsage &&
+      this._colliderCount % 10 === 0
+    ) {
+      const m = process.memoryUsage();
+      console.log(
+        `[Terrain:mem] collider #${this._colliderCount} — RSS: ${Math.round(m.rss / 1024 / 1024)}MB, External: ${Math.round(m.external / 1024 / 1024)}MB`,
+      );
+    }
   }
 
   private generateTile(

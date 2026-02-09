@@ -61,7 +61,20 @@ const physxJs = path.join(rootDir, '../physx-js-webidl/dist/physx-js-webidl.js')
 if (fs.existsSync(physxWasm)) {
   fs.copyFileSync(physxWasm, path.join(assetsDir, 'physx-js-webidl.wasm'))
   fs.copyFileSync(physxJs, path.join(assetsDir, 'physx-js-webidl.js'))
-  console.log('✓ PhysX assets copied to world/assets/web/')
+
+  // Patch getHeapMax() for server: cap WASM memory at 640MB instead of 2GB.
+  // WASM binary starts at 256MB, PhysX init grows to ~567MB.
+  // 640MB provides headroom without allowing runaway growth to 2GB.
+  // The client keeps the original 2GB limit in client/public/.
+  const serverJsPath = path.join(assetsDir, 'physx-js-webidl.js')
+  let jsContent = fs.readFileSync(serverJsPath, 'utf8')
+  jsContent = jsContent.replace(
+    /var getHeapMax = \(\) =>\n\s+\/\/.*\n\s+\/\/.*\n\s+\/\/.*\n\s+\/\/.*\n\s+\(?typeof process.*\n\s+\? \d+\n\s+: 2147483648;/,
+    `var getHeapMax = () =>\n      // Server: cap at 640MB (WASM init uses ~567MB, this adds headroom)\n      (typeof process !== 'undefined' && typeof process.versions !== 'undefined' && process.versions.node)\n        ? 671088640\n        : 2147483648;`
+  )
+  fs.writeFileSync(serverJsPath, jsContent)
+
+  console.log('✓ PhysX assets copied to world/assets/web/ (server: 640MB WASM cap)')
 } else {
   console.error('❌ PhysX WASM not found at:', physxWasm)
   throw new Error('PhysX WASM files missing - ensure @hyperscape/physx-js-webidl is built first')

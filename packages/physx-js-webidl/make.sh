@@ -112,7 +112,12 @@ else
 fi
 
 # Base flags for all builds - supports web, worker, and node environments
-BASE_FLAGS="-s ENVIRONMENT='web,worker,node' -s EXPORT_ES6=1 -s MODULARIZE=1 -s USE_ES6_IMPORT_META=0 -s ALLOW_MEMORY_GROWTH=1"
+# INITIAL_MEMORY=64MB: start small, grow as needed
+# MAXIMUM_MEMORY=640MB: cap growth to prevent runaway allocation
+# Note: Current prebuilt binary uses INITIAL_MEMORY=256MB (baked in WASM).
+# PhysX init grows to ~567MB. 640MB provides headroom without allowing 2GB runaway.
+# ALLOW_MEMORY_GROWTH=1: still allowed, but capped at 640MB
+BASE_FLAGS="-s ENVIRONMENT='web,worker,node' -s EXPORT_ES6=1 -s MODULARIZE=1 -s USE_ES6_IMPORT_META=0 -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=67108864 -s MAXIMUM_MEMORY=671088640"
 
 # Build based on requested type
 case $BUILD_TYPE in

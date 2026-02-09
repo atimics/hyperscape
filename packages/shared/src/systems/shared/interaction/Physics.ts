@@ -780,6 +780,18 @@ export class Physics extends SystemBase implements IPhysics {
     sceneDesc.simulationEventCallback = simulationEventCallback;
 
     const isServer = this.world.isServer;
+
+    // Memory profiling helper
+    const logMem = (label: string) => {
+      if (isServer && typeof process !== "undefined" && process.memoryUsage) {
+        const m = process.memoryUsage();
+        console.log(
+          `[PhysX:mem] ${label} — RSS: ${Math.round(m.rss / 1024 / 1024)}MB, External: ${Math.round(m.external / 1024 / 1024)}MB`,
+        );
+      }
+    };
+    logMem("before createScene");
+
     if (isServer) {
       // Server: use lightweight CPU-only settings to minimize WASM heap usage
       // eABP (Automatic Box Pruning) is the best CPU broadphase — eGPU allocates
@@ -804,6 +816,7 @@ export class Physics extends SystemBase implements IPhysics {
     }
 
     this.scene = this.physics.createScene(sceneDesc);
+    logMem("after createScene");
   }
 
   private setupQueryObjects(): void {

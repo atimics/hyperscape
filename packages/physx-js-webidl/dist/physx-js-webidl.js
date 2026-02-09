@@ -1068,11 +1068,15 @@ var PhysX = (() => {
     };
 
     var getHeapMax = () =>
-      // Stay one Wasm page short of 4GB: while e.g. Chrome is able to allocate
-      // full 4GB Wasm memories, the size will wrap back to 0 bytes in Wasm side
-      // for any code that deals with heap sizes, which would require special
-      // casing all heap size related code to treat 0 specially.
-      2147483648;
+      // Server: cap at 640MB to prevent OOM on constrained deployments.
+      // WASM binary starts at 256MB and PhysX init grows to ~567MB.
+      // 640MB provides headroom for scenes without runaway growth.
+      // Client (browser): uses the default 2GB cap.
+      typeof process !== "undefined" &&
+      typeof process.versions !== "undefined" &&
+      process.versions.node
+        ? 671088640
+        : 2147483648;
 
     var alignMemory = (size, alignment) => {
       assert(alignment, "alignment argument is required");
